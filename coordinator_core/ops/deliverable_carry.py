@@ -102,7 +102,7 @@ from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 # bridge" section and
 # `coordinator_core/tests/test_baton_class_is_the_only_membership_set.py`.
 #
-# Review: coordinatorcode-reviewer-3e4f4e1b — this coupling is intended, made
+# This coupling is intended, made
 # explicit here rather than removed: a future `_PRE_RENAME_ALIASES` entry
 # targeting `roadmap-baton` widens this set automatically with no code change
 # at this call site, so `baton_class.py`'s own review discipline is now the

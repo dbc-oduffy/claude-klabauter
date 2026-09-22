@@ -436,17 +436,23 @@ def test_ac14_concurrent_revert_detection_dedupes_to_one_stored_event(repo_root,
     # writer collides on `tracker_store.append_event`'s own duplicate-id
     # guard rather than silently double-appending (DR-241 bound (i),
     # `_find_existing_by_address`'s documented closing mitigation).
-    real_read_events = tracker_store.read_events
+    # `_emit`'s pre-append scan reads through `_read_events_for_dedup_scan`
+    # (2026-09-21 fix, so a stored suggest-tier event stays visible to its
+    # own dedup check), not `tracker_store.read_events` — patch the former
+    # to pin racer 2 to the stale pre-race snapshot.
+    real_read_events_for_dedup_scan = tt._read_events_for_dedup_scan
     monkeypatch.setattr(
-        tracker_store,
-        "read_events",
+        tt,
+        "_read_events_for_dedup_scan",
         lambda *a, **kw: list(pre_race_events),
     )
     try:
         with pytest.raises(tracker_store.TrackerStoreDuplicateIdError):
             tt._emit(payload2, repo_root=repo_root)
     finally:
-        monkeypatch.setattr(tracker_store, "read_events", real_read_events)
+        monkeypatch.setattr(
+            tt, "_read_events_for_dedup_scan", real_read_events_for_dedup_scan
+        )
 
     events = list(tracker_store.read_events(repo_root=repo_root))
     retracts = [

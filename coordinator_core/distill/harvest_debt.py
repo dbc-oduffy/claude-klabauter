@@ -139,7 +139,7 @@ class HarvestDebtResult:
 
 
 def _specs_dir_relative_paths(specs_dir: Path) -> set[str]:
-    # Review: code-reviewer (Finding 1, 2026-07-12) — was keyed on bare Path.name,
+    # Was keyed on bare Path.name,
     # colliding same-named specs across different archive/specs/<subdir>/ trees and
     # silently under-counting debt. Keyed on specs_dir-relative path (POSIX-normalized)
     # so it compares like-for-like with the log-row path component below.

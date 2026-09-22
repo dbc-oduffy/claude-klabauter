@@ -152,7 +152,7 @@ def test_load_deliverable_ledger_unparsable_yaml_returns_empty_list(tmp_path, ca
         rows = load_deliverable_ledger(tmp_path)
 
     assert rows == []
-    # Review: coordinatorreview-integrator-574d6d25 — the caplog.at_level context
+    # The caplog.at_level context
     # implied "and it warns"; assert the warning was actually emitted, not just
     # the return value.
     assert any("could not read/parse" in record.message for record in caplog.records)
@@ -199,7 +199,7 @@ def test_validate_deliverable_ledger_rows_accepts_open_row():
 
 
 def test_validate_deliverable_ledger_rows_raises_on_bad_status_enum():
-    # Review: coordinatorreview-integrator-574d6d25 — pin the NATURE of the
+    # Pin the NATURE of the
     # violation (an invalid enum value), not just the bare field name "status".
     with pytest.raises(DeliverableLedgerValidationError, match="status.*invalid|invalid.*status"):
         validate_deliverable_ledger_rows([_well_formed_row(status="deprecated")])
@@ -315,7 +315,7 @@ def _make_guarded_open(real_open):
     """Build the archive write-guard for `open`, shared by the AC8 guard test and its
     negative control.
 
-    Review: coordinatorcode-reviewer-s4-integration — the two tests previously each
+    The two tests previously each
     carried their own copy of this closure. Editing one and not the other would have
     silently decoupled the negative control from the guard it is the control FOR, so
     the shared definition is the point, not a tidiness preference.
@@ -384,7 +384,7 @@ def test_seed_zero_write_guard_negative_control_open(tmp_path, monkeypatch):
 def test_seed_zero_write_guard_negative_control_replace(tmp_path, monkeypatch):
     """Negative control for the `os.replace` half of the AC8 zero-write guard.
 
-    Review: coordinatorcode-reviewer-s4-integration — the first negative control named
+    The first negative control named
     both guards in its docstring and exercised only `open`, so a broken `_guarded_replace`
     would have gone uncaught. That is the same inert-probe failure the negative control
     was added to close, reproduced for the second guard; this closes it for real."""
@@ -564,7 +564,7 @@ def test_normalize_none_is_absent():
     assert _normalize_extracted_deliverable_id(None) is None
 
 
-# Review: coordinatorcode-reviewer c2f6a1ea — F1: YAML 1.1's null-literal set
+# YAML 1.1's null-literal set
 # includes `Null`/`NULL`, not just lowercase `null`. A hand-authored
 # `deliverable_id: Null` line must not manufacture the literal string "Null"
 # into the ledger.
@@ -593,7 +593,7 @@ def test_normalize_preserves_bare_hash_with_no_preceding_whitespace():
 
 
 def test_normalize_unterminated_quote_still_strips_trailing_comment():
-    # Review: coordinatorcode-reviewer f292d223 — F7: an unterminated opening
+    # An unterminated opening
     # quote previously fell through to `value[1:]` with no comment-stripping,
     # leaving the trailing inline comment attached to the "id". Deliberate
     # behaviour now: strip it exactly as the unquoted branch would.

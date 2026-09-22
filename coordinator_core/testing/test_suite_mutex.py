@@ -82,9 +82,9 @@ def _dead_pid() -> int:
     return proc.pid
 
 
-def test_lock_path_is_under_settings_home_claude_klabauter() -> None:
+def test_lock_path_is_under_settings_home() -> None:
     path = suite_mutex.lock_path()
-    assert path.parent.name == "claude-klabauter"
+    assert path.parent == Path(os.environ["COORDINATOR_SETTINGS_HOME"])
     assert path.name == "test-suite-mutex.lock"
     assert os.environ["COORDINATOR_SETTINGS_HOME"] in str(path)
 

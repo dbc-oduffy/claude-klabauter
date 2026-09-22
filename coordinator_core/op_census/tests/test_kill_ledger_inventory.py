@@ -148,6 +148,19 @@ def test_cross_plane_cut_must_say_so_in_the_status() -> None:
     kli.classify(unstated, live_ops=frozenset({"hooks.example_op"}), suspended_ops=frozenset())
     assert unstated[0].population == "CONTESTED"
 
+    # K-006's rewritten wording (AC-P3-4): a status stating removal in BOTH
+    # planes, with the op absent, lands rather than reading as an unstated
+    # cross-plane cut.
+    both_planes = kli.parse_ledger(
+        _entry(
+            "removed — both planes: DoE-claude deregistered it 2026-08-16 "
+            "(b33a06c6a); claude-klabauter's handler deleted 2026-09-11 (abc1234).",
+            title="`hooks.example_op`",
+        )
+    )
+    kli.classify(both_planes, live_ops=frozenset(), suspended_ops=frozenset())
+    assert both_planes[0].population == "LANDED"
+
 
 def test_rebuilt_must_say_so_and_must_actually_be_live() -> None:
     text = _entry("**LANDED** (`abc1234`), then rebuilt and live again.", title="`memo.example_send`")

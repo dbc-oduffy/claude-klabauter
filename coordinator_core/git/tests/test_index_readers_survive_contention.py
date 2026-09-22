@@ -117,7 +117,7 @@ class TestGitStateReadIndex:
         )
 
         assert git_state.read_index(repo, fresh=True) == {}
-        # Review: code-reviewer finding 2 (a0f120ca85333568d) -- `read_index`
+        # `read_index`
         # calls `index_path.stat` exactly once, so the count is deterministic;
         # tightened from `>=` to match the sibling `read_bytes` assertion.
         assert calls["n"] == _ATTEMPTS_TO_SUCCEED
@@ -221,7 +221,7 @@ class TestExactlyOneLadder:
         assert seen, "git_index.scoped_status bypassed the shared ladder"
 
     def test_neither_reader_module_calls_time_sleep_directly(self):
-        # Review: code-reviewer finding 1 (a0f120ca85333568d) -- a name-grep
+        # A name-grep
         # for "RETRY_DELAY" is evaded by a resurrected ladder under any other
         # name (`_BACKOFF_S`, `_READ_PAUSE_S`, a local var `vars(module)`
         # never sees), so it was never "the tell" its own comment claimed. A

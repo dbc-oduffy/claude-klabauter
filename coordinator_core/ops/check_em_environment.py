@@ -189,7 +189,7 @@ def main(argv: List[str]) -> int:
     return 0
 
 
-# Review: code-reviewer — add standalone-CLI guard for consistency with every
+# Add standalone-CLI guard for consistency with every
 # other module in this port batch (Finding 5).
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))

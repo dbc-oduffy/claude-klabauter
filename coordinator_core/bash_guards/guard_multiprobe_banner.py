@@ -183,7 +183,10 @@ from coordinator_core.bash_guards._shape_classifier import (
     ShapeClassification,
     classify_command,
 )
-from coordinator_core.bash_guards.dispatch_checks import check_multiprobe_banner_rewrite
+from coordinator_core.bash_guards.dispatch_checks import (
+    _bt_python3_invocation as _mb_python3_invocation,
+    check_multiprobe_banner_rewrite,
+)
 from coordinator_core.bash_guards._helpers import operator_override_note, resolve_git_root
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core.bash_guards._verdict import record_silent
@@ -316,12 +319,19 @@ _SCRATCH_SCRIPT_NAME = "multiprobe.py"
 _POWERSHELL_BANNER_GENERIC_SUMMARY = (
     "a single in-process python3 call batching every probe, zero per-probe forks"
 )
-_POWERSHELL_BANNER_GENERIC_EXAMPLE = (
-    "python3 -c 'import subprocess\\n"
-    "print(subprocess.run([\"git\", \"status\", \"--porcelain=v2\", \"--branch\"], "
-    "capture_output=True, text=True).stdout)'  "
-    "# batch every probe into one process instead of one call per probe"
-)
+def _powershell_banner_generic_example() -> str:
+    """Built at call time via `_mb_python3_invocation()` -- see the sibling
+    grep-via-bash path (`guard_grep_via_bash.py`), which resolves the real
+    interpreter rather than a literal `python3 -c` an operator on a stock
+    Windows box (where `python3` is frequently absent from PATH) cannot
+    run. Resolution is fail-open to `"python3"`, so this degrades to the
+    prior literal wherever it cannot do better."""
+    return (
+        "%s -c 'import subprocess\\n"
+        "print(subprocess.run([\"git\", \"status\", \"--porcelain=v2\", \"--branch\"], "
+        "capture_output=True, text=True).stdout)'  "
+        "# batch every probe into one process instead of one call per probe" % _mb_python3_invocation()
+    )
 
 
 def _seam_confirmed_rewrite(result: Optional[Dict[str, Any]]) -> bool:
@@ -461,7 +471,7 @@ def _outlet_from_seam_result(
         rewrite = updated["command"]
         if is_subagent:
             return _subagent_script_outlet(rewrite, script_hint, bypass_note)
-        return ("the rewrite below. %s" % bypass_note, rewrite)
+        return ("this rewrite. %s" % bypass_note, rewrite)
     context = hso.get("additionalContext") or ""
     return ("the alternative below. %s" % bypass_note, context)
 
@@ -544,7 +554,7 @@ def check(
             _SHAPE_NAME,
             cmd,
             _POWERSHELL_BANNER_GENERIC_SUMMARY,
-            "%s\n  %s" % (_POWERSHELL_BANNER_GENERIC_EXAMPLE, bypass_note),
+            "%s\n  %s" % (_powershell_banner_generic_example(), bypass_note),
             host_is_windows=False,
         )
 

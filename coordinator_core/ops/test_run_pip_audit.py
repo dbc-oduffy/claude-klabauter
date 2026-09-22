@@ -167,7 +167,7 @@ def test_non_json_stdout_raises_runtime_error(tmp_path, monkeypatch):
 
 
 def test_empty_stdout_with_nonzero_exit_raises_runtime_error(tmp_path, monkeypatch):
-    """Review: code-reviewer (F1, P1) — empty stdout + non-zero exit (tool
+    """Empty stdout + non-zero exit (tool
     absent/crashed, e.g. "No module named pip_audit") previously fell
     through to the falsy-stdout branch and silently substituted a
     clean-scan payload, indistinguishable from a genuine zero-vuln result.
@@ -259,7 +259,7 @@ def test_invocation_is_list_argv_of_sys_executable_no_shell(tmp_path, monkeypatc
 
 
 def test_subprocess_run_carries_timeout(tmp_path, monkeypatch):
-    """Review: code-reviewer (F2, P1) — pip-audit is a live network call
+    """pip-audit is a live network call
     (advisory endpoint); an unresponsive network must not wedge the op
     forever. Assert a timeout= is passed on every invocation."""
     lockfile = _make_lockfile(tmp_path)

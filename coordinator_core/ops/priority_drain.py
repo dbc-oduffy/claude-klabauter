@@ -140,7 +140,7 @@ _KNOWN_KINDS = ("handoff", "plan", "roadmap", "deliverable")
 # on-disk file — a silent-collision hazard, not a traversal one). See module
 # docstring "TRUST BOUNDARY" — this guard is NEVER skippable, unlike the
 # best-effort schema validation below.
-# Review: code-reviewer — was `^[A-Za-z0-9][A-Za-z0-9._-]*$`, whose
+# Was `^[A-Za-z0-9][A-Za-z0-9._-]*$`, whose
 # unrestricted trailing-char class let a trailing `.` through where this
 # module's own docstring claimed an EXACT mirror; tightened to match.
 _TARGET_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*[A-Za-z0-9_-]$|^[A-Za-z0-9]$")
@@ -261,7 +261,7 @@ def _own_validate(record: Any) -> Optional[str]:
     if isinstance(sequence, bool) or not isinstance(sequence, int):
         return f"sequence must be an integer, got {sequence!r}"
 
-    # Review: code-reviewer — defense-in-depth backstop for the YAML
+    # defense-in-depth backstop for the YAML
     # injection closed at the render layer (priority_set._render_entry now
     # routes through yaml.safe_dump, which escapes these correctly). Reject
     # embedded newlines here too, same discipline already applied to
@@ -329,7 +329,7 @@ def _move(path: Path, dest_dir: Path, session_id: str) -> Optional[Path]:
     ``relocate_touched_path`` degrades to a plain move with no claim
     bookkeeping, exactly like the ``path.rename`` this replaces.
 
-    Review: code-reviewer — this call omits ``cwd`` (defaults to None),
+    This call omits ``cwd`` (defaults to None),
     unlike ``migrate_cross_repo_layout._move_one``'s explicit
     ``cwd=repo_root``. Confirmed safe rather than merely convenient: this
     op's inbox is resolved via ``coordinator_state_root(central=True)`` (see
@@ -344,7 +344,7 @@ def _move(path: Path, dest_dir: Path, session_id: str) -> Optional[Path]:
     docstring) — passing one in would mean introducing a new parameter for a
     call that is already correct, not closing a real inconsistency.
 
-    Review: code-reviewer — the inbox scan-and-archive phase is not under any
+    The inbox scan-and-archive phase is not under any
     lock (only the ledger write itself is, via priority_set's locked_rmw), so
     two concurrent drain() calls can both discover the same candidate file
     before either archives it. The loser's move used to propagate a bare
@@ -359,7 +359,7 @@ def _move(path: Path, dest_dir: Path, session_id: str) -> Optional[Path]:
     so this narrow catch still fires the same way it did around the bare
     ``rename``.
 
-    Review: code-reviewer — TWO separate catches here do TWO different jobs;
+    TWO separate catches here do TWO different jobs;
     do not "simplify" them back into one. (1) The narrow ``except OSError``
     immediately below is the vanished-source race above — it must return
     None, never fall back to a retry, since the source is genuinely gone.

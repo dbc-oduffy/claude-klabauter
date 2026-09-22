@@ -2746,9 +2746,8 @@ def _run_probe_stable_pid_miss(claude_klabauter_root: Path | None) -> _ProbeResu
     ``stable_pid`` capture misses AND which runs only Bash/PowerShell for 30 minutes
     reads DEAD on the Layer-2 recency path in
     ``coordinator_core/session/liveness.py::session_live``, making it takeover- and
-    reap-eligible while still alive. ``hooks.session_heartbeat`` — the sole discharge
-    of that hazard — was deregistered 2026-08-16 (both DoE-side hook registrations).
-    Deregistration was ruled safe ONLY because the miss rate measured 0% (10/10
+    reap-eligible while still alive. The heartbeat was removed (K-006); this probe
+    guards the premise of that removal — that the miss rate measured 0% (10/10
     live + 354/354 archived sessions since 2026-08-10). That 0% did NOT hold:
     re-measured 2026-08-26 over the ledger's own window it was 65.3% (147/225),
     one cause (``posix-parent-miss:name-mismatch``), closed 2026-08-22 by

@@ -30,20 +30,29 @@ from coordinator_core.bash_guards import dispatch_checks
 
 def _capture(monkeypatch):
     calls = []
+    #: The deletion channel's `kind`, captured so this fixture's stub cannot
+    #: silently diverge from the real signature again. It did: the stub took
+    #: three positional parameters, `append_touch_claims` grew a keyword-only
+    #: `kind`, and every call raised `TypeError` into the caller's own
+    #: never-raise `except Exception` -- so these tests reported "nothing was
+    #: recorded" for a channel that was in fact broken, which is the shape
+    #: they exist to catch.
+    kinds = []
 
-    def fake_append_touch_claims(paths, session_id, root):
+    def fake_append_touch_claims(paths, session_id, root, *, kind=None, **_kw):
         calls.append(list(paths))
+        kinds.append(kind)
 
     monkeypatch.setattr(
         "coordinator_core.session.touch_record.append_touch_claims",
         fake_append_touch_claims,
     )
-    return calls
+    return calls, kinds
 
 
 class TestInRepoTargetStillRecords:
     def test_in_repo_target_is_recorded(self, tmp_path, monkeypatch):
-        calls = _capture(monkeypatch)
+        calls, kinds = _capture(monkeypatch)
         root = tmp_path / "repo"
         root.mkdir()
         target = root / "sub" / "file.txt"
@@ -53,11 +62,17 @@ class TestInRepoTargetStillRecords:
         dispatch_checks._rm_flush_touch([str(target)], "sess", str(root))
 
         assert calls == [["sub/file.txt"]]
+        # A deletion is a WRITE claim: it is the most mutating thing this
+        # record carries, and it must keep refusing a peer's commit now that
+        # read-kind claims no longer do.
+        from coordinator_core.session import touch_record
+
+        assert kinds == [touch_record.KIND_WRITE]
 
 
 class TestOutOfRepoSameDriveIsSkipped:
     def test_out_of_repo_target_records_nothing(self, tmp_path, monkeypatch):
-        calls = _capture(monkeypatch)
+        calls, kinds = _capture(monkeypatch)
         root = tmp_path / "repo"
         root.mkdir()
         outside = tmp_path / "outside" / "holder.json"
@@ -74,7 +89,7 @@ class TestOutOfRepoSameDriveIsSkipped:
 
 class TestCrossDriveTargetSkipped:
     def test_cross_drive_target_skipped_by_containment_gate(self, tmp_path, monkeypatch):
-        # Review: C2 code-reviewer — this used to pin the (now-deleted)
+        # This used to pin the (now-deleted)
         # `except ValueError: continue` around `os.path.relpath`, which
         # passed identically whether the skip came from that except clause
         # or from `_is_within` above it, so it pinned nothing that
@@ -83,7 +98,7 @@ class TestCrossDriveTargetSkipped:
         # than only on the downstream `calls` list, so this fails if the
         # gate stops being consulted even though the net recording
         # behavior would look the same.
-        calls = _capture(monkeypatch)
+        calls, kinds = _capture(monkeypatch)
         root = tmp_path / "repo"
         root.mkdir()
 
@@ -125,11 +140,11 @@ class TestCrossDriveTargetSkipped:
 
 class TestRootItselfIsRecorded:
     def test_root_itself_is_recorded_as_dot(self, tmp_path, monkeypatch):
-        # Review: C2 code-reviewer — pins a case inspection-clean by reading
+        # Pins a case inspection-clean by reading
         # `_is_within` (p == r returns True for root itself) but previously
         # untested: `root` passed as the deletion target relpaths to ".",
         # which is recorded rather than skipped.
-        calls = _capture(monkeypatch)
+        calls, kinds = _capture(monkeypatch)
         root = tmp_path / "repo"
         root.mkdir()
 
@@ -142,10 +157,10 @@ class TestRootWithTrailingSeparatorTargetIsRecorded:
     def test_target_under_root_with_trailing_separator_is_recorded(
         self, tmp_path, monkeypatch
     ):
-        # Review: C2 code-reviewer — pins the trailing-separator shape on
+        # Pins the trailing-separator shape on
         # `root` itself; `_is_within`'s `r.rstrip(os.sep) + os.sep` handles
         # this by inspection but it was untested here.
-        calls = _capture(monkeypatch)
+        calls, kinds = _capture(monkeypatch)
         root = tmp_path / "repo"
         root.mkdir()
         target = root / "sub" / "file.txt"
@@ -163,12 +178,12 @@ class TestDotDotNormalizesBackInsideIsRecorded:
     def test_dot_dot_path_normalizing_inside_root_is_recorded(
         self, tmp_path, monkeypatch
     ):
-        # Review: C2 code-reviewer — a target spelled with a `..` segment
+        # A target spelled with a `..` segment
         # that normalizes back inside `root` (e.g. `root/sub/../file.txt`)
         # must still be RECORDED: it is in-repo once normalized, and
         # `_is_within` normpaths before comparing, so this is not the
         # out-of-repo shape this gate exists to reject.
-        calls = _capture(monkeypatch)
+        calls, kinds = _capture(monkeypatch)
         root = tmp_path / "repo"
         root.mkdir()
         (root / "sub").mkdir()

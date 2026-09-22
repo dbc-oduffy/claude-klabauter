@@ -215,7 +215,7 @@ def test_mint_person_core_collision_on_non_github_alias_resolves_via_that_alias(
     losing bundle at all, still recovers — via the alias that actually
     collided (`email` here), not a hardcoded `github` retry.
 
-    # Review: coordinator:code-reviewer P1 — regression coverage for the
+    # Regression coverage for the
     # retry using whichever alias actually collided rather than always
     # `github`; this bundle has no `github` key to fall back on at all."""
     repo = _make_git_repo(tmp_path / "repo")
@@ -240,7 +240,7 @@ def test_mint_person_core_collision_on_later_alias_resolves_to_true_winner(tmp_p
     winner's `person_id` — not resolve `github` back to this call's own
     just-written orphan and misreport a real conflict as resolved.
 
-    # Review: coordinator:code-reviewer P1 — this is the exact untested
+    # This is the exact untested
     # collision ordering the finding identified."""
     repo = _make_git_repo(tmp_path / "repo")
 
@@ -271,7 +271,7 @@ def test_mint_person_core_collision_on_person_created_reraises(tmp_path, monkeyp
     of this call's own has succeeded yet) must never attempt an alias-based
     recovery — re-raise rather than guess at a recovery target.
 
-    # Review: coordinator:code-reviewer P2 — regression coverage for scoping
+    # Regression coverage for scoping
     # the collision-recoverable `try` to only the alias-emission loop."""
     from coordinator_core.tracker_entities import TrackerEntityError
 

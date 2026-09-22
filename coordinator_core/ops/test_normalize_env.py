@@ -97,7 +97,7 @@ def test_restore_missing_file_exit_code_matches_golden_oracle_behavior():
     assert rc == 2
 
 
-# Review: code-reviewer (Finding 2) — this constant previously used an em-dash
+# This constant previously used an em-dash
 # ("— restore") that neither matched the code's actual output ("--restore",
 # double-hyphen) nor was ever wired into an assertion, silently masking an
 # unverified byte-parity claim. Fixed to the code's actual current output and
@@ -217,7 +217,7 @@ def test_extra_zsh_path_entries_filters_homebrew_and_defaults():
     assert extras == ["/Users/me/.local/bin"]
 
 
-# Review: code-reviewer (Finding 4, A6) — companion to Finding 1's A5 fix.
+# Companion to Finding 1's A5 fix.
 # No prior test exercised `_ne_darwin_bash_profile_repair`'s actual disk-write
 # path at all, so the permission-drop regression would not have been caught.
 def test_darwin_bash_profile_repair_preserves_prior_file_mode(tmp_path):

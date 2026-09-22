@@ -904,7 +904,7 @@ def receiver_em_to_repo_key(receiver_em_id: str) -> str:
     DoE-ratified alias surface: DoE consult 2026-07-05 strang-03 follow-up, Q1.
     """
     shortname = receiver_em_id[:-3] if receiver_em_id.endswith("-em") else receiver_em_id
-    # Review: code-reviewer — removed unreachable `if not shortname` guard; _validate_send_params
+    # Removed unreachable `if not shortname` guard; _validate_send_params
     # rejects empty `to` before this point, so the "-em"-alone → empty-shortname path is
     # unreachable from the handler. Caller gets repos. (missing suffix), correctly fails lookup.
 
@@ -983,10 +983,56 @@ def canonical_receiver_id(receiver_em_id: str) -> str:
     return _repo_key_to_receiver_em_id(repo_key)
 
 
+def reroute_owner(receiver_em_id: str) -> Optional[str]:
+    """The EM id a memo addressed to `receiver_em_id` is delivered to instead, or None.
+
+    Two kinds of address are not receivers and route to an owner:
+      - a manifest redirect alias (`identity.redirectAliases`: `.claude-em`,
+        `claude-home`, `coordinator-claude`, `coordinator-claude-em`) routes to the
+        central receiver, `doe-claude-em`;
+      - a publish mirror routes to its declared owner, whether it is addressed by
+        one of its aliases (`read_publish_mirror_owners`) or by a `repos.*`
+        receiver whose path is a declared mirror path. The published engine is
+        registered in `repos.*` on purpose so tools can find it, which is how
+        `claude-klabauter-em` used to resolve into the mirror's own inbox; it
+        routes to `claude-klabauter-em`.
+    An ownerless mirror returns None here; `resolve_receiver_inbox` still refuses
+    its path a delivery. Never raises.
+    """
+    normalized = receiver_em_id.strip().lower()
+    if normalized in read_redirect_aliases():
+        try:
+            central = canonical_receiver_id(normalized)
+        except AmbiguousReceiverError:
+            return None
+        return central if central != normalized else None
+    owner = read_publish_mirror_owners().get(normalized)
+    if owner:
+        declared = {m.get("owner") for m in read_publish_mirrors().values()}
+        return owner if owner in declared else None
+    try:
+        repo_key = receiver_em_to_repo_key(receiver_em_id)
+        repo_path_str = read_registry_repos().get(repo_key) if repo_key else None
+    except RegistryReadError:
+        return None
+    if not repo_path_str:
+        return None
+    mirror_key = publish_mirror_path_match(Path(repo_path_str))
+    if not mirror_key:
+        return None
+    return read_publish_mirrors().get(mirror_key, {}).get("owner") or None
+
+
 def resolve_receiver_inbox(
     receiver_em_id: str,
 ) -> Tuple[Optional[Path], Optional[Path], dict[str, str]]:
     """Resolve receiver EM identity → (inbox_dir, receiver_repo_path, all_repos_registry).
+
+    A publish mirror or a redirect alias is never a receiver. A memo addressed
+    to one routes to its owner (`reroute_owner`): `claude-klabauter-em` resolves
+    to `claude-klabauter-em`'s inbox, `coordinator-claude-em` to `doe-claude-em`'s.
+    A mirror with no owner declared resolves to no receiver at all (the
+    `(None, None, all_repos)` UNKNOWN shape), never to the mirror's own inbox.
 
     Returns:
         (inbox_dir, receiver_repo_path, all_repos) where inbox_dir is the
@@ -1015,6 +1061,10 @@ def resolve_receiver_inbox(
         AmbiguousReceiverError: a central receiver id fans in to more than one
             DISTINCT registered repos.* key (manifest/registry disagreement).
     """
+    owner = reroute_owner(receiver_em_id)
+    if owner and owner.strip().lower() != receiver_em_id.strip().lower():
+        if reroute_owner(owner) is None:
+            return resolve_receiver_inbox(owner)
     all_repos = read_registry_repos()
     central_ids = read_central_receiver_ids()
     normalized_id = receiver_em_id.strip().lower()
@@ -1029,6 +1079,8 @@ def resolve_receiver_inbox(
     if not repo_path_str:
         return None, None, all_repos
     receiver_repo_path = Path(repo_path_str)
+    if publish_mirror_path_match(receiver_repo_path):
+        return None, None, all_repos
     # Per-receiver probe (C5, C10a migration window): the receiver's OWN
     # corpus root — never this repo's `memo_corpus_root`, never a hardcoded
     # `cross-repo` literal — decides where its inbox lives; a migrated peer
@@ -1179,7 +1231,7 @@ def _nearest_receiver_matches(
     if nothing is within a reasonable edit-distance similarity threshold
     (cutoff 0.5) or the registry has no candidates at all.
 
-    Review: code-reviewer — callers detecting uniqueness (`unique_nearest_receiver`)
+    Callers detecting uniqueness (`unique_nearest_receiver`)
     rely on calling this with `n=2` and treating a returned length of exactly 2 as
     "ambiguous" (2+ candidates cleared the cutoff) vs exactly 1 as "unique" — i.e.
     on `difflib.get_close_matches(..., n=2, ...)` returning exactly 2 entries iff

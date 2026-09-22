@@ -373,7 +373,7 @@ _TYPE_TO_GLOB: dict[str, str] = {
     # existing archived-memo support) treats the archive directory's glob
     # alone as sufficient, since every file archived out of inbox/ already
     # passed the inbox-side shape guard at archive time.
-    # Review: code-reviewer (F7) — deliberately weaker guarantee than
+    # Deliberately weaker guarantee than
     # cross-repo-memo's explicit from/to shape guard: this trusts directory
     # placement alone, unenforced/untested from this module's side, in case
     # a future reader assumes parity between the two.
@@ -684,7 +684,7 @@ def liveness(fm: dict, record_type: str) -> str:
         return 'LIVE'
 
     # --- Archived-memo: unconditionally terminal by directory placement ---
-    # Review: code-reviewer (F1) — every file under cross-repo/archive/ is
+    # Every file under cross-repo/archive/ is
     # already resolved (that's why it's archived, not in inbox/); do not fall
     # through to the graceful default's handoff-vocabulary _TERMINAL_STATUS
     # check, which silently reports LIVE for memo-vocabulary statuses like
@@ -1037,7 +1037,7 @@ def _clause_matches(fm: dict, clause: dict) -> bool:
     if op == 'in' and isinstance(raw, list):
         return any(str(el) in clause['values'] for el in raw)
 
-    # Review: code-reviewer — F2: lowercase Python bools to match JS String(true)→'true'
+    # Lowercase Python bools to match JS String(true)→'true'
     if raw is None:
         fm_val = ''
     elif raw is True:
@@ -2261,9 +2261,9 @@ _SIDECAR_SUFFIXES = (
     '.prior-art-check.',       # subsumes both classic (.prior-art-check.md) and timestamped variants
     '.review.',                # review-sidecar schema (docs/plans/*.review.md)
     '.docs-check.',            # docs-check-sidecar schema (docs/plans/*.docs-check.md)
-    # Review: F6 — removed redundant .prior-art-check.md / .plan-coverage-check.md entries;
+    # F6 — removed redundant .prior-art-check.md / .plan-coverage-check.md entries;
     # the dot-terminated forms already match them as substrings via _is_known_sidecar.
-    # Review: code-reviewer (ops-records-cruft-hierarchy F2) — added .review./.docs-check.
+    # Added .review./.docs-check.
     # so this set covers all 4 docs/plans/* sidecar schemas the oracle's
     # _buildPlanSidecarRegexes derives, not just 2 of 4.
 )

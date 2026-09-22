@@ -188,7 +188,7 @@ class TestRenderContract:
     def test_scan_incomplete_truthy_non_bool_does_not_trip_qualifier(
         self, monkeypatch, tmp_path, capsys
     ):
-        """Review: code-reviewer -- Finding 8. `scan_incomplete` is `is True`-gated,
+        """`scan_incomplete` is `is True`-gated,
         not `bool(...)`-coerced, so a future non-bool truthy sentinel (e.g. a
         string like "false") fails to trip "(partial scan)" rather than
         silently rendering it -- `bool("false")` is `True` in Python, which is

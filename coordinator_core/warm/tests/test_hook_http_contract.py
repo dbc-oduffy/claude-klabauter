@@ -145,3 +145,28 @@ def test_blocking_events_are_distinguished_from_advisory_ones():
     assert hook_http.is_blocking_event("PreToolUse")
     assert not hook_http.is_blocking_event("PostToolUse")
     assert not hook_http.is_blocking_event(None)
+
+
+# -- plugin_root residency: the docstring must not overclaim caller-side computation ------
+
+
+def test_payload_from_event_docstring_names_the_ambient_residual():
+    """2026-08-29 bug-backlog row: `payload_from_event` computes `plugin_root` in the
+    RESIDENT SERVER process (wherever `build_request` runs), not at the caller -- a foreign
+    `cwd` on the event does not change the answer. The docstring must say so, not claim
+    the opposite ("rather than leaving every downstream reader... independently" read, on
+    its own, as if this function were caller-side)."""
+    doc = hook_http.payload_from_event.__doc__ or ""
+    assert "NOT CALLER-SIDE" in doc
+    assert "ambient probe" in doc
+
+
+def test_payload_from_event_plugin_root_is_caller_independent_today():
+    """Pins the measured defect itself, not just the prose: with no `plugin_root` on the
+    wire and no forwardable `CLAUDE_PLUGIN_ROOT` header, two events differing only in
+    `cwd` resolve to the SAME `plugin_root` -- the resolution is this process's ambient
+    state, not the caller's. This must go red the day a real per-caller channel lands;
+    when it does, the docstring's "NOT CALLER-SIDE" claim needs updating alongside it."""
+    a = hook_http.payload_from_event({"session_id": "s1", "cwd": "/repo/one"})
+    b = hook_http.payload_from_event({"session_id": "s2", "cwd": "/repo/two/elsewhere"})
+    assert a["plugin_root"] == b["plugin_root"]

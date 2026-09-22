@@ -242,7 +242,6 @@ def _run_process_probe() -> List[ProcessObservation]:
     # process_iter(attrs=["pid", "name"]) defaults `ad_value=None`, so an
     # unreadable `name`/`pid` attr comes back as `None` here rather than
     # raising AccessDenied out of this loop (verified against psutil 7.2.2 —
-    # Review: coordinator:code-reviewer). The `or ""` guard below
     # is what makes that `None` safe to `.lower()` and filter on; the
     # explicit `proc.cmdline()` try/except a few lines down is a separate,
     # deliberately-covered AccessDenied path (_CommandLineUnavailable).

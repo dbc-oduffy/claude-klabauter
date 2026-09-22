@@ -45,7 +45,7 @@ def test_op_is_classified_compute_only() -> None:
     assert result is OpClass.COMPUTE_ONLY
 
 
-# Review: coordinatorcode-reviewer.ad3945b7f5b493ad9 finding 1 — name asserted
+# Name asserted
 # the opposite of the behavior proven; the firing case is covered separately by
 # test_op_returns_allow_advisory_shape_when_sentinel_present.
 def test_op_suppresses_for_a_non_firing_payload() -> None:
@@ -114,7 +114,7 @@ def test_op_suppresses_on_override_env_from_payload_not_os_environ(tmp_path, mon
     }
     assert _handler({"payload": payload}) == {}
 
-    # Review: coordinatorcode-reviewer.ad3945b7f5b493ad9 finding 2 — the prior
+    # The prior
     # inverse case reached the suppression path via fail-open posture, never
     # via the override branch, so it could not discriminate an accidental
     # os.environ read. Force the firing branch (sentinel present) so the only

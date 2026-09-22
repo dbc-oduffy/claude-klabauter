@@ -307,7 +307,7 @@ def raise_floor(dimension: str, repo_root: Optional[Path] = None) -> Optional[Pa
 # ---------------------------------------------------------------------------
 
 _PORTED_OPS_FRAGMENT = ".github/ported-ops-paths.txt"
-# Review: coordinator:code-reviewer-3c4f24d7 -- anchored to line-start (MULTILINE)
+# Anchored to line-start (MULTILINE)
 # and matches the LAST such line, not the first `re.search` hit anywhere in the
 # blob. interrogate's real summary TOTAL row is its last "TOTAL ..." line; a
 # per-file row whose docstring/path happens to contain the literal token

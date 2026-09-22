@@ -40,7 +40,7 @@ the ambient-context trio `ambient_before`/`ambient_after`/`ambient_delta`
 (Optional[dict]). `from_json` accepts a v1 payload (none of these keys
 present) by defaulting every one of them to None -- see from_json()."""
 
-# Review: code-reviewer (Slice B F5, nit) — named constants for floor_scope's
+# Named constants for floor_scope's
 # documented "run"|"per_op" enum, mirroring gate.py's VERDICT_* constant pattern,
 # so callers (harness.py) reference a name instead of a bare string literal.
 FLOOR_SCOPE_RUN = "run"
@@ -196,7 +196,7 @@ class ConformanceRecord:
     def to_json(self) -> str:
         """Serialize this record to a JSON string. Round-trip pair: from_json()."""
         data = asdict(self)
-        # Review: code-reviewer (Slice A F5, nit) — asdict() already recurses
+        # asdict() already recurses
         # into Tolerance (a nested dataclass) and produces an equivalent dict;
         # this explicit re-assignment is belt-and-braces future-proofing in
         # case Tolerance ever grows a non-trivially-serializable field, kept

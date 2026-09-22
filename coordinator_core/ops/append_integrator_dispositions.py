@@ -64,27 +64,38 @@ second block that names the one it supersedes. It used to no-op. See
 `append_dispositions` for why that was break-class.
 
 Negative-spec:
-  - Does NOT REFUSE on a bucket map that fails to cover the findings exactly
-    once — but it no longer stays silent about one either. Where the sidecar
-    carries a fenced ```json `findings` array, `_partition_audit` compares the
-    supplied ids against it and records `partition_audit:` in the appended
-    block, naming the unbucketed, duplicated, out-of-range and unrecognized
-    ids, plus any disagreement with the reviewer's own declared
-    `findings_count:`. Ids are read against EVERY envelope in the sidecar, not
-    the first: a multi-pass reviewer emits one envelope per pass, and the
-    narrow window left the later pass's findings undispositionable except by a
-    spelling that attested them against the earlier pass's findings
-    (`_findings_index_space`). The block records the per-envelope spans the
-    ids were read in. WARN, not refuse: see the comment at the write site for
-    why a refusal here would brick every file the reviewer cited.
-    Where the sidecar carries only the `review-findings` shape there is
-    nothing to check against — the template (DR-091) has no structured
-    per-finding id field (the same absence
-    `block_em_hand_edit_pending_review_integration` documents for its own
-    coverage heuristic) — so the audit renders nothing and completeness stays
-    the calling agent's responsibility, per `agents/review-integrator.md`
-    § Sidecar Disposition Annotation ("Every finding in the sidecar must
-    appear in exactly one bucket").
+  - DOES REFUSE, before writing anything, when the supplied buckets leave a
+    HOLE (a finding no bucket names) or an OVERLAP (a finding named in more
+    than one bucket) against the reviewer's own declared findings total —
+    `_partition_audit`'s `unbucketed` / `duplicated` classes, checked where
+    the sidecar carries a fenced ```json `findings` array. A holed or
+    overlapping partition used to land WARN-only, which made a miscounted
+    bucket PERMANENTLY wrong on the record feeding subtractive adjudication:
+    the written block reads as authoritative to every later reader, while the
+    stderr warning is gone by the next session. Refusing costs a retry with
+    the findings already applied; it does not cost the finding itself. Ids are
+    read against EVERY envelope in the sidecar, not the first: a multi-pass
+    reviewer emits one envelope per pass, and a narrow window left the later
+    pass's findings undispositionable except by a spelling that attested them
+    against the earlier pass's findings (`_findings_index_space`). Where the
+    sidecar carries only the `review-findings` shape there is nothing to check
+    against — the template (DR-091) has no structured per-finding id field
+    (the same absence `block_em_hand_edit_pending_review_integration`
+    documents for its own coverage heuristic) — so no hole/overlap check can
+    run and completeness stays the calling agent's responsibility, per
+    `agents/review-integrator.md` § Sidecar Disposition Annotation ("Every
+    finding in the sidecar must appear in exactly one bucket").
+  - Does NOT refuse on the audit's OTHER discrepancy classes —
+    `out_of_range`, `unrecognized`, `ambiguous_block`, and
+    `declared_count_mismatch` — which stay WARN, not refuse: those are
+    read/parse-shape uncertainties (a typo'd id, competing candidate JSON
+    blocks, a stamped total that may itself be stale) rather than a
+    caller-supplied id set provably incomplete or self-contradicting against
+    the array it was read from, so refusing on them would brick a
+    possibly-correct call on the audit's own uncertainty. They still render in
+    the appended `partition_audit:` block (never only on stderr) and the
+    block records the per-envelope spans the ids were read in via
+    `envelope_spans`.
   - Does NOT check that a finding reached the RIGHT bucket. Nothing on disk
     records what the correct disposition was, so a mislabel stays invisible.
     The audit closes the arithmetic half of the gap, never the judgment half.
@@ -162,6 +173,34 @@ BUCKET_ORDER = (
     "deferred",
     "verified-no-action",
 )
+
+#: Relation a newly-appended block bears to whatever dispositions blocks
+#: already sit in this sidecar. `RELATION_COMPLEMENTARY` is the default: a
+#: partitioned review dispatches one integrator per SLICE of the same
+#: reviewer's findings, and those slices are complementary by construction
+#: (disjoint finding-id ranges), never successive drafts of the same
+#: disposition set. Before this module named the relation, every append
+#: after the first stamped `supersedes_block: N` regardless — a reader
+#: following that marker concluded the earlier slice's dispositions were
+#: withdrawn, when nothing was lost and nothing disagreed. See
+#: claude-klabauter#48.
+#:
+#: `RELATION_SUPERSEDE` is the pre-existing repair-run semantic
+#: (`append_dispositions`'s own docstring): a second pass over the SAME
+#: finding set, where the later block is the one and only operative record
+#: and the earlier one is history.
+#:
+#: A per-slice id was considered as the discriminator instead of this
+#: explicit flag (claude-klabauter#48, option 2) and rejected: no slice
+#: identifier reaches this module's call site today (`_build_arg_parser`
+#: carries no `--slice-id`/`--slice` flag, and no session or dispatch
+#: envelope this reads exposes one either) — inferring "distinct slice" from
+#: an id this call never receives would be a guess dressed as a fact. Option
+#: 1 — an explicit relation argument, defaulting to the common case — is the
+#: one this module can actually honor.
+RELATION_COMPLEMENTARY = "complementary"
+RELATION_SUPERSEDE = "supersede"
+_RELATION_CHOICES = (RELATION_COMPLEMENTARY, RELATION_SUPERSEDE)
 
 #: YAML key per bucket — differs from the CLI flag spelling only in that the
 #: flag uses hyphens throughout while `escalated-p0` doubles as both (kept as
@@ -516,7 +555,7 @@ def _findings_index_space(
             start = len(union) + 1
             union.extend(findings)
             spans.append((start, len(union)))
-        # Review: S8 reviewer F1 -- a co-existing bare (unidentified) block
+        # A co-existing bare (unidentified) block
         # must still count toward ambiguity even when real envelopes are
         # present; hardcoding 1 here silently dropped it instead of tripping
         # `ambiguous_block`. Envelopes themselves stay safe to union (any
@@ -955,6 +994,7 @@ def _build_block(
     prior_blocks: int = 0,
     partition_audit: Optional[Dict[str, List[str]]] = None,
     envelope_spans: Optional[List[Tuple[int, int]]] = None,
+    relation: str = RELATION_COMPLEMENTARY,
 ) -> str:
     """Render the canonical `## Integrator Dispositions` block, matching
     `agents/review-integrator.md`'s own example byte-for-byte in structure
@@ -987,6 +1027,15 @@ def _build_block(
     name, and a record that leaves that to be re-derived from the file is
     indistinguishable by eye from one that got it wrong. Spans name the
     numbering the ids were audited in; a reader needs no second look.
+
+    `relation` is stated in EVERY block, not only when it disagrees with the
+    default, so a reader never has to infer it from a marker's absence — the
+    exact silent-inference failure claude-klabauter#48 names
+    (`RELATION_COMPLEMENTARY`'s own comment). `supersedes_block` /
+    `recorded_at` render only when `relation == RELATION_SUPERSEDE` AND a
+    prior block exists: a complementary append (the partitioned-review case)
+    must never carry `supersedes_block`, because that marker is what a later
+    reader follows to conclude the earlier block was withdrawn.
     """
     lines: List[str] = []
     lines.append("")
@@ -996,7 +1045,8 @@ def _build_block(
     lines.append("")
     lines.append("```yaml")
     lines.append("schema_version: 1")
-    if prior_blocks:
+    lines.append(f"relation: {relation}")
+    if prior_blocks and relation == RELATION_SUPERSEDE:
         lines.append(f"supersedes_block: {prior_blocks}")
         lines.append(f"recorded_at: {datetime.now(timezone.utc).date().isoformat()}")
     for bucket in BUCKET_ORDER:
@@ -1046,6 +1096,7 @@ def append_dispositions(
     rationale: Optional[str] = None,
     git_root: Optional[Path] = None,
     no_findings: bool = False,
+    relation: str = RELATION_COMPLEMENTARY,
 ) -> Dict[str, object]:
     """Validate `sidecar_path` and append the disposition block to it.
 
@@ -1072,8 +1123,12 @@ def append_dispositions(
     int}`` — `already_dispositioned` keeps its name and now means a block was
     already there, not that this call declined to write. Raises
     `DispositionsError` on any validation failure — see module docstring for
-    the full fail-loud checklist. Never partially writes: the block is only
-    ever appended after every check above passes.
+    the full fail-loud checklist, which now includes a HOLED or OVERLAPPING
+    bucket partition (a finding the supplied buckets leave uncovered or cover
+    twice, checked against the reviewer's own declared findings total) —
+    refused before anything is written, not merely warned about. Never
+    partially writes: the block is only ever appended after every check above
+    passes.
 
     `no_findings` records an all-buckets-empty block for a reviewer that filled
     its findings section and declared no findings in it. NEGATIVE SPEC: this is
@@ -1082,7 +1137,21 @@ def append_dispositions(
     only one of them is honest. It is also not a substitute for the unfilled-
     scaffold check above, which still fires first: a reviewer that never wrote
     its findings body has not declared anything.
+
+    `relation` (default `RELATION_COMPLEMENTARY`) states, in the appended
+    block itself, whether this append is complementary to (a disjoint slice
+    of the same reviewer's findings — the partitioned-review case) or
+    supersedes (a repair re-pass over the same finding set) whatever
+    dispositions blocks already sit in this sidecar. Only `RELATION_SUPERSEDE`
+    renders `supersedes_block:`. See `RELATION_COMPLEMENTARY`'s module-level
+    comment for why this is an explicit argument rather than something
+    inferred from a slice id.
     """
+    if relation not in _RELATION_CHOICES:
+        raise DispositionsError(
+            f"relation must be one of {_RELATION_CHOICES!r}, got: {relation!r}"
+        )
+
     if not sidecar_path.is_file():
         raise DispositionsError(f"sidecar not found: {sidecar_path}")
 
@@ -1172,15 +1241,29 @@ def append_dispositions(
             "declared no findings at all, pass --no-findings."
         )
 
-    # WARN, never refuse. A misdirected write above has no correct record to
-    # land and refusing costs a retry; a miscount does not -- the findings are
-    # already applied by the time this is called, and refusing would write no
-    # `## Integrator Dispositions` heading at all. That heading is the single
-    # thing `block_em_hand_edit_pending_review_integration` unblocks on, so a
-    # refusal here would brick every file the reviewer cited over an
-    # arithmetic slip in the record of work that is already done -- strictly
-    # worse than the miscount. The mismatch is recorded instead, in the block,
-    # and a second call with the right map supersedes it cleanly.
+    # REFUSE on a HOLED or OVERLAPPING partition (`unbucketed` / `duplicated`),
+    # before anything is written. Those two classes are checked directly
+    # against the declared total this sidecar's own findings array supplies
+    # (`_findings_index_space`'s union) -- a finding the map leaves uncovered
+    # or double-covers is not almost right, it is exactly the arithmetic this
+    # audit exists to police, and letting it land WARN-only made a miscounted
+    # bucket permanently wrong on the record: subtractive adjudication reads
+    # the written block as authoritative, not the stderr line that is gone by
+    # the next session. Refusing costs a retry with the same findings already
+    # applied; landing a bad partition costs a silent corruption of the very
+    # record subtractive adjudication subtracts from. Nothing is written on
+    # this path -- the caller fixes the bucket map and calls again, exactly as
+    # an unfilled-scaffold or a wrong-target refusal already works above.
+    #
+    # WARN, still never refuse, for the OTHER discrepancy classes this audit
+    # reports -- `out_of_range`, `unrecognized`, `ambiguous_block`,
+    # `declared_count_mismatch`. Those are read/parse-shape uncertainties (an
+    # id that may be a typo, competing candidate JSON blocks, a stamped total
+    # that may itself be stale) rather than a caller-supplied id set that is
+    # provably incomplete or self-contradicting against the array it was read
+    # from, so refusing on those would brick a possibly-correct call on the
+    # audit's own uncertainty rather than on a mistake the caller can point
+    # to and fix. See the module docstring's negative-spec for the same split.
     findings, envelope_spans, candidate_blocks = _findings_index_space(text)
     audit = (
         None
@@ -1193,6 +1276,20 @@ def append_dispositions(
         )
     )
 
+    if audit and (audit.get("unbucketed") or audit.get("duplicated")):
+        parts = []
+        if audit.get("unbucketed"):
+            parts.append("unbucketed: [" + ", ".join(audit["unbucketed"]) + "]")
+        if audit.get("duplicated"):
+            parts.append("duplicated: [" + ", ".join(audit["duplicated"]) + "]")
+        raise DispositionsError(
+            "the supplied buckets do not partition this reviewer's "
+            f"{len(findings)} declared findings cleanly ({'; '.join(parts)}) "
+            "-- every finding must appear in EXACTLY ONE bucket. Nothing was "
+            "written. Fix the bucket map (see `agents/review-integrator.md` "
+            "§ Sidecar Disposition Annotation) and call again."
+        )
+
     block = _build_block(
         buckets,
         rationale,
@@ -1200,6 +1297,7 @@ def append_dispositions(
         prior_blocks=prior_blocks,
         partition_audit=audit,
         envelope_spans=envelope_spans,
+        relation=relation,
     )
     with sidecar_path.open("a", encoding="utf-8") as handle:
         handle.write(block)
@@ -1214,6 +1312,7 @@ def append_dispositions(
         "prior_blocks": prior_blocks,
         "partition_audit": audit,
         "envelope_spans": envelope_spans,
+        "relation": relation,
     }
 
 
@@ -1286,6 +1385,19 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Record an empty disposition set for a reviewer that declared no findings. "
             "Mutually exclusive with any bucket flag."
+        ),
+    )
+    parser.add_argument(
+        "--relation",
+        choices=_RELATION_CHOICES,
+        default=RELATION_COMPLEMENTARY,
+        help=(
+            "Relation this append bears to any dispositions block already in the "
+            "sidecar. 'complementary' (default): a disjoint slice of the same "
+            "reviewer's findings from a partitioned review — nothing is withdrawn, "
+            "and no `supersedes_block` is written. 'supersede': a repair re-pass "
+            "over the SAME finding set, where this block becomes the sole "
+            "operative record and `supersedes_block` names the one it replaces."
         ),
     )
     parser.add_argument(
@@ -1394,18 +1506,26 @@ def main(argv: Optional[List[str]] = None) -> int:
             rationale=rationale,
             git_root=git_root,
             no_findings=args.no_findings,
+            relation=args.relation,
         )
     except DispositionsError as exc:
         print(f"append-integrator-dispositions: {exc}", file=sys.stderr)
         return 1
 
-    if result["already_dispositioned"]:
+    if result["already_dispositioned"] and result["relation"] == RELATION_SUPERSEDE:
         prior = int(result["prior_blocks"])  # type: ignore[call-overload]
         print(
             f"append-integrator-dispositions: OK — appended dispositions block "
             f"{prior + 1} to {result['path']}, superseding block {prior}. "
             "The last block is the operative one; the earlier ones are kept as "
             "the disposition history."
+        )
+    elif result["already_dispositioned"]:
+        prior = int(result["prior_blocks"])  # type: ignore[call-overload]
+        print(
+            f"append-integrator-dispositions: OK — appended dispositions block "
+            f"{prior + 1} to {result['path']} as COMPLEMENTARY to the {prior} "
+            "existing block(s) — none of them is superseded or withdrawn."
         )
     else:
         print(f"append-integrator-dispositions: OK — appended dispositions block to {result['path']}.")

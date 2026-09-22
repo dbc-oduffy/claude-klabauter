@@ -42,7 +42,7 @@ pytestmark = [
     pytest.mark.spawns_process,
 ]
 
-# Review: code-reviewer — no `cadence` marker: subprocess.run is fully
+# No `cadence` marker: subprocess.run is fully
 # monkeypatched below, nothing here spawns a real process, so this suite
 # belongs in the per-commit tier, not deferred to cadence gates.
 
@@ -166,7 +166,6 @@ class _SubprocessSpy:
         self._check_ignore_stdout = check_ignore_stdout
         self._check_ignore_returncode = check_ignore_returncode
         self._ls_files_returncode = ls_files_returncode
-        # Review: coordinatorcode-reviewer-c58be590 (live-round follow-up) --
         # `_resolve_repo_root`'s `git rev-parse --show-toplevel` probe.
         # Defaults to `None` so the caller (`_run_round`) can bind it to the
         # fixture's own `dest`, preserving today's "dest is already the
@@ -176,7 +175,7 @@ class _SubprocessSpy:
 
     def __call__(self, cmd, **kwargs):
         self.calls.append(list(cmd))
-        # Review: coordinatorcode-reviewer-c58be590 -- kwargs were
+        # Kwargs were
         # discarded, so no test could assert `timeout=` actually reaches
         # the two `publish.py` legs.
         self.call_kwargs.append(dict(kwargs))
@@ -556,7 +555,7 @@ def test_no_publish_flag_prints_notice_and_does_not_push(tmp_path, monkeypatch):
     argv is ever spawned, and the printed command names the short
     `percolate-push` entry point, not a raw `git -C <abs-path> push` line
     (state/handoffs/2026-08-13-one-command-publish.md, shape 2)."""
-    # Review: review-integrator — harden past the subprocess.run boundary:
+    # Harden past the subprocess.run boundary:
     # a future edit routing a push through os.system or a direct
     # subprocess.Popen call would previously slip past this test silently
     # (see this module's own docstring). Any call to either now fails loud.
@@ -653,7 +652,6 @@ def test_commit_pathspec_derived_from_real_run_not_dry_run(tmp_path, monkeypatch
     assert spy.pathspec_from_file_content is not None
     pathspec = spy.pathspec_from_file_content
 
-    # Review: coordinatorcode-reviewer-c58be590 (live-round follow-up) --
     # `5858489a8` (repo-relative pathspec entries) predates these
     # assertions; `_run_round`'s default `repo_root` echoes `dest` itself
     # (§ `_SubprocessSpy`'s `--show-toplevel` stub), so entries are
@@ -663,7 +661,7 @@ def test_commit_pathspec_derived_from_real_run_not_dry_run(tmp_path, monkeypatch
     # The dry-run-only file must NOT leak into the pathspec.
     assert "dryrun-only-file.md" not in pathspec
 
-    # Review: code-reviewer — `Path(entry).suffix` is not a valid file-ness
+    # `Path(entry).suffix` is not a valid file-ness
     # proxy (an extensionless tracked file like LICENSE would fail it); test
     # the actual AC7 claim instead: no entry is the dest root, and no entry
     # is a path-prefix of another entry (which a directory element would be).
@@ -786,7 +784,7 @@ def test_red_ci_prints_no_push_command_and_fails(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Review: code-reviewer — the gate_fires=True branch (evidence-print,
+# The gate_fires=True branch (evidence-print,
 # --yes skipping the blocking input(), and the declined -> cancelled path)
 # had no coverage; today's suite would pass identically if --yes were
 # silently ignored, since the gate never fired to exercise it.
@@ -963,7 +961,7 @@ def test_gate_fires_non_tty_without_token_named_refusal_no_eoferror(tmp_path, mo
 
 
 # ---------------------------------------------------------------------------
-# Review: code-reviewer — the HIGH-tier content-leak abort path (Step 2c)
+# The HIGH-tier content-leak abort path (Step 2c)
 # had no coverage; `_SubprocessSpy`'s default `scan_stdout` always yields
 # rc 0, so a regression that stopped scan-secrets from returning 2 on a
 # HIGH hit, or stopped round.py from checking for it, would pass unnoticed.
@@ -1005,7 +1003,7 @@ def test_high_tier_scan_hit_aborts_before_step3(tmp_path, monkeypatch, capsys):
 
 
 # ---------------------------------------------------------------------------
-# Review: code-reviewer — the `committed and declined_paths` partial-landed
+# The `committed and declined_paths` partial-landed
 # branch had no test; the default `commit_stdout` has no `committed`/
 # `declined_paths` keys, so this whole `if` block was dead in the suite.
 # ---------------------------------------------------------------------------
@@ -1035,7 +1033,7 @@ def test_commit_landed_with_declined_paths_reports_partial_and_fails(tmp_path, m
 
 
 # ---------------------------------------------------------------------------
-# Review: code-reviewer — early-return failure branches in `_cmd_round` had
+# early-return failure branches in `_cmd_round` had
 # no coverage; every one of these calls `_print_step_failure` and returns
 # _EXIT_FAIL/_EXIT_USAGE, none previously asserted.
 # ---------------------------------------------------------------------------
@@ -1382,7 +1380,7 @@ def test_generic_commit_failure_returns_fail(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Review: code-reviewer — the no-op path, PASS-WITH-WARNINGS verdict, and
+# The no-op path, PASS-WITH-WARNINGS verdict, and
 # ci_exists=False branch were untested.
 # ---------------------------------------------------------------------------
 
@@ -1566,7 +1564,7 @@ def test_clean_dest_proceeds_through_commit(tmp_path, monkeypatch):
 
 
 def test_dest_ahead_count_no_upstream_line_is_undetermined_not_zero(tmp_path, monkeypatch):
-    """Review: coordinatorcode-reviewer-c58be590 -- git omits the
+    """Git omits the
     `# branch.ab` line entirely when the checked-out branch has no
     upstream tracking ref (or dest is detached HEAD). That must return
     `None` (undetermined), the same as a probe failure -- never fall
@@ -1928,7 +1926,7 @@ def test_subsequent_clean_round_clears_marker_before_publishing(tmp_path, monkey
 
 
 # ---------------------------------------------------------------------------
-# Review: review-integrator (P2 polarity inversion) — the round-failure
+# The round-failure
 # marker is now written IMMEDIATELY once a commit lands (before CI smoke and
 # the gate), not only on a failure path, so a crash anywhere after the
 # commit lands leaves the marker standing (fail-safe) instead of leaving a
@@ -2449,7 +2447,7 @@ def test_local_git_legs_carry_the_plumbing_bound_not_a_publish_bound(tmp_path, m
 @pytest.mark.pending_fix
 @pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_publish_legs_use_the_publish_bound(tmp_path, monkeypatch):
-    """Review: coordinatorcode-reviewer-c58be590 -- `_SubprocessSpy` previously
+    """`_SubprocessSpy` previously
     discarded `**kwargs`, so no test asserted `timeout=_PUBLISH_LEG_TIMEOUT_SECS`
     actually reached the two `publish.py` legs (`519cc8baf7`'s whole point).
 
@@ -2493,7 +2491,6 @@ def test_commit_leg_has_its_own_bound_not_the_publish_leg_s(tmp_path, monkeypatc
 
 
 # ---------------------------------------------------------------------------
-# Review: coordinatorcode-reviewer-c58be590 (live-round follow-up) --
 # `dest` can be a subdirectory of the mirror's actual git worktree root;
 # `--repo` and the pathspec's `repo_root` must resolve to, and share, that
 # worktree root rather than `dest` itself.

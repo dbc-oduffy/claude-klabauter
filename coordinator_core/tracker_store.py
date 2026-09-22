@@ -72,6 +72,7 @@ import time
 from pathlib import Path
 
 from coordinator_core.locked_write import MutateAbort, locked_rmw
+from coordinator_core.session.claimed_write import replace_text
 
 # NOTE: `coordinator_core.ops.emit._slug.machine_slug` is NOT imported at
 # module scope. `coordinator_core.ops.emit` is a submodule of
@@ -272,6 +273,28 @@ def append_event(event: dict, *, repo_root: Path) -> dict:
 
     def _mutate(old_text: str) -> str:
         lines = _split_lines(old_text)
+
+        # Own-machine duplicate detection widened to the full history, not
+        # just the live flat shard: rotate_month relocates a closed month's
+        # lines out of `old_text` into `<YYYY-MM>/events.<slug>.jsonl`, and a
+        # same-idempotency_key retry re-derives the same id (F5). Scanning
+        # only `old_text` would let that retry sail past a rotated
+        # duplicate and double-append (DR-241 bound (i)). rotate_month locks
+        # this same shard path, so reading the rotated files here — inside
+        # this same locked_rmw mutation — cannot race a concurrent rotation.
+        for rotated_path in _peer_shard_paths(repo_root, machine_slug()):
+            if rotated_path == target:
+                continue
+            for line in _split_lines(rotated_path.read_text(encoding="utf-8")):
+                try:
+                    existing = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(existing, dict) and existing.get("id") == event["id"]:
+                    raise TrackerStoreDuplicateIdError(
+                        f"event id {event['id']!r} already appears in this "
+                        "machine's rotated shard history"
+                    )
 
         # Own-shard duplicate detection: one extra pass over data already
         # read into memory for the sequence bump. A line that fails to
@@ -699,10 +722,9 @@ def rotate_month(*, repo_root: Path, month: str, machine: str | None = None) -> 
             rotated_dir.mkdir(parents=True, exist_ok=True)
             if existing_text and not existing_text.endswith("\n"):
                 existing_text += "\n"
-            rotated_path.write_text(
+            replace_text(
+                rotated_path,
                 existing_text + "".join(line + "\n" for line in new_lines),
-                encoding="utf-8",
-                newline="\n",
             )
 
         relocated = len(candidates)

@@ -143,21 +143,6 @@ def test_acceptor_ends_when_the_listening_socket_closes(monkeypatch) -> None:
     assert ctx._queue.qsize() == 0
 
 
-def test_acceptor_drops_a_connection_arriving_after_close_listener(monkeypatch) -> None:
-    """Same outcome the Windows accept chain produces for an instance
-    connected after the listener closed: the client reads EOF and goes cold
-    rather than being answered by a draining generation."""
-    monkeypatch.setattr(server, "_wrap_socket", lambda conn: "io")
-    ctx = _ctx()
-    ctx.close_listener()
-    conn = _FakeConn()
-
-    ctx._acceptor_loop(_FakeListener([conn]))
-
-    assert conn.closed is True
-    assert ctx._queue.qsize() == 0
-
-
 def test_acceptor_survives_a_wrap_failure_and_keeps_accepting(monkeypatch) -> None:
     """The acceptor-side analog of `_worker_loop`'s load-bearing guard: one
     bad connection must cost that connection, never this thread. A dead

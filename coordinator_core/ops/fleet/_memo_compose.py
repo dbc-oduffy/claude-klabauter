@@ -60,11 +60,36 @@ from coordinator_core.ops.fleet._memo_resolver import (
     resolve_receiver_inbox as _resolve_receiver_inbox,
 )
 from coordinator_core._repo_root_probe import resolve_repo_root as _resolve_repo_root
+from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 from coordinator_core.ops.fleet._memo_summary import (
     derive_prose_summary,
     is_placeholder_summary,
     validate_explicit_summary,
 )
+
+
+def body_opens_frontmatter(body: str) -> bool:
+    """True iff `body` itself opens with a parseable YAML frontmatter block —
+    i.e. the caller pasted a WHOLE memo draft (its own `---` frontmatter plus
+    body) as the `body` param, rather than only the prose that belongs below
+    the closing `---` (memo.draft owns the frontmatter; a `body` composing
+    ANOTHER frontmatter block on top of it delivers a memo whose own body
+    opens with a second, spurious YAML document).
+
+    Normalises `\\r\\n` to `\\n` first — a body's own line endings must not
+    change the verdict — then delegates entirely to `parse_frontmatter`
+    (no new regex, no new YAML parse): `True` iff
+    `parse_frontmatter(body)["frontmatter"] is not None`.
+
+    Negative-spec: does NOT reject a mid-body `---` horizontal rule (only a
+    LEADING frontmatter block matters — `parse_frontmatter` only looks at the
+    start of the string), a leading horizontal rule followed by ordinary
+    prose (that does not parse as a YAML mapping), or a body that opens with
+    a fenced YAML code block (an indented/fenced example, not a real leading
+    `---`-delimited document).
+    """
+    normalized = body.replace("\r\n", "\n")
+    return parse_frontmatter(normalized)["frontmatter"] is not None
 
 _LOG = logging.getLogger(__name__)
 
@@ -141,7 +166,7 @@ def _resolve_engine_sender_id(root: Optional[str] = None) -> str:
             owner = _read_publish_mirrors().get(mirror_key, {}).get("owner")
             if owner:
                 return owner
-    # Review: overengineering-reviewer — _read_registry_repos() is only
+    # _read_registry_repos() is only
     # consumed by the terminal em_id_for_root() leg below; moved past the
     # mirror-owner early return so it is not paid on a path that discards it.
     try:
@@ -248,7 +273,7 @@ def resolve_and_assert_sender_id(from_id: Optional[str], root: Optional[str] = N
     try:
         inbox_dir, _receiver_repo_path, _all_repos = _resolve_receiver_inbox(resolved)
     except (RegistryReadError, AmbiguousReceiverError) as exc:
-        # Review: coordinator-code-reviewer Finding 2 — the degrade itself is
+        # The degrade itself is
         # deliberate (a registry-read hiccup should not block a send
         # resolve_sender_id already degraded through), but it must not be
         # SILENT: this is the compose-time addressability assertion being

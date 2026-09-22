@@ -379,7 +379,7 @@ def test_posix_forwarder_execs_no_shebang_no_exec_bit_target_via_real_subprocess
     "on Windows for this falsifier to exercise",
 )
 def test_posix_forwarder_execs_unreadable_target_via_real_subprocess(tmp_path):
-    """Review: code-reviewer F1's falsifier — a real generated forwarder,
+    """A real generated forwarder,
     invoked as a genuinely separate process, against a fixture CLI that
     exists but carries no read permission (mode 0o000). Before the
     isfile()+os.access(R_OK) pre-check, `os.execv(sys.executable, [...])`

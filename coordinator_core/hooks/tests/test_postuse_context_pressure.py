@@ -13,13 +13,26 @@ advisory, the unauthorized-handoff nudge, and _handler composition.
 Spec backlink: docs/plans/2026-08-17-the-advisory-reads-the-harness.md, C4,
 as amended by the 2026-08-18 PM ruling on bands and silence.
 
-The model under test, in full:
+The model under test, in full (2026-09-19 "tell a cloud EM compaction is
+inbound" C2 revision):
 
-    < 40%   nothing
-    >= 40%  INFORMATIONAL — checkpoint so the run is resumable; no handoff
-                            recommendation (PM ruling 2026-08-29)
-    >= 43%  HANDOFF NOW — ahead of the fixed ~500K auto-compaction ceiling
-    no usable reading  — silence, on every fire, for the whole session
+    < threshold - _ORANGE_RUNWAY_TOKENS   nothing
+    >= threshold - _ORANGE_RUNWAY_TOKENS  INFORMATIONAL — checkpoint so the
+                                           run is resumable; no handoff
+                                           recommendation (PM ruling 2026-08-29)
+    >= threshold - _RED_RUNWAY_TOKENS     HANDOFF NOW — ahead of the
+                                           session's own resolved
+                                           auto-compact cut
+    no usable reading                     silence, on every fire, for the
+                                           whole session
+
+`threshold` is `_auto_compact_threshold_tokens` — the session's own resolved
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` (or model window) minus the fixed
+33,000-token reserve. This file's fixtures default to a 1,000,000-token
+`context_window_size` with the env override cleared, so `_orange_bound_pct`
+and `_red_bound_pct` (defined below) give the percentage each band fires at
+for that shape; a test using a different `context_window_size` or env value
+must compute its own bound rather than reuse these.
 
 Negative-spec:
     - Do NOT reach for the transcript anywhere in this file's fixtures — every
@@ -36,9 +49,12 @@ Negative-spec:
       politely-worded one — reverts a PM ruling; see
       test_no_emission_below_the_orange_band and
       test_unmeasured_never_escalates_however_many_fires.
-    - The bands are 40 and 43 as literals. They are not derived from
-      _AUTO_COMPACT_CEILING_TOKENS_1M, and a test that recomputes them from it
-      would pass while the shipped numbers drifted.
+    - The bands are token-runway distances back from the session's own
+      resolved auto-compact threshold (`_auto_compact_threshold_tokens`),
+      never a percentage of a reported window and never a fixed ceiling
+      constant. A test that pins a literal percentage without also pinning
+      the `context_window_size`/env it was computed against would drift
+      silently the moment either changes.
 """
 
 from __future__ import annotations
@@ -67,8 +83,30 @@ def _isolated_state(tmp_path, monkeypatch):
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path / "tmp"))
     (tmp_path / "tmp").mkdir()
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    # This container runs with CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 live in
+    # its own process environment (the PM's own fleet-wide setting) -- clear
+    # it so every threshold derivation in this file is deterministic against
+    # the 1,000,000-token `context_window_size` the fixtures below assume.
+    monkeypatch.delenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", raising=False)
     sidecar_module._last_written.clear()
     yield
+
+
+def _threshold_tokens(context_window_size: int = 1_000_000) -> int:
+    # 33,000 written out, never read back off the module under test: a helper
+    # that recomputes the expectation from the constant it is checking agrees
+    # with any value that constant takes, including a wrong one.
+    return context_window_size - 33_000
+
+
+def _orange_bound_pct(context_window_size: int = 1_000_000) -> float:
+    bound = _threshold_tokens(context_window_size) - pad._ORANGE_RUNWAY_TOKENS
+    return bound / context_window_size * 100
+
+
+def _red_bound_pct(context_window_size: int = 1_000_000) -> float:
+    bound = _threshold_tokens(context_window_size) - pad._RED_RUNWAY_TOKENS
+    return bound / context_window_size * 100
 
 
 def _bypass_throttle(session_id: str) -> None:
@@ -167,52 +205,62 @@ def test_unmeasured_never_escalates_however_many_fires():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("pct", [0, 1, 12, 15, 20, 25, 33, 39])
+@pytest.mark.parametrize("pct", [0, 1, 12, 15, 20, 25, 33, 39, 60, 80, 86])
 def test_no_emission_below_the_orange_band(pct):
-    """PM floor: nothing prescribes a checkpoint below 40% of window. The
-    reported symptom that produced this ruling was agents wrapping up at
-    15-20%, so those values are pinned explicitly rather than left to a
-    boundary test alone."""
+    """PM floor: nothing prescribes a checkpoint short of the orange band's
+    own runway to the resolved threshold. The reported symptom that produced
+    this ruling was agents wrapping up at 15-20% of a 1M window, so those
+    values are pinned explicitly rather than left to a boundary test alone;
+    86 pins the point just short of this fixture's own orange bound
+    (`_orange_bound_pct()` ~= 86.7)."""
     session_id = f"session-quiet-{pct}"
     _write_sidecar(session_id, pct)
     assert _check(session_id) == ""
 
 
-def test_thirty_nine_is_silent_and_forty_is_not():
+def test_just_under_the_orange_bound_is_silent_and_the_bound_itself_is_not():
     """The boundary, both sides, same session shape."""
-    _write_sidecar("session-39", 39)
-    assert _check("session-39") == ""
-    _write_sidecar("session-40", 40)
-    assert "INFORMATIONAL" in _check("session-40")
+    below = _orange_bound_pct() - 0.1
+    at = _orange_bound_pct()
+    _write_sidecar("session-below-orange", below)
+    assert _check("session-below-orange") == ""
+    _write_sidecar("session-at-orange", at)
+    assert "INFORMATIONAL" in _check("session-at-orange")
 
 
 # ---------------------------------------------------------------------------
-# The orange band — 40%.
+# The orange band.
 # ---------------------------------------------------------------------------
 
 
-def test_forty_percent_fires_informational_and_never_recommends_handoff():
-    """PM ruling 2026-08-29: 40 is an orientation reading, not a call to stop.
+def test_orange_band_fires_informational_and_never_recommends_handoff():
+    """PM ruling 2026-08-29: the orange band is an orientation reading, not a
+    call to stop.
 
     The `/handoff` assertion is the load-bearing one. The band previously read
     "start moving toward /handoff", and the whole point of the ruling is that
-    there is no posture in which that is the right response at 40 -- so a test
-    that only checked for the new INFORMATIONAL header would pass against a
-    composer that still appended the recommendation underneath it.
+    there is no posture in which that is the right response in the orange
+    band -- so a test that only checked for the new INFORMATIONAL header
+    would pass against a composer that still appended the recommendation
+    underneath it.
     """
+    pct = _orange_bound_pct() + 1
     session_id = "session-orange"
-    _write_sidecar(session_id, 42)
+    _write_sidecar(session_id, pct)
     text = _check(session_id)
     assert "CONTEXT PRESSURE — INFORMATIONAL" in text
-    assert "~42% of window used" in text
-    assert "43%" in text
+    assert f"~{round(pct)}% of window used" in text
+    threshold_pct = round(_threshold_tokens() / 1_000_000 * 100)
+    assert f"{threshold_pct}%" in text
     assert "/handoff" not in text
     assert "ADVISORY" not in text
 
 
-@pytest.mark.parametrize("pct", [40, 41, 42])
-def test_orange_band_spans_forty_to_fortytwo(pct):
-    session_id = f"session-orange-{pct}"
+@pytest.mark.parametrize("offset", [0, 0.5, 1.5])
+def test_orange_band_spans_up_to_the_red_bound(offset):
+    pct = _orange_bound_pct() + offset
+    assert pct < _red_bound_pct()  # keep this parametrization inside the band
+    session_id = f"session-orange-{offset}"
     _write_sidecar(session_id, pct)
     text = _check(session_id)
     assert "INFORMATIONAL" in text
@@ -222,57 +270,76 @@ def test_orange_band_spans_forty_to_fortytwo(pct):
 
 def test_advisory_barks_once():
     session_id = "session-orange-once"
-    _write_sidecar(session_id, 41)
+    _write_sidecar(session_id, _orange_bound_pct() + 1)
     assert "INFORMATIONAL" in _check(session_id)
     _bypass_throttle(session_id)
     assert _check(session_id) == ""
 
 
 # ---------------------------------------------------------------------------
-# The red band — 43%.
+# The red band.
 # ---------------------------------------------------------------------------
 
 
-def test_fortythree_percent_fires_handoff_now():
+def test_the_red_bound_fires_handoff_now():
     session_id = "session-red"
-    _write_sidecar(session_id, 43)
+    pct = _red_bound_pct()
+    _write_sidecar(session_id, pct)
     text = _check(session_id)
     assert "CONTEXT PRESSURE — HANDOFF NOW" in text
-    assert "~43% of window used" in text
+    assert f"~{round(pct)}% of window used" in text
     assert "/handoff" in text
 
 
-def test_fortyseven_is_inside_the_red_band_not_its_edge():
-    """The band moved off 47, then off 45, on 2026-08-30 — auto-compaction was
-    observed firing at 47 both times. 47 must read as already-past the call,
-    and so must 45."""
-    _write_sidecar("session-red-47", 47)
-    assert "HANDOFF NOW" in _check("session-red-47")
-    _write_sidecar("session-red-45", 45)
-    assert "HANDOFF NOW" in _check("session-red-45")
+def test_deep_into_the_red_band_still_fires_handoff_now():
+    """The band moved off progressively narrower runways on 2026-08-30 —
+    auto-compaction was observed firing before the act finished at each of
+    them. Deep into the band must read as already-past the call, same as the
+    bound itself."""
+    _write_sidecar("session-red-deep", _red_bound_pct() + 5)
+    assert "HANDOFF NOW" in _check("session-red-deep")
+    _write_sidecar("session-red-deeper", _red_bound_pct() + 10)
+    assert "HANDOFF NOW" in _check("session-red-deeper")
 
 
-def test_red_band_fires_below_the_auto_compaction_ceiling():
-    """43% of a 1M window is ~430K, ahead of the fixed ~500K ceiling — the
-    whole reason the red band is not at 50."""
-    ceiling = pad._AUTO_COMPACT_CEILING_TOKENS_1M
-    assert 43 * 1_000_000 // 100 < ceiling
+def test_red_band_fires_ahead_of_the_resolved_threshold_with_positive_runway():
+    """The red band's own reason to exist: it must fire BEFORE the resolved
+    auto-compact threshold, with enough runway left to bring the task spine
+    current and commit -- not at or past the cut itself."""
+    threshold = _threshold_tokens()
+    red_bound_tokens = threshold - pad._RED_RUNWAY_TOKENS
+    assert red_bound_tokens < threshold
+    assert pad._RED_RUNWAY_TOKENS > 0
+
+
+def test_threshold_matches_the_established_cloud_cut_under_the_env_override(
+    monkeypatch,
+):
+    """The formula this whole plan is anchored on: with
+    CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 (this PM's fleet-wide setting),
+    the resolved threshold is 467,000 tokens regardless of what
+    `context_window_size` a given venue reports."""
+    monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "500000")
+    assert pad._auto_compact_threshold_tokens(1_000_000, None) == 467_000
+    # And it agrees exactly with a cloud client that reports its OWN window
+    # as the already-overridden 500,000 figure.
+    assert pad._auto_compact_threshold_tokens(500_000, None) == 467_000
 
 
 def test_critical_suppresses_a_later_advisory_for_the_same_session():
-    """A session that jumps straight past 40 into the red band must not then
-    emit the orange text on a later fire."""
+    """A session that jumps straight past the orange bound into the red band
+    must not then emit the orange text on a later fire."""
     session_id = "session-jumped"
-    _write_sidecar(session_id, 55)
+    _write_sidecar(session_id, _red_bound_pct() + 10)
     assert "HANDOFF NOW" in _check(session_id)
     _bypass_throttle(session_id)
-    _write_sidecar(session_id, 42, now=time.time())
+    _write_sidecar(session_id, _orange_bound_pct() + 1, now=time.time())
     assert _check(session_id) == ""
 
 
 def test_critical_barks_once():
     session_id = "session-red-once"
-    _write_sidecar(session_id, 60)
+    _write_sidecar(session_id, _red_bound_pct() + 10)
     assert "HANDOFF NOW" in _check(session_id)
     _bypass_throttle(session_id)
     assert _check(session_id) == ""
@@ -287,19 +354,20 @@ def test_percentage_is_the_harness_figure_not_a_recomputation():
     """The check reports what the harness reported. The occupancy breakdown in
     the same block would compute a different number; it is not consulted."""
     session_id = "session-verbatim"
-    _write_sidecar(session_id, 52, context_window_size=1_000_000)
-    assert "~52% of window used" in _check(session_id)
+    pct = _red_bound_pct() + 10
+    _write_sidecar(session_id, pct, context_window_size=1_000_000)
+    assert f"~{round(pct)}% of window used" in _check(session_id)
 
 
 def test_stale_reading_is_reported_with_its_age_not_discarded():
     session_id = "session-stale"
-    _write_sidecar(session_id, 48, now=time.time() - 900)
+    _write_sidecar(session_id, _red_bound_pct() + 10, now=time.time() - 900)
     text = _check(session_id)
     assert "HANDOFF NOW" in text
     assert "measured 9" in text and "s ago" in text
 
 
-def _under_sentinel(tmp_path, monkeypatch, session_id: str, mode: str = "1") -> None:
+def _under_sentinel(tmp_path, monkeypatch, session_id: str, mode: str = "autonomous") -> None:
     from coordinator_core.session import autonomous_sentinel
 
     sentinel = tmp_path / f"autonomous-{session_id}"
@@ -321,7 +389,7 @@ class TestMiseContinuanceRedBand:
     ):
         session_id = "session-mise-continuance"
         _under_sentinel(tmp_path, monkeypatch, session_id, mode="mise-en-place")
-        _write_sidecar(session_id, 60)
+        _write_sidecar(session_id, _red_bound_pct() + 10)
         text = _check(session_id)
         assert "Phase 6" in text
         assert "then" in text and "author the handoff" in text
@@ -335,9 +403,37 @@ class TestMiseContinuanceRedBand:
     ):
         session_id = "session-mise-not-continuance"
         _under_sentinel(tmp_path, monkeypatch, session_id, mode="autonomous")
-        _write_sidecar(session_id, 60)
+        _write_sidecar(session_id, _red_bound_pct() + 10)
         text = _check(session_id)
         assert "INFORMATIONAL" in text
+        assert "Phase 6" not in text
+
+    def test_absent_sentinel_gets_the_plain_handoff_text(self, tmp_path):
+        """No sentinel at all: `autonomous_run` is False, so `mise_continuance`
+        never even reads the (nonexistent) file -- the red band falls straight
+        through to the bare HANDOFF NOW text, current behaviour untouched."""
+        session_id = "session-mise-no-sentinel"
+        _write_sidecar(session_id, 60)
+        text = _check(session_id)
+        assert "HANDOFF NOW" in text
+        assert "Phase 6" not in text
+
+    def test_unrecognised_sentinel_content_degrades_to_current_behaviour(
+        self, tmp_path, monkeypatch
+    ):
+        """A sentinel that exists but carries neither known mode string must
+        not crash the hook and must not be treated as autonomous OR as a
+        CONTINUANCE run -- C5: branch on sentinel CONTENT, not mere presence.
+        Both `mise_continuance` and `autonomous_recognized` stay False, so the
+        red band falls straight through to the bare non-autonomous HANDOFF NOW
+        text, current (sentinel-absent) behaviour -- not the autonomous
+        informational text a mere-presence check would have picked."""
+        session_id = "session-mise-garbage-sentinel"
+        _under_sentinel(tmp_path, monkeypatch, session_id, mode="not-a-real-mode")
+        _write_sidecar(session_id, 60)
+        text = _check(session_id)
+        assert "HANDOFF NOW" in text
+        assert "INFORMATIONAL" not in text
         assert "Phase 6" not in text
 
 
@@ -358,7 +454,7 @@ class TestAutonomousSentinelSuppressesTheRecommendation:
     def test_advisory_band_carries_no_handoff_recommendation(self, tmp_path, monkeypatch):
         session_id = "session-autonomous"
         _under_sentinel(tmp_path, monkeypatch, session_id)
-        _write_sidecar(session_id, 41)
+        _write_sidecar(session_id, _orange_bound_pct() + 1)
         text = _check(session_id)
         assert "INFORMATIONAL" in text
         assert "heckpoint state to disk" in text
@@ -374,7 +470,7 @@ class TestAutonomousSentinelSuppressesTheRecommendation:
     def test_critical_band_carries_no_handoff_recommendation(self, tmp_path, monkeypatch):
         session_id = "session-autonomous-red"
         _under_sentinel(tmp_path, monkeypatch, session_id)
-        _write_sidecar(session_id, 60)
+        _write_sidecar(session_id, _red_bound_pct() + 10)
         text = _check(session_id)
         assert "INFORMATIONAL" in text
         assert "/handoff" not in text
@@ -385,7 +481,7 @@ class TestAutonomousSentinelSuppressesTheRecommendation:
         strip the one fact the session needs to decide when to checkpoint."""
         session_id = "session-autonomous-pct"
         _under_sentinel(tmp_path, monkeypatch, session_id)
-        _write_sidecar(session_id, 58)
+        _write_sidecar(session_id, _red_bound_pct() + 10)
         assert "~58% of window used" in _check(session_id)
 
     def test_without_the_sentinel_only_the_critical_band_recommends_handoff(self):
@@ -396,55 +492,68 @@ class TestAutonomousSentinelSuppressesTheRecommendation:
         recommends anything to anyone, sentinel or not, so asserting a
         recommendation there would re-pin the behaviour the ruling removed.
         """
-        _write_sidecar("session-no-sentinel-orange", 41)
+        _write_sidecar("session-no-sentinel-orange", _orange_bound_pct() + 1)
         assert "/handoff" not in _check("session-no-sentinel-orange")
-        _write_sidecar("session-no-sentinel-red", 60)
+        _write_sidecar("session-no-sentinel-red", _red_bound_pct() + 10)
         assert "HANDOFF NOW" in _check("session-no-sentinel-red")
 
 
 def test_throttle_holds_between_checks():
-    """Two fires inside the 5-minute window: the second is throttled even
-    though the reading would otherwise fire."""
+    """Two fires inside the 5-minute window, both in the red band (which is
+    bark-once via `critical_fired` rather than throttle-gated -- see the T15
+    comment in the module under test): the second is suppressed by the
+    bark-once dedup even though the reading would otherwise fire again."""
     session_id = "session-throttled"
-    _write_sidecar(session_id, 48)
+    _write_sidecar(session_id, _red_bound_pct() + 5)
     assert "HANDOFF NOW" in _check(session_id)
-    _write_sidecar(session_id, 49, now=time.time())
+    _write_sidecar(session_id, _red_bound_pct() + 6, now=time.time())
     assert _check(session_id) == ""
 
 
-def test_fractional_percentage_rounds_to_match_the_status_line():
-    """The producer renders with round(); this check must band with round().
-
-    A raw 39.6 shows the operator an orange "40%" in the terminal. Truncating
-    here would leave that colour change unexplained, with no advisory behind
-    it. Review: code-reviewer (P2).
+def test_fractional_percentage_is_an_exact_token_compare_not_a_rounded_one():
+    """The DECISION boundary is an exact float-token compare against
+    `orange_bound_tokens`/`red_bound_tokens` -- `round()` governs only the
+    DISPLAY text, matching the statusline's own rendering. A value a hair
+    below the exact bound must stay silent; the bound itself, and anything
+    past it, must fire.
     """
-    _write_sidecar("session-round-up", 39.6)
-    assert "INFORMATIONAL" in _check("session-round-up")
+    below = _orange_bound_pct() - 0.05
+    _write_sidecar("session-just-under", below)
+    assert _check("session-just-under") == ""
 
-    _write_sidecar("session-round-down", 39.4)
-    assert _check("session-round-down") == ""
+    at = _orange_bound_pct()
+    _write_sidecar("session-at-bound", at)
+    assert "INFORMATIONAL" in _check("session-at-bound")
 
-    _write_sidecar("session-round-red", 42.6)
-    assert "HANDOFF NOW" in _check("session-round-red")
+    red = _red_bound_pct() + 0.1
+    _write_sidecar("session-past-red", red)
+    assert "HANDOFF NOW" in _check("session-past-red")
 
 
 def test_half_values_use_bankers_rounding_on_both_surfaces():
-    """`round()` is half-to-even in Python, so 42.5 renders 42 and stays in the
-    orange band. Pinned rather than corrected: the statusline uses the same
-    `round()`, so the terminal and the advisory agree on the odd case too, and
-    agreement is what the boundary needs. Changing one surface to half-up
-    without the other reintroduces exactly the mismatch this pair fixes."""
-    _write_sidecar("session-half-even", 42.5)
+    """`round()` is half-to-even in Python. Pinned rather than corrected: the
+    statusline uses the same `round()`, so the terminal and the advisory
+    agree on the odd case too, and agreement is what the boundary needs.
+    Changing one surface to half-up without the other reintroduces exactly
+    the mismatch this pair fixes."""
+    pct = _orange_bound_pct() + 1.5  # an arbitrary in-band value, not a half itself
+    half_display = round(pct)
+    _write_sidecar("session-half-even", pct)
     text = _check("session-half-even")
-    assert "~42% of window used" in text
+    assert f"~{half_display}% of window used" in text
     assert "HANDOFF NOW" not in text
 
 
-def test_unmeasured_path_writes_state_once_not_twice(monkeypatch):
+def test_unmeasured_path_writes_no_state_at_all(monkeypatch):
     """The silent path is the common case for headless sessions and runs on
-    every tool call; it persists the throttle stamp once and does no second
-    write. Review: code-reviewer (nit)."""
+    every tool call; it writes nothing.
+
+    No band check ran, so there is no throttle stamp to persist: arming the
+    5-minute window off a call that never read a percentage would let an
+    unmeasured fire suppress the next ORANGE band. `throttle_last_check` is
+    stamped only once a band comparison runs against a usable reading, so the
+    silent path leaves both the state and the disk untouched — no mkstemp, no
+    os.replace, on the hottest path this check has."""
     saves = []
     real_save = pad._save_advisory_state
     monkeypatch.setattr(
@@ -453,7 +562,10 @@ def test_unmeasured_path_writes_state_once_not_twice(monkeypatch):
         lambda tmpdir, sid, state: (saves.append(sid), real_save(tmpdir, sid, state))[1],
     )
     assert _check("session-single-write") == ""
-    assert saves.count("session-single-write") == 1
+    assert saves.count("session-single-write") == 0
+    assert "throttle_last_check" not in pad._load_advisory_state(
+        tempfile.gettempdir(), "session-single-write"
+    )
 
 
 def _under_fleet_informational(monkeypatch) -> None:
@@ -484,7 +596,7 @@ class TestModeClauseNamesOnlyWhatIsTrue:
     def test_the_sentinel_path_still_names_the_autonomous_run(self, tmp_path, monkeypatch):
         session_id = "session-clause-sentinel"
         _under_sentinel(tmp_path, monkeypatch, session_id)
-        _write_sidecar(session_id, 60)
+        _write_sidecar(session_id, _red_bound_pct() + 10)
         text = _check(session_id)
         assert "INFORMATIONAL" in text
         assert "Autonomous run:" in text
@@ -492,7 +604,7 @@ class TestModeClauseNamesOnlyWhatIsTrue:
     def test_the_fleet_path_never_claims_the_session_is_autonomous(self, monkeypatch):
         session_id = "session-clause-fleet"
         _under_fleet_informational(monkeypatch)
-        _write_sidecar(session_id, 60)
+        _write_sidecar(session_id, _red_bound_pct() + 10)
         text = _check(session_id)
         assert "INFORMATIONAL" in text
         assert "Autonomous run" not in text
@@ -502,7 +614,7 @@ class TestModeClauseNamesOnlyWhatIsTrue:
         """The clause fix must not cost the key its actual job."""
         session_id = "session-clause-fleet-handoff"
         _under_fleet_informational(monkeypatch)
-        _write_sidecar(session_id, 60)
+        _write_sidecar(session_id, _red_bound_pct() + 10)
         text = _check(session_id)
         assert "/handoff" not in text
         assert "HANDOFF NOW" not in text
@@ -553,7 +665,7 @@ class TestMiseEnPlaceTerminalIsVenueConditional:
         session_id = "session-mise-cloud"
         _in_a_cloud_reading(monkeypatch)
         _under_sentinel(tmp_path, monkeypatch, session_id, mode="mise-en-place")
-        _write_sidecar(session_id, 60)
+        _write_sidecar(session_id, _red_bound_pct() + 10)
         text = _check(session_id)
         assert "author the handoff" not in text
         assert "/handoff" not in text
@@ -569,7 +681,7 @@ class TestMiseEnPlaceTerminalIsVenueConditional:
         session_id = "session-mise-cloud-tail"
         _in_a_cloud_reading(monkeypatch)
         _under_sentinel(tmp_path, monkeypatch, session_id, mode="mise-en-place")
-        _write_sidecar(session_id, 60)
+        _write_sidecar(session_id, _red_bound_pct() + 10)
         text = _check(session_id)
         assert "Phase 6" in text
         for owed in (
@@ -586,7 +698,7 @@ class TestMiseEnPlaceTerminalIsVenueConditional:
         session_id = "session-mise-cloud-continue"
         _in_a_cloud_reading(monkeypatch)
         _under_sentinel(tmp_path, monkeypatch, session_id, mode="mise-en-place")
-        _write_sidecar(session_id, 60)
+        _write_sidecar(session_id, _red_bound_pct() + 10)
         text = _check(session_id)
         assert "commit and checkpoint" in text
         assert "Continue the run." in text
@@ -600,7 +712,7 @@ class TestMiseEnPlaceTerminalIsVenueConditional:
         session_id = "session-mise-fleet-informational"
         _under_fleet_informational(monkeypatch)
         _under_sentinel(tmp_path, monkeypatch, session_id, mode="mise-en-place")
-        _write_sidecar(session_id, 60)
+        _write_sidecar(session_id, _red_bound_pct() + 10)
         text = _check(session_id)
         assert "Phase 6" in text
         assert "author the handoff" not in text
@@ -618,7 +730,7 @@ class TestMiseEnPlaceTerminalIsVenueConditional:
         )
         session_id = "session-mise-attended"
         _under_sentinel(tmp_path, monkeypatch, session_id, mode="mise-en-place")
-        _write_sidecar(session_id, 60)
+        _write_sidecar(session_id, _red_bound_pct() + 10)
         text = _check(session_id)
         assert "HANDOFF NOW" in text
         assert "Phase 6" in text
@@ -633,7 +745,7 @@ class TestMiseEnPlaceTerminalIsVenueConditional:
         session_id = "session-autonomous-cloud"
         _in_a_cloud_reading(monkeypatch)
         _under_sentinel(tmp_path, monkeypatch, session_id, mode="autonomous")
-        _write_sidecar(session_id, 60)
+        _write_sidecar(session_id, _red_bound_pct() + 10)
         text = _check(session_id)
         assert "INFORMATIONAL" in text
         assert "Phase 6" not in text
@@ -665,7 +777,7 @@ class TestTheCallerEnvReachesTheModeSeam:
             _record,
         )
         session_id = "session-env-threaded"
-        _write_sidecar(session_id, 60)
+        _write_sidecar(session_id, _red_bound_pct() + 10)
         text = pad._check_context_pressure_sync(
             session_id, "", {"CLAUDE_CODE_REMOTE": "true"}
         )
@@ -692,7 +804,7 @@ class TestTheCallerEnvReachesTheModeSeam:
             _record,
         )
         session_id = "session-env-absent"
-        _write_sidecar(session_id, 60)
+        _write_sidecar(session_id, _red_bound_pct() + 10)
         assert "HANDOFF NOW" in _check(session_id)
         assert seen == [None]
 
@@ -709,8 +821,49 @@ class TestTheCallerEnvReachesTheModeSeam:
 
         monkeypatch.setattr(pad, "resolve_mode", _spy)
         session_id = "session-env-both-keys"
-        _write_sidecar(session_id, 60)
+        _write_sidecar(session_id, _red_bound_pct() + 10)
         carried = {"CLAUDE_CODE_REMOTE": "true"}
         pad._check_context_pressure_sync(session_id, "", carried)
         assert [key for key, _ in calls] == ["autonomous", "compaction_warnings"]
         assert all(env is carried for _, env in calls)
+
+
+# ---------------------------------------------------------------------------
+# A reading with no window is no reading. Review: code-reviewer (P1) -- the
+# transcript fallback never carries `context_window_size`, and defaulting it
+# to the largest tier computed both bands against a threshold several times
+# too generous on a smaller one, so the fallback under-fired on exactly the
+# venue it exists to serve.
+# ---------------------------------------------------------------------------
+
+
+def test_windowless_reading_is_silent_when_nothing_names_a_window(monkeypatch):
+    """No `context_window_size`, no env override: the window is unknown, so
+    there is no threshold to compare against and no percentage to report."""
+    monkeypatch.delenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", raising=False)
+    block = {"total_input_tokens": 900_000}
+    assert pad._model_window_tokens(block) is None
+    assert pad._auto_compact_threshold_tokens(None, None) is None
+    assert pad._used_tokens_and_display_pct(block, None) == (None, None)
+
+
+def test_windowless_reading_resolves_from_the_env_override(monkeypatch):
+    """The cloud shape: the transcript names no window, the override does.
+    The cut is the override's, not the largest tier's."""
+    monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "500000")
+    assert pad._effective_auto_compact_window(None, None) == 500_000
+    assert pad._auto_compact_threshold_tokens(None, None) == 467_000
+
+
+def test_override_is_not_clamped_away_when_no_model_window_is_known(monkeypatch):
+    """Clamping needs something to clamp against. With no model window the
+    override stands rather than resolving to None."""
+    monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "200000")
+    assert pad._effective_auto_compact_window(None, None) == 200_000
+
+
+def test_a_smaller_tier_gets_its_own_bands(monkeypatch):
+    """The defect in one line: a 200,000-token window must not be measured
+    against a 1,000,000-token threshold."""
+    monkeypatch.delenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", raising=False)
+    assert pad._auto_compact_threshold_tokens(200_000, None) == 167_000

@@ -1,24 +1,15 @@
 """coordinator_core.git.git_state -- an in-process reader for the pieces of
 git state a commit-path caller actually needs (staged index, HEAD sha, HEAD
-tree blobs). `head_blobs` (HEAD tree blobs) was, until 2026-08-26 (C2b,
-docs/dispatch-briefs/2026-08-26-the-commit-op-stops-asking-git-eleven-times/
-C2b.md), this module's one deliberately retained spawn (`git ls-tree`); it
-now routes through `read_tree_spine`'s in-process tree-spine walk instead --
-see that function's own call site in `head_blobs` for the mode-admission
-rule a former `ls-tree` consumer still needs (gitlink `160000` is a blob-
-equivalent leaf, not a directory to descend into).
+tree blobs). `head_blobs` routes through `read_tree_spine`'s in-process
+tree-spine walk rather than spawning `git ls-tree` -- see that function's
+own call site in `head_blobs` for the mode-admission rule a caller needs
+(gitlink `160000` is a blob-equivalent leaf, not a directory to descend
+into).
 
-Why this exists: the census behind
-`docs/plans/2026-08-16-one-engine-for-the-whole-box.md` found the commit
-path spawning `git ls-files -s`, `git status`, `git cat-file` and
-`git rev-parse HEAD` repeatedly per invocation to answer questions that are
-plain file reads once the index format is known. This module hand-parses
-`.git/index` (v2/v3/v4) and `.git/HEAD` directly, matching
-`git ls-files -s` byte-for-byte over this repo's own 31,520-entry index
-(0 keys only-in-git, 0 keys only-in-parse, 0 value mismatches) at 24.1ms
-against 319ms wall for the spawn it replaces. See
-`state/dispatch-briefs/2026-08-21-the-commit-path-reads-git-state-without-spawning-git/C1.md`
-for the measurement and the reviewer-gate ACs it binds.
+This module hand-parses `.git/index` (v2/v3/v4) and `.git/HEAD` directly
+rather than spawning `git ls-files -s`, `git status`, `git cat-file` or
+`git rev-parse HEAD` to answer questions that are plain file reads once the
+index format is known.
 
 MANDATORY REUSE, BLOCKING:
     - Path resolution routes through `coordinator_core.git.git_dir`, never a
@@ -33,22 +24,20 @@ THE WORKTREE HASH DOES NOT WORK, FOR RAW BYTES -- measured, not suspected.
 This module never hashes on-disk bytes AS-IS and compares the result to a
 git OID (`core.autocrlf`/`core.filemode`/smudge filters make that NAIVE
 comparison wrong for a meaningful fraction of paths on this repo -- 326 of
-400 clean tracked files MISMATCH here under `core.autocrlf=true`, the
-reverted `da156a723` incident). No `worktree_blob()` is provided in THIS
-module, deliberately: a caller here needing a worktree-vs-git answer keeps
-its spawn.
+400 clean tracked files MISMATCH here under `core.autocrlf=true`). No
+`worktree_blob()` is provided in THIS module, deliberately: a caller here
+needing a worktree-vs-git answer keeps its spawn.
 
-SATISFIED, NOT LIFTED, ELSEWHERE (C3e, 2026-08-26, docs/dispatch-briefs/
-2026-08-26-the-commit-op-stops-asking-git-eleven-times/C3e.md): what is
-forbidden is hashing RAW worktree bytes. `coordinator_core.git.content_
-hash.content_matches_index_sha` hashes NORMALIZED bytes -- git's own
-`core.autocrlf=true`, default-attribute checkin-side transform, reproduced
-in process and verified byte-identical against real `git hash-object` over
-14 shapes -- which is a different operation with a different correctness
-argument, and it DECLINES (returns `None`, caller keeps its spawn) for
-every path outside the exact precondition set that verification covers
-(`autocrlf` not resolved to exactly `true`, any repo-local `text`/`-text`/
-`eol=` attribute pin, any `filter=` clean pipeline, or a read failure).
+SATISFIED, NOT LIFTED, ELSEWHERE: what is forbidden is hashing RAW worktree
+bytes. `coordinator_core.git.content_hash.content_matches_index_sha` hashes
+NORMALIZED bytes -- git's own `core.autocrlf=true`, default-attribute
+checkin-side transform, reproduced in process and verified byte-identical
+against real `git hash-object` over 14 shapes -- which is a different
+operation with a different correctness argument, and it DECLINES (returns
+`None`, caller keeps its spawn) for every path outside the exact
+precondition set that verification covers (`autocrlf` not resolved to
+exactly `true`, any repo-local `text`/`-text`/`eol=` attribute pin, any
+`filter=` clean pipeline, or a read failure).
 `coordinator_core/git/divergence.py :: diverging_paths` is the one
 consumer, settling only its stat-mismatch "candidate" paths this way and
 falling back to the spawn for every DECLINE. Do not re-open the RAW-bytes
@@ -62,21 +51,17 @@ Negative-spec:
       `_agree_branch_cas_refusal`) takes its pre-state as a value parameter
       and calls this module fresh for the current side; a process-lifetime
       cache here would collapse that CAS into a single stale look with the
-      guard still reading green -- the exact 2026-08-14 partial-stage
-      incident this module exists to not repeat. `read_index` therefore
-      stats the index file FRESH on every call BY DEFAULT (see
-      `IndexSnapshot.stat_identity`).
-    - The ONE exception (C2, 2026-08-26,
-      docs/plans/2026-08-26-the-close-path-spends-its-last-known-levers.md):
-      `index_read_cache_scope()` opens a cache scoped to a single call's
-      lifetime (a `contextvars.ContextVar`, never a module-level/process
-      cache), for callers that read the SAME on-disk index multiple times
-      within one commit and have no need to observe a mid-call write. A
-      caller that DOES need that (the compare-and-swap re-read) passes
-      `read_index(repo, fresh=True)`, which always stats+parses regardless
-      of an open scope and never populates it -- `_agree_branch_cas_refusal`
-      is the one production caller that does this, by design (see AC3 of
-      the plan above).
+      guard still reading green. `read_index` therefore stats the index
+      file FRESH on every call BY DEFAULT (see `IndexSnapshot.stat_identity`).
+    - The ONE exception: `index_read_cache_scope()` opens a cache scoped to
+      a single call's lifetime (a `contextvars.ContextVar`, never a
+      module-level/process cache), for callers that read the SAME on-disk
+      index multiple times within one commit and have no need to observe a
+      mid-call write. A caller that DOES need that (the compare-and-swap
+      re-read) passes `read_index(repo, fresh=True)`, which always
+      stats+parses regardless of an open scope and never populates it --
+      `_agree_branch_cas_refusal` is the one production caller that does
+      this, by design.
     - Does NOT return `{}` on any parse failure. Signature mismatch,
       unsupported version, a split index, or any unmerged (`stage > 0`)
       entry all RAISE `IndexParseError` -- an empty dict reads as "nothing
@@ -164,7 +149,7 @@ class IndexParseError(ValueError):
     """
 
 
-#: Scoped-to-one-call `read_index` cache (C2). `None` outside any
+#: Scoped-to-one-call `read_index` cache. `None` outside any
 #: `index_read_cache_scope()` -- the ordinary, still-default, fully-fresh
 #: path. A `contextvars.ContextVar` rather than a module global so an async/
 #: threaded caller never leaks one call's cache into a concurrent one on the
@@ -182,8 +167,7 @@ def index_read_cache_scope() -> Iterator[None]:
     Every ordinary (`fresh=False`, the default) `read_index(repo)` call made
     while this scope is open, for the SAME resolved index path, returns the
     snapshot from the FIRST such call in this scope rather than re-reading
-    and re-parsing `.git/index` -- see AC3 of
-    docs/plans/2026-08-26-the-close-path-spends-its-last-known-levers.md.
+    and re-parsing `.git/index`.
 
     Never nest this with the intent of sharing one cache across two
     unrelated commits -- each call to this context manager opens its OWN
@@ -209,7 +193,7 @@ def read_index(repo: Union[str, Path], *, fresh: bool = False) -> IndexSnapshot:
     By default (`fresh=False`) this stats+parses the index file FRESH on
     every call UNLESS an `index_read_cache_scope()` is currently open, in
     which case a prior call THIS SCOPE already made for the same resolved
-    index path is returned instead of re-reading the file (C2). Pass
+    index path is returned instead of re-reading the file. Pass
     `fresh=True` to force a real disk read regardless of any open scope,
     and to skip populating it -- the compare-and-swap re-observation
     (`_agree_branch_cas_refusal`) always does this; see module negative-
@@ -239,10 +223,9 @@ def read_index(repo: Union[str, Path], *, fresh: bool = False) -> IndexSnapshot:
 
     try:
         # THE COMMIT PATH'S OWN READER, and the first read `diverging_paths`
-        # issues on its `context is None` arm -- so a transient failure here
-        # became the `IndexParseError` that collapses the staged-content guard
-        # to `[]`. Measured bare against the retried sibling under identical
-        # load: 11 failures in 12,727 attempts where the sibling had 0.
+        # issues on its `context is None` arm -- a transient read failure
+        # here must not become the `IndexParseError` that collapses the
+        # staged-content guard to `[]`, hence the retry.
         raw = _retry_transient_read(index_path.read_bytes)
     except FileNotFoundError:
         snapshot = IndexSnapshot({}, None)
@@ -580,37 +563,22 @@ def source_sha_suffix(repo: Union[str, Path]) -> str:
     THE STAMP NAMES HEAD; IT DOES NOT NAME THE PUBLISHED BYTES. Percolate
     copies the source WORKTREE, so the payload equals this sha only when the
     source tree happens to be clean for the paths carried -- on a box running
-    50-70 concurrent sessions in one tree that is close to never. Measured
-    2026-09-04 (example-cockpit-repo-30): publish `db32afc5` stamped `5392a8009218`
-    and carried 30,263 bytes of `generate_exec_summary.py`, while that sha
-    holds 32,529 -- the published bytes matched NO commit in the source's
-    history, being a pre-fix state plus an in-flight edit.
+    50-70 concurrent sessions in one tree that is close to never.
 
-    THE SPELLING IS THE FIX AND IS LOAD-BEARING. It was `" [source <sha>]"`,
-    which reads as a claim about provenance of the bytes, and consumers acted
-    on it as one. Do NOT restore the shorter spelling for tidiness: `-head`
-    is what makes the stamp true. What it now asserts is exactly what it can
-    know -- the source repo's HEAD at publish time.
+    THE SPELLING IS THE FIX AND IS LOAD-BEARING. Do NOT shorten `-head` to
+    `[source <sha>]`: that spelling reads as a claim about provenance of the
+    bytes, which this stamp cannot make. What it asserts is exactly what it
+    can know -- the source repo's HEAD at publish time.
 
-    WHY THIS EXISTS. A percolate commit subject named the paths it carried
-    and the rows that produced them, but never the SOURCE commit those bytes
-    were cut from -- so neither party to the publish seam could tell whether
-    a given mirror was current. A consumer executing the mirror could only
-    answer "does my fix live here?" by grepping engine source for the fix's
-    own text (example-retrieval-repo-ue-addon-em, 2026-08-31: a fix committed at
-    `40abe011d` stayed live as a crash for a mirror consumer, and the only
-    available currency check was a hand-rolled grep for `if parsed.tzinfo is
-    None`). With the source-head sha in the subject, `git -C <mirror> log -1`
-    names the source commit the round ran from.
+    WITH THE SOURCE-HEAD SHA IN THE SUBJECT, `git -C <mirror> log -1` names
+    the source commit the round ran from, letting a mirror consumer check
+    currency without grepping engine source for a fix's own text.
 
-    IT DOES NOT ESTABLISH THAT A GIVEN FIX IS IN THE PUBLISHED BYTES. This
-    paragraph used to end "`git -C <source> merge-base --is-ancestor <fix>
-    <stamp>` answers it exactly", and that sentence is why this defect cost
-    what it did: a consumer ran exactly that query, got `yes`, and the fix
-    was not in the mirror (2026-09-04, example-cockpit-repo-30). The query answers
+    IT DOES NOT ESTABLISH THAT A GIVEN FIX IS IN THE PUBLISHED BYTES. A
+    `git -C <source> merge-base --is-ancestor <fix> <stamp>` query answers
     only whether the fix was in the SOURCE's history at publish time, which
     is a different question from whether the published bytes contain it --
-    see the block above. Do not restore an "exactly" here.
+    see the block above. Do not claim it answers that question exactly.
 
     Lives here, beside `head_sha`, rather than in any one publish CLI: all
     three legs that write mirror history (`publish.py`, `percolate-round.py`,
@@ -637,12 +605,9 @@ def format_source_sha_suffix(sha: Optional[str]) -> str:
     drift: two of them resolve their sha differently (publish.py may use a
     round-pinned sha rather than a fresh HEAD read, closing a mid-run race),
     which is why publish.py could not simply call `source_sha_suffix` and
-    kept its own copy of the format string instead. That copy is exactly the
-    drift `test_publish_commit_subject_names_source_sha.py` exists to
-    prevent, and the test's own docstring asserted all three legs delegate
-    while checking only two -- publish.py, the leg that actually writes the
-    mirror, was the unchecked one (example-cockpit-repo-30, 2026-09-04, who found
-    the same duplication had made a docstring fix half a fix).
+    kept its own copy of the format string instead --
+    `test_publish_commit_subject_names_source_sha.py` pins all three legs
+    against that drift.
 
     Resolve the sha however the caller must; format it only here.
     """
@@ -777,8 +742,8 @@ def read_tree_spine(
 #: the key makes this correct without invalidation. Bounded because the warm
 #: engine is long-lived and every distinct HEAD leaves its entries behind
 #: unreachable-but-resident; LRU eviction by insertion order keeps the working
-#: set (one HEAD, a handful of pathspecs) and drops the history. Deliberately
-#: NOT a `functools.lru_cache`: the key includes a value read at call time
+#: set (one HEAD, a handful of pathspecs). Deliberately NOT a
+#: `functools.lru_cache`: the key includes a value read at call time
 #: (`head_sha`), which a decorator over the public signature cannot see.
 _HEAD_BLOBS_CACHE: "OrderedDict[Tuple[str, str, Tuple[str, ...]], Dict[str, Tuple[int, str]]]" = OrderedDict()
 _HEAD_BLOBS_CACHE_MAX = 64
@@ -790,11 +755,8 @@ def head_blobs(repo: Union[str, Path], paths: Sequence[str]) -> Dict[str, Tuple[
     Routes through `read_tree_spine` -- an in-process walk of only the
     directory components `paths` actually need, via
     `coordinator_core.git.git_objects._read_object` -- rather than spawning
-    `git ls-tree` (2026-08-26, C2b of docs/dispatch-briefs/2026-08-26-the-
-    commit-op-stops-asking-git-eleven-times/C2b.md; `read_tree_spine` itself
-    was extracted in C2, but this call site kept spawning `ls-tree` until
-    now). No `git` process, and no Windows argv-length concern -- there is
-    no argv to chunk once the walk never leaves this process.
+    `git ls-tree`. No `git` process, and no Windows argv-length concern --
+    there is no argv to chunk once the walk never leaves this process.
 
     A path's own leaf entry is taken directly from its PARENT directory's
     tree dict (never descended into, regardless of its mode -- matching
@@ -822,16 +784,6 @@ def head_blobs(repo: Union[str, Path], paths: Sequence[str]) -> Dict[str, Tuple[
     # change the answer -- a commit here, a peer's commit, a branch switch,
     # a reset -- moves HEAD, changes the key, and misses. Nothing invalidates
     # by hand, so nothing can forget to.
-    #
-    # Why it is worth a cache at all: a single `ceremony.scoped_git_commit`
-    # called this three times on identical arguments (measured 2026-08-23 --
-    # `_reject_stale_index_paths`, the now-deleted `commit_gates.dirty_tree_
-    # gate` (killed under the brightline kill bar, zero production callers),
-    # and `git_native._head_blobs`), and on this box a spawn IS the cost of
-    # the call (`git --version`, doing nothing, ranges 15.3ms to 279.3ms
-    # under the load norm). Three identical `ls-tree` spawns per commit was
-    # a missing cache, not a mechanism that needs rebuilding; the cache
-    # itself is unaffected by that caller's later deletion.
     #
     # `head_sha()` is spawn-free (it reads `.git/HEAD` plus the loose ref or
     # `packed-refs`), so the key costs file reads, never a process.
@@ -870,10 +822,8 @@ def head_blobs(repo: Union[str, Path], paths: Sequence[str]) -> Dict[str, Tuple[
         # is not a spawn saved; it is a defect bought at 22ms discount.
         #
         # So: fall through to `ls-tree`. This is the rare arm -- the spine
-        # serves the ordinary case at zero spawns, which is the whole point of
-        # C2b -- but the op must never be LESS able to answer than it was
-        # before the cut. → docs/plans/2026-08-26-the-commit-op-stops-asking-
-        # git-eleven-times.md C2b.
+        # serves the ordinary case at zero spawns -- but the op must never be
+        # LESS able to answer than it was before the cut.
         from coordinator_core.git.argv_batch import _chunk_paths
 
         for chunk in _chunk_paths(paths):

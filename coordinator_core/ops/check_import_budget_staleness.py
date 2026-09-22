@@ -133,7 +133,7 @@ def _git_log_since(repo_root: Path, since_date: str, paths: list[str]) -> Option
     failed query into "no movement confirmed" (see `compute_entrypoint_staleness`).
     """
     if not paths:
-        # Review: coordinator:code-reviewer — unreachable via the only call
+        # Unreachable via the only call
         # site (compute_entrypoint_staleness returns UNKNOWN before this is
         # called); kept as belt-and-suspenders for future callers. "" here
         # means "no paths given", distinct from None (query failure).
@@ -186,7 +186,7 @@ def compute_entrypoint_staleness(
 
     measured_paths = entry.get("measured_paths")
     if not measured_paths or not isinstance(measured_paths, (list, tuple)):
-        # Review: coordinator:code-reviewer — a truthiness-only check passes
+        # A truthiness-only check passes
         # a bare string, which git log then unpacks one pathspec per
         # character (silent false FRESH); require a list/tuple explicitly.
         return {"entrypoint": entrypoint, "verdict": "UNKNOWN", "reason": "measured_paths missing, empty, or not a list"}

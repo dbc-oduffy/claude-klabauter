@@ -70,7 +70,7 @@ def test_each_target_py_cmd_present_ps1_asymmetric():
 
 
 def test_assemble_targets_partition_engine_vs_by_path():
-    # Review: code-reviewer — mirrors GATE's
+    # Mirrors GATE's
     # test_gate_targets_partition_engine_vs_by_path so a future edit that
     # drops a target from _ENGINE_ENTRIES without adding it to
     # BY_PATH_TARGETS (or vice versa) fails loud here instead of surfacing

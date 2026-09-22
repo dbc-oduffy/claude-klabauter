@@ -177,7 +177,7 @@ def test_pid_not_running_replace_leaves_no_trace_on_a_prior_first_claim(
     assert "replaced_live_reason" not in on_disk
 
 
-# Review: coordinatorcode-reviewer (finding #3) -- pin the `_build_record` scoping
+# Pin the `_build_record` scoping
 # invariant with an on-disk assertion rather than resting on the claim() return dict,
 # which would pass even if `replaced_*` leaked into the refresh path.
 def test_same_session_refresh_leaves_no_replaced_trace_on_disk(repo_root, record_dir):

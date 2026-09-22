@@ -32,4 +32,15 @@
     X(COORDINATOR_JOB_MODE) \
     X(COORDINATOR_AGENT_TYPE_HOST)
 
+/* Name PREFIXES forwarded from the caller's whole environment: every
+ * variable whose name starts with one of these, non-empty, rides `_env`
+ * under its own name. Per-session guard overrides, a namespace the guards
+ * extend without telling the door. Expanded as a string literal per leg,
+ * like DOOR_ENV_SET above. */
+#define DOOR_ENV_PREFIXES(X) \
+    X(COORDINATOR_ALLOW_) \
+    X(COORDINATOR_OVERRIDE_) \
+    X(COORDINATOR_PROBE_) \
+    X(COORDINATOR_SCOPE_)
+
 #endif /* COORDINATOR_WARM_DOOR_ENV_SET_H */

@@ -1,29 +1,47 @@
 """Characterization tests for coordinator_core.ops.install_health_run.
 
-Ported test cases mirror the T1-T5 cases from DoE-claude's former
+Ported test cases mirror the T1/T5 cases from DoE-claude's former
 coordinator/bin/tests/test-install-health-run.sh, plus the trust-gate
 contract from DoE-claude's former coordinator/lib/coordinator-
 trusted-root-guard.sh's fail-loud mode, which this module reimplements.
+
+T2/T3/T4 (bash-drop-in-passthrough, continue-past-failure, silent-skip) and
+the shebang-resolution/cmd-twin regression tests were retired here: they all
+exercised the retired glob-and-shebang dispatch (a real script dropped into
+bin/install-health/ that the orchestrator discovered and launched by
+sniffing its bytes). That dispatch no longer exists -- a leg is now a
+`_NATIVE_LEGS` row (in-process callable, or a `DeclaredLaunch` with a stated
+argv), and an on-disk file in the drop-in directory that is not a declared
+leg is refused by name, never launched (see `test_undeclared_drop_in_*`
+below). The CONTRACT properties those retired tests pinned (continue past a
+failing leg, an OSError counts one failure, a nonzero exit counts one
+failure) are ported below against monkeypatched `DeclaredLaunch` rows in
+`_NATIVE_LEGS` instead of real bash drop-ins.
 
 Port of: install-health-run.sh (DoE 290997c7, 2026-07-22)
 """
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from coordinator_core import launchable
+import coordinator_core.ops.install_health_run as install_health_run_module
 from coordinator_core.install.shell_rc_guard import write_path_entry_guard_blocks
-from coordinator_core.install.door_install import ProvenanceVerdict
+from coordinator_core.install.door_install import DoorInstallError, ImageCurrencyAudit, ProvenanceVerdict
+from coordinator_core.install.door_route_signal import DoorRouteResult
+from coordinator_core.install.engine_root_for_install import InstallEngineRoot
 from coordinator_core.ops.install_health_run import (
     _BIN_DST_KNOWN_FORWARDER,
     _NATIVE_LEGS,
+    DeclaredLaunch,
     _trusted_root,
     check_bareword_path_provisioning,
     check_door_provenance,
+    check_door_route,
     main,
 )
 
@@ -104,6 +122,18 @@ def _trust_opt_out(monkeypatch, tmp_path):
         "coordinator_core.ops.install_health_run.check_door_provenance",
         lambda *args, **kwargs: 0,
     )
+    # check-door-route (this dispatch's new leg, C2) is likewise a real
+    # `_NATIVE_LEGS` entry that runs unconditionally in main() — every test
+    # in this file gets a bare quarantined HOME with no installed door at
+    # all, so the leg would correctly print a NOTE ("no door installed")
+    # into every unrelated iteration-contract test, breaking their silent/
+    # exact-output assertions. Same default-to-no-op precedent as the legs
+    # above; the dedicated `test_check_door_route_*` cases below opt back IN
+    # by calling the function directly.
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.check_door_route",
+        lambda *args, **kwargs: 0,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -116,58 +146,6 @@ def test_empty_dir_exits_zero_silent(tmp_path, capsys):
     captured = capsys.readouterr()
     assert rc == 0
     assert captured.out == ""
-    assert captured.err == ""
-
-
-# ---------------------------------------------------------------------------
-# T2: one always-succeeds script -> exit 0, stdout passthrough
-# ---------------------------------------------------------------------------
-
-def test_success_script_passthrough(tmp_path, capfd):
-    root = _mk_root(tmp_path)
-    script = root / "coordinator" / "bin" / "install-health" / "10-ok.sh"
-    script.write_text('#!/usr/bin/env bash\necho "ran ok"\nexit 0\n', encoding="utf-8")
-    os.chmod(script, 0o755)
-    rc = main([], script_path=str(root / "bin" / "install-health-run.sh"))
-    captured = capfd.readouterr()
-    assert rc == 0
-    assert "ran ok" in captured.out
-
-
-# ---------------------------------------------------------------------------
-# T3: fail + success -> exit non-zero, BOTH ran, failure named on stderr
-# ---------------------------------------------------------------------------
-
-def test_failure_does_not_abort_loop(tmp_path, capsys):
-    root = _mk_root(tmp_path)
-    marker = root / "ran.marker"
-    fail_script = root / "coordinator" / "bin" / "install-health" / "10-fail.sh"
-    ok_script = root / "coordinator" / "bin" / "install-health" / "20-ok.sh"
-    fail_script.write_text('#!/usr/bin/env bash\necho "failing"\nexit 1\n', encoding="utf-8")
-    ok_script.write_text(f'#!/usr/bin/env bash\necho ran >> "{marker}"\nexit 0\n', encoding="utf-8")
-    os.chmod(fail_script, 0o755)
-    os.chmod(ok_script, 0o755)
-
-    rc = main([], script_path=str(root / "bin" / "install-health-run.sh"))
-    captured = capsys.readouterr()
-
-    assert rc == 1
-    assert marker.read_text(encoding="utf-8").count("ran\n") == 1
-    assert "[install-health] FAIL: 10-fail.sh exit=1" in captured.err
-
-
-# ---------------------------------------------------------------------------
-# T4: silent no-op-skip script -> exit 0, no stderr noise
-# ---------------------------------------------------------------------------
-
-def test_silent_skip_no_noise(tmp_path, capsys):
-    root = _mk_root(tmp_path)
-    script = root / "coordinator" / "bin" / "install-health" / "10-skip.sh"
-    script.write_text('#!/usr/bin/env bash\nexit 0\n', encoding="utf-8")
-    os.chmod(script, 0o755)
-    rc = main([], script_path=str(root / "bin" / "install-health-run.sh"))
-    captured = capsys.readouterr()
-    assert rc == 0
     assert captured.err == ""
 
 
@@ -223,149 +201,224 @@ def test_untrusted_root_gate_fails_loud(tmp_path, capsys, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Regression: shebang-driven interpreter resolution (2026-07-21 defect).
-#
-# A drop-in named `*.sh` may carry non-bash content — the `.sh` suffix
-# exists only so the directory glob keeps finding it (see DoE-claude's
-# seed-skill-overrides.sh, pure Python under a .sh name). A hardcoded
-# `bash <script>` invocation dies on the script's first non-bash line.
+# DeclaredLaunch — AC3: closed `interpreter` vocabulary, `interpreter_flags`
+# validation and argv shape.
 # ---------------------------------------------------------------------------
 
 
-def test_python_content_under_sh_suffix_runs_correctly(tmp_path, capsys):
-    """The actual regression: a `.sh`-suffixed drop-in whose content is
-    Python must be launched via the Python interpreter, not bash. This test
-    MUST fail against a hardcoded `["bash", script]` invocation."""
+def test_declared_launch_rejects_non_python_interpreter():
+    with pytest.raises(ValueError):
+        DeclaredLaunch(script="x.py", interpreter="bash")
+
+
+def test_declared_launch_rejects_interpreter_flag_without_dash_prefix():
+    with pytest.raises(ValueError):
+        DeclaredLaunch(script="x.py", interpreter_flags=("u",))
+
+
+def test_declared_launch_argv_includes_interpreter_flags():
+    dl = DeclaredLaunch(script="x.py", interpreter_flags=("-u",))
+    assert dl.argv("/some/root") == [sys.executable, "-u", os.path.join("/some/root", "x.py")]
+
+
+# ---------------------------------------------------------------------------
+# DeclaredLaunch — AC4/AC5: the launch is stated, never inferred from the
+# script's bytes, its filename, or a default.
+# ---------------------------------------------------------------------------
+
+
+def test_declared_launch_sh_named_python_script_runs_under_sys_executable(tmp_path, monkeypatch):
+    """AC4 — a `.sh`-named file holding Python content, launched via a real
+    subprocess against a tmp engine root: the extension is never sniffed."""
     root = _mk_root(tmp_path)
-    marker = root / "python.marker"
-    script = root / "coordinator" / "bin" / "install-health" / "10-python.sh"
+    marker = root / "ran.marker"
+    script = root / "weird-name.sh"
     script.write_text(
-        "#!/usr/bin/env python3\n"
-        "from pathlib import Path\n"
-        f"Path({str(marker)!r}).write_text('ran')\n"
-        "import sys\n"
-        "sys.exit(0)\n",
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('ran')\n",
         encoding="utf-8",
     )
-    os.chmod(script, 0o755)
+
+    monkeypatch.setattr(
+        install_health_run_module,
+        "_NATIVE_LEGS",
+        [("fake-sh-python", DeclaredLaunch(script="weird-name.sh"))],
+    )
 
     rc = main([], script_path=str(root / "bin" / "install-health-run.sh"))
-    captured = capsys.readouterr()
 
-    assert rc == 0, f"expected rc=0, got {rc}; stderr={captured.err!r}"
-    assert marker.exists()
+    assert rc == 0
     assert marker.read_text(encoding="utf-8") == "ran"
 
 
-def test_no_exec_bit_bash_drop_in_still_runs(tmp_path, capsys):
-    """Contract guard, not a regression test for this diff: pins the
-    exec-bit-independence guarantee (a `#!/usr/bin/env bash` drop-in with
-    mode 0o644, no execute bit, must still run successfully — the script is
-    passed as an argument to an explicit interpreter, never exec'd bare).
-    Both the pre-fix hardcoded `["bash", script]` dispatch and the current
-    shebang-resolved dispatch pass this test identically for a
-    `#!/usr/bin/env bash` drop-in, so a future reader should not assume this
-    test would catch a reintroduction of the shebang-resolution defect that
-    `test_python_content_under_sh_suffix_runs_correctly` pins."""
+def test_declared_launch_no_exec_bit_still_launches_via_stated_interpreter(tmp_path, monkeypatch):
+    """AC5 — a `DeclaredLaunch` whose script has no execute bit still
+    launches: argv[0] is always the interpreter, never the script itself."""
     root = _mk_root(tmp_path)
-    marker = root / "noexec.marker"
-    script = root / "coordinator" / "bin" / "install-health" / "10-noexec.sh"
+    marker = root / "ran.marker"
+    script = root / "noexec_leg.py"
     script.write_text(
-        f'#!/usr/bin/env bash\necho ran >> "{marker}"\nexit 0\n',
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('ran')\n",
         encoding="utf-8",
     )
     os.chmod(script, 0o644)
 
+    monkeypatch.setattr(
+        install_health_run_module,
+        "_NATIVE_LEGS",
+        [("fake-noexec", DeclaredLaunch(script="noexec_leg.py"))],
+    )
+
     rc = main([], script_path=str(root / "bin" / "install-health-run.sh"))
-    captured = capsys.readouterr()
 
-    assert rc == 0, f"expected rc=0, got {rc}; stderr={captured.err!r}"
-    assert marker.read_text(encoding="utf-8") == "ran\n"
+    assert rc == 0
+    assert marker.read_text(encoding="utf-8") == "ran"
 
 
-def test_no_shebang_drop_in_still_runs_under_bash_fallback(tmp_path, capsys):
+def test_declared_launch_nt_launcher_used_alone_under_windows(tmp_path, monkeypatch):
+    """AC5 — the `nt_launcher` tier returns `[<launcher>]` alone under
+    `_is_windows() -> True`, never combined with `interpreter`/`script`."""
     root = _mk_root(tmp_path)
-    marker = root / "noshebang.marker"
-    script = root / "coordinator" / "bin" / "install-health" / "10-noshebang.sh"
-    script.write_text(f'echo ran >> "{marker}"\nexit 0\n', encoding="utf-8")
-    os.chmod(script, 0o755)
+    monkeypatch.setattr(install_health_run_module, "_is_windows", lambda: True)
+
+    calls = []
+
+    def _fake_call(argv, **_spawn_kwargs):
+        calls.append(argv)
+        return 0
+
+    monkeypatch.setattr(install_health_run_module.subprocess, "call", _fake_call)
+    monkeypatch.setattr(
+        install_health_run_module,
+        "_NATIVE_LEGS",
+        [("fake-nt", DeclaredLaunch(script="leg.py", nt_launcher="leg.exe"))],
+    )
 
     rc = main([], script_path=str(root / "bin" / "install-health-run.sh"))
-    captured = capsys.readouterr()
 
-    assert rc == 0, f"expected rc=0, got {rc}; stderr={captured.err!r}"
-    assert marker.read_text(encoding="utf-8") == "ran\n"
-
-
-# ---------------------------------------------------------------------------
-# Regression: unresolvable interpreter must not abort the loop (Finding 1,
-# 2026-07-21 code review of the shebang-resolve slice).
-# ---------------------------------------------------------------------------
+    assert rc == 0
+    assert calls == [[os.path.join(str(root), "leg.exe")]]
 
 
-def test_unresolvable_interpreter_counts_one_failure_and_does_not_abort_loop(tmp_path, capsys):
-    """A drop-in whose shebang names a guaranteed-absent interpreter must be
-    counted as exactly one failure via subprocess.call's OSError, not raise
-    out of the loop and abort the whole install-health run — this is the
-    module's own documented 'continue past sub-script failures' contract."""
+def test_declared_launch_ignores_undeclared_on_disk_cmd_twin(tmp_path, monkeypatch, capsys):
+    """AC5 — an on-disk `<script>.cmd` that is NOT declared is ignored: the
+    twin is never probed for, and `.cmd` is not even a scanned drop-in
+    extension, so it produces no REFUSED line either."""
     root = _mk_root(tmp_path)
     marker = root / "ran.marker"
-    bad_script = root / "coordinator" / "bin" / "install-health" / "10-bad-interpreter.sh"
-    ok_script = root / "coordinator" / "bin" / "install-health" / "20-ok.sh"
-    bad_script.write_text(
-        "#!/usr/bin/env definitely-not-a-real-interpreter-xyz\necho unreachable\n",
+    script = root / "leg.py"
+    script.write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('ran')\n",
         encoding="utf-8",
     )
-    ok_script.write_text(f'#!/usr/bin/env bash\necho ran >> "{marker}"\nexit 0\n', encoding="utf-8")
-    os.chmod(bad_script, 0o755)
-    os.chmod(ok_script, 0o755)
+    stray_cmd = root / "coordinator" / "bin" / "install-health" / "leg.py.cmd"
+    stray_cmd.write_text("echo should-not-run\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        install_health_run_module,
+        "_NATIVE_LEGS",
+        [("fake-leg", DeclaredLaunch(script="leg.py"))],
+    )
+
+    rc = main([], script_path=str(root / "bin" / "install-health-run.sh"))
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert marker.read_text(encoding="utf-8") == "ran"
+    assert "leg.py.cmd" not in captured.err
+
+
+# ---------------------------------------------------------------------------
+# AC6 — an undeclared drop-in is refused by name, never launched.
+# ---------------------------------------------------------------------------
+
+
+def test_undeclared_drop_in_refused_by_name_not_run_exit_zero(tmp_path, capsys):
+    root = _mk_root(tmp_path)
+    marker = root / "ran.marker"
+    stray = root / "coordinator" / "bin" / "install-health" / "10-foo.sh"
+    stray.write_text(f'#!/usr/bin/env bash\necho ran >> "{marker}"\nexit 0\n', encoding="utf-8")
+
+    rc = main([], script_path=str(root / "bin" / "install-health-run.sh"))
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert not marker.exists()
+    assert (
+        "[install-health] REFUSED: 10-foo.sh is not a declared leg -- "
+        "declare it in install_health_run._NATIVE_LEGS" in captured.err
+    )
+
+
+# ---------------------------------------------------------------------------
+# Ported CONTRACT tests: continue-past-failure, nonzero-exit-counts-one-
+# failure, OSError-counts-one-failure — against monkeypatched `DeclaredLaunch`
+# rows in `_NATIVE_LEGS` rather than real bash drop-ins (see module
+# docstring for why the prior glob-driven versions were retired outright).
+# ---------------------------------------------------------------------------
+
+
+def test_declared_launch_nonzero_exit_counts_one_failure_and_loop_continues(tmp_path, capsys, monkeypatch):
+    root = _mk_root(tmp_path)
+    marker = root / "ran.marker"
+    fail_script = root / "fail_leg.py"
+    fail_script.write_text("import sys\nsys.exit(1)\n", encoding="utf-8")
+    ok_script = root / "ok_leg.py"
+    ok_script.write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('ran')\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        install_health_run_module,
+        "_NATIVE_LEGS",
+        [
+            ("fake-fail", DeclaredLaunch(script="fail_leg.py")),
+            ("fake-ok", DeclaredLaunch(script="ok_leg.py")),
+        ],
+    )
 
     rc = main([], script_path=str(root / "bin" / "install-health-run.sh"))
     captured = capsys.readouterr()
 
     assert rc == 1
-    assert captured.err.count("[install-health] FAIL: 10-bad-interpreter.sh") == 1
+    assert marker.read_text(encoding="utf-8") == "ran"
+    assert "[install-health] FAIL: fake-fail exit=1" in captured.err
     assert "1 health script(s) failed" in captured.err
-    assert marker.read_text(encoding="utf-8") == "ran\n"
 
 
-# ---------------------------------------------------------------------------
-# Regression: main()'s Windows .cmd-twin branch (Finding 5, 2026-07-21 code
-# review of the shebang-resolve slice).
-# ---------------------------------------------------------------------------
-
-
-def test_main_invokes_cmd_twin_alone_not_twin_plus_script(tmp_path, capsys, monkeypatch):
-    """On Windows, when a `.cmd` twin exists next to a `.sh` drop-in,
-    main()'s loop must invoke the twin alone (resolve_by_shebang's own
-    complete-argv convention), not [twin, script]."""
-    monkeypatch.setattr(launchable, "_is_windows", lambda: True)
-
+def test_declared_launch_oserror_counts_one_failure_and_loop_continues(tmp_path, capsys, monkeypatch):
     root = _mk_root(tmp_path)
     marker = root / "ran.marker"
-    script = root / "coordinator" / "bin" / "install-health" / "10-twin.sh"
-    twin = root / "coordinator" / "bin" / "install-health" / "10-twin.sh.cmd"
-    script.write_text("#!/usr/bin/env bash\necho should-not-run\n", encoding="utf-8")
-    twin.write_text(f'echo ran >> "{marker}"\nexit 0\n', encoding="utf-8")
-    os.chmod(script, 0o755)
+    ok_script = root / "ok_leg.py"
+    ok_script.write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('ran')\n",
+        encoding="utf-8",
+    )
 
-    calls = []
-    import coordinator_core.ops.install_health_run as install_health_run_module
+    monkeypatch.setattr(
+        install_health_run_module,
+        "_NATIVE_LEGS",
+        [
+            ("fake-bad", DeclaredLaunch(script="missing_interpreter_leg.py")),
+            ("fake-ok", DeclaredLaunch(script="ok_leg.py")),
+        ],
+    )
 
-    def _fake_call(argv, **_spawn_kwargs):
-        # **_spawn_kwargs: the call site passes no-console creationflags plus
-        # explicit std-handle fds (see `_leg_spawn_kwargs`); this test pins the
-        # argv, not the spawn plumbing.
-        calls.append(argv)
-        return 0
+    real_call = install_health_run_module.subprocess.call
+
+    def _fake_call(argv, **kwargs):
+        if "missing_interpreter_leg.py" in argv[-1]:
+            raise OSError("no such interpreter")
+        return real_call(argv, **kwargs)
 
     monkeypatch.setattr(install_health_run_module.subprocess, "call", _fake_call)
 
     rc = main([], script_path=str(root / "bin" / "install-health-run.sh"))
+    captured = capsys.readouterr()
 
-    assert rc == 0
-    assert len(calls) == 1
-    assert calls[0] == [str(twin)]
+    assert rc == 1
+    assert "[install-health] FAIL: fake-bad" in captured.err
+    assert marker.read_text(encoding="utf-8") == "ran"
 
 
 # ---------------------------------------------------------------------------
@@ -378,11 +431,12 @@ def test_main_invokes_cmd_twin_alone_not_twin_plus_script(tmp_path, capsys, monk
 def _touch_native_dropin(root: Path, basename: str) -> Path:
     """Create a placeholder drop-in file for one of the natively-repointed
     basenames. Its CONTENT is irrelevant — the loop must never read/execute
-    this file's shebang or body for a basename in `_NATIVE_ENTRYPOINTS`; it
-    exists only so glob() finds a matching path to dispatch on."""
+    this file's shebang or body for a basename in `_NATIVE_LEGS`; it exists
+    only so the undeclared-drop-in refusal scan sees a matching stem on disk
+    and correctly skips it (name/extension match only — the scan never reads
+    permission bits, so no exec bit is set here)."""
     script = root / "coordinator" / "bin" / "install-health" / basename
     script.write_text("#!/usr/bin/env python3\nraise SystemExit(99)\n", encoding="utf-8")
-    os.chmod(script, 0o755)
     return script
 
 
@@ -417,13 +471,25 @@ def test_native_entrypoint_nonzero_return_produces_fail_line_and_nonzero_exit(tm
     assert "1 health script(s) failed" in captured.err
 
 
-def test_native_entrypoint_exception_counts_one_failure_and_does_not_abort_loop(tmp_path, capsys):
+def test_native_entrypoint_exception_counts_one_failure_and_does_not_abort_loop(tmp_path, capsys, monkeypatch):
     root = _mk_root(tmp_path)
     marker = root / "ran.marker"
     _touch_native_dropin(root, "seed-skill-overrides.sh")
-    ok_script = root / "coordinator" / "bin" / "install-health" / "20-ok.sh"
-    ok_script.write_text(f'#!/usr/bin/env bash\necho ran >> "{marker}"\nexit 0\n', encoding="utf-8")
-    os.chmod(ok_script, 0o755)
+    ok_script = root / "ok_leg.py"
+    ok_script.write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('ran')\n",
+        encoding="utf-8",
+    )
+    # Continuation proof is a declared `DeclaredLaunch` leg appended after the
+    # real registry, not an undeclared drop-in -- an undeclared `.sh`/`.py`
+    # file is REFUSED, never launched, under the declared-launch model this
+    # file now tests (see `test_undeclared_drop_in_refused_by_name_not_run_
+    # exit_zero`), so it can no longer stand in for "the loop continues".
+    monkeypatch.setattr(
+        install_health_run_module,
+        "_NATIVE_LEGS",
+        _NATIVE_LEGS + [("fake-ok", DeclaredLaunch(script="ok_leg.py"))],
+    )
 
     with patch(
         "coordinator_core.ops.install_health_run.seed_skill_overrides.main",
@@ -434,7 +500,7 @@ def test_native_entrypoint_exception_counts_one_failure_and_does_not_abort_loop(
 
     assert rc == 1
     assert "[install-health] FAIL: seed-skill-overrides raised: boom" in captured.err
-    assert marker.read_text(encoding="utf-8") == "ran\n"
+    assert marker.read_text(encoding="utf-8") == "ran"
 
 
 # ---------------------------------------------------------------------------
@@ -527,12 +593,22 @@ def test_native_probe_nonzero_return_produces_fail_line_and_nonzero_exit(tmp_pat
     assert "1 health script(s) failed" in captured.err
 
 
-def test_native_probe_exception_counts_one_failure_and_does_not_abort(tmp_path, capsys):
+def test_native_probe_exception_counts_one_failure_and_does_not_abort(tmp_path, capsys, monkeypatch):
     root = _mk_root(tmp_path)
     marker = root / "ran.marker"
-    ok_script = root / "coordinator" / "bin" / "install-health" / "20-ok.sh"
-    ok_script.write_text(f'#!/usr/bin/env bash\necho ran >> "{marker}"\nexit 0\n', encoding="utf-8")
-    os.chmod(ok_script, 0o755)
+    ok_script = root / "ok_leg.py"
+    ok_script.write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('ran')\n",
+        encoding="utf-8",
+    )
+    # Continuation proof is a declared `DeclaredLaunch` leg (see the sibling
+    # `test_native_entrypoint_exception_counts_one_failure_and_does_not_abort_
+    # loop`'s comment for why an undeclared drop-in no longer stands in here).
+    monkeypatch.setattr(
+        install_health_run_module,
+        "_NATIVE_LEGS",
+        _NATIVE_LEGS + [("fake-ok", DeclaredLaunch(script="ok_leg.py"))],
+    )
 
     with patch(
         "coordinator_core.ops.install_health_run.ensure_python3_exe_shim.main",
@@ -546,7 +622,7 @@ def test_native_probe_exception_counts_one_failure_and_does_not_abort(tmp_path, 
 
     assert rc == 1
     assert "[install-health] FAIL: ensure-python3-exe-shim raised: boom" in captured.err
-    assert marker.read_text(encoding="utf-8") == "ran\n"
+    assert marker.read_text(encoding="utf-8") == "ran"
 
 
 def test_reintroduced_native_probe_sh_sibling_does_not_double_run(tmp_path, capsys):
@@ -811,3 +887,250 @@ def test_check_door_provenance_no_door_exits_zero_with_note(monkeypatch, capsys)
     captured = capsys.readouterr()
     assert rc == 0
     assert "NOTE" in captured.out
+
+
+def test_prebuilt_behind_its_sources_fails_with_a_rebuild_remediation(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.door_install.committed_prebuilt_source_drift",
+        lambda: ["door.c"],
+    )
+    rc = install_health_run_module._report_prebuilt_currency()
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "door.c" in captured.err
+    assert "coordinator_core/warm/door/build.py" in captured.err
+
+
+def test_current_prebuilt_reports_nothing(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.door_install.committed_prebuilt_source_drift",
+        lambda: [],
+    )
+    assert install_health_run_module._report_prebuilt_currency() == 0
+    assert capsys.readouterr() == ("", "")
+
+
+# Pin that check_door_provenance's own
+# platform gate actually wires _report_prebuilt_currency in on Windows and
+# leaves it out elsewhere, through the real entry point rather than by
+# calling _report_prebuilt_currency() directly (which the two tests above
+# do, bypassing the gate). Monkeypatches the file's own _is_windows()
+# predicate, never sys.platform globally.
+def test_check_door_provenance_windows_also_runs_prebuilt_currency_check(
+    monkeypatch, capsys
+):
+    _patch_verdict(monkeypatch, "ok")
+    monkeypatch.setattr(install_health_run_module, "_is_windows", lambda: True)
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.door_install.committed_prebuilt_source_drift",
+        lambda: ["door.c"],
+    )
+    rc = check_door_provenance("", "")
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "door.c" in captured.err
+
+
+def test_check_door_provenance_non_windows_skips_prebuilt_currency_check(
+    monkeypatch, capsys
+):
+    _patch_verdict(monkeypatch, "ok")
+    monkeypatch.setattr(install_health_run_module, "_is_windows", lambda: False)
+
+    def _boom():
+        raise AssertionError("committed_prebuilt_source_drift must not run off-Windows")
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.door_install.committed_prebuilt_source_drift",
+        _boom,
+    )
+    rc = check_door_provenance("", "")
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "FAIL" not in captured.err
+
+
+# ---------------------------------------------------------------------------
+# check-door-route (C2)
+# ---------------------------------------------------------------------------
+
+_ROOT = Path("/root/klabauter")
+
+
+def _patch_door_route_base(monkeypatch, *, door_installed=True):
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.door_install.is_door_installed",
+        lambda bin_dst: door_installed,
+    )
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.resolve_engine_root_for_install",
+        lambda: InstallEngineRoot(kind="published", root=_ROOT, remediation=None),
+    )
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.expected_forwarders",
+        lambda claude_klabauter_root: {"coordinator-invoke": "coordinator-invoke.py"},
+    )
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run._names_the_installer_gives_an_image",
+        lambda expected_names, bin_dir: list(expected_names),
+    )
+
+
+def test_check_door_route_registered_in_native_legs():
+    names = [name for name, _ in _NATIVE_LEGS]
+    assert "check-door-route" in names
+    # Deliberately AFTER check-door-provenance, BEFORE check-launch-chain-
+    # intact -- the plan-row's own ordering constraint.
+    assert names.index("check-door-provenance") < names.index("check-door-route") < names.index(
+        "check-launch-chain-intact"
+    )
+
+
+def test_check_door_route_no_door_exits_zero_with_note(monkeypatch, capsys):
+    _patch_door_route_base(monkeypatch, door_installed=False)
+    rc = check_door_route("", "")
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "NOTE" in captured.out
+
+
+def test_check_door_route_no_engine_root_exits_zero_with_discriminator_unavailable(monkeypatch, capsys):
+    _patch_door_route_base(monkeypatch)
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.resolve_engine_root_for_install",
+        lambda: InstallEngineRoot(kind="none", root=None, remediation="no engine root"),
+    )
+    rc = check_door_route("", "")
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "DISCRIMINATOR_UNAVAILABLE" in captured.out
+
+
+def test_check_door_route_unresolved_and_cold_control_unresolved_is_discriminator_unavailable(
+    monkeypatch, capsys
+):
+    _patch_door_route_base(monkeypatch)
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.door_route_signal.read_door_route",
+        lambda door_path, op, *, repo_root, timeout: DoorRouteResult("unresolved", None),
+    )
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.door_route_signal.run_cold_control_invocation",
+        lambda op, *, repo_root, params=None: DoorRouteResult("unresolved", None),
+    )
+    rc = check_door_route("", "")
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "DISCRIMINATOR_UNAVAILABLE" in captured.out
+
+
+def test_check_door_route_ac2_pins_same_repo_root_to_both_calls(monkeypatch):
+    _patch_door_route_base(monkeypatch)
+    seen: dict = {}
+
+    def _read(door_path, op, *, repo_root, timeout):
+        seen["read_repo_root"] = repo_root
+        return DoorRouteResult("unresolved", None)
+
+    def _cold(op, *, repo_root, params=None):
+        seen["cold_repo_root"] = repo_root
+        return DoorRouteResult("in_process", {})
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.door_route_signal.read_door_route", _read
+    )
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.door_route_signal.run_cold_control_invocation", _cold
+    )
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.door_install.audit_installed_image_currency",
+        lambda bin_dst, names: ImageCurrencyAudit(current=list(names), stale=[]),
+    )
+    check_door_route("", "")
+    assert seen["read_repo_root"] == _ROOT
+    assert seen["cold_repo_root"] == _ROOT
+    assert seen["read_repo_root"] == seen["cold_repo_root"]
+
+
+def test_check_door_route_no_hardlink_divergence_exits_zero(monkeypatch, capsys):
+    _patch_door_route_base(monkeypatch)
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.door_route_signal.read_door_route",
+        lambda door_path, op, *, repo_root, timeout: DoorRouteResult("warm_server", {"route": "warm_server"}),
+    )
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.door_install.audit_installed_image_currency",
+        lambda bin_dst, names: ImageCurrencyAudit(current=list(names), stale=[]),
+    )
+    rc = check_door_route("", "")
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "FAIL" not in captured.err
+
+
+def test_check_door_route_divergence_and_warmth_expected_exits_one(monkeypatch, capsys):
+    _patch_door_route_base(monkeypatch)
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.door_route_signal.read_door_route",
+        lambda door_path, op, *, repo_root, timeout: DoorRouteResult("warm_server", {"route": "warm_server"}),
+    )
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.door_install.audit_installed_image_currency",
+        lambda bin_dst, names: ImageCurrencyAudit(current=[], stale=["age-sweep-lessons"]),
+    )
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.is_warm_enabled", lambda: True
+    )
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.read_discovery_with_cause",
+        lambda repo_root: ({"port": 1}, "record_present"),
+    )
+    rc = check_door_route("", "")
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "[door-route] FAIL" in captured.err
+    assert "age-sweep-lessons" in captured.err
+    assert "python scripts/setup.py" in captured.err
+
+
+def test_check_door_route_divergence_and_warmth_not_expected_exits_zero_with_note(monkeypatch, capsys):
+    _patch_door_route_base(monkeypatch)
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.door_route_signal.read_door_route",
+        lambda door_path, op, *, repo_root, timeout: DoorRouteResult("warm_server", {"route": "warm_server"}),
+    )
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.door_install.audit_installed_image_currency",
+        lambda bin_dst, names: ImageCurrencyAudit(current=[], stale=["age-sweep-lessons"]),
+    )
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.is_warm_enabled", lambda: False
+    )
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.read_discovery_with_cause",
+        lambda repo_root: (None, "record_absent"),
+    )
+    rc = check_door_route("", "")
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "NOTE" in captured.out
+    assert "FAIL" not in captured.err
+
+
+def test_check_door_route_audit_error_exits_zero_with_discriminator_unavailable(monkeypatch, capsys):
+    _patch_door_route_base(monkeypatch)
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.door_route_signal.read_door_route",
+        lambda door_path, op, *, repo_root, timeout: DoorRouteResult("warm_server", {"route": "warm_server"}),
+    )
+
+    def _raise(bin_dst, names):
+        raise DoorInstallError("no readable prebuilt for this platform")
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.door_install.audit_installed_image_currency", _raise
+    )
+    rc = check_door_route("", "")
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "DISCRIMINATOR_UNAVAILABLE" in captured.out

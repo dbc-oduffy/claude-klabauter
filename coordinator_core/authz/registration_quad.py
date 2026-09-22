@@ -166,7 +166,7 @@ def _discover_all_ops() -> list[str]:
     A plain `import coordinator_core.ops` under-discovers relative to this and MUST
     NOT be substituted for it.
 
-    # Review: code-reviewer (Finding 1) — mirrors
+    # Mirrors
     # coordinator_core/tests/test_dispatch_message.py's
     # _import_all_ops_tree_modules()/test_op_key_scope_table_covers_all_registered_ops
     # pair: pass 2 imports are returned and asserted non-empty below, so a silently
@@ -190,7 +190,7 @@ def _discover_all_ops() -> list[str]:
     return imported
 
 
-# Review: code-reviewer (Finding 4) — one-line purpose docstring per helper, matching
+# one-line purpose docstring per helper, matching
 # the RAG-bait convention every other function in this file already follows.
 def _live_registry() -> Mapping[str, object]:
     """Live `_REGISTRY` table, deferred-imported to keep this module's own import cheap."""
@@ -268,7 +268,7 @@ def check_registration_quad(
     op) — that is a different failure shape, owned by
     `coordinator_core/ops/tests/test_registry_map_sync.py`, not this quad check.
     """
-    # Review: code-reviewer (Finding 3) — only `registry` depends on the ops-tree
+    # Only `registry` depends on the ops-tree
     # discovery walk (op modules self-register into `_REGISTRY` via import-time side
     # effect). `classification`/`scope`/`module_map` are plain dict literals that
     # populate on their own defining module's import and never need the walk; gating

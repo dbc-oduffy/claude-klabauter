@@ -452,7 +452,7 @@ async def _handler(
         }
     elif _applied[0]:
         _LOG.debug("handoff.stamp: stamped shipped_in: %s into %s", sha, p)
-        # Review: code-reviewer (F6) — include message field for envelope consistency
+        # Include message field for envelope consistency
         # with handoff.transition; callers doing result["message"] must not KeyError.
         return {
             "exit_code": 0,
@@ -467,7 +467,7 @@ async def _handler(
         _LOG.debug(
             "handoff.stamp: shipped_in already present in %s — skipping (idempotent)", p
         )
-        # Review: code-reviewer (F6) — include message field for envelope consistency.
+        # Include message field for envelope consistency.
         return {
             "exit_code": 0,
             "applied": False,
@@ -487,7 +487,7 @@ async def _handler(
 def _err(msg: str, kind: Optional[str] = None) -> dict:
     """Return an exit_code=1 error reply dict.
 
-    Review: code-reviewer (F8) — renamed _error → _err for consistency with sibling
+    Renamed _error → _err for consistency with sibling
     ops (handoff_transition, memo_transition all use _err).
 
     kind: echoed verbatim into the response (DR-096) — the ``_handler`` doc
@@ -787,7 +787,7 @@ _CLOSED_REASONS = frozenset({"cancelled", "displaced", "stale"})
 # remain unconditionally terminal — this set's membership is unchanged, only
 # one caller's use of it gained a same-write bypass for one specific member.
 #
-# Review: coordinator:code-reviewer — this vendored copy had drifted to
+# This vendored copy had drifted to
 # 3 members, silently omitting "abandoned"; now imports
 # lifecycle_constants.HANDOFF_TERMINAL_DEPLOYMENT directly (a leaf module,
 # zero coordinator_core imports/side effects) instead of vendoring.
@@ -847,10 +847,23 @@ class _DeploymentStateRepairPolicy:
     handoff must resolve under, e.g. ``("archive", "handoffs")``.
     ``carveout`` — ``(existing_state, target_state) -> bool``; True bypasses
     the terminal-lock refusal for that specific transition.
+
+    ``refuses_continued_target`` — True means this door must REFUSE a call
+    targeting ``deployment_state: continued`` outright, regardless of the
+    existing state, rather than write it. See
+    docs/plans/2026-08-18-supersede-stamps-and-archives-atomically.md AC1
+    ("writer 4"): a writer of a terminal ``deployment_state`` must either
+    discharge the archival git-mv in the same operation or refuse to write.
+    The live door has no git-mv path (see module docstring/this handler's
+    own registration note — it is a frontmatter-only repair verb), so it can
+    never satisfy the first half and must always take the second. The
+    archived door's own ``continued`` writes are exempt (the record already
+    lives under archive/handoffs/ — there is nothing left to move).
     """
 
     root_segments: "tuple[str, ...]"
     carveout: Callable[[Optional[str], str], bool]
+    refuses_continued_target: bool = False
 
 
 _ARCHIVED_DEPLOYMENT_STATE_POLICY = _DeploymentStateRepairPolicy(
@@ -861,6 +874,7 @@ _ARCHIVED_DEPLOYMENT_STATE_POLICY = _DeploymentStateRepairPolicy(
 _LIVE_DEPLOYMENT_STATE_POLICY = _DeploymentStateRepairPolicy(
     root_segments=("state", "handoffs"),
     carveout=_live_door_carveout,
+    refuses_continued_target=True,
 )
 
 # Cross-repo continued_into reference shape (e.g. "claude-klabauter:docs/plans/x.md")
@@ -877,7 +891,7 @@ _CROSS_REPO_REF_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{2,}:(?!//)")
 def _repair_deployment_state_err(msg: str) -> dict:
     """Error-shape helper shared by both deployment_state repair doors.
 
-    Review: overengineering-reviewer (2026-08-31) — dropped the
+    Dropped the
     ``verb_label`` policy axis that used to distinguish the two doors' log
     prefixes here; it varied a log string only, at the cost of ~19 call-site
     edits. Error paths log a generic prefix (root context is not yet
@@ -1252,6 +1266,25 @@ async def _repair_deployment_state_impl(
             f"{target_state!r}, not 'closed' — rejected rather than silently "
             "written to a state it does not apply to")
 
+    # AC1 ("writer 4"), docs/plans/2026-08-18-supersede-stamps-and-archives-
+    # atomically.md: this door can never discharge the archival git-mv (it is
+    # a frontmatter-only repair verb — see _DeploymentStateRepairPolicy's own
+    # docstring), so it must refuse a `continued` target outright rather than
+    # ever leave state/handoffs/ carrying a terminal, un-archived record.
+    # Checked before repo_root/path resolution — a usage error, not an I/O
+    # one. `handoff.archive_transition` mode="supersede" is the correct door
+    # for this transition: it stamps and archives atomically.
+    if policy.refuses_continued_target and target_state == "continued":
+        return _repair_deployment_state_err(
+            "deployment_state 'continued' is refused on this door — it has "
+            "no git-mv path to discharge the archival in the same operation, "
+            "and a writer that cannot also discharge the archival must "
+            "refuse rather than leave the record resident in state/handoffs/ "
+            "(AC1, docs/plans/2026-08-18-supersede-stamps-and-archives-"
+            "atomically.md) — use handoff.archive_transition mode='supersede' "
+            "instead, which stamps deployment_state:continued and archives "
+            "in one atomic operation")
+
     if repo_root is None:
         # NO DOOR NAME IN THIS MESSAGE, DELIBERATELY. `_repair_deployment_state_impl`
         # is shared by BOTH doors, so a hardcoded op name here is wrong for one of
@@ -1260,7 +1293,6 @@ async def _repair_deployment_state_impl(
         # had not invoked. It is caller-facing `error` text, not a log line — the
         # generic log prefix lives in `_repair_deployment_state_err`, and the two
         # door-distinguishing lines further down carry `root_label` once resolved.
-        # Review: coordinator:code-reviewer (slice B, Finding 1, P1).
         return _repair_deployment_state_err(
             "repair_deployment_state: repo_root is required "
             "(no founding root available)")

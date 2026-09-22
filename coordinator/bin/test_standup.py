@@ -1,6 +1,6 @@
 """test_standup.py — self-contained test suite for standup.py.
 
-Review: code-reviewer — F5 (P2): standup.py landed with no test file. This suite covers
+standup.py landed with no test file. This suite covers
 the not-inside-a-git-repo hard error, the baseline/no-baseline output shape, section
 presence/ordering, and — the F1 regression this campaign exists to prevent — a static
 guarantee that no `bash` (or any shell) subprocess spawn is reachable from the module.

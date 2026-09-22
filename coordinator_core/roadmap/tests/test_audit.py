@@ -62,7 +62,7 @@ def _write_stub(
     kind: str = "spinoff-roadmap",
     covers: Optional[List[str]] = None,
 ) -> None:
-    # Review: code-reviewer (P1, Finding 1) — `kind` defaults to the retired
+    # `kind` defaults to the retired
     # spelling for byte-parity with every pre-existing caller, but callers
     # below now also pass `kind="roadmap-baton"` (the canonical D1 spelling)
     # to prove `_ROADMAP_BATON_KIND_WHERE`'s `kind in (...)` term actually
@@ -488,7 +488,7 @@ def test_run_audit_dual_spelling_both_legacy_and_canonical_kind_found(
 
 # ---------------------------------------------------------------------------
 # resolve_repo_root / _state_root / _claude_klabauter_root / resolve_data_root —
-# Review: code-reviewer (P2) — the DATA_ROOT/state-root resolution chain had
+# The DATA_ROOT/state-root resolution chain had
 # zero direct unit tests despite ~50 lines of module docstring justifying it
 # as a genuine correctness fix over the oracle. A test exercising
 # resolve_repo_root against a non-git tmp_path would have caught the P1
@@ -588,7 +588,7 @@ def test_engine_root_wins_while_both_are_set(monkeypatch: pytest.MonkeyPatch) ->
 def test_claude_klabauter_root_pointer_file_fast_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Review: code-reviewer (P2) — rung-1.5 pointer-file fast path (Windows
+    # rung-1.5 pointer-file fast path (Windows
     # hook-latency fix, ported from coordinator-claude-klabauter-root.sh) must resolve
     # without ever invoking the subprocess-based machine-local ladder.
     settings_home = tmp_path / "settings-home"
@@ -676,7 +676,7 @@ def test_main_root_flag_consumed_runs_audit(tmp_path: Path) -> None:
 
 
 def test_main_config_error_exits_1(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Review: code-reviewer (P2) — a foreseeable config gap (unresolvable
+    # A foreseeable config gap (unresolvable
     # CLAUDE_KLABAUTER_ROOT) is a usage/config error, exit 1 — not this module's own
     # documented exit-3 "unexpected internal error" contract.
     def _boom(root_flag: Optional[str], cwd: Optional[Path] = None) -> Path:

@@ -626,5 +626,80 @@ class TestRegistryReadTimeoutDistinguishedFromAbsentKey(unittest.TestCase):
         self.assertIn(_mod._REGISTRY_READ_TIMEOUT_TOKEN, str(ctx.exception))
 
 
+class TimeoutMessageClaimsOnlyWhatTheDoorKnows(unittest.TestCase):
+    """C4 of docs/plans/2026-09-20-stop-the-engine-spawning-to-talk-to-itself.md.
+
+    A negative spec, so these are worded as bans. The two cut sentences were not
+    merely imprecise: one asserted engine behaviour this process cannot observe,
+    and the other prescribed a remedy measurably wrong for the failure that was
+    actually happening. Both survived because nothing pinned their absence.
+    """
+
+    def _both_branches(self):
+        ceremony = _mod._timeout_exceeded_message("ceremony.commit_v2", 32)
+        ordinary = _mod._timeout_exceeded_message("queue.append", 12)
+        return {"ceremony": ceremony, "ordinary": ordinary}
+
+    def test_neither_branch_asserts_what_the_engine_is_doing(self):
+        for name, text in self._both_branches().items():
+            with self.subTest(branch=name):
+                self.assertNotIn("does not stop when this client", text)
+                self.assertNotIn("slow op is not a hung one", text)
+
+    def test_neither_branch_prescribes_making_the_op_cheaper(self):
+        """Measured counterexample: a no-op `ping` took 28.8s through a door
+        whose process and every pool member sat at 0.0% CPU. There was nothing
+        to make cheaper, and a remedy naming the wrong cause teaches the reader
+        to discount a message that must be read every time it fires."""
+        for name, text in self._both_branches().items():
+            with self.subTest(branch=name):
+                self.assertNotIn("cheaper", text)
+                self.assertNotIn("fewer spawns", text)
+                self.assertNotIn("fewer git spawns", text)
+
+    def test_both_branches_keep_the_reconcile_instruction(self):
+        """The half that was right, and the half a peer's reconcile is why
+        nothing was double-executed. Weakening it is the failure this test
+        exists to refuse."""
+        for name, text in self._both_branches().items():
+            with self.subTest(branch=name):
+                # Whitespace-normalised: these messages hard-wrap, and the
+                # instruction is the property, not where the line breaks fall.
+                flat = " ".join(text.split())
+                self.assertIn("Reconcile against real repo state", flat)
+                self.assertIn("may have", flat)
+                self.assertIn("git log", flat)
+
+    def test_both_branches_still_carry_the_discriminator_prefix(self):
+        """`is_timeout_error` matches on this prefix. A reworded message that
+        drops it turns every timeout into an unclassified RuntimeError."""
+        for name, text in self._both_branches().items():
+            with self.subTest(branch=name):
+                self.assertTrue(text.startswith(_mod._TIMEOUT_MESSAGE_PREFIX))
+                self.assertTrue(_mod.is_timeout_error(RuntimeError(text)))
+
+    def test_the_warm_clients_indeterminate_message_makes_no_engine_claim(self):
+        """The same C4 cut, on the message a warm-served refusal actually
+        prints. The cc_invoke remedies above were fixed first and this one was
+        missed -- it surfaced verbatim in the next indeterminate after they
+        shipped, which is the case for pinning every copy rather than one."""
+        from coordinator_core.warm import client
+
+        text = " ".join(client._MUTATION_INDETERMINATE_MESSAGE.split())
+        self.assertNotIn("slow op is not a hung one", text)
+        self.assertNotIn("does not stop when this client", text)
+        self.assertIn("Reconcile against real state", text)
+        self.assertIn("may never have started", text)
+
+    def test_no_branch_names_an_override_key(self):
+        """Unchanged contract from this file's original subject — re-asserted
+        here because C4 rewrote both branches and a reworded message is exactly
+        where a helpful-sounding env var creeps back in."""
+        for name, text in self._both_branches().items():
+            with self.subTest(branch=name):
+                self.assertNotIn("CC_INVOKE_TIMEOUT_SECS", text)
+                self.assertNotIn("COORDINATOR_DISPATCH_TIMEOUT_SECS", text)
+
+
 if __name__ == "__main__":
     unittest.main()

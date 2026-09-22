@@ -249,27 +249,42 @@ _EVENT_NAME = "PreToolUse"
 #: already takes for its narrower shape). No such capability exists in this
 #: package as of this decision, so no attempt is made to fake one here.
 _FOR_LOOP_GENERIC_SUMMARY = "a single in-process python3 loop, zero per-item forks"
-_FOR_LOOP_GENERIC_EXAMPLE = (
-    "python3 -c 'import glob\\nfor f in glob.glob(\"*.txt\"):\\n    ...'  "
-    "# do the per-item work in-process, zero per-iteration forks"
-)
+
+
+def _for_loop_generic_example() -> str:
+    """Built at call time via `_pl_python3_invocation()` -- see the sibling
+    grep-via-bash path (`guard_grep_via_bash.py`), which resolves the real
+    interpreter rather than a literal `python3 -c` an operator on a stock
+    Windows box (where `python3` is frequently absent from PATH) cannot
+    run. Resolution is fail-open to `"python3"`, so this degrades to the
+    prior literal wherever it cannot do better."""
+    return (
+        "%s -c 'import glob\\nfor f in glob.glob(\"*.txt\"):\\n    ...'  "
+        "# do the per-item work in-process, zero per-iteration forks" % _pl_python3_invocation()
+    )
+
 
 #: WHILE-READ LOOP -- always a `_generic_advisory` (no seam to consult, see
 #: module docstring's WHILE_READ_LOOP paragraph). The example reads the item
 #: list in-process instead of spawning a shell `while read` loop, the same
-#: honest outlet `_FOR_LOOP_GENERIC_EXAMPLE` offers for its own shape --
+#: honest outlet `_for_loop_generic_example` offers for its own shape --
 #: no auto-rewrite outlet is synthesized here either (plan Out of scope).
 _WHILE_READ_GENERIC_SUMMARY = "a single in-process python3 loop, zero per-item forks"
-_WHILE_READ_GENERIC_EXAMPLE = (
-    "<generator> | python3 -c 'import sys\\nfor line in sys.stdin:\\n"
-    "    f = line.strip()\\n    ...'  "
-    "# do the per-item work in-process, zero per-iteration forks"
-)
+
+
+def _while_read_generic_example() -> str:
+    """See `_for_loop_generic_example` -- same real-interpreter resolution."""
+    return (
+        "<generator> | %s -c 'import sys\\nfor line in sys.stdin:\\n"
+        "    f = line.strip()\\n    ...'  "
+        "# do the per-item work in-process, zero per-iteration forks" % _pl_python3_invocation()
+    )
+
 
 #: PIPELINE_FOREACH_OBJECT -- PowerShell-only, no bash analogue (D2, C3 of
 #: pln-the-shape-classifier-reaches-a-e743e5). A `ForEach-Object`/`%` block
 #: spawns once PER PIPELINE OBJECT when its body calls a native executable
-#: -- the same fork-per-iteration cost `_FOR_LOOP_GENERIC_EXAMPLE` addresses
+#: -- the same fork-per-iteration cost `_for_loop_generic_example` addresses
 #: for a bash/pwsh `for`/`foreach` loop, so it gets the identical remedy
 #: shape: collapse the per-item spawn into one in-process python3 call over
 #: the whole collection, rather than one call per object flowing through
@@ -278,11 +293,15 @@ _WHILE_READ_GENERIC_EXAMPLE = (
 _PIPELINE_FOREACH_OBJECT_SUMMARY = (
     "a single in-process python3 call over the whole collection, zero per-item forks"
 )
-_PIPELINE_FOREACH_OBJECT_EXAMPLE = (
-    "python3 -c 'import glob\\nfor f in glob.glob(\"*.py\"):\\n    ...'  "
-    "# do the per-item work in-process instead of forking once per "
-    "pipeline object"
-)
+
+
+def _pipeline_foreach_object_example() -> str:
+    """See `_for_loop_generic_example` -- same real-interpreter resolution."""
+    return (
+        "%s -c 'import glob\\nfor f in glob.glob(\"*.py\"):\\n    ...'  "
+        "# do the per-item work in-process instead of forking once per "
+        "pipeline object" % _pl_python3_invocation()
+    )
 
 
 def _seam_confirmed_rewrite(result: Optional[Dict[str, Any]]) -> bool:
@@ -377,7 +396,6 @@ def _generic_advisory(
     # `_outlet_from_seam_result`'s cue-window trick -- see that function's
     # comment.
     #
-    # Review: coordinator:code-reviewer (Finding 6, guard-message-size-
     # discipline) -- the override note now trails the Example line (the
     # concrete command a reader would copy) rather than sitting between the
     # alternative summary and the Example, matching every other guard's
@@ -554,7 +572,7 @@ def _verdict_for_loop(
     seam_result = check_find_exec_rewrite(cmd, session_id)
     if not _seam_confirmed_rewrite(seam_result):
         return _generic_advisory(
-            "for-loop", cmd, _FOR_LOOP_GENERIC_SUMMARY, _FOR_LOOP_GENERIC_EXAMPLE, payload
+            "for-loop", cmd, _FOR_LOOP_GENERIC_SUMMARY, _for_loop_generic_example(), payload
         )
     summary, example = _outlet_from_seam_result(seam_result, payload)
     # DR-280 (2026-08-07): the deny leg is retired -- always render the
@@ -591,7 +609,7 @@ def _verdict_while_read(
     """
     del session_id
     return _generic_advisory(
-        "while-read-loop", cmd, _WHILE_READ_GENERIC_SUMMARY, _WHILE_READ_GENERIC_EXAMPLE, payload
+        "while-read-loop", cmd, _WHILE_READ_GENERIC_SUMMARY, _while_read_generic_example(), payload
     )
 
 
@@ -697,7 +715,7 @@ def _verdict_powershell(
         # text (a `python3 -c` loop) is a subprocess invocation, not shell
         # syntax, so it is equally valid run from a PowerShell prompt.
         return _generic_advisory(
-            "for-loop", cmd, _FOR_LOOP_GENERIC_SUMMARY, _FOR_LOOP_GENERIC_EXAMPLE, payload
+            "for-loop", cmd, _FOR_LOOP_GENERIC_SUMMARY, _for_loop_generic_example(), payload
         )
     if primary.shape is Shape.PIPELINE_FOREACH_OBJECT:
         # New member (D2) -- no bash analogue, no seam to consult. Same
@@ -708,7 +726,7 @@ def _verdict_powershell(
             "pipeline-foreach-object",
             cmd,
             _PIPELINE_FOREACH_OBJECT_SUMMARY,
-            _PIPELINE_FOREACH_OBJECT_EXAMPLE,
+            _pipeline_foreach_object_example(),
             payload,
         )
     # WHILE_READ_LOOP is deliberately absent from the classifier's POWERSHELL

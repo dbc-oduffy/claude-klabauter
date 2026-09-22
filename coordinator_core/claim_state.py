@@ -132,7 +132,7 @@ class ClaimState:
             a DISTINCT, inspectable flag — the accessor never silently
             coerces a disagreement into either half's answer.
 
-            Review: coordinator:code-reviewer (slice A, P2) — this flag is
+            This flag is
             DELIBERATELY NARROWER than "any ledger/mirror disagreement". It
             is `bool(ledger_holder) and not bool(mirror_holder)` only — it
             does NOT flag the case where both sides hold a live claim but
@@ -169,7 +169,7 @@ def _read_ledger_claim(claim_dir: Path) -> Optional[tuple]:
     """
     if not claim_dir.is_dir():
         return None
-    # Review: em-authored-finding — degrade (OSError, ValueError) on both
+    # em-authored-finding — degrade (OSError, ValueError) on both
     # reads, not just OSError. read_text(encoding="utf-8") raises
     # UnicodeDecodeError (a ValueError subclass) on invalid UTF-8, which
     # propagated uncaught to ~25 callers all written assuming this accessor

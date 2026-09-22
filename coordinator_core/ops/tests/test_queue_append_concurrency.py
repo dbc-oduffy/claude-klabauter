@@ -116,7 +116,7 @@ class TestDistinctEntriesSurvive:
             assert result_a["slug"] in f.name, (
                 f"filename {f.name!r} must retain the slug component"
             )
-            # Review: code-reviewer — tighten the "both_present" assertion to also assert
+            # Tighten the "both_present" assertion to also assert
             # the digest-suffix shape explicitly, mirroring test_queue_parity.py's
             # test_promote_filename_uses_ts_safe_slug digest-shape check (Finding 7).
             assert re.search(r"-[0-9a-f]{12}\.yaml$", f.name), (

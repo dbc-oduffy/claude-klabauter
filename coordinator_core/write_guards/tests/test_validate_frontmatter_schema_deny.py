@@ -720,10 +720,17 @@ class TestDenyForensicsCapture:
         if forensics_dir.exists():
             shutil.rmtree(forensics_dir)
 
-        def _boom(self, *args, **kwargs):
+        def _boom(*args, **kwargs):
             raise OSError("simulated unwritable forensics target")
 
-        monkeypatch.setattr(guard.Path, "write_text", _boom)
+        # C6-migrated: the forensics dump now routes through
+        # session/claimed_write.py::replace_text (the seam), not a bare
+        # Path.write_text call on this module's own Path import -- patch the
+        # seam entry point itself to simulate the same unwritable-target
+        # failure.
+        monkeypatch.setattr(
+            "coordinator_core.session.claimed_write.replace_text", _boom
+        )
 
         result = guard.check(payload)
 
@@ -771,6 +778,111 @@ class TestSchemaValidationDeny:
             _payload("Edit", str(fp), str(tmp_path), old_string="old", new_string="new")
         )
         assert result is None
+
+
+class TestWholeDocumentRecordsMatchMode:
+    """C6 (docs/plans/2026-09-11-vendored-schemas-and-the-work-state-contract.md):
+    `match_mode: "whole-document-records"` validates a top-level YAML array,
+    element by element, against the same schema -- opt-in, no vendored
+    schema declares it yet (C10), so every existing schema's behaviour is
+    unchanged. Exercises `_evaluate_schema_validation` directly (a pure
+    function, no DoE sibling / manifest needed) rather than going through
+    `check()`, since this is schema-shape logic, not routing.
+    """
+
+    _schema = {
+        "match_mode": "whole-document-records",
+        "type": "object",
+        "required": ["id", "title"],
+        "properties": {
+            "id": {"type": "string"},
+            "title": {"type": "string"},
+        },
+    }
+
+    def test_three_records_one_bad_names_its_index(self):
+        content = (
+            "- id: a\n  title: A\n"
+            "- id: b\n"
+            "- id: c\n  title: C\n"
+        )
+        message = guard._evaluate_schema_validation(
+            "fixture-records", self._schema, None, content, "fixture.yaml", {},
+        )
+        assert message is not None
+        assert "[1]." in message
+
+    def test_non_dict_element_reports_not_an_object(self):
+        content = "- id: a\n  title: A\n- just a string\n"
+        message = guard._evaluate_schema_validation(
+            "fixture-records", self._schema, None, content, "fixture.yaml", {},
+        )
+        assert message is not None
+        assert "record 1 is not an object" in message
+
+    def test_bare_object_reports_expected_array(self):
+        content = "id: a\ntitle: A\n"
+        message = guard._evaluate_schema_validation(
+            "fixture-records", self._schema, None, content, "fixture.yaml", {},
+        )
+        assert message is not None
+        assert "expected an array of records" in message
+
+    def test_empty_list_is_valid(self):
+        # The restricted YAML parser this branch shares with `whole-document-
+        # yaml` (`_parse_yaml`) has no top-level-empty-list representation --
+        # it always degrades a listless/blank document to `{}`. `.json` goes
+        # through `json.loads` instead, which parses `[]` as an actual empty
+        # list, so that extension exercises the real empty-list path.
+        message = guard._evaluate_schema_validation(
+            "fixture-records", self._schema, None, "[]\n", "fixture.json", {},
+        )
+        assert message is None
+
+    def test_all_conformant_records_pass(self):
+        content = "- id: a\n  title: A\n- id: b\n  title: B\n"
+        message = guard._evaluate_schema_validation(
+            "fixture-records", self._schema, None, content, "fixture.yaml", {},
+        )
+        assert message is None
+
+    def test_whole_document_yaml_over_top_level_list_keeps_todays_message(self):
+        """A `whole-document-yaml` schema fed the same top-level-list content
+        keeps its EXISTING message shape (validates the whole list as one
+        object against the schema, producing today's ordinary
+        `_validate_frontmatter_obj` errors) -- untouched by this mode."""
+        yaml_schema = dict(self._schema, match_mode="whole-document-yaml")
+        content = "- id: a\n  title: A\n"
+        message = guard._evaluate_schema_validation(
+            "fixture-yaml", yaml_schema, None, content, "fixture.yaml", {},
+        )
+        assert message is not None
+        assert "[1]." not in message
+        assert "fm_dict must be a dict or None, got list" in message
+
+    def test_mutual_exclusivity_advisory_fires_default_stands_down_strict(self, monkeypatch):
+        """Mirrors the existing differential cases: the advisory sibling
+        renders this finding by default and stands down under strict
+        (`build_violation_payload_advisory`'s own `_is_strict()` gate) --
+        for this new match_mode too. The deny leg's `_evaluate_schema_
+        validation` has no strict-awareness of its own (that gating lives
+        one layer up, in `check()`); it always reports a bad record."""
+        content = "- id: a\n  title: A\n- id: b\n"
+        deny_message = guard._evaluate_schema_validation(
+            "fixture-records", self._schema, None, content, "fixture.yaml", {},
+        )
+        assert deny_message is not None
+
+        advisory_default = advisory_guard._evaluate_schema_validation_advisory(
+            "fixture-records", self._schema, None, content, "fixture.yaml", {},
+        )
+        assert advisory_default is not None
+
+        monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
+        advisory_strict = advisory_guard._evaluate_schema_validation_advisory(
+            "fixture-records", self._schema, None, content, "fixture.yaml", {},
+        )
+        assert advisory_strict is None
 
 
 class TestMemoOffersDeny:
@@ -1057,7 +1169,7 @@ class TestPlanTasksSpineDeny:
         )
         assert result is None
 
-    # Review: review-a-write-guard (MAJOR) -- `_cf_plan_tasks_writes_declared`
+    # `_cf_plan_tasks_writes_declared`
     # was registered in `_PLAN_TASKS_CROSS_FIELD_RULES` but this guard never
     # forwarded `plan_created`, so the rule's own safe-default ("cannot
     # confirm post-cutoff") stood down unconditionally on every write -- a
@@ -1177,6 +1289,101 @@ class TestPlanTasksSpineDeny:
         reason = _assert_advisory_shape(result)
         assert "tasks[C0].writes" in reason
         assert "tasks[C1]" not in reason
+
+
+class TestPlanStatusOffEnumWarn:
+    """C5 (2026-09-11-vendored-schemas-and-the-work-state-contract.md): a
+    plan write that sets `status` off the vendored plan schema's enum, or
+    drops it entirely, warns in both modes and never denies — modelled on
+    the grouping-approval finding for the same PM-ruling reason. Fires only
+    when the write CHANGES the status from what is on disk.
+    """
+
+    def _plan_dir(self, tmp_path):
+        d = tmp_path / "docs" / "plans"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def _assert_warn(self, result):
+        assert result is not None
+        out = result["hookSpecificOutput"]
+        assert "permissionDecision" not in out
+        return out["additionalContext"]
+
+    @pytest.mark.parametrize("strict", [None, "1"])
+    def test_off_enum_write_to_new_plan_warns_never_denies(self, tmp_path, monkeypatch, strict):
+        if strict:
+            monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
+        fp = self._plan_dir(tmp_path) / "2026-09-11-test-plan.md"
+        # Pre-created empty so the write-guard's own new-file scaffold offer
+        # (a DIFFERENT finding, gated on `not os.path.exists`) does not fire
+        # first and mask the plan-status finding under test -- this still
+        # models "new" for THIS evaluator's own purposes (an empty prior file
+        # carries no prior status, so `prior_status` resolves to the sentinel
+        # exactly as a genuinely nonexistent path would).
+        fp.write_text("", encoding="utf-8")
+        content = (
+            "---\ntitle: Test plan\ncreated: 2026-09-11\nauthor: test\n"
+            "status: bogus\n---\n\n# Plan\n\n## Tasks\n"
+        )
+        payload = _payload("Write", str(fp), str(tmp_path), content=content)
+        reason = self._assert_warn(guard.check(payload))
+        assert "not a plan status" in reason
+        assert "draft" in reason
+        assert advisory_guard.check(payload) is None, "advisory must stand down in lockstep"
+
+    def test_absent_status_on_new_plan_warns(self, tmp_path):
+        fp = self._plan_dir(tmp_path) / "2026-09-11-test-plan.md"
+        fp.write_text("", encoding="utf-8")
+        content = "---\ntitle: Test plan\ncreated: 2026-09-11\nauthor: test\n---\n\n# Plan\n\n## Tasks\n"
+        payload = _payload("Write", str(fp), str(tmp_path), content=content)
+        reason = self._assert_warn(guard.check(payload))
+        assert "has no `status:`" in reason
+        assert advisory_guard.check(payload) is None
+
+    def test_edit_of_unrelated_line_in_legacy_off_enum_plan_does_not_fire(self, tmp_path):
+        fp = self._plan_dir(tmp_path) / "2026-07-29-test-plan.md"
+        old_content = (
+            "---\ntitle: Test plan\ncreated: 2026-07-29\nauthor: test\n"
+            "status: bogus-legacy\n---\n\n# Plan\n\nbody\n"
+        )
+        fp.write_text(old_content, encoding="utf-8")
+        new_content = old_content.replace("body", "body edited")
+        payload = _payload(
+            "Edit", str(fp), str(tmp_path), old_string="body", new_string="body edited"
+        )
+        result = guard.check(payload)
+        if result is not None:
+            reason = result["hookSpecificOutput"].get("additionalContext", "")
+            assert "is not a plan status" not in reason
+            assert "has no `status:`" not in reason
+
+    def test_edit_that_changes_status_to_off_enum_warns(self, tmp_path):
+        fp = self._plan_dir(tmp_path) / "2026-07-29-test-plan.md"
+        old_content = (
+            "---\ntitle: Test plan\ncreated: 2026-07-29\nauthor: test\n"
+            "status: draft\n---\n\n# Plan\n\n## Tasks\n"
+        )
+        fp.write_text(old_content, encoding="utf-8")
+        new_content = old_content.replace("status: draft", "status: bogus")
+        payload = _payload(
+            "Edit", str(fp), str(tmp_path),
+            old_string="status: draft", new_string="status: bogus",
+        )
+        reason = self._assert_warn(guard.check(payload))
+        assert "not a plan status" in reason
+        assert advisory_guard.check(payload) is None
+
+    def test_write_to_plans_index_with_no_frontmatter_never_fires(self, tmp_path):
+        fp = self._plan_dir(tmp_path) / "INDEX.md"
+        payload = _payload("Write", str(fp), str(tmp_path), content="# Plans index\n\nbody\n")
+        assert guard.check(payload) is None
+
+    def test_plan_sidecar_never_fires(self, tmp_path):
+        fp = self._plan_dir(tmp_path) / "2026-07-29-test-plan.sizing.md"
+        content = "---\ntitle: Sizing\n---\n\nbody\n"
+        payload = _payload("Write", str(fp), str(tmp_path), content=content)
+        assert guard.check(payload) is None
 
 
 class TestEveryFiringResultIsDenyOrAdvisoryShaped:
@@ -2127,6 +2334,52 @@ class TestUnparseableFrontmatterWarns:
         assert guard.check(payload) is None, "an I/O error must fail open"
 
 
+class TestRunReportGlobFallbackIsNotAClassifier:
+    """Mirrors the advisory sibling's own class of the same name.
+    `run-report.schema.json`'s `applies_to` is the directory-wide catch-all
+    `.coordinator-local/subagent-share/*/*.md`; an undeclared-kind `.md`
+    dropped there with no run-report-shaped frontmatter must draw nothing
+    from either sibling.
+    """
+
+    def _sidecar_dir(self, tmp_path):
+        d = tmp_path / ".coordinator-local" / "subagent-share" / "sess1"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    @pytest.mark.parametrize("strict", ["0", "1"])
+    def test_no_frontmatter_non_run_report_note_draws_nothing(
+        self, tmp_path, monkeypatch, strict
+    ):
+        if strict == "1":
+            monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
+        fp = self._sidecar_dir(tmp_path) / "staff-eng-review.md"
+        payload = _payload(
+            "Write",
+            str(fp),
+            str(tmp_path),
+            content="# Staff Eng Review\n\nSome free-form review notes.\n",
+        )
+        assert guard.check(payload) is None
+        assert advisory_guard.check(payload) is None
+
+    def test_genuine_run_report_still_warns(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
+        fp = self._sidecar_dir(tmp_path) / "report.md"
+        payload = _payload(
+            "Write",
+            str(fp),
+            str(tmp_path),
+            content="---\nstatus: not-a-real-status\n---\n\n## Observations\nbody\n",
+        )
+        result = guard.check(payload)
+        assert result is not None
+        rendered = _assert_advisory_shape(result)
+        assert "run-report:" in rendered
+        assert "status" in rendered
+        assert advisory_guard.check(payload) is None, "strict mode is the deny sibling's turn"
+
+
 class TestPlanTasksSpineIntegrityDeny:
     """The three spine defects a per-ROW loop structurally cannot see.
 
@@ -2288,3 +2541,112 @@ class TestPlanTasksSpineIntegrityDeny:
         assert guard._plan_tasks_spine_errors(
             source, schemas, fm
         ) == advisory_mod._plan_tasks_spine_errors(source, schemas, fm)
+
+
+class TestUnvendoredOfferableAdvisory:
+    """C7 (docs/plans/2026-09-11-vendored-schemas-and-the-work-state-contract.md):
+    the baton's item 3 — `_unvendored_offerable_doc_type` and
+    `_unvendored_offerable_message` already exist (the loud path Census row 4
+    found a live gap of 0 for) but no test referenced either. Pins the
+    non-blocking `[unvendored-schema gap]` advisory across the three shapes
+    the manifest itself declares (applies_to glob, sidecar suffix, `kind:`
+    fallback) plus the negative case where the schema IS vendored.
+
+    No production change (row body) -- these tests exercise the existing
+    `_load_context`-derived manifest path with a synthetic `docTypes` list
+    swapped in, since the real vendored corpus's gap is 0 and cannot exhibit
+    the finding on its own.
+    """
+
+    def _ctx_with_doc_types(self, doc_types):
+        ctx = guard._load_context()
+        ctx.manifest = {"docTypes": doc_types}
+        return ctx
+
+    def _patch_context(self, monkeypatch, doc_types):
+        ctx = self._ctx_with_doc_types(doc_types)
+        monkeypatch.setattr(guard, "_load_context", lambda _forensics=None: ctx)
+
+    def _assert_gap_shape(self, result: dict, schema_name: str, type_: str) -> None:
+        assert result is not None
+        hso = result["hookSpecificOutput"]
+        assert hso["hookEventName"] == "PreToolUse"
+        assert "permissionDecision" not in hso
+        assert set(hso.keys()) == {"hookEventName", "additionalContext"}
+        message = hso["additionalContext"]
+        assert message.startswith("[unvendored-schema gap]")
+        assert type_ in message
+        assert schema_name in message
+
+    def test_applies_to_glob_gap_fires_advisory(self, tmp_path, monkeypatch):
+        self._patch_context(
+            monkeypatch,
+            [
+                {
+                    "offerable": True,
+                    "schemaName": "zzz-test-unvendored-glob",
+                    "type": "zzz-test-glob-type",
+                    "applies_to": "zzz-unvendored/*.md",
+                }
+            ],
+        )
+        d = tmp_path / "zzz-unvendored"
+        d.mkdir(parents=True, exist_ok=True)
+        fp = d / "foo.md"
+        fp.write_text("plain body, no frontmatter block", encoding="utf-8")
+        result = guard.check(_payload("Write", str(fp), str(tmp_path), content="plain body"))
+        self._assert_gap_shape(result, "zzz-test-unvendored-glob", "zzz-test-glob-type")
+
+    def test_sidecar_suffix_gap_fires_advisory(self, tmp_path, monkeypatch):
+        self._patch_context(
+            monkeypatch,
+            [
+                {
+                    "offerable": True,
+                    "schemaName": "zzz-test-unvendored-sidecar",
+                    "type": "zzz-test-sidecar-type",
+                    "isSidecar": True,
+                    "suffix": "zzz-test-suffix",
+                }
+            ],
+        )
+        fp = tmp_path / "some-plan.zzz-test-suffix.md"
+        fp.write_text("plain body, no frontmatter block", encoding="utf-8")
+        result = guard.check(_payload("Write", str(fp), str(tmp_path), content="plain body"))
+        self._assert_gap_shape(result, "zzz-test-unvendored-sidecar", "zzz-test-sidecar-type")
+
+    def test_kind_fallback_gap_fires_advisory(self, tmp_path, monkeypatch):
+        self._patch_context(
+            monkeypatch,
+            [
+                {
+                    "offerable": True,
+                    "schemaName": "zzz-test-unvendored-kind",
+                    "type": "zzz-test-kind-type",
+                }
+            ],
+        )
+        fp = tmp_path / "some-doc.md"
+        fm = "---\nkind: zzz-test-kind-type\n---\nbody"
+        fp.write_text(fm, encoding="utf-8")
+        result = guard.check(_payload("Write", str(fp), str(tmp_path), content=fm))
+        self._assert_gap_shape(result, "zzz-test-unvendored-kind", "zzz-test-kind-type")
+
+    def test_schema_already_vendored_yields_nothing(self, tmp_path, monkeypatch):
+        self._patch_context(
+            monkeypatch,
+            [
+                {
+                    "offerable": True,
+                    "schemaName": "handoff",
+                    "type": "zzz-test-vendored-type",
+                    "applies_to": "zzz-vendored/*.md",
+                }
+            ],
+        )
+        d = tmp_path / "zzz-vendored"
+        d.mkdir(parents=True, exist_ok=True)
+        fp = d / "foo.md"
+        fp.write_text("plain body, no frontmatter block", encoding="utf-8")
+        result = guard.check(_payload("Write", str(fp), str(tmp_path), content="plain body"))
+        assert result is None

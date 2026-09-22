@@ -76,7 +76,8 @@ handler body):
      `_commit_envelope` (peer arm only; the local arm never spawns git).
   3. Enqueues any state mutation (queue/backlog/similar)?           No.
   4. Invokes a subprocess that may do any of the above?             YES —
-     `_commit_envelope`'s `subprocess.run(["git", ...])` calls (peer arm).
+     `_commit_envelope` (peer arm), via `git_native.commit_authored_new_file`'s
+     `git update-index` refresh and identity-resolution fallback spawns.
   5. I/O behavior conditional (reads under some paths, writes under
      others)?                                                       YES —
      the local/peer fork itself IS conditional I/O routing.
@@ -192,22 +193,19 @@ import datetime
 import hashlib
 import json
 import os
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.ipc import register_op
 from coordinator_core.session import core as _session_core
-from coordinator_core.ops.ceremony.git_native import check_ignore
+from coordinator_core.ops.ceremony.git_native import check_ignore, commit_authored_new_file
 from coordinator_core.ops.emit._slug import machine_slug
 from coordinator_core.memo_corpus import receiver_inbox_root
 from coordinator_core.ops.fleet._common import (
-    _make_git_env,
     check_repo_root,
     main_worktree_root,
 )
-from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core import tracker_holder
 from coordinator_core import tracker_store
 
@@ -464,33 +462,6 @@ def _write_envelope_file(target_path: Path, content: str) -> None:
 _DELIVERABLE_ID = "dlv-sat-06"
 
 
-def _unstage(runner, rel_path: str) -> None:
-    """Drop *rel_path* from the RECEIVER's index after a failed delivery commit.
-
-    Leaves the envelope written-but-untracked, which is exactly the state the
-    detached/bare/unborn-HEAD arm above already documents as safe for the
-    receiver's own sweep — so both failure arms converge on one state instead
-    of diverging. Without this, a failed commit strands our file STAGED in a
-    foreign repo's index, where the receiver's next pathspec-less commit lands
-    it inside an unrelated commit attributed to them: a cross-tree write
-    arriving in their history without their action, which is the harm DR-214's
-    admission discipline exists to prevent.
-
-    `git commit` failing on `index.lock` contention is the ORDINARY outcome in
-    a receiver running its own concurrent sessions under this box's documented
-    50-70 concurrent-LLM load norm, not an exceptional one — this arm is on the
-    expected path.
-
-    Best-effort and never raises: if the unstage itself fails there is nothing
-    further this op can safely do inside a repo it does not own, and raising
-    here would mask the original delivery failure the caller needs to see.
-    """
-    try:
-        runner(["restore", "--staged", "--", rel_path])
-    except OSError:
-        pass
-
-
 def _delivery_commit_message(rel_path: str) -> str:
     """Delivery commit subject plus attribution trailers.
 
@@ -538,7 +509,7 @@ def _delivery_commit_message(rel_path: str) -> str:
         "",
         f"Deliverable-Id: {_DELIVERABLE_ID}",
     ]
-    # Review: overengineering-reviewer (finding 2) — routed through the one
+    # Routed through the one
     # shared accessor (session.core.attributable_session_id); the strip()
     # and exception guard stay here, since the accessor itself makes no
     # such contract and this site's `.strip()`/`except` shape is its own.
@@ -551,80 +522,37 @@ def _delivery_commit_message(rel_path: str) -> str:
     return "\n".join(lines)
 
 
-def _commit_envelope(receiver_repo_path: Path, rel_path: str) -> dict:
-    """Stage+commit ONLY the just-delivered envelope in the RECEIVER repo,
-    all-hooks-off (D2(3)) — `-c core.hooksPath=<empty-tmpdir>`, NEVER
-    `--no-verify` (does not bypass `prepare-commit-msg`). No foreign branch
-    creation: a detached/bare/unborn HEAD leaves the file written but
-    uncommitted for the receiver's own sweep. Never raises — every failure
-    arm returns `{"committed": False, "reason": <str>}`.
+def _commit_envelope(receiver_repo_path: Path, rel_path: str, content: str) -> dict:
+    """Commit the just-composed envelope into the RECEIVER repo through
+    `git_native.commit_authored_new_file` — the same hookless, compose-free
+    delivery primitive `memo_send` already calls at both its `to:`
+    (`_memo_send`) and `cc:` (`_deliver_cc_copy`) legs, so this fleet's
+    write-and-commit half of a peer delivery has exactly one implementation,
+    not two that can drift apart (D2(3) all-hooks-off is the primitive's own
+    contract, never `--no-verify`). A detached/bare/unborn receiver HEAD, or
+    any other precondition the primitive refuses, leaves the envelope
+    written but uncommitted for the receiver's own sweep — the primitive's
+    refusal arms cover exactly the cases the hand-rolled `symbolic-ref`
+    check used to. Never raises — every failure arm returns
+    `{"committed": False, "reason": <str>}`.
     """
-    env = _make_git_env()
-
-    def _run(args: list[str]) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            ["git", "-C", str(receiver_repo_path), *args],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            stdin=subprocess.DEVNULL,
-            env=env,
-            **no_console_creationflags(),
+    msg_fd, msg_name = tempfile.mkstemp(prefix="push-suggestion-msg-", suffix=".txt")
+    msg_file = Path(msg_name)
+    try:
+        with os.fdopen(msg_fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(_delivery_commit_message(rel_path))
+        commit_result = commit_authored_new_file(
+            rel_path, content, msg_file, receiver_repo_path,
+            deliverable_id=_DELIVERABLE_ID,
         )
+    finally:
+        try:
+            msg_file.unlink()
+        except OSError:
+            pass
 
-    try:
-        head_check = _run(["symbolic-ref", "-q", "HEAD"])
-    except OSError as exc:
-        return {"committed": False, "reason": f"could not read receiver HEAD: {exc}"}
-    if head_check.returncode != 0:
-        return {
-            "committed": False,
-            "reason": "no active branch (detached HEAD, bare repo, or unborn HEAD)",
-        }
-
-    try:
-        add_result = _run(["add", "--", rel_path])
-    except OSError as exc:
-        return {"committed": False, "reason": f"could not run git add: {exc}"}
-    if add_result.returncode != 0:
-        return {"committed": False, "reason": f"git add failed: {add_result.stderr.strip()}"}
-
-    try:
-        with tempfile.TemporaryDirectory() as empty_hooks_dir:
-            commit_result = subprocess.run(
-                [
-                    "git", "-C", str(receiver_repo_path),
-                    "-c", f"core.hooksPath={empty_hooks_dir}",
-                    "-c", "commit.gpgsign=false",
-                    "commit", "-m",
-                    _delivery_commit_message(rel_path),
-                    "--", rel_path,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=60,
-                stdin=subprocess.DEVNULL,
-                env=env,
-                **no_console_creationflags(),
-            )
-    except OSError as exc:
-        _unstage(_run, rel_path)
-        return {"committed": False, "reason": f"could not run git commit: {exc}"}
-
-    if commit_result.returncode != 0:
-        combined = (commit_result.stdout + commit_result.stderr).lower()
-        if (
-            "nothing to commit" in combined
-            or "nothing added to commit" in combined
-            or "no changes added to commit" in combined
-        ):
-            # Idempotent no-op — the path is already committed as-is.
-            return {"committed": True, "reason": None}
-        _unstage(_run, rel_path)
-        return {
-            "committed": False,
-            "reason": f"git commit failed: {commit_result.stderr.strip()}",
-        }
+    if not commit_result.ok:
+        return {"committed": False, "reason": commit_result.stderr}
     return {"committed": True, "reason": None}
 
 
@@ -739,7 +667,7 @@ def _deliver_envelope(target_root: Path, owning_repo: Optional[str], event: dict
             "request; safe to treat as success-on-retry."
         ) from exc
 
-    outcome = _commit_envelope(target_root, rel_path)
+    outcome = _commit_envelope(target_root, rel_path, content)
     return {
         "delivered": "peer",
         "path": str(target_path),

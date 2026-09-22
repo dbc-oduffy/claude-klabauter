@@ -64,7 +64,7 @@ _MOD = _load_cli_module()
 # defaults are reworded, these tests must FAIL loudly (the guard's prefix contract
 # may no longer hold) instead of silently tracking the new wording.
 #
-# Review: coordinator:code-reviewer (913d6318) F4 — goal-seed/roadmap-seed now have
+# goal-seed/roadmap-seed now have
 # their own dedicated title-default branches (F3 fix), so they are represented here
 # by their own distinct strings rather than sharing the generic memo fallback by
 # coincidence.
@@ -117,7 +117,7 @@ class TestMintRefusal(unittest.TestCase):
                 )
 
     def test_hnd_cmp_mint_refuses_on_placeholder(self):
-        # Review: coordinator:code-reviewer (913d6318) F1/F2 — pln- was removed from
+        # pln- was removed from
         # the guard (never in gate_eval._HANDOFF_ID_PATTERN's blast radius; guarding
         # it broke the D3 "plan_id always present, never null" contract). hnd-/cmp-
         # now route through the shared _mint_artifact_id_from_title wrapper (F2).

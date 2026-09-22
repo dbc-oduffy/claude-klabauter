@@ -156,7 +156,7 @@ class _WriterMismatchRefusesMixin:
         fake_cc_invoke.assert_called_once()
 
     def test_no_git_root_at_all_exits_2_without_dispatching(self):
-        # Review: code-reviewer (P2, EM-ruled) — renamed from
+        # Renamed from
         # test_unresolved_with_no_root_never_refuses_beyond_exit2, whose name
         # promised "never refuses" while its body asserted rc == 2 (it does
         # refuse). "No git root resolved at all" is a distinct condition from

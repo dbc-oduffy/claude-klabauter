@@ -31,17 +31,164 @@ resolve on disk), 3 transport (e.g. `ResolveCoordinatorCloneError`) — see
 
 Spec backlink: pln-plan-assemble-brief-route-the-2d016a, chunk C1
 Spec backlink: pln-plan-assemble-wave-2-the-predi-fad89b, chunk C1
+Spec backlink: docs/plans/2026-09-11-document-scaffolding-is-emitted-not-remembered.md, chunk C4
+
+`brief(...)` (this module, C4): wraps `residue.brief(...)` unchanged, then
+appends the `plan` scaffold directive (through the shared
+`coordinator_core.roadmap_planning_assemble.scaffold_directive` constructor,
+C1) when the resolved route is `"plan"` -- `spec-dispatch` never scaffolds a
+`--type plan` document, so `directives` stays `[]` on that arm, byte-
+identical to every pre-C4 caller. `residue.py` is untouched (out of this
+chunk's writes): the directive is assembled here, over the envelope
+`residue.brief` already returns, never inside it.
+
+`--sizing-object`/`--no-sizing-object` (`coordinator-doc-new`'s one
+required mutex for `--type plan`) is computed from THIS call's own
+`sizing_object_path` -- the same path `_dispatch_brief` already validated
+resolves on disk -- never a second free-text argument: present ->
+`--sizing-object=<path>`, absent -> `--no-sizing-object`. `--title` is
+computed from that same sizing object's own `intent:` field (the PM's ask,
+verbatim, already-resolved ceremony state) when a sizing object is
+supplied; omitted (never a placeholder minted here) when it is not --
+`--title` is optional on the real CLI for `--type plan`, so an absent
+value is not a required-field violation (AC3).
+
+Negative-spec: does NOT gate the `plan` directive on `plan_path` (an
+ALREADY-authored plan the caller is re-reading residue/gates for) -- it is
+gated on `resolved_route == "plan"` alone, mirroring
+`roadmap_planning_assemble`'s additive-only, entry-gated shape. Does NOT
+parse `--sizing-object`'s YAML for anything but `intent:` -- no route
+re-derivation happens here (that is `residue.brief`'s own `_route_from_
+sizing_object`, untouched).
 """
 
 from __future__ import annotations
 
 import json
 import sys
+from datetime import date
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
+from coordinator_core.frontmatter.schema_validate import parse_yaml
 from coordinator_core.resolve_coordinator_clone import ResolveCoordinatorCloneError
 from coordinator_core.plan_assemble import residue
+from coordinator_core.roadmap_planning_assemble.scaffold_directive import (
+    Flag,
+    build_scaffold_directive,
+)
+
+# C4: the shared constructor's (C1) per-type required-flag computation for
+# this host's one emitted row (coordinator_core/ops/doctype_hosts.py, keyed
+# (type="plan", ceremony="plan-assemble"), module=this package). `--title`
+# is optional (never `required=True`): it is computed from the cited sizing
+# object's `intent:` field when one is supplied, and simply omitted
+# otherwise -- `--title` itself is optional on the real CLI for `--type
+# plan` (AC3 binds only the flags the CLI itself requires; `--sizing-
+# object`/`--no-sizing-object` is that one mutex here, and it is appended
+# by hand below -- same store_true-leg workaround
+# `roadmap_planning_assemble._roadmap_baton_and_seed_directives` documents,
+# never `MutexFlagPair`, which would render the malformed
+# `--no-sizing-object=True`).
+_PLAN_FLAG_SPEC: tuple[Flag, ...] = (
+    Flag("--title", "title", required=False),
+)
+
+
+def _slug(text: str) -> str:
+    """Lowercase-dash slug, mirroring `coordinator-doc-new._slug_from_title`'s
+    observable shape closely enough for a computed (never free-text)
+    `--out` default -- same small helper `roadmap_planning_assemble._slug`
+    duplicates rather than importing (one hierarchy per consumer, no
+    cross-package private-helper dependency)."""
+    out = []
+    prev_dash = False
+    for ch in text.lower():
+        if ch.isalnum():
+            out.append(ch)
+            prev_dash = False
+        elif not prev_dash:
+            out.append("-")
+            prev_dash = True
+    return "".join(out).strip("-") or "untitled"
+
+
+def _intent_from_sizing_object(path: Path) -> Optional[str]:
+    """The `intent:` a sizing object states about itself, or `None` --
+    mirrors `residue._route_from_sizing_object`'s best-effort, silent-on-
+    failure read (same file, a different key), never a second parser."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        parsed = parse_yaml(text)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    candidate = parsed.get("intent")
+    if isinstance(candidate, str) and candidate.strip():
+        return candidate
+    return None
+
+
+def _plan_scaffold_directive(sizing_object_path: Optional[Path]) -> dict[str, Any]:
+    """C4: emits the `plan` scaffold directive through the shared
+    constructor. `--out` is computed the same way
+    `coordinator-doc-new._default_output_path` computes it for `--type
+    plan` (`docs/plans/<today>-<slug>.md`), never left to the CLI's own
+    default, so `already_satisfied` (AC4) can be computed here."""
+    root = Path.cwd()
+    today = date.today().isoformat()
+    intent = (
+        _intent_from_sizing_object(sizing_object_path)
+        if sizing_object_path is not None
+        else None
+    )
+    slug = _slug(intent) if intent else "untitled"
+    resolved: dict[str, Any] = {
+        "title": intent,
+        "out": f"docs/plans/{today}-{slug}.md",
+    }
+    directive = build_scaffold_directive(
+        "d-scaffold-plan",
+        "plan",
+        resolved,
+        _PLAN_FLAG_SPEC,
+        root=root,
+    )
+    directive["args"].append(
+        f"--sizing-object={sizing_object_path}"
+        if sizing_object_path is not None
+        else "--no-sizing-object"
+    )
+    return directive
+
+
+def brief(
+    *,
+    explicit_route: Optional[str] = None,
+    plan_path: Optional[Path] = None,
+    sizing_object_path: Optional[Path] = None,
+    caller_flags: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """C4: wraps `residue.brief(...)` unchanged, appending the `plan`
+    scaffold directive when the resolved route is `"plan"` (see module
+    docstring). Every exception `residue.brief` raises propagates
+    unchanged."""
+    decision_object = residue.brief(
+        explicit_route=explicit_route,
+        plan_path=plan_path,
+        sizing_object_path=sizing_object_path,
+        caller_flags=caller_flags,
+    )
+    resolved_route = decision_object.get("artifact", {}).get("route")
+    directives = list(decision_object.get("directives", []))
+    if resolved_route == "plan":
+        directives.append(_plan_scaffold_directive(sizing_object_path))
+    decision_object["directives"] = directives
+    return decision_object
 
 
 class _PlanAssembleExitCode:
@@ -190,7 +337,7 @@ def _dispatch_brief(rest: list[str]) -> int:
             return _usage()
 
     try:
-        decision_object = residue.brief(
+        decision_object = brief(
             explicit_route=explicit_route,
             plan_path=plan_path,
             sizing_object_path=sizing_object_path,

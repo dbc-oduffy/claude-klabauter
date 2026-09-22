@@ -192,11 +192,9 @@ def _vehicle_match(anti_scope_text: str) -> "str | None":
 
 def _vehicle_advisory_message(target: str, phrase: str):
     return compose(
-        f"{_VEHICLE_TOKEN}: {target}'s ## Anti-scope names an execution "
-        f"vehicle (\"{phrase}\") -- a plan owns what changes and what must "
-        "not, not how it is dispatched; the vehicle is resolved at "
-        "dispatch time from file overlap and the gate graph. Re-express a "
-        "real constraint as a depends_on edge or a named carve-out instead."
+        f"{_VEHICLE_TOKEN}: Anti-scope names an execution vehicle (\"{phrase}\") -- "
+        "a plan owns what changes, not how it is dispatched. Use instead: "
+        "`a depends_on edge or a named carve-out`"
     )
 
 
@@ -242,10 +240,8 @@ def _classify(text: str, cwd: "str | None") -> "list[Any]":
 
 def _advisory_message(target: str, detected: str):
     return compose(
-        f"{_TOKEN}: {target} names {detected} as its test surface -- "
-        "Tier T (path-scoped to the chunk's own files) is what a plan may "
-        "name; global/cadence verification is EM-owned at the wave "
-        "boundary, not a chunk's job."
+        f"{_TOKEN}: names {detected} as test surface. Use instead: "
+        "`Tier T, path-scoped to the chunk's own files`"
     )
 
 

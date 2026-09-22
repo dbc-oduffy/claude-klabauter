@@ -478,7 +478,7 @@ class TestC4CacheCannotOutliveExpiryOrMarkerEdit:
     the clock advanced)."""
 
     def test_cached_active_verdict_does_not_survive_its_own_expiry(self, tmp_path):
-        # Review: coordinatorreview-integrator (failopen-caches P3) -- the
+        # The
         # initial "still active" assertion below is widened from a 1ms
         # Expires window to several seconds. A 1ms window made THIS
         # assertion (not the later, deliberately-slept one) flaky on a

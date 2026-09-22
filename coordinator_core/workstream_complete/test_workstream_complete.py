@@ -423,21 +423,29 @@ def test_deletion_blocks_directive_scopes_the_gate_to_the_ceremonys_own_paths():
     ]
 
 
-def test_deletion_blocks_directive_normalises_windows_separators():
-    """A backslash would drop a path silently OUT of the gate's scope.
+def test_deletion_blocks_directive_passes_separators_through_verbatim():
+    """The builder hands paths on untouched; normalisation is the gate's job.
 
     `gate_scope` membership is exact-string matching against `git diff --cached
     --name-status` output, which is always repo-relative with forward slashes,
-    while git accepts either spelling in the commit pathspec. Unnormalised, the
-    gate would be NARROWER than the commit -- the one direction that weakens
-    it, and silently."""
+    while git accepts either spelling in the commit pathspec -- so a backslash
+    reaching the gate unconverted would make the gate NARROWER than the commit,
+    the one direction that weakens it silently.
+
+    Converting HERE fixed that at the cost of a worse bug: a backslash is a
+    legal character in a POSIX filename, so an unconditional rewrite mangles a
+    real path on every non-Windows box. The conversion therefore lives at
+    `commit_gates._parse_cli_args`, the single choke point every caller passes
+    through, conditioned on `os.name == "nt"` -- see that module's
+    `test_parse_cli_args_normalises_backslashes_to_forward_slashes_on_windows`
+    and its POSIX counterpart."""
     directive = wsc.build_deletion_blocks_check_directive(
         "msg.txt", [r"state\lessons\a.yaml", "archive/completed/b.md"]
     )
 
     assert directive is not None
     assert directive["args"][2:] == [
-        "state/lessons/a.yaml",
+        r"state\lessons\a.yaml",
         "archive/completed/b.md",
     ]
 
@@ -510,6 +518,22 @@ def test_resolver_backed_review_partition_strategy_never_demoted_by_a_single_emp
     )
     jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
     assert "review-partition-strategy" in jp_ids
+
+
+def test_review_partition_scalar_value_refuses_by_name_not_a_raw_crash(
+    monkeypatch, tmp_path
+):
+    """2026-08-21 bug-backlog: `decisions['review_partition']` is the
+    engine's INPUT for freeze/integrator directives (a mapping with
+    `range`/`slices`) -- a confusable sibling, the `review-partition-
+    strategy` judgment point's own answer (a short strategy string like
+    `'by-concern'`), sits one line away in the same payload. Passing that
+    string under the wrong key used to crash `build_directives` with a raw
+    `AttributeError: 'str' object has no attribute 'get'`; it must instead
+    raise a named `ValueError` a caller can act on."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    with pytest.raises(ValueError, match="review_partition"):
+        wsc.brief(decisions={"review_partition": "by-concern"}, repo_root=tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -1165,16 +1189,22 @@ def test_consumed_handoff_completeness_leg_a_open_blocks(monkeypatch, tmp_path):
         "override-known-in-flight",
         "stop-and-handoff",
     ]
+    # C1 (docs/plans/2026-09-11-the-memo-lifecycle-closes-its-own-handoffs.md)
+    # unions the per-run `d-ship-consumed-handoff:<basename>` id into BOTH
+    # clearing arms on top of the static four -- this fixture consumes one
+    # baton (`state/handoffs/x.md`), so one ship id is expected. An arm that
+    # omits it leaves an EM reaching the gate that way unable to ship.
     for disposition in jp["dispositions"][:2]:
         assert disposition["resolves"] == [
             "d-claim-plan-execution-lock",
             "d-stamp-plan-implemented",
             "d-harvest-deferrals-1",
             "d-complete-entry",
+            "d-ship-consumed-handoff:x.md",
         ]
     assert jp["dispositions"][-1]["resolves"] == []
     # Every arm carries `guidance`: the two clearing arms resolve the SAME
-    # four directives, so without it the record is the only thing telling
+    # directives, so without it the record is the only thing telling
     # them apart and the EM has nothing to pick on.
     assert all(d.get("guidance") for d in jp["dispositions"])
     assert jp["recommendation"] is None
@@ -1308,7 +1338,7 @@ def test_consumed_handoff_completeness_plural_one_of_two_fires_other_still_evalu
     assert elements_by_handoff["state/handoffs/y.md"]["leg_a"]["verdict"] == "clean"
 
 
-# Review: coordinatorcode-reviewer-c13e4663 Finding 4 — the new plural loop
+# The new plural loop
 # had no test proving `_resolve_handoff_path_str`'s archived-handoff branch
 # (a real fleet condition) still resolves and evaluates an element.
 def test_consumed_handoff_completeness_plural_resolves_archived_handoff(monkeypatch, tmp_path):
@@ -1352,7 +1382,7 @@ def test_consumed_handoff_completeness_leg_a_indeterminate_when_handoff_unreadab
     assert leg_a["detail"] == "handoff unreadable"
 
 
-# Review: coordinatorcode-reviewer-c13e4663 Finding 1 — a non-UTF-8 handoff
+# A non-UTF-8 handoff
 # raised UnicodeDecodeError (a ValueError subclass) out of brief() uncaught
 # instead of degrading to leg A's "handoff unreadable" indeterminate.
 def test_consumed_handoff_completeness_leg_a_indeterminate_when_handoff_non_utf8(monkeypatch, tmp_path):
@@ -1468,7 +1498,7 @@ def _leg_a_non_terminal_schema_statuses() -> list[str] | None:
     doe_repo = Path(doe_root)
     if not doe_repo.exists():
         return None
-    # Review: coordinator:code-reviewer -- a git-show error against a
+    # A git-show error against a
     # *present* DoE checkout still fails hard; "no DoE repo" AND "this root
     # publishes no authoring schema" both collapse to None/skip.
     doe_plan_schema = _doe_head_plan_schema(doe_repo)
@@ -1951,6 +1981,17 @@ def _sweep_directive_ids_and_resolves_ids(
     the chain-terminal leg. See `test_extended_sweep_covers_every_
     preserved_judgment_point` below for the code-derived guard against this
     same gap recurring silently.
+
+    Coverage note (2026-08-15/2026-09-21): every gate variant this sweep
+    ever built passed `consumed_handoff_paths=()`, so `compute_consumed_
+    handoff_completeness_gate` always took its `applies=False` shortcut and
+    `build_consumed_handoff_completeness_judgment_point` never ran inside
+    the sweep at all -- its static `resolves` ids were checked by no guard
+    anywhere in the tree. A third gate variant below seeds a real on-disk
+    consumed handoff with an open acceptance-criteria box and a non-empty
+    `consumed_handoff_paths`, so `.blocks` is True and the judgment point's
+    dispositions fold into the same `resolves_ids`/`directive_ids` union
+    `test_no_judgment_point_resolves_a_phantom_directive_id` already checks.
     """
     # `d-complete-entry`'s gate (`directives_completion.completion_archive_
     # predicate`) checks for a real `archive/` dir on disk -- seed it so
@@ -1965,6 +2006,16 @@ def _sweep_directive_ids_and_resolves_ids(
     plan_slug = "sweep-coverage-governing-plan"
     _write_plan(tmp_path, plan_slug)
     _write_handoff(tmp_path, "state/handoffs/x.md", f"docs/plans/{plan_slug}.md")
+
+    # A second, distinct consumed handoff carrying an open acceptance-
+    # criteria box, so the plural-gate variant below actually blocks (leg
+    # A fires) and `build_consumed_handoff_completeness_judgment_point`
+    # executes at least once inside this sweep.
+    consumed_handoff_completeness_path = "state/handoffs/sweep-coverage-consumed-handoff.md"
+    _write_ac_handoff(
+        tmp_path, consumed_handoff_completeness_path, "## Acceptance criteria\n\n- [ ] one\n"
+    )
+    _patch_leg_b(monkeypatch, {"exit_code": 1, "referenced": False})
 
     directive_ids: set[str] = set()
     resolves_ids: set[str] = set()
@@ -2025,6 +2076,11 @@ def _sweep_directive_ids_and_resolves_ids(
     for gate in (
         _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()),
         _gate("single-session", consumed_handoff_paths=()),
+        _gate(
+            "chain-terminal",
+            consumed_handoff=consumed_handoff_completeness_path,
+            consumed_handoff_paths=(consumed_handoff_completeness_path,),
+        ),
     ):
         _patch_gate(monkeypatch, gate)
         decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
@@ -2077,7 +2133,7 @@ def _all_preserved_judgment_point_ids() -> set[str]:
     exactly-29-entry tuple of the builders that census actually owns (see
     that tuple's own docstring) -- rather than a `dir()` name-pattern sweep.
 
-    Review: code-reviewer -- a bare `dir(wsc._judgments)` sweep matching
+    A bare `dir(wsc._judgments)` sweep matching
     every `build_*_judgment_point`-named, module-local callable silently
     assumed every such function is zero-arg and always returns a dict (true
     of exactly the 29 census builders, at the time this helper was
@@ -2581,7 +2637,7 @@ def test_disk_driven_single_entry_exact_scope_match_stays_quiet_ac9(monkeypatch,
     this test pins against `test_single_entry_prefix_scope_match_surfaces_
     but_exact_match_stays_quiet` most needs producer-driven proof, since a
     hand-typed `detection` dict cannot catch that correspondence drifting.
-    Review: coordinator:code-reviewer -- Finding 1, closes the one AC9 quiet
+    Closes the one AC9 quiet
     case still hand-authored while its siblings were rebuilt via
     `_real_detector_c_detection`. Unaffected by the concurrent
     `matched_scope_entry_count` FILE-dedupe change in `wsc-session-
@@ -6233,3 +6289,28 @@ def test_review_scope_resolution_does_not_take_the_trailer_map_fast_path():
                 "commits predate it is silently truncated and the partitioned "
                 "review under-covers without saying so"
             )
+
+
+def test_existing_pinboard_line_returns_none_when_cache_file_absent(tmp_path):
+    """`_existing_pinboard_line` must degrade to `None` ('not verified',
+    per `build_pinboard_directive`'s own contract) rather than `""`
+    ('verified empty') when the orientation cache file has never been
+    written -- an empty string would be indistinguishable from a real
+    empty pinboard line and could wrongly mark a note as already_satisfied.
+    """
+    assert wsc._existing_pinboard_line(tmp_path) is None
+
+
+def test_existing_pinboard_line_reads_the_current_pinboard_bullet(tmp_path):
+    """2026-08-08 bug-backlog: the pinboard directive's satisfaction check
+    (`build_pinboard_directive`'s `existing_pinboard_line` param) was never
+    threaded at its production call site, so it never fired. This exercises
+    the disk-read half of that wiring directly: given a real orientation
+    cache file with a `## Pinboard` section, `_existing_pinboard_line` must
+    return the current bullet's text, matching `read_existing_pinboard`."""
+    from coordinator_core.orientation.regenerate_cache import resolve_cache_file
+
+    cache_file = resolve_cache_file(tmp_path)
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text("# Orientation\n\n## Pinboard\n- current note here\n", encoding="utf-8")
+    assert wsc._existing_pinboard_line(tmp_path) == "current note here"

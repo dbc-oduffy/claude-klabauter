@@ -156,6 +156,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from coordinator_core.argv_fidelity import ArgvFidelityError, resolve_body
 from coordinator_core.backlog_grind_assemble import CADENCES, brief
 from coordinator_core.backlog_grind_assemble import directives as bga_directives
 from coordinator_core.backlog_grind_assemble import readers_blitz as readers_bug_blitz
@@ -170,6 +171,7 @@ from coordinator_core.telemetry.composition_record import (
     flush_composition_record,
     make_fleet_budget,
 )
+from coordinator_core.session.claimed_write import append_claimed_line
 from coordinator_core.session.grant import write_tier_u_grant
 
 # ---------------------------------------------------------------------------
@@ -390,8 +392,7 @@ _NON_PASS_NOTE_LOG = Path("state/scratch/backlog-grind/non-pass-notes.log")
 def _append_backlog_note(repo_root: Path, note: str) -> None:
     log_path = _assert_in_repo_root(_NON_PASS_NOTE_LOG, repo_root)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("a", encoding="utf-8") as fh:
-        fh.write(f"{note}\n")
+    append_claimed_line(log_path, f"{note}\n".encode("utf-8"))
 
 
 def _non_pass_checkout(repo_root: Path, paths: list[str], note: str) -> dict[str, Any]:
@@ -922,7 +923,8 @@ def _usage(prog: str) -> int:
         "[--decisions <json> | --decisions-file <path>]\n"
         "                    [--run-id <run-id>]\n"
         "                    [--wave-path <repo-relative-path>]...   (repeatable)\n"
-        "                    [--granularity per-item|per-wave] [--message <commit message>]",
+        "                    [--granularity per-item|per-wave] "
+        "[--message <commit message> | --message-file <path>]",
         file=sys.stderr,
     )
     print(f"       {prog} drop <{cadence_list}> [--session-id <id>]", file=sys.stderr)
@@ -966,7 +968,7 @@ def _build_wave_path_directives(
     for raw in wave_paths:
         _assert_in_repo_root(Path(raw), repo_root)
 
-    # Review: code-reviewer — F4: this was a cross-module reach into a
+    # This was a cross-module reach into a
     # module-private (underscore-prefixed) constant with no __all__/export;
     # readers_blitz.py now exports COMMIT_READINESS_JP_ID publicly.
     depends_on = readers_bug_blitz.COMMIT_READINESS_JP_ID if cadence == "bug-blitz" else None
@@ -1063,6 +1065,7 @@ def main_apply(argv: list[str]) -> int:
     wave_paths: list[str] = []
     granularity: Optional[str] = None
     message: Optional[str] = None
+    message_file: Optional[str] = None
     run_id: Optional[str] = None
     conflict = detect_conflicting_payload_channels(tail)
     if conflict is not None:
@@ -1077,7 +1080,7 @@ def main_apply(argv: list[str]) -> int:
             session_id = tail[i + 1]
             i += 2
         elif tok == "--run-id":
-            # Review: code-reviewer — F1: apply.py's recomputed brief()
+            # apply.py's recomputed brief()
             # never threaded --run-id, so mise Phase-6 deterministically
             # resolved to the "missing --run-id" judgment point on every
             # `apply mise-en-place` call once records existed. Mirrors
@@ -1108,16 +1111,22 @@ def main_apply(argv: list[str]) -> int:
                 return _usage("backlog-grind-assemble")
             message = tail[i + 1]
             i += 2
+        elif tok == "--message-file":
+            if i + 1 >= len(tail):
+                return _usage("backlog-grind-assemble")
+            message_file = tail[i + 1]
+            i += 2
         else:
             print(f"backlog-grind-assemble apply: unrecognized argument {tok!r}", file=sys.stderr)
             return _usage("backlog-grind-assemble")
 
     if wave_paths:
-        if granularity is None or message is None:
+        if granularity is None or (message is None and message_file is None):
             print(
                 "backlog-grind-assemble apply: --wave-path requires both "
-                "--granularity and --message (the two commit cardinalities "
-                "are semantically different -- there is no safe default)",
+                "--granularity and one of --message/--message-file (the two "
+                "commit cardinalities are semantically different -- there is "
+                "no safe default)",
                 file=sys.stderr,
             )
             return _usage("backlog-grind-assemble")
@@ -1129,9 +1138,15 @@ def main_apply(argv: list[str]) -> int:
                 file=sys.stderr,
             )
             return _usage("backlog-grind-assemble")
-    elif granularity is not None or message is not None:
+        try:
+            message = resolve_body(message, message_file, flag_name="--message")
+        except ArgvFidelityError as exc:
+            print(f"backlog-grind-assemble apply: {exc}", file=sys.stderr)
+            return _usage("backlog-grind-assemble")
+    elif granularity is not None or message is not None or message_file is not None:
         print(
-            "backlog-grind-assemble apply: --granularity/--message require --wave-path",
+            "backlog-grind-assemble apply: --granularity/--message/"
+            "--message-file require --wave-path",
             file=sys.stderr,
         )
         return _usage("backlog-grind-assemble")

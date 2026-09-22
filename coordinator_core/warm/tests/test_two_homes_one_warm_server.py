@@ -115,6 +115,7 @@ def _make_pool_ctx() -> "server._ServerContext":
     exactly as `_ensure_dispatch_pool` builds the production one except for
     the `initializer=` swap documented above."""
     ctx = server._ServerContext.__new__(server._ServerContext)
+    ctx._pool_outstanding = server.InFlightCounter()
     ctx._dispatch_pool = concurrent.futures.ProcessPoolExecutor(
         max_workers=2,
         initializer=_worker_init,

@@ -61,7 +61,7 @@ def posture(monkeypatch, tmp_path):
         monkeypatch.setenv("CLAUDE_HOME", str(home))
         yield module
     finally:
-        # Review: code-reviewer Finding 3 -- never popped, a stale module
+        # Never popped, a stale module
         # loaded from a sibling repo's file otherwise outlives this test.
         sys.modules.pop("_doe_posture_under_test", None)
 

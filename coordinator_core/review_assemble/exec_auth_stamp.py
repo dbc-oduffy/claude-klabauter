@@ -105,12 +105,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from coordinator_core.argv_fidelity import ArgvFidelityError, refuse_newline_argv
 from coordinator_core.frontmatter.primitives import (
     BlockScalar,
     append_fm_block_scalar_line,
     canonical_body_sha,
     insert_fm_field,
     read_fm_block_scalar,
+    read_fm_field,
     read_fm_field_unquoted,
     rebuild,
     replace_fm_field,
@@ -158,6 +160,58 @@ def _append_note(current: Optional[str], addition: str) -> str:
     if current.endswith(addition):
         return current
     return current + NOTE_APPEND_SEPARATOR + addition
+
+
+def _is_unterminated_quoted_scalar(raw: Optional[str]) -> bool:
+    """True when *raw* -- a single physical line read by `read_fm_field` --
+    opens a single- or double-quoted YAML scalar that never closes on that
+    same line, i.e. the real value continues onto further physical lines
+    `read_fm_field` never saw.
+
+    Every frontmatter primitive this module writes through
+    (`replace_fm_field`/`insert_fm_field`) matches ONE physical line
+    (`read_fm_field`'s own docstring). `read_fm_block_scalar` catches the
+    `|`/`>` block-scalar shape, but a quoted scalar YAML folds across lines
+    with no such header -- `execution_authorized_note: 'Scope of this
+    authorization: C1-C3 only. C4 stays gated\\n  on the DR-287 ruling...'`
+    reads back here as an unterminated `'Scope of this authorization: ...`
+    line. Writing over that line truncates the value and strands its
+    continuation lines as bogus top-level keys (state/bug-backlog/2026-08-20-
+    review-exec-auth-stamp-truncates-a-multi-898a8003e121.yaml) -- silent,
+    since the document still parses. This is the single-line-only companion
+    to that block-scalar catch, so the caller can refuse instead.
+
+    A single-quoted scalar's `''` is the escaped-inner-quote form, not a
+    close -- mirrors `_split_trailing_comment`'s own quote scanner. A
+    double-quoted scalar's `\\"` is likewise an escaped inner quote, not a
+    close. An empty or unquoted *raw* (ordinary single-line value, or a
+    present-but-empty key) is never flagged.
+    """
+    if not raw:
+        return False
+    if raw.startswith("'"):
+        body = raw[1:]
+        i = 0
+        while i < len(body):
+            if body[i] == "'":
+                if i + 1 < len(body) and body[i + 1] == "'":
+                    i += 2
+                    continue
+                return False
+            i += 1
+        return True
+    if raw.startswith('"'):
+        body = raw[1:]
+        i = 0
+        while i < len(body):
+            if body[i] == '\\':
+                i += 2
+                continue
+            if body[i] == '"':
+                return False
+            i += 1
+        return True
+    return False
 
 
 def _current_note_text(fm: str, block: Optional[BlockScalar]) -> Optional[str]:
@@ -262,6 +316,18 @@ def stamp_execution_authorization(
 
         fm = split.fm_text
         note_block = read_fm_block_scalar(fm, "execution_authorized_note")
+        if note_block is None and _is_unterminated_quoted_scalar(
+            read_fm_field(fm, "execution_authorized_note")
+        ):
+            # Refuse rather than silently truncate -- see
+            # _is_unterminated_quoted_scalar's docstring for the corruption
+            # this converts into a visible failure.
+            raise MutateAbort(
+                f"{plan_path}: execution_authorized_note is a multi-line "
+                f"quoted YAML scalar; a single-line write would truncate it "
+                f"and strand its continuation lines as bogus top-level keys. "
+                f"Convert it to a `|` block scalar by hand before stamping."
+            )
         current_note = _current_note_text(fm, note_block)
 
         # The note field's convergence test differs from the other three:
@@ -665,7 +731,7 @@ def _main_mark_reviewed(rest: list[str]) -> int:
 
     # `plan_status_transition.main` only ever returns 0 or 1 (verified by
     # reading every `return` in `main`/`_stamp_rung`/`_stamp_reviewed` --
-    # Review: coordinator:code-reviewer session 403ab86c Finding 1) -- there
+    # There
     # is no callee-side usage code to pass through, so the two-way outcome
     # space below is honest rather than implying a distinction the callee
     # does not make.
@@ -787,6 +853,32 @@ def main(argv: list[str]) -> int:
 
     if note is not None and append_note_text is not None:
         print("review-exec-auth-stamp: --note and --append-note are mutually exclusive", file=sys.stderr)
+        return EXIT_USAGE
+
+    try:
+        refuse_newline_argv(
+            note,
+            flag_name="--note",
+            remedy=(
+                "a real line break here would be truncated by a .cmd "
+                "forwarder before it reaches this stamp; there is no "
+                "--note-file leg (the field's own PM-verbatim block-scalar "
+                "shape is written another way -- see this module's "
+                "docstring), so express the note as a single line."
+            ),
+        )
+        refuse_newline_argv(
+            append_note_text,
+            flag_name="--append-note",
+            remedy=(
+                "a real line break here would be truncated by a .cmd "
+                "forwarder before it reaches this stamp; there is no "
+                "--append-note-file leg, so express the appended text as a "
+                "single line."
+            ),
+        )
+    except ArgvFidelityError as exc:
+        print(f"review-exec-auth-stamp: {exc}", file=sys.stderr)
         return EXIT_USAGE
 
     if by is None or (note is None and append_note_text is None):

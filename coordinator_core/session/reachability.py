@@ -41,16 +41,19 @@ Four outcomes, distinguishable by the caller as structured data — collapsing
 them is the defect this module exists to close:
 
     "own_session"   — the input resolves to the CALLING session's own record,
-                       via EITHER of two independent signals:
-                       `harness_registry.self_record()` (primary, pid-keyed),
+                       via the per-request carried identity
+                       (`_canonical_self_sid()`) when one exists, or,
+                       failing that, EITHER of two legacy independent
+                       signals: `harness_registry.self_record()` (pid-keyed),
                        or `CLAUDE_CODE_MESSAGING_SOCKET` matching the record's
                        `messaging_socket_path` as an opaque string (second
-                       signal; exists because the pid resolver can decline
-                       for a correct pid -- measured live 2026-08-13,
-                       `env-miss:name-mismatch` with `CLAUDE_PID` correctly
-                       set -- see `resolve_address`'s own docstring). Never
-                       mislabelled `not_reachable`; a session cannot
-                       `SendMessage` itself via this address form regardless.
+                       legacy signal; exists because the pid resolver can
+                       decline for a correct pid -- measured live
+                       2026-08-13, `env-miss:name-mismatch` with `CLAUDE_PID`
+                       correctly set -- see `resolve_address`'s own
+                       docstring). Never mislabelled `not_reachable`; a
+                       session cannot `SendMessage` itself via this address
+                       form regardless.
     "reachable"      — exactly one live record matches; `address` is set.
     "not_reachable"  — no ADDRESS can be built for the input. NEVER a
                        fallback guess. `reason` names which of the five
@@ -586,6 +589,41 @@ def _socket_env_self_match(sid: str, snapshot: dict) -> bool:
     return env_socket == record.messaging_socket_path
 
 
+def _canonical_self_sid() -> str | None:
+    """The per-request carried identity, when this call is running inside a
+    warm-served request -- the highest-precedence self signal for exactly
+    that case, and a no-op (`None`) everywhere else, including cold.
+
+    `self_record()` is pid-keyed off THIS PROCESS's `CLAUDE_PID` env var.
+    Inside a warm-served request that process is the server that was
+    spawned once, not the session currently being served, so every request
+    the process ever serves resolves to the SAME (wrong) self -- the
+    spawner (`state/bug-backlog/2026-08-30-self-record-decides-self-inside-
+    the-warm-door-3c91d0af7e42.yaml`). `session.core.carried_session_id()`
+    reads the per-request tier-0 binding instead, which names the actual
+    caller regardless of which process is serving the request.
+
+    Deliberately scoped to `core.in_warm_served_request()` ONLY -- never
+    `session.core.attributable_session_id()`'s cold branch. On cold,
+    `self_record()` already answers correctly (its own process IS the
+    caller's own environment there), so a second, independent read of the
+    same class of env var would only reintroduce this module's existing
+    signals as a redundant copy -- and would let whichever session-id env
+    var happens to be ambient in a caller's OWN cold process (`session.core.
+    SESSION_ENV_PRECEDENCE`) override the two signals every existing
+    `self_record()`-based caller already assumes are untouched by them.
+
+    Returns `None`, never `""`, when unresolved -- callers `or`-chain this
+    straight into the existing `self_record()`/`_socket_env_self_match`
+    fallback rather than adding a second falsy check.
+    """
+    from coordinator_core.session import core as _session_core
+
+    if not _session_core.in_warm_served_request():
+        return None
+    return _session_core.carried_session_id() or None
+
+
 def resolve_advisory_address(session_id: str | None) -> str:
     """Best-effort bare `SendMessage` address for `session_id`, or `""` on
     any resolution outcome that isn't a usable address.
@@ -662,16 +700,24 @@ def _resolve_addresses_bulk_from_snapshot(session_ids: list[str], snapshot: dict
     separate `harness_registry.snapshot()` calls one after another risk a
     torn view (the registry is a live directory scan, not a stable
     read), which would let a caller's address dict and its "is messaging
-    on at all" verdict disagree about the instant they describe."""
-    self_info = harness_registry.self_record()
-    self_sid = self_info[0] if self_info is not None else None
+    on at all" verdict disagree about the instant they describe.
+
+    Self-classification defers to `_canonical_self_sid()` first, same
+    precedence and same rationale as `resolve_address` -- see that
+    function's docstring. Only when it returns `None` does this fall back
+    to the legacy `self_record()` + `_socket_env_self_match` pair."""
+    self_sid = _canonical_self_sid()
+    legacy_self_signals = self_sid is None
+    if legacy_self_signals:
+        self_info = harness_registry.self_record()
+        self_sid = self_info[0] if self_info is not None else None
     live_candidates = {c.session_id: c for c in resolve_candidates(snapshot)}
 
     result: dict[str, str] = {}
     for sid in session_ids:
         if not sid:
             continue
-        if sid == self_sid or _socket_env_self_match(sid, snapshot):
+        if sid == self_sid or (legacy_self_signals and _socket_env_self_match(sid, snapshot)):
             result[sid] = "<this session>"
             continue
         candidate = live_candidates.get(sid)
@@ -748,8 +794,13 @@ def resolve_address(owner_id: str, this_repo_root: str | None = None) -> Resolve
     directory scan, per that module's own single-scan contract -- and
     persists nothing beyond this call's return value.
 
-    Self-classification uses TWO independent signals; either firing is
-    sufficient for `own_session`:
+    Self-classification checks `_canonical_self_sid()` first -- the
+    per-request identity, when one is carried, is authoritative and short-
+    circuits the two legacy signals below entirely (see its own docstring
+    for why: a warm-served request's `self_record()` otherwise resolves to
+    the server's spawner, not the caller being served). Only when it
+    returns `None` do the legacy TWO independent signals apply, either
+    firing sufficient for `own_session`:
 
       1. `harness_registry.self_record()` -- the primary, pid-keyed signal.
       2. `CLAUDE_CODE_MESSAGING_SOCKET` compared, as an opaque string,
@@ -809,8 +860,11 @@ def resolve_address(owner_id: str, this_repo_root: str | None = None) -> Resolve
 
     snapshot = harness_registry.snapshot()
 
-    self_info = harness_registry.self_record()
-    self_sid = self_info[0] if self_info is not None else None
+    self_sid = _canonical_self_sid()
+    legacy_self_signals = self_sid is None
+    if legacy_self_signals:
+        self_info = harness_registry.self_record()
+        self_sid = self_info[0] if self_info is not None else None
 
     matches = _matching_session_ids(owner_id, snapshot)
 
@@ -818,7 +872,8 @@ def resolve_address(owner_id: str, this_repo_root: str | None = None) -> Resolve
         return _not_reachable_result(owner_id, snapshot, root)
 
     if len(matches) == 1 and (
-        matches[0] == self_sid or _socket_env_self_match(matches[0], snapshot)
+        matches[0] == self_sid
+        or (legacy_self_signals and _socket_env_self_match(matches[0], snapshot))
     ):
         return ResolveResult(outcome="own_session", session_id=matches[0])
 

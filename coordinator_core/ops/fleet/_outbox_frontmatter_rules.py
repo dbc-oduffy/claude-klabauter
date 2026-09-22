@@ -80,7 +80,7 @@ OUTBOX_REQUIRED_FIELDS = (
     "kind",
 )
 
-# Review: overengineering-reviewer — single-sourced from _memo_compose._VALID_KINDS
+# single-sourced from _memo_compose._VALID_KINDS
 # (mirrored across 5 sites; `bug` landed in 2 of them and this copy went stale).
 VALID_KINDS = _VALID_KINDS
 

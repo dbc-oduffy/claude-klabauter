@@ -2,7 +2,7 @@
 UTC attach, and the ``%Y-%m-%d`` output shape that ``ops.records_query._SINCE_ISO_RE``
 expects, plus the malformed-``observed_at`` raise-loud contract.
 
-Review: coordinatorcode-reviewer — locks in the fix that moved ``_since_cutoff(ctx)``
+Locks in the fix that moved ``_since_cutoff(ctx)``
 out of ``_query_completions``'s ``try`` so a malformed ``observed_at`` raises instead
 of silently degrading to zero completions.
 """

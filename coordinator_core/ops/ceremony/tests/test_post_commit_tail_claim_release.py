@@ -31,6 +31,7 @@ from coordinator_core.ops.ceremony.post_commit_tail import (
 )
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
+from coordinator_core.session import touch_record
 from coordinator_core.win_portability import no_console_creationflags
 
 # `_commit_and_push_origin_stub_close` lands a real commit and this suite
@@ -72,15 +73,23 @@ def repo(tmp_path):
 
 
 def _released_paths(repo: Path, sid: str) -> set:
-    touched = _sdir(repo, sid) / "touched.txt"
-    if not touched.exists():
+    """Reads the C4 ``touch-record.jsonl`` seam directly (`touch_record.
+    _read_stream_claims`'s own last-verb-wins fold), not a legacy
+    ``touched.txt`` -- that compat-union read was deleted 2026-08-26 (see
+    `session_scope._read_touch_record_as_legacy_lines`'s own docstring),
+    and `release_committed_claims` has written only the jsonl sink since.
+    A path whose last recorded event is a release (`touch_record.
+    VERB_RELEASE`) is released; anything else (still-`T`, or never
+    touched at all) is not."""
+    sink = _sdir(repo, sid) / touch_record.RECORD_FILENAME
+    if not sink.exists():
         return set()
-    released = set()
-    for line in touched.read_text(encoding="utf-8").splitlines():
-        verb, _ts, path = session_scope.parse_touch_event(line)
-        if verb == "R":
-            released.add(path)
-    return released
+    claims, _degraded, _reasons = touch_record._read_stream_claims(sink)
+    return {
+        path
+        for path, event in claims.items()
+        if event.verb == touch_record.VERB_RELEASE
+    }
 
 
 def test_commit_and_push_origin_stub_close_releases_claim_on_closed_stub(repo):

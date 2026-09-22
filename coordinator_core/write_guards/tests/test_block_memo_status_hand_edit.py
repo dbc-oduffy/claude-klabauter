@@ -233,8 +233,24 @@ class TestLiveClaimGate:
             raise RuntimeError("indeterminate liveness read")
 
         monkeypatch.setattr("coordinator_core.liveness.cs_claim_holder_live", _raise)
-        # Fails open on error — this guard's established discipline.
-        assert guard._has_live_claim(str(tmp_path), "some-memo.md") is False
+        # 2026-08-06 fix (bug-backlog
+        # 2026-08-06-block-memo-status-hand-edit-s-liveness-r-dcd9cece63ff):
+        # a cs_claim_holder_live exception is INDETERMINATE, not "no claim"
+        # -- fails toward deny (True), not toward the advisory degrade.
+        assert guard._has_live_claim(str(tmp_path), "some-memo.md") is True
+
+    def test_has_live_claim_fails_toward_deny_on_unresolved_git_common_dir(
+        self, tmp_path, monkeypatch
+    ):
+        """2026-08-06 fix (bug-backlog
+        2026-08-06-block-memo-status-hand-edit-s-liveness-r-dcd9cece63ff): an
+        unresolved git-common-dir is indeterminate, not "no claim" -- must
+        fail toward deny (True), matching the module's conservative
+        ambiguous-match direction, not the pre-fix ALLOW-on-error path."""
+        monkeypatch.undo()
+        monkeypatch.setattr(guard, "_resolve_git_common_dir", lambda cwd: None)
+
+        assert guard._has_live_claim(str(tmp_path), "some-memo.md") is True
 
 
 # ---------------------------------------------------------------------------

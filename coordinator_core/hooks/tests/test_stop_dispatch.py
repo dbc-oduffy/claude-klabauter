@@ -262,7 +262,7 @@ def test_two_firing_advisory_legs_both_appear_not_just_the_first(monkeypatch):
         mod, "_nudge_unrouted_sizing_handler",
         lambda _p: post_advisory("BRAVO-LEG-TEXT"), raising=True)
 
-    # Review: coordinator:code-reviewer — session_id="" is load-bearing:
+    # session_id="" is load-bearing:
     # `_silence_all_legs` does not patch `_receiver_state_sensor_handler`,
     # so the real handler runs; a falsy session_id keeps it a no-op (see
     # that module's own "field(...) treats '' as absent" docstring). Do
@@ -290,7 +290,7 @@ def test_two_blocking_legs_both_reasons_appear(monkeypatch):
         mod, "_runtime_tripwire_em_check_handler",
         lambda _p: deny("Stop", "BLOCK-REASON-TWO"), raising=True)
 
-    # Review: coordinator:code-reviewer — session_id="" is load-bearing here
+    # session_id="" is load-bearing here
     # too, see the identical note in the advisory-arm test above.
     _mod, result = _aggregate({"cwd": "", "session_id": "", "transcript_path": ""})
     blob = str(result)

@@ -322,7 +322,7 @@ def _build_fork_frontmatter(
     # Provenance fields via PROVENANCE_FIELD_MAP (keys ratified per spinoff-provenance-ancestry
     # contract; origin_handoff_id is the C2 ID-companion added on top of that ratified set —
     # see the PROVENANCE_FIELD_MAP comment block above for why).
-    # Review: code-reviewer — stale "PLACEHOLDER keys — Wave 2 swaps" contradicted ratification at module docstring; updated.
+    # Stale "PLACEHOLDER keys — Wave 2 swaps" contradicted ratification at module docstring; updated.
     for logical_name, meta in PROVENANCE_FIELD_MAP.items():
         key = meta["key"]
         cardinality = meta["cardinality"]
@@ -419,7 +419,7 @@ def _parse_claim_timestamp(value: Optional[str]) -> Optional[datetime.datetime]:
     the two would hand ``sorted()`` a naive/aware pair, which raises
     ``TypeError`` — unhandled at both op boundaries (``_handler`` and
     ``_handle_stamp`` catch only ``OSError``/``AmbiguousOriginHandoffError``).
-    Review: code-reviewer (Finding 1). A naive parse is therefore normalized
+    code-reviewer (Finding 1). A naive parse is therefore normalized
     to UTC-aware here so every value this function returns is comparable
     against every other, honouring the "aware" promise this docstring
     already made before the fix landed.
@@ -534,7 +534,7 @@ def _resolve_origin_handoff(
     md_files = sorted(p for p in handoffs_dir.iterdir() if p.suffix == ".md" and p.is_file())
     candidates: List[Dict[str, object]] = []
     for hfile in md_files:
-        # Review: code-reviewer (Finding 1) -- before routing the claim read
+        # Before routing the claim read
         # through resolve_claim_state, EVERY unreadable candidate file was
         # read unconditionally here (via hfile.read_text()) and logged on
         # OSError. resolve_claim_state's own mirror read now swallows an
@@ -566,7 +566,7 @@ def _resolve_origin_handoff(
         try:
             text = hfile.read_text(encoding="utf-8", errors="replace")
         except OSError:
-            # Review: code-reviewer (Finding 2) -- route through the module
+            # Route through the module
             # logger instead of a raw print, matching the discipline used
             # elsewhere in this file for per-item skip-and-continue failures.
             _LOG.warning(
@@ -722,6 +722,33 @@ def _resolve_stamp_match_text(contained: Path) -> str:
     return stem
 
 
+def _resolve_handoff_id_from_origin_path(
+    worktree_root: Path, handoffs_dir: Path, origin_handoff: str
+) -> Optional[str]:
+    """Derive ``origin_handoff_id`` from a caller-supplied ``origin_handoff``
+    path, by reading THAT SAME file's own ``handoff_id`` frontmatter scalar —
+    the same same-file, never-a-separate-lookup C2 invariant
+    ``_resolve_origin_handoff`` documents and uses for its own two-tuple
+    return.
+
+    Degrades to ``None`` (never raises) when ``origin_handoff`` escapes
+    ``handoffs_dir``, does not resolve to a file on disk, is unreadable, or
+    carries no ``handoff_id`` field — mirroring stamp mode's existing
+    degrade-not-abort discipline for every other provenance field.
+    """
+    target = Path(origin_handoff)
+    if not target.is_absolute():
+        target = worktree_root / target
+    contained = contained_path(target, [handoffs_dir])
+    if contained is None or not contained.is_file():
+        return None
+    try:
+        text = contained.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    return extract_frontmatter_scalar(text, "handoff_id") or None
+
+
 async def _handle_stamp(params: dict, repo_root: Optional[Path]) -> dict:
     """Stamping-mode entry point — writes the five ``origin_*`` provenance
     fields onto an ALREADY-EXISTING handoff file in place, rather than
@@ -820,8 +847,11 @@ async def _handle_stamp(params: dict, repo_root: Optional[Path]) -> dict:
     # --- origin_handoff / origin_handoff_id --- resolved TOGETHER when
     # origin_handoff is not supplied (never a separate lookup — mirrors
     # _resolve_origin_handoff's own C2 invariant). A caller-supplied
-    # origin_handoff keeps whatever origin_handoff_id accompanied it
-    # (possibly none), rather than re-deriving one independently.
+    # origin_handoff that names a resolvable file still gets its
+    # origin_handoff_id read off that SAME file when the caller omitted it —
+    # only a caller-supplied origin_handoff that does NOT resolve to a
+    # readable file on disk (or that never carried a handoff_id) degrades to
+    # null, same as before.
     origin_handoff = params.get("origin_handoff") or None
     origin_handoff_id = params.get("origin_handoff_id") or None
     if not origin_handoff:
@@ -851,6 +881,10 @@ async def _handle_stamp(params: dict, repo_root: Optional[Path]) -> dict:
             })
         if not origin_handoff_id:
             origin_handoff_id = resolved_handoff_id
+    elif not origin_handoff_id:
+        origin_handoff_id = await asyncio.to_thread(
+            _resolve_handoff_id_from_origin_path, worktree_root, handoffs_dir, origin_handoff
+        )
 
     # --- origin_plan_id --- truthy caller value wins; else auto-resolve or
     # surface disambiguation candidates (identical contract to the author
@@ -1097,7 +1131,7 @@ async def _handler(
     # coordinator-doc-new, so it does not inherit C1's scaffolder-side
     # emission. Append the canonical block when the caller-supplied body
     # doesn't already carry one — never duplicate it.
-    # Review: code-reviewer 49e8b242 P2 — was frontmatter.body_blocks._compile_heading_re,
+    # Was frontmatter.body_blocks._compile_heading_re,
     # which near-missed the parser's own grammar; now the canonical detector shared
     # with the parser and every other detection site.
     if not SESSION_LEDGER_HEADING_RE.search(body):
@@ -1153,7 +1187,7 @@ async def _handler(
         origin_plan_id = origin_plan_id_raw if origin_plan_id_raw else None
     else:
         plans_dir = worktree_root / "docs" / "plans"
-        # Review: code-reviewer (F2/F9) — call _collect_plans once; derive ids inline.
+        # Call _collect_plans once; derive ids inline.
         # Eliminated _enumerate_plan_ids wrapper that forced a second filesystem scan
         # in the ambiguous branch.
         plan_items = await asyncio.to_thread(_collect_plans, plans_dir)
@@ -1190,7 +1224,7 @@ async def _handler(
             origin_goal_id = [str(origin_goal_id_raw)] if origin_goal_id_raw else None
     else:
         goals_dir = worktree_root / "state" / "goals"
-        # Review: code-reviewer (F2/F9) — call _collect_goals once; derive ids inline.
+        # Call _collect_goals once; derive ids inline.
         # Eliminated _enumerate_active_goal_ids wrapper that forced a second filesystem
         # scan in the ambiguous branch.
         goal_items = await asyncio.to_thread(_collect_goals, goals_dir)
@@ -1230,7 +1264,7 @@ async def _handler(
     handoffs_dir.mkdir(parents=True, exist_ok=True)
     out_path = handoffs_dir / filename
 
-    # Review: code-reviewer (F2) — resolved once, in this function's own scope, so
+    # Resolved once, in this function's own scope, so
     # a fork-handoff authored while a plan is claimed carries that plan's
     # deliverable_id instead of always minting a fresh one (DR-207 DD#1 second door).
     carried_deliverable_id = _resolve_claimed_plan_deliverable_id(worktree_root)

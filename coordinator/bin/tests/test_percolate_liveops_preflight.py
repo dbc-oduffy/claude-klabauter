@@ -230,7 +230,7 @@ def test_two_registry_aliases_of_same_path_censused_once(tmp_path, monkeypatch, 
 
 
 def test_module_docstring_is_populated():
-    """Review: coordinatorcode-reviewer-eb287fb6 -- `from __future__ import
+    """`from __future__ import
     annotations` used to precede the module docstring, demoting it to a
     dead expression that never became `__doc__`. Pins that it now does."""
     assert _cli.__doc__ is not None

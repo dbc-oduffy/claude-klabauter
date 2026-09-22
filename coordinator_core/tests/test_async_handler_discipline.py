@@ -156,6 +156,22 @@ def _handler_files() -> list[pathlib.Path]:
     return files
 
 
+def _assert_handler_corpus_nonempty(files: list[pathlib.Path]) -> None:
+    """Fail loud if the handler-file scan is empty.
+
+    A renamed or deleted entry in `_HANDLER_DIRS` makes `_handler_files()`
+    return `[]` (each root is guarded by `is_dir()`, so a missing directory
+    is skipped rather than erroring), which in turn feeds an empty list into
+    `@pytest.mark.parametrize` below and collects zero test cases -- the gate
+    then reports as passing while auditing nothing.
+    """
+    assert files, (
+        "handler-file scan returned zero .py files under "
+        f"{[str(d) for d in _HANDLER_DIRS]} -- a renamed or deleted handler "
+        "directory silently empties this gate's corpus instead of failing it"
+    )
+
+
 # ---------------------------------------------------------------------------
 # AST analysis helpers
 # ---------------------------------------------------------------------------
@@ -435,9 +451,13 @@ def _rel(path: pathlib.Path) -> str:
         return str(path)
 
 
+_HANDLER_FILES: list[pathlib.Path] = _handler_files()
+_assert_handler_corpus_nonempty(_HANDLER_FILES)
+
+
 @pytest.mark.parametrize(
     "path",
-    _handler_files(),
+    _HANDLER_FILES,
     ids=lambda p: _rel(p),
 )
 def test_no_direct_blocking_subprocess_in_async_handlers(path: pathlib.Path) -> None:
@@ -582,3 +602,17 @@ def test_checker_passes_on_historical_fixed_specimen() -> None:
         f"strengthened checker false-positived on the historical FIXED "
         f"specimen (scoped_git_commit.py::_handler post-fix): {violations}"
     )
+
+
+def test_handler_corpus_guard_fails_loud_on_empty_scan() -> None:
+    """A renamed/deleted `_HANDLER_DIRS` entry must raise at collection time
+    instead of letting the parametrized gate above silently collect zero
+    test cases and report a pass."""
+    with pytest.raises(AssertionError, match="handler-file scan"):
+        _assert_handler_corpus_nonempty([])
+
+
+def test_handler_corpus_guard_accepts_nonempty_scan() -> None:
+    """A non-empty scan must not raise -- the guard only fires on the
+    vacuous-corpus case."""
+    _assert_handler_corpus_nonempty([pathlib.Path("dummy.py")])

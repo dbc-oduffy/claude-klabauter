@@ -81,7 +81,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
     # "malformed": []}) — raising is the only channel that actually surfaces the failure.
     # This is an emit-path POLICY choice, not something the shared reader decides — the
     # reader stays policy-neutral and only reports the unreadable-root signal back.
-    # Review: code-reviewer — knowingly-accepted blast-radius trade: this raise aborts
+    # knowingly-accepted blast-radius trade: this raise aborts
     # the WHOLE cockpit-emission.json build (all 21 sections + post-collect enrichment
     # discarded), not just goals_current, so a transient permission hiccup on this root
     # now blocks the entire artifact refresh where it previously wouldn't have.
@@ -106,7 +106,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
         derivation = "parsed" if period == "week" else "rolled_up"
 
         emitted = {
-            # Review: code-reviewer (Finding 1) — legacy rows (no goal_id key on the raw
+            # Legacy rows (no goal_id key on the raw
             # record) fall through to the reader's own deterministic-hash fallback
             # (row.goal_id, computed by wire_read.read_and_collapse via
             # goal_append._goal_id), instead of silently emitting "". Without this, a
@@ -118,7 +118,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
             "period": period,
             "period_value": record.get("period_value", ""),
             "declared_by_machine": record.get("declared_by_machine", "unknown"),
-            # Review: code-reviewer (Finding 7) — this defaults missing declared_at to
+            # This defaults missing declared_at to
             # ctx.observed_at, while the dedup comparison above defaults it to "" instead.
             # Harmless to the dedup outcome (an empty string always loses a comparison
             # against a real timestamp), but the two defaults intentionally differ: ""
@@ -149,7 +149,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
         if "weekly_perceptible" in record:
             emitted["weekly_perceptible"] = record["weekly_perceptible"]
 
-        # Review: code-reviewer (Finding 1) — guard against a malformed key_results_status
+        # Guard against a malformed key_results_status
         # shape (non-list, or list-of-non-dicts from producer-side JSONL drift) so a bad
         # record quarantines only this record's key_results_status, not the whole
         # collect() call (mirrors the file's per-record quarantine posture elsewhere).
@@ -179,7 +179,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
                 for kr in key_results_status_raw
                 if isinstance(kr, dict)
             ]
-            # Review: code-reviewer (Finding 2) — deliberate choice: if every item in
+            # Deliberate choice: if every item in
             # key_results_status is malformed (non-dict), kr_status is [] and the key is
             # OMITTED (not emitted as []), preserving absent-when-absent semantics keyed
             # on "did anything survive projection", not merely "was the key present".

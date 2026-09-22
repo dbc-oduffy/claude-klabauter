@@ -627,7 +627,6 @@ def test_artifact_tier_omits_on_genuinely_divergent_multi_artifact_commit(
     assert f"Session-Id: {_SID}" in joined
 
 
-# Review: C6b/AC11's declared-fork-pair canonical-join pin (review-integrator
 # P1, coordinatorcode-reviewer-0f04f47d.md) tested `state/deliverable-
 # equivalence.yaml` + canonicalize() -- condemned and collapsed to identity
 # (plan 2026-08-20-the-close-ceremony-stops-paying-for-the-join, F-1); the

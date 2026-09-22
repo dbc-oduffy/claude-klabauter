@@ -14,7 +14,11 @@ resolves no credit rule itself, and modifies neither primitive:
      `backfill.py`), fed by `state/review-trail/*.json` at fold time;
   2. the reviewer sidecar receipt
      (`coordinator_core.review_trail.receipt_credit`), fed by the
-     `review_receipt:` block the dispatch seam stamps.
+     `review_receipt:` block the dispatch seam stamps, gated by that
+     module's session completion summary — a session holding a
+     `review_completion:` block anywhere requires the counting sidecar (or
+     its findings twin) to carry one too; a session holding none falls back
+     to the plain content test.
 
 Source 2 is not a redundant belt on source 1 — it is the only live one.
 Source 1's corpus is FROZEN: `review_trail.write`'s in-process wiring was
@@ -97,8 +101,29 @@ narrowing in at fold time (`backfill.resolve_and_fold`'s rule 4), and this
 module reads the already-folded result — no waiver source to consult here
 either.
 
+Population rule (DR-421, docs/plans/2026-09-11-the-merge-gate-proves-receipt-
+coverage.md § C3): a commit joins `commit_sha_set` — the population this
+dimension requires review evidence for — only if at least one of its touched
+paths intersecting `changed_files` is NOT bookkeeping under
+`coordinator_core.coverage._is_bookkeeping_path`
+(`_BOOKKEEPING_PATH_PREFIXES`, reused here and not widened; DR-421 refuses
+any code-partition exemption unconditionally — this filter narrows
+POPULATION, not credit). A commit whose only touched-and-wanted paths are all
+bookkeeping is tallied separately and never required to carry review
+evidence; the tally is reported in both PASS and FAIL detail, never dropped
+silently. DR-421 also decided the `state/handoffs/` authoring leg is NOT
+carried: C1's measured range had zero bookkeeping-only commits touching
+`state/handoffs/` either way, so this module keeps its one `git log` at
+`--name-only` rather than switching to `--name-status` to special-case
+introduced (A/C/R) paths there.
+
 Spec backlink: docs/plans/2026-07-20-merge-gate-dod-engine-enforced.md § C5
 docs/plans/2026-08-27-the-reviewed-set-is-a-file-not-a-computation.md § C3
+docs/plans/2026-09-11-the-merge-gate-proves-receipt-coverage.md § C3, DR-421
+docs/plans/2026-09-11-the-merge-gate-proves-receipt-coverage.md § C4, AC7 (FAIL
+detail's per-session grouping; the merge-not-close line and the live/ended
+marking live in `coordinator/bin/merge-gate-and-pr.py`'s `cmd_coverage_gate`,
+not here)
 """
 
 from __future__ import annotations
@@ -109,6 +134,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+from coordinator_core.coverage import _is_bookkeeping_path
 from coordinator_core.ops.gate_validate_invocable import (
     DimensionResult,
     Verdict,
@@ -163,6 +189,64 @@ def _run_git(args: List[str], cwd: str) -> "tuple[int, str, str]":
     except OSError as exc:
         print(f"skip: gate_dimension_review._run_git failed: {exc}", file=sys.stderr)
         return 1, "", str(exc)
+
+
+#: AC7 (docs/plans/2026-09-11-the-merge-gate-proves-receipt-coverage.md § C4)
+#: bounds: the FAIL detail's by-session breakdown shows at most this many
+#: sessions, each showing at most this many SHAs, with a `+N more` tail on
+#: both axes.
+_MAX_SESSIONS_IN_DETAIL = 5
+_MAX_COMMITS_PER_SESSION_IN_DETAIL = 3
+#: The label an empty Session-Id trailer groups under (AC7). `cmd_coverage_gate`
+#: (coordinator/bin/merge-gate-and-pr.py) skips this label when marking named
+#: sessions live/ended -- it names no real session to check liveness for.
+_NO_SESSION_ID_LABEL = "no Session-Id"
+
+
+def _group_uncovered_by_session(
+    uncovered: List[str], commit_provenance: "dict[str, tuple[str, str]]"
+) -> "dict[str, list[str]]":
+    """Groups `uncovered` SHAs by their Session-Id trailer, empty ->
+    `_NO_SESSION_ID_LABEL`. Preserves first-appearance order on both axes
+    (session grouping and the SHAs within it) -- no sort, so the order tracks
+    whatever order `uncovered` itself arrives in."""
+    grouped: "dict[str, list[str]]" = {}
+    for sha in uncovered:
+        _, session_id = commit_provenance.get(sha, ("", ""))
+        key = session_id or _NO_SESSION_ID_LABEL
+        grouped.setdefault(key, []).append(sha)
+    return grouped
+
+
+def _uncovered_by_session_detail(
+    uncovered: List[str], commit_provenance: "dict[str, tuple[str, str]]"
+) -> str:
+    """AC7: the FAIL detail groups uncovered SHAs (12-char) under their
+    Session-Id, bounded to the first `_MAX_SESSIONS_IN_DETAIL` sessions x
+    `_MAX_COMMITS_PER_SESSION_IN_DETAIL` commits plus a `+N more` tail on
+    both axes.
+
+    `cmd_coverage_gate` (coordinator/bin/merge-gate-and-pr.py) parses the
+    session tokens back out of this text to mark each live/ended -- the
+    `  <session>: ` line shape (two leading spaces, then the session token,
+    then `: `) is load-bearing for that parse and must not change shape
+    without updating it there too."""
+    grouped = _group_uncovered_by_session(uncovered, commit_provenance)
+    session_keys = list(grouped.keys())
+    lines = ["uncovered by session:"]
+    for key in session_keys[:_MAX_SESSIONS_IN_DETAIL]:
+        shas = grouped[key]
+        shown = ", ".join(
+            sha[:12] for sha in shas[:_MAX_COMMITS_PER_SESSION_IN_DETAIL]
+        )
+        extra = len(shas) - _MAX_COMMITS_PER_SESSION_IN_DETAIL
+        if extra > 0:
+            shown += f" (+{extra} more)"
+        lines.append(f"  {key}: {shown}")
+    remaining_sessions = len(session_keys) - _MAX_SESSIONS_IN_DETAIL
+    if remaining_sessions > 0:
+        lines.append(f"  (+{remaining_sessions} more session(s))")
+    return "\n".join(lines)
 
 
 def _review_dimension_check(
@@ -249,7 +333,11 @@ def _review_dimension_check(
     # characters (content-addressed asset, git-lfs pointer, generated hash
     # filename) is otherwise indistinguishable from a sha and would silently
     # re-anchor current_sha onto a bogus value, dropping the real commit.
-    commit_sha_set: "set[str]" = set()
+    #: sha -> True if at least one of its wanted-and-touched paths is NOT
+    #: bookkeeping (population rule, DR-421 / module docstring). A commit
+    #: present here only with False entries is bookkeeping-only and never
+    #: joins the population this dimension requires review evidence for.
+    commit_has_code_path: "dict[str, bool]" = {}
     #: sha -> (committer date, Session-Id trailer), harvested from the same
     #: header line. Only consulted if the resident store leaves something
     #: uncovered, but collected unconditionally — it is already parsed.
@@ -267,16 +355,29 @@ def _review_dimension_check(
                     current_sha = sha
                     committed_at, _, session_id = rest.partition(_HEADER_FIELD_SEP)
                     commit_provenance[sha] = (committed_at.strip(), session_id.strip())
-            elif current_sha is not None and line.replace("\\", "/") in wanted:
-                commit_sha_set.add(current_sha)
+            elif current_sha is not None:
+                path = line.replace("\\", "/")
+                if path in wanted:
+                    is_code = not _is_bookkeeping_path(path)
+                    commit_has_code_path[current_sha] = (
+                        commit_has_code_path.get(current_sha, False) or is_code
+                    )
+
+    commit_sha_set = {sha for sha, has_code in commit_has_code_path.items() if has_code}
+    bookkeeping_only_count = sum(
+        1 for has_code in commit_has_code_path.values() if not has_code
+    )
 
     commit_shas = list(commit_sha_set)
     if not commit_shas:
-        return DimensionResult(
-            dimension="review",
-            verdict=Verdict.PASS,
-            detail=f"covered: no commits in diff_base={diff_base!r} touch changed_files",
-        )
+        if bookkeeping_only_count:
+            detail = (
+                f"covered: 0 code commit(s), {bookkeeping_only_count} "
+                "bookkeeping-only commit(s) not in population"
+            )
+        else:
+            detail = f"covered: no commits in diff_base={diff_base!r} touch changed_files"
+        return DimensionResult(dimension="review", verdict=Verdict.PASS, detail=detail)
 
     # The reviewed-set store (docs/plans/2026-08-27-the-reviewed-set-is-a-
     # file-not-a-computation.md): a resident, append-only set of already-
@@ -321,7 +422,10 @@ def _review_dimension_check(
             detail=(
                 f"uncovered: {len(uncovered)}/{len(commit_shas)} commit(s) touching "
                 f"changed_files carry neither a review-trail stamp nor a reviewer "
-                f"sidecar receipt (e.g. {uncovered[0][:12]})"
+                f"sidecar receipt (e.g. {uncovered[0][:12]}) -- "
+                f"{len(commit_shas)} code commit(s), {bookkeeping_only_count} "
+                "bookkeeping-only commit(s) not in population\n"
+                + _uncovered_by_session_detail(uncovered, commit_provenance)
             ),
         )
 
@@ -330,7 +434,9 @@ def _review_dimension_check(
         verdict=Verdict.PASS,
         detail=(
             f"covered: all {len(commit_shas)} commit(s) touching changed_files "
-            "carry a review-trail stamp or a reviewer sidecar receipt"
+            "carry a review-trail stamp or a reviewer sidecar receipt -- "
+            f"{len(commit_shas)} code commit(s), {bookkeeping_only_count} "
+            "bookkeeping-only commit(s) not in population"
         ),
     )
 

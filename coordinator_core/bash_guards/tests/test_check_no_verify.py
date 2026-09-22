@@ -85,7 +85,7 @@ class TestProseMentionAllowed:
         assert not _denied("git status")
 
     def test_semicolon_inside_quoted_message_allowed(self):
-        """Review: code-reviewer (Finding 1) -- an ordinary commit message
+        """An ordinary commit message
         containing a literal `;` must not itself be denied when there is no
         real bypass flag anywhere in the command."""
         assert not _denied('git commit -m "fix: bug; cleanup"')
@@ -188,7 +188,7 @@ class TestGenuineBypassStillDenied:
 
 
 class TestBypassRegexFallbackReachedAndDenies:
-    """Review: coordinator:code-reviewer (Finding 1, 2026-08-05) -- every case
+    """Every case
     above in `TestGenuineBypassStillDenied` uses a well-formed, tokenizable
     command, so all of them take the TOKENIZED walk in
     `_seg_has_git_bypass_flag` and never reach the `_BypassRe` fallback the

@@ -155,6 +155,7 @@ __all__ = [
     "ImageCurrencyAudit",
     "audit_installed_image_currency",
     "rebuild_and_verify_prebuilt",
+    "committed_prebuilt_source_drift",
     "named_forwarder_path",
     "install_named_forwarder",
     "remove_shadowing_ps1_sibling",
@@ -293,6 +294,40 @@ def _current_source_fingerprint() -> "dict[str, str]":
         path.name: hashlib.sha256(path.read_bytes()).hexdigest()
         for path in (*build_posix._SOURCES, build_posix._HEADER)
     }
+
+
+#: Named without the platform switch `_PREBUILT_PROVENANCE` carries: the
+#: committed `door.exe`'s currency is a fact about the tree, readable anywhere.
+_WINDOWS_PREBUILT_PROVENANCE = _DOOR_DIR / "door.exe.provenance.json"
+
+
+def committed_prebuilt_source_drift() -> "list[str]":
+    """Names of the door sources that differ from those the committed
+    `door.exe` was built from -- empty when the prebuilt is current.
+
+    Every other currency check compares an INSTALLED image against the
+    committed prebuilt, so a prebuilt itself behind `door.c` passes all of
+    them; this compares the prebuilt's own recorded source hashes against
+    the sources on disk instead, which is answerable without a compiler.
+
+    Raises `DoorInstallError` when the sidecar is unreadable or records no
+    sources -- same convention as `_prebuilt_image_bytes`."""
+    try:
+        record = json.loads(_WINDOWS_PREBUILT_PROVENANCE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise DoorInstallError(
+            f"door_install: no readable prebuilt provenance at {_WINDOWS_PREBUILT_PROVENANCE}: {exc}"
+        ) from exc
+    recorded = record.get("sources") if isinstance(record, dict) else None
+    if not isinstance(recorded, dict) or not recorded:
+        raise DoorInstallError(
+            f"door_install: {_WINDOWS_PREBUILT_PROVENANCE} records no source fingerprint"
+        )
+    return sorted(
+        path.name
+        for path in door_build.SOURCES
+        if recorded.get(path.name) != door_build._sha256_file(path)
+    )
 
 
 def _reference_image_bytes(bin_dst: Path) -> bytes:
@@ -728,6 +763,7 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
     bin_dst.mkdir(parents=True, exist_ok=True)
 
     dest_provenance = installed_provenance_path(bin_dst)
+    prior_identity = _file_identity(dest_exe)
 
     # ROUTE ON PLATFORM FIRST, NOT ON PREBUILT PRESENCE (C2, dispatch brief
     # F-013, part a). This used to branch solely on `_PREBUILT_DOOR_EXE.
@@ -834,11 +870,100 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
     # the same `engine_root`).
     door_build.write_sidecar(dest_exe, engine_root)
 
+    relinked = _relink_names_stranded_on(bin_dst, dest_exe, prior_identity)
+    if relinked:
+        print(f"[door-install] re-linked {relinked} name(s) from the replaced image to {dest_exe}")
+
     swept = _sweep_displaced_images(bin_dst)
     if swept:
         print(f"[door-install] swept {len(swept)} stale displaced image(s) from {bin_dst}")
 
     return dest_exe
+
+
+def _file_identity(path: Path) -> "Optional[tuple[int, int]]":
+    """`(st_dev, st_ino)` of `path`, or None when it does not exist."""
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        return None
+    return (st.st_dev, st.st_ino)
+
+
+def _link_over(source: Path, dest: Path) -> None:
+    """Point `dest` at `source`'s image without a window where `dest` is absent.
+
+    Links to a temporary sibling and renames it over `dest`, so a caller
+    resolving the name mid-swap gets the old image or the new one, never
+    ENOENT. Where the rename cannot land over a running image (Windows), the
+    old one is displaced to a `.stale-` sibling first -- the same naming
+    `install_named_forwarder` uses, so `_sweep_displaced_images` reaps it.
+    """
+    tmp = dest.with_name(f".{dest.name}.relink-{os.getpid()}")
+    try:
+        os.link(source, tmp)
+    except OSError:
+        shutil.copy2(source, tmp)
+    try:
+        os.replace(tmp, dest)
+    except OSError:
+        displaced = dest.with_name(f"{dest.name}.stale-{os.getpid()}-{int(time.time())}")
+        os.replace(dest, displaced)
+        os.replace(tmp, dest)
+        try:
+            displaced.unlink()
+        except OSError:
+            pass
+
+
+def _relink_names_stranded_on(
+    bin_dst: Path, dest_exe: Path, prior_identity: "Optional[tuple[int, int]]"
+) -> int:
+    """Re-point every name in `bin_dst` still on the image `dest_exe` replaced.
+
+    The per-name forwarders are hard links to the canonical door. A build that
+    writes `dest_exe` as a NEW file (every POSIX compile does) leaves each of
+    them on the old image: the install reports success while hundreds of
+    names keep running the door it just replaced. Measured 2026-09-22: 443 of
+    444 names stranded by one `door_install --bin-dst`.
+
+    Identity, not name lists, decides what moves: exactly the entries that
+    shared the replaced image's inode, so nothing that was never a door name
+    is touched. A build that rewrote the file in place kept its inode, every
+    link already sees the new bytes, and there is nothing to do.
+
+    Refuses to report success while any name is left behind -- a partial
+    re-link raises `DoorInstallError` naming them rather than returning a
+    count that reads as done.
+    """
+    if prior_identity is None or _file_identity(dest_exe) == prior_identity:
+        return 0
+
+    def _stranded() -> "list[Path]":
+        found = []
+        for entry in bin_dst.iterdir():
+            if ".stale-" in entry.name or entry.name.startswith("."):
+                continue
+            try:
+                st = os.lstat(entry)
+            except OSError:
+                continue
+            if (st.st_dev, st.st_ino) == prior_identity:
+                found.append(entry)
+        return found
+
+    stranded = _stranded()
+    for entry in stranded:
+        _link_over(dest_exe, entry)
+
+    left = _stranded()
+    if left:
+        names = ", ".join(sorted(p.name for p in left)[:10])
+        raise DoorInstallError(
+            f"door_install: {len(left)} name(s) in {bin_dst} still run the replaced "
+            f"door image after re-linking ({names}); the install is not complete"
+        )
+    return len(stranded)
 
 
 def named_forwarder_path(bin_dst: Path, name: str) -> Path:

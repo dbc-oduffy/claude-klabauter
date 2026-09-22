@@ -101,7 +101,7 @@ def test_phase_chain_preinstall_sets_flag_and_does_not_exit():
 # _self_resolve_walker_roots — `python3 -m coordinator_core.ops.
 # setup_chain_walker` entry point fallback used when neither
 # COORDINATOR_SETUP_REPO_ROOT nor COORDINATOR_SETUP_LIB_DIR is set.
-# Review: code-reviewer (Finding 5, 2026-08-03) — every existing test sets
+# Every existing test sets
 # both env vars, leaving this branch entirely uncovered.
 # ---------------------------------------------------------------------------
 
@@ -404,7 +404,7 @@ def test_agent_direct_with_chain_preinstall_consent_token_falls_through(tmp_path
 
 
 def test_agent_direct_override_pair_reaches_full_install_body_not_reblocked(tmp_path):
-    # Review: code-reviewer (Finding 1, 2026-07-17) regression test — a full
+    # A full
     # (non-check, non-preflight, non-chain-preinstall) install invocation
     # carrying the documented override pair must reach the install body, not
     # get re-blocked at exit 92 by run_mode_prompt's own unconditional

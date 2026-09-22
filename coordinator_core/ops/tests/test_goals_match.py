@@ -175,7 +175,7 @@ class TestGoalMatchCandidates:
 
     def test_empty_store_directory_absent(self, tmp_path):
         """No state/goals/ directory → empty candidates list."""
-        # Review: code-reviewer — passing {} caused early-return on missing text before
+        # Passing {} caused early-return on missing text before
         # reaching _collect_candidates; use a real text value to exercise is_dir() guard.
         common_dir = _make_git_repo(tmp_path / "repo")
         result = _handler({"text": "legibility"}, repo_root=common_dir)
@@ -335,7 +335,7 @@ class TestGoalMatchCandidates:
 
     def test_absent_status_warned_sibling_still_returned(self, tmp_path):
         """Goal with no status field is skipped with warning; active sibling is returned."""
-        # Review: code-reviewer (F2) — absent status is a data error distinct from
+        # Absent status is a data error distinct from
         # achieved/abandoned; must warn so the operator can diagnose missing candidates.
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
@@ -365,7 +365,7 @@ class TestGoalMatchCandidates:
 
     def test_missing_id_field_quarantined(self, tmp_path):
         """Goal with missing id field is quarantined; active sibling is still returned."""
-        # Review: code-reviewer (F4) — _seed_goal(id_val=None) produces a dict that
+        # _seed_goal(id_val=None) produces a dict that
         # passes YAML parse but trips the isinstance(id_val, str) guard.
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
@@ -393,7 +393,7 @@ class TestGoalMatchCandidates:
 
     def test_missing_title_field_quarantined(self, tmp_path):
         """Goal with missing title field is quarantined; active sibling is still returned."""
-        # Review: code-reviewer (F4) — _seed_goal(title=None) produces a dict that
+        # _seed_goal(title=None) produces a dict that
         # passes YAML parse and id check but trips the isinstance(title_val, str) guard.
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)

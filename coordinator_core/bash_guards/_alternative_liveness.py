@@ -148,11 +148,9 @@ from coordinator_core.bash_guards import block_subagent_grant_acquisition
 from coordinator_core.bash_guards import block_subagent_guard_grant
 from coordinator_core.bash_guards import check_raw_pid_liveness
 from coordinator_core.bash_guards import guard_powershell_via_bash
-from coordinator_core.bash_guards import guard_branch_set_precedence
 from coordinator_core.bash_guards import guard_grep_via_bash
 from coordinator_core.bash_guards import guard_head_tail_rewrite
 from coordinator_core.bash_guards import guard_inprocess_search
-from coordinator_core.bash_guards import guard_longlived_branch_naming
 from coordinator_core.bash_guards import guard_multiprobe_banner
 from coordinator_core.bash_guards import guard_offer_git_c
 from coordinator_core.bash_guards import guard_plumbing_and_loops
@@ -438,7 +436,7 @@ def _trigger_destructive_rm() -> Optional[Dict[str, Any]]:
 
 
 def _trigger_destructive_git_revert() -> Optional[Dict[str, Any]]:
-    """Review: staff-eng, Finding 9 (2026-08-05) -- the previous UNTRIGGERED
+    """The previous UNTRIGGERED
     row recorded a probe of `git revert`, a command this guard does not
     target at all (it gates `checkout`/`restore`/`reset`/`stash`, per its
     own docstring). A load-bearing path (`state/`-rooted, `_is_loadbearing`)
@@ -455,6 +453,53 @@ def _trigger_destructive_git_revert() -> Optional[Dict[str, Any]]:
         with open(target, "w", encoding="utf-8", newline="\n") as fh:
             fh.write("baseline\nuncommitted edit\n")
         return _dc.check_destructive_git_revert("git -C %s reset --hard" % repo, "altlive-probe")
+
+
+def _trigger_stale_write() -> Optional[Dict[str, Any]]:
+    """`check_stale_write`'s deny leg needs a baseline this session itself
+    recorded, then disk content that no longer matches it -- the guard
+    denies only when BOTH hashes exist and disagree, so a fixture that
+    merely writes a file proves nothing (no recorded hash reads as "not
+    stale", by that function's own fail-toward-allow posture).
+
+    The whole fixture lives inside the scratch repo, including the touch
+    record: `append_touch_claims` writes to `<root>/.git/coordinator-
+    sessions/<sid>`, so pointing `root` at the throwaway repo keeps this
+    probe out of the real tree's live-session hub. Writing it against the
+    real root would mint a session directory that `conftest._no_new_live_
+    session_hub_entries` then fails an unrelated test for.
+    """
+    from coordinator_core.session import touch_record as _tr
+
+    with _scratch_git_repo() as repo:
+        # Same symlink reason as `_trigger_validate_frontmatter_schema_
+        # advisory`: mkdtemp hands back `/var/...` on macOS, and the guard
+        # resolves its root through `show_toplevel`, which reports
+        # `/private/var/...`. Resolve once so the repo-relative key this
+        # fixture records matches the one the guard looks up.
+        repo = os.path.realpath(repo)
+        rel = "state/note.md"
+        target = os.path.join(repo, "state", "note.md")
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("the content this session last read\n")
+        _tr.append_touch_claims(
+            [rel],
+            "altlive-stale-probe",
+            repo,
+            content_hashes={rel: _tr.compute_content_hash(target) or ""},
+            # The fixture stands in for the READ channel (`_record_bash_read_
+            # claims`), which is what records the baseline `check_stale_write`
+            # compares against. Stamped so the probe keeps matching what
+            # production writes rather than drifting to an unknown-kind line.
+            kind=_tr.KIND_READ,
+        )
+        with open(target, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("the different content now on disk\n")
+        # A bare `>` redirect -- `_stale_write_shape_candidates` treats only
+        # whole-file writes as candidates, so `>>`/`tee -a`/`sed -i` here
+        # would fire nothing and the trigger would silently grade dead.
+        return _dc.check_stale_write("echo replacement > %s" % rel, "altlive-stale-probe", repo)
 
 
 def _trigger_destructive_git_revert_advisory() -> Optional[Dict[str, Any]]:
@@ -503,11 +548,11 @@ def _trigger_plan_body_bash_write() -> Optional[Dict[str, Any]]:
         return block_subagent_plan_body_bash_write.check(payload)
 
 
-#: C1/C5/C7 (docs/plans/2026-08-01-branch-creation-seam-guards.md) are each
-#: hazard-repo-scoped (`_is_hazard_repo(resolve_git_root(cwd))` gates every
-#: one before its own name predicate runs) -- unlike every guard above this
-#: comment, none of them fires from a bare synthetic payload. `_is_hazard_
-#: repo` is swapped on each guard's OWN module attribute for the duration of
+#: C1 (docs/plans/2026-08-01-branch-creation-seam-guards.md) is
+#: hazard-repo-scoped (`_is_hazard_repo(resolve_git_root(cwd))` gates it
+#: before its own name predicate runs) -- unlike every guard above this
+#: comment, it does not fire from a bare synthetic payload. `_is_hazard_
+#: repo` is swapped on the guard's OWN module attribute for the duration of
 #: one trigger call, then restored -- never a persistent patch to shipped
 #: guard behavior, and never dependent on this MACHINE's real fleet
 #: registry: `coordinator_core/conftest.py`'s suite-wide `HOME`/
@@ -517,11 +562,10 @@ def _trigger_plan_body_bash_write() -> Optional[Dict[str, Any]]:
 #: hazard repo OUTSIDE pytest, on this dev machine's fleet registry) is
 #: insufficient on its own -- confirmed by this row initially firing under a
 #: bare `python3 -c` probe and then failing under `pytest` with an identical
-#: `cwd`. Mirrors this package's own test suites' injection convention
-#: (`tests/test_guard_branch_set_precedence.py`'s own `monkeypatch.setattr(
-#: guard, "_is_hazard_repo", lambda git_root: True)`), just without the
-#: `monkeypatch` fixture (this module is a library, not a test) -- manual
-#: save/restore in a `try/finally` instead.
+#: `cwd`. Mirrors this package's own test suite's injection convention
+#: (`monkeypatch.setattr(guard, "_is_hazard_repo", lambda git_root: True)`),
+#: just without the `monkeypatch` fixture (this module is a library, not a
+#: test) -- manual save/restore in a `try/finally` instead.
 _ALTLIVE_HAZARD_CWD = os.path.dirname(_pkg.__file__)
 
 
@@ -536,17 +580,6 @@ def _trigger_block_noncanonical_branch_creation() -> Optional[Dict[str, Any]]:
         block_noncanonical_branch_creation._is_hazard_repo = orig_hazard
 
 
-def _trigger_guard_longlived_branch_naming() -> Optional[Dict[str, Any]]:
-    orig_hazard = guard_longlived_branch_naming._is_hazard_repo
-    guard_longlived_branch_naming._is_hazard_repo = lambda git_root: True
-    try:
-        return guard_longlived_branch_naming.check(
-            _payload("git checkout -b migration/altlive-longlived-probe", agent_id=None, cwd=_ALTLIVE_HAZARD_CWD)
-        )
-    finally:
-        guard_longlived_branch_naming._is_hazard_repo = orig_hazard
-
-
 def _trigger_check_blanket_git_add() -> Optional[Dict[str, Any]]:
     """``check_blanket_git_add`` resolves its hazard-repo git root from
     ``os.getcwd()`` (or a ``-C <dir>`` embedded in ``cmd`` itself, see
@@ -558,9 +591,8 @@ def _trigger_check_blanket_git_add() -> Optional[Dict[str, Any]]:
 
     ``_is_hazard_repo`` is swapped on `dispatch_checks`'s own module
     attribute (``_dc._is_hazard_repo``) for the duration of this one call,
-    same convention as `_trigger_block_noncanonical_branch_creation` /
-    `_trigger_guard_longlived_branch_naming` /
-    `_trigger_guard_branch_set_precedence` above -- a temporary swap on the
+    same convention as `_trigger_block_noncanonical_branch_creation` above
+    -- a temporary swap on the
     SHIPPED guard's own module, restored in `finally`, never a persistent
     patch. Supersedes the prior `UNTRIGGERED` reason ("target-class gate is
     hardcoded to the operator's real ~/.claude meta-repo"), which stopped
@@ -606,75 +638,6 @@ def _trigger_p4_verb_fence() -> Optional[Dict[str, Any]]:
         p4_verb_fence._is_p4_gated = orig_gated
 
 
-def _trigger_guard_branch_set_precedence() -> Optional[Dict[str, Any]]:
-    """C5's own `ahead_of_main` (the count actually named in its advisory)
-    is a REAL `git rev-list` call, never injectable through `check()`'s own
-    `branch_set_provider` seam (that seam only replaces the enumeration
-    half, per that guard's own module docstring "Injection seam") -- so a
-    deterministic fire needs a REAL scratch repo carrying a real commit on
-    a same-day canonical branch ahead of a real `main`.
-
-    `refs/remotes/origin/main` is written into the scratch repo explicitly:
-    `_branch_set._main_ref()` resolves its OWN "does main/origin/main
-    exist" probe against THIS PROCESS's actual working directory (that
-    function takes no `cwd` param at all -- see its own docstring), not the
-    scratch repo, so on this package's own dev/CI tree it answers
-    "origin/main". The SECOND, cwd-scoped call
-    (`git rev-list --count origin/main..<branch>`) then needs the scratch
-    repo to carry a ref of that exact name, or the count silently comes
-    back 0 (not an error) -- `_branch_set.py`'s own documented quirk, not a
-    defect introduced here.
-
-    The candidate branch's date segment is set to REAL "today"
-    (`daily_day.local_day()`, called at trigger time) so AC16's
-    `should_prompt_rename` leg short-circuits False on the "span already
-    covers today" branch, independent of the fabricated recency epoch fed
-    through `branch_set_provider` -- avoids the age-vs-span-date
-    contradiction a stale real branch name would otherwise hit (recent
-    enough to survive the 48h leg, but dated too far in the past to survive
-    the should-rename leg simultaneously).
-
-    `_is_hazard_repo` is swapped on `guard_branch_set_precedence`'s own
-    module attribute for the duration of this one call, then restored --
-    never a persistent patch to shipped guard behavior. Mirrors this
-    guard's own test suite's technique
-    (`tests/test_guard_branch_set_precedence.py`'s
-    `monkeypatch.setattr(guard, "_is_hazard_repo", lambda git_root: True)`)
-    since a real scratch tempdir is never a machine-registered hazard repo.
-    """
-    tmp = tempfile.mkdtemp(prefix="altlive-branchset-")
-    try:
-        _run(["git", "init", "-q", "-b", "main"], cwd=tmp)
-        _run(["git", "config", "user.email", "altlive-probe@example.com"], cwd=tmp)
-        _run(["git", "config", "user.name", "altlive-probe"], cwd=tmp)
-        with open(os.path.join(tmp, "f.txt"), "w", encoding="utf-8", newline="\n") as fh:
-            fh.write("hello\n")
-        _run(["git", "add", "."], cwd=tmp)
-        _run(["git", "commit", "-q", "-m", "init"], cwd=tmp)
-        _run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=tmp)
-
-        today = local_day()
-        candidate = "work/altlive-other/%s" % today
-        _run(["git", "checkout", "-q", "-b", candidate], cwd=tmp)
-        with open(os.path.join(tmp, "f.txt"), "a", encoding="utf-8", newline="\n") as fh:
-            fh.write("candidate commit\n")
-        _run(["git", "commit", "-q", "-am", "candidate commit"], cwd=tmp)
-        _run(["git", "checkout", "-q", "main"], cwd=tmp)
-
-        target = "work/altlive-machine/%s" % today
-        payload = _payload("git checkout -b %s" % target, agent_id=None, cwd=tmp)
-        provider = lambda: [(candidate, time.time() - 3600)]
-
-        orig_hazard = guard_branch_set_precedence._is_hazard_repo
-        guard_branch_set_precedence._is_hazard_repo = lambda git_root: True
-        try:
-            return guard_branch_set_precedence.check(payload, branch_set_provider=provider)
-        finally:
-            guard_branch_set_precedence._is_hazard_repo = orig_hazard
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-
-
 #: Guards this module CAN provably drive to emit, keyed by canonical
 #: registry name (dispatch_checks members as their bare function name;
 #: module guards as their module name). Each callable takes no arguments
@@ -690,6 +653,7 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     "check_destructive_rm": _trigger_destructive_rm,
     "check_destructive_git_revert": _trigger_destructive_git_revert,
     "check_destructive_git_revert_advisory": _trigger_destructive_git_revert_advisory,
+    "check_stale_write": _trigger_stale_write,
     "check_offer_git_c": lambda: guard_offer_git_c.check_offer_git_c(
         "cd %s && git status" % shlex.quote(os.path.dirname(_pkg.__file__)), "altlive-probe", ""
     ),
@@ -859,8 +823,6 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     ),
     # -- docs/plans/2026-08-01-branch-creation-seam-guards.md, chunk C2 --
     "block_noncanonical_branch_creation": _trigger_block_noncanonical_branch_creation,
-    "guard_branch_set_precedence": _trigger_guard_branch_set_precedence,
-    "guard_longlived_branch_naming": _trigger_guard_longlived_branch_naming,
 }
 
 
@@ -1397,7 +1359,7 @@ def _classify_backtick_span(span: str) -> Optional[Alternative]:
         return None
     if len(argv) == 1 and argv[0].endswith("/"):
         # Latent gap this C2 dispatch exposed: a bare single-token span
-        # ending in "/" (e.g. guard_longlived_branch_naming's own "Reserve
+        # ending in "/" (e.g. a branch-prefix suggestion such as "Reserve
         # `migration/` for work the PM has actually authorized as
         # longlived") names a directory/branch-prefix, never an executable
         # -- a trailing slash cannot denote a runnable file on any
@@ -2101,7 +2063,7 @@ def probe_override(alt: Alternative, guard: str, baseline: GuardFireResult) -> V
         if baseline.envelope:
             baseline_decision = baseline.envelope.get("hookSpecificOutput", {}).get("permissionDecision")
 
-    # Review: coordinator:code-reviewer (finding, 2026-08-15) -- deliberately
+    # Deliberately
     # RE-READ here, not reused from the `had_prior`/`prior_value` captured
     # near the top of this function. That earlier pair is scoped to the
     # key-specific branch's own try/finally (it restores state before that

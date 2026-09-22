@@ -1047,6 +1047,20 @@ def build_report(
             "out-of-work": count(VERDICT_OUT_OF_WORK),
             "unknown": count(VERDICT_UNKNOWN),
             "exited": count(VERDICT_EXITED),
+            # Additive, ours: `peers` above still conflates a live roster with
+            # transcripts EXITED has already accounted for elsewhere on this
+            # same counts block, so it is never the number a reader can act on
+            # without first subtracting `exited` (and, for the WATCH band,
+            # filtering `registry: absent` rows by hand -- already excluded
+            # from `peers` but not from a naive `len(rows)`). `live` is struck
+            # from the same rows at the same instant: every row still in
+            # `peers` whose verdict is not EXITED. `summary_line`'s field set
+            # is DoE-owned fixed-form (see its docstring) and stays untouched;
+            # this field exists only on the dict a caller can read directly.
+            "live": sum(
+                1 for row in rows
+                if row["registry"] != "absent" and row["verdict"] != VERDICT_EXITED
+            ),
         },
         # THE STRUCK INSTANT, in the return DICT only -- never on `summary_line`
         # (staff-eng finding 3: `summary_line` is DoE-owned contract, spelled
@@ -1056,7 +1070,7 @@ def build_report(
         # the instant the `counts` block above was struck, never a re-read.
         # Spelled `as_of`, not `taken_at` -- the falsifier's `_WHEN_TOKEN` does
         # not match `taken_at` (staff-eng finding 2).
-        # Review: overengineering-reviewer finding 3 -- was a literal copy of
+        # Was a literal copy of
         # the fromtimestamp/strftime expression; now the shared seam.
         "as_of": watch_heartbeat.iso_instant(now),
     }
@@ -1173,7 +1187,7 @@ def _cli(argv: Optional[list] = None) -> int:
              "from cwd -- this runs under a harness tool whose working directory is not ours.")
     # Pre-2026-09-01 spelling; accepted, unadvertised. Rationale + retirement
     # condition: group_em/tests/test_deprecated_crown_flag_alias.py
-    # Review: overengineering-reviewer -- collapsed duplicated 9-line rationale
+    # Collapsed duplicated 9-line rationale
     # to a pointer; full argument lives in the test file (also the delete unit).
     parser.add_argument(
         "--group-em-session-id",

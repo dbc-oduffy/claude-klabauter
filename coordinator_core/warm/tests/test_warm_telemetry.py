@@ -6,6 +6,7 @@ Spec backlink: docs/plans/2026-08-16-one-engine-for-the-whole-box.md § C26
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import tempfile
 import threading
@@ -20,7 +21,7 @@ from coordinator_core.warm import telemetry
 def _short_warm_runtime_base(monkeypatch: pytest.MonkeyPatch):
     """Overrides the suite-wide HOME quarantine's `warm-runtime-base`
     (`coordinator_core/conftest.py::_quarantine_real_home`) with a short,
-    real on-disk root under `/tmp`.
+    real on-disk root under `/tmp` on POSIX.
 
     Only `test_try_warm_dispatch_does_not_record_on_a_served_response`
     below drives the real `client.try_warm_dispatch` preamble
@@ -34,10 +35,15 @@ def _short_warm_runtime_base(monkeypatch: pytest.MonkeyPatch):
     `test_election_posix.py::short_runtime_base` (committed b4e300c8f1);
     duplicated here rather than lifted into a shared `conftest.py`
     because this dispatch's scope is this file only.
+
+    `/tmp` does not exist as a drive-relative root on Windows and there
+    is no `sun_path` budget to protect there, so `os.name == "nt"` falls
+    back to the platform default temp root instead, same guard as
+    `conftest.py::_quarantine_real_home` uses for the suite-wide base.
     """
     from coordinator_core.warm import breadcrumb
 
-    base = Path(tempfile.mkdtemp(prefix="wrb-", dir="/tmp"))
+    base = Path(tempfile.mkdtemp(prefix="wrb-", dir=None if os.name == "nt" else "/tmp"))
     try:
         monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(base))
         yield base

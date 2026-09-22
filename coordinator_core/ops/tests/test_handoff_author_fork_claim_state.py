@@ -188,7 +188,7 @@ class TestMultiMatchDefectBReproduction:
             _resolve_origin_handoff(handoffs_dir, session_id, repo_root=repo_root)
 
     def test_naive_and_aware_claimed_at_mix_does_not_raise_type_error(self, tmp_path):
-        """Review: code-reviewer (Finding 1). A bare-date claimed_at (e.g.
+        """code-reviewer (Finding 1). A bare-date claimed_at (e.g.
         ``2026-06-14``, a real seeded shape -- see
         test_normalize_claimed_frontmatter.py) parses NAIVE via
         datetime.fromisoformat, while a ledger-shaped Z-suffixed timestamp

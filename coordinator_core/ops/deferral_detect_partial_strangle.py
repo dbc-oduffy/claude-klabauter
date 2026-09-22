@@ -377,7 +377,7 @@ def _scan_manifest_candidates(repo_root: Path) -> Tuple[List[dict], List[str]]:
     try:
         entries = sorted(os.scandir(decisions_dir), key=lambda e: e.name)
     except OSError as exc:
-        # Review: code-reviewer Finding 5 — switched from print(file=sys.stderr) to a
+        # Switched from print(file=sys.stderr) to a
         # module logger, matching every sibling silent-enumeration fix in this same
         # commit wave (ripe_filter.py, deliverable_rollup.py, memo_triage.py,
         # claims.py) and making this scan-failure observable via caplog in tests.

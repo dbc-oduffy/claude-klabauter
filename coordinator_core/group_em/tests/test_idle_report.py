@@ -800,6 +800,30 @@ def test_no_row_rendered_as_a_live_verdict_is_absent_from_a_read_registry(
             )
 
 
+def test_live_count_excludes_exited_rows_the_same_way_peers_excludes_registry_absent(
+    tmp_path, projects_dir, now
+):
+    """The 2026-09-01 measurement: `counts["peers"]` still conflated live
+    sessions with EXITED ones even after C11 stopped it conflating them with
+    registry-absent WATCH rows, because `registry_absent` is only ever struck
+    for `VERDICT_WATCH`. `counts["live"]` is struck off the same rows and must
+    exclude both halves -- EXITED regardless of registry state, and the
+    registry-absent WATCH band `peers` already excludes."""
+    _write(projects_dir, "4040aaaa-x", [_record(2, now)], mtime_minutes_ago=2, now=now)
+    _write(projects_dir, "4141bbbb-x", [_record(45, now)], mtime_minutes_ago=45, now=now)
+    _write(projects_dir, "4242cccc-x", [_record(16.7, now)], mtime_minutes_ago=16.7, now=now)
+    report = _report(
+        tmp_path, projects_dir, now, names={"4040aaaa-x": "live-peer", "other": "p"})
+    live_row = _row(report, "4040aaaa")
+    exited_row = _row(report, "4141bbbb")
+    watch_absent_row = _row(report, "4242cccc")
+    assert live_row["verdict"] not in (idle_report.VERDICT_EXITED,)
+    assert exited_row["verdict"] == idle_report.VERDICT_EXITED
+    assert watch_absent_row["registry"] == "absent"
+    assert report["counts"]["peers"] == 2
+    assert report["counts"]["live"] == 1
+
+
 def test_the_projects_directory_is_derived_from_the_repo_root(tmp_path):
     """Hardcoding it is a watcher that silently reports the wrong fleet."""
     resolved = idle_report.projects_dir_for("X:/some-repo", home=str(tmp_path))

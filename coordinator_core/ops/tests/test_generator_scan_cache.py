@@ -66,7 +66,7 @@ def test_load_invalid_json_returns_empty(tmp_path: Path) -> None:
     assert cache.load(tmp_path) == {}
 
 
-# Review: coordinatorcode-reviewer -- test_load_truncated_body_returns_empty
+# test_load_truncated_body_returns_empty
 # removed here: it lands on the same except-JSONDecodeError branch as
 # test_load_invalid_json_returns_empty above, and its own justification (a
 # concurrent half-written read) is already structurally impossible given
@@ -216,7 +216,7 @@ def test_corrupt_cache_warm_run_returns_full_correct_set(tmp_path: Path) -> None
     assert recovered == baseline
 
 
-# Review: coordinatorcode-reviewer -- symlink parity with the pre-C6 sweep
+# Symlink parity with the pre-C6 sweep
 # (rglob + path.stat()/is_file(), both of which follow symlinks by default).
 def test_symlinked_py_file_is_swept(tmp_path: Path) -> None:
     real_path = _write_fixture_module(tmp_path, "gen_a.py", _DECLARED_GENERATOR_SOURCE)
@@ -339,7 +339,7 @@ def test_tracked_paths_memo_invalidates_on_index_signature_change(tmp_path: Path
         gp.subprocess.run = _spy_run
         assert index_path.exists()
         gp._tracked_paths(tmp_path)
-        # Review: coordinatorcode-reviewer -- assert the bound directly
+        # Assert the bound directly
         # rather than resting on reading the overwrite-on-miss assignment.
         assert len(gp._TRACKED_PATHS_MEMO) == 1
     finally:

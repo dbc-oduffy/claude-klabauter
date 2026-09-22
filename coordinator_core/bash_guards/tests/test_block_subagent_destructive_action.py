@@ -154,7 +154,7 @@ def test_chmod_non_recursive_allows():
 
 
 def test_generic_branch_deny_message_does_not_advise_a_sandbox_scoping_that_does_not_exist():
-    # Review: coordinator:code-reviewer (slice B, Finding 3) -- the generic
+    # The generic
     # git/rm/chmod-chown-R fallback branch of `_build_reason` had the same
     # phantom "scope it to your sandbox dir" advice the rm-specific branch
     # was fixed for; it has since been corrected in-place, but with no test
@@ -194,7 +194,7 @@ def test_generic_branch_deny_message_states_shell_surface_not_capability_boundar
 
 
 def test_rm_deny_message_states_shell_surface_not_capability_boundary():
-    # Review: coordinator:code-reviewer (S5) -- the rm branch (and the
+    # The rm branch (and the
     # machine-local branch below) claimed enforcement stronger than the
     # code holds ("denied OUTRIGHT ... no ... exception this guard will
     # honor", "There is NO subagent-honored override") with no disclosure
@@ -1812,7 +1812,7 @@ def test_gitk_bare_invocation_is_not_treated_as_git():
 
 def test_normalize_executable_basename_exe_and_backslash_stripping_directly():
     assert guard._normalize_executable_basename("git.exe") == "git"
-    # Review: code-reviewer -- Finding 1 (P1, 2026-07-28): the basename is
+    # 2026-07-28): the basename is
     # now fully case-folded (not just the `.exe` suffix), since Windows
     # PATH/cmd.exe resolution is case-insensitive and every downstream
     # identity/membership check compares against a lowercase literal.

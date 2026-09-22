@@ -130,7 +130,10 @@ def test_quick_wrap_close_commits_declared_artifacts_leaving_no_orphans(
     assert before, "fixture setup did not actually leave dirty declared artifacts"
 
     # --- Run the one reachable close ceremony (C5): /quick-wrap. ---
-    envelope = qwa.brief(worktree_root=repo)
+    # `commit=True`: this test exercises the real ceremony's commit path, the one
+    # `main()` caller that opts into C5's carve-out (state/bug-backlog/2026-09-06-
+    # quick-wrap-assemble-brief-commits-while-every-sibling-brief-only-reads.yaml).
+    envelope = qwa.brief(worktree_root=repo, commit=True)
     assert envelope["gates"]["commit_outcome"]["status"] in (
         "committed",
         "empty",

@@ -66,7 +66,7 @@ import time
 from pathlib import Path
 from typing import Mapping
 
-from coordinator_core._hook_envelope import allow_advisory, no_advisory
+from coordinator_core._hook_envelope import allow_advisory, no_advisory, payload_of
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.hooks.support.git_common_dir import resolve_git_common_dir
 from coordinator_core.hooks.support.message_envelope import compose, render
@@ -133,6 +133,9 @@ def _compose_workflow_offer(in_window_count: int, env: object = None) -> str:
 async def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Agent|Workflow) op: offer a Workflow after a burst of
     hand-dispatched write-capable executors."""
+    # Normalize the two params shapes
+    # both engine doors and the cold chain send (see block_worktree_tool).
+    params = payload_of(params)
     tool_name = params.get("tool_name")
     if not isinstance(tool_name, str) or not tool_name:
         return no_advisory()
@@ -230,7 +233,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     pruned = [n for n in lines if n >= cutoff]
     tmp_path = dispatch_log.with_name(f"{dispatch_log.name}.tmp.{os.getpid()}")
     try:
-        tmp_path.write_text("".join(f"{n}\n" for n in pruned), encoding="utf-8")
+        tmp_path.write_text("".join(f"{n}\n" for n in pruned), encoding="utf-8", newline="\n")
         os.replace(tmp_path, dispatch_log)
     except Exception:
         try:

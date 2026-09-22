@@ -267,7 +267,7 @@ def _resolve_cited_path(
         return None
     if os.path.isabs(cited):
         return cited if os.path.isfile(cited) else None
-    # Review: code-reviewer — `cited` is trusted-content-derived (DoE's own
+    # `cited` is trusted-content-derived (DoE's own
     # first-party doctrine prose, not adversarial input) and is joined
     # against `_candidate_roots` with no post-join containment check. No
     # guard is added here deliberately; this comment records that the trust
@@ -389,7 +389,7 @@ def load_manifest(plugin_root: str) -> Optional[Manifest]:
                 return candidate
         return None
 
-    # Review: code-reviewer — `surfaces` is a disk-existence assertion only
+    # `surfaces` is a disk-existence assertion only
     # (catches manifest drift promptly), never a resolution input: generic
     # citation paths already resolve via `_candidate_roots` independent of
     # whether they're declared here. A future reader should not assume
@@ -468,7 +468,7 @@ def scan(plugin_root: str, consumers: Optional[List[str]] = None) -> ScanReport:
             for line_no, line in enumerate(f, start=1):
                 line = line.rstrip("\n")
                 if not _CITATION_LINE_RE.search(line):
-                    # Review: code-reviewer — a bare `§` with no path-shaped
+                    # A bare `§` with no path-shaped
                     # citation immediately before it (format drift, e.g. a
                     # stray comma between path and `§`) is otherwise silently
                     # never scanned. Count it as a coarse visibility signal,
@@ -510,7 +510,7 @@ def scan(plugin_root: str, consumers: Optional[List[str]] = None) -> ScanReport:
                         kind = "DEAD"
                     results.append(AnchorResult(kind, rel, line_no, value, cited))
 
-    # Review: code-reviewer — every consumer vanishing (all skipped, none
+    # Every consumer vanishing (all skipped, none
     # read) must COULD-NOT-CHECK, not a clean 0. Without this, "found
     # nothing" (exit 0, zero coverage) and "looked at nothing" collapse into
     # the same code — exactly the defect class this rewrite exists to close.

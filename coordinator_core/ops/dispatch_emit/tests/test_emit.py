@@ -474,10 +474,17 @@ def test_verification_row_writing_only_a_plan_body_raises_unroutable(tmp_path):
     assert "Split the row" in str(excinfo.value)
 
 
-def test_explicit_agent_type_escapes_the_unroutable_refusal(tmp_path):
-    """The escape hatch is the same one ``MixedAgentTypeRowError`` leaves: an
-    explicit row-level ``agent_type:`` short-circuits derivation ahead of the
-    check, so an author who means to force a type is not walled out."""
+def test_an_explicit_agent_type_does_not_escape_the_unroutable_refusal(tmp_path):
+    """No override reconciles an unroutable row, the same way none reconciles
+    a mixed-writes one: the check sits above the override. An override names
+    WHO runs a coherent row; an execution-tier row writing only an immutable
+    body is incoherent for every possible runner, so honouring the override
+    here only bought a dispatch that could end in a refusal.
+
+    Measured over the corpus before this moved: 7 of 3914 spine rows carry an
+    override, all 7 are this exact shape, and 0 are legitimate -- so the
+    tightening converts no clean emission into a surprise refusal.
+    """
     plan_path = _plan_with_row(
         tmp_path,
         "- id: C1\n"
@@ -487,16 +494,14 @@ def test_explicit_agent_type_escapes_the_unroutable_refusal(tmp_path):
         "  writes:\n"
         "    - docs/plans/2026-08-13-example.md\n"
         "  agent_type: coordinator:review-integrator\n"
-        # review-integrator has no `_AGENT_MODELS` row, so the override must
-        # name its model -- unrelated to this leg, but MalformedAgentOverrideError
-        # fires downstream of the check under test and would mask it.
         "  agent_model: sonnet\n",
     )
 
-    script = compose_script(
-        build_waves(read_spine(plan_path)), name="wf", description="forced"
-    )
-    assert "agentType: 'coordinator:review-integrator'" in script
+    with pytest.raises(UnroutableWorkKindRowError) as excinfo:
+        compose_script(
+            build_waves(read_spine(plan_path)), name="wf", description="forced"
+        )
+    assert "Split the row" in str(excinfo.value)
 
 
 def test_verification_row_writing_an_ordinary_path_still_routes_executor(tmp_path):
@@ -544,7 +549,7 @@ def test_spine_text_with_neither_agent_key_emits_byte_identically(tmp_path):
     pre-existing hand-built ``WaveRow`` path -- the negative-spec twin of
     the positive case above, and an actual byte-for-byte comparison rather
     than only substring assertions (the name's original unmet promise;
-    Review: overengineering-reviewer -- the prior ``_plan_text`` helper's
+    The prior ``_plan_text`` helper's
     ``with_agent_keys=True`` branch was dead code, never exercised)."""
     plan_path = tmp_path / "plan.md"
     plan_path.write_text(
@@ -908,7 +913,7 @@ def test_provenance_structured_claim_never_replaces_the_diff_check():
 
 
 def test_provenance_reconciles_structured_reports_per_report_reaches_the_emitted_script():
-    """Review: coordinator:code-reviewer, finding P2 -- the constant-level
+    """The constant-level
     assertion above stays green even if a refactor stops threading this
     clause through to the emitted script; pin the reaching leg too, the
     same idiom `test_the_per_hunk_clause_reaches_the_emitted_script` uses."""
@@ -918,7 +923,7 @@ def test_provenance_reconciles_structured_reports_per_report_reaches_the_emitted
 
 
 def test_provenance_structured_claim_never_replaces_the_diff_check_reaches_the_emitted_script():
-    """Review: coordinator:code-reviewer, finding P2 -- same reaching-the-
+    """Same reaching-the-
     emitted-script leg for the diff-still-governs clause."""
     script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
     if "Pathspec provenance" in script:
@@ -2065,7 +2070,6 @@ def _phase_body_slice(script: str, phase_title: str, next_phase_title: str) -> s
     checked, rather than merely whether a row id string appears anywhere in
     the whole script -- the substring-anywhere shape this replaces could not
     fail even when a batch's title wrongly enumerated the whole wave (see
-    Review: code-reviewer S4-dispatch-emit, P2 finding 2).
     """
     start_marker = f"phase('{phase_title}');"
     end_marker = f"phase('{next_phase_title}');"
@@ -2925,7 +2929,7 @@ def test_dispatch_report_path_is_inside_the_bookkeeping_allowlist():
 
 
 def test_dispatch_report_path_refuses_a_row_id_containing_path_separators():
-    """Review: coordinator:code-reviewer, finding P3, EM-overridden to APPLY
+    """
     -- a row id spliced raw with `../` would pass the allowlist's
     `str.startswith` check while resolving outside `_BOOKKEEPING_PREFIXES`
     on disk. Must refuse loud, never silently sanitize."""
@@ -2937,7 +2941,7 @@ def test_dispatch_report_path_refuses_a_row_id_containing_path_separators():
 
 
 def test_dispatch_report_path_accepts_ordinary_row_ids():
-    """Review: coordinator:code-reviewer, finding 1 -- the allowlist rewrite
+    """The allowlist rewrite
     must still accept every ordinary row-id shape a plan spine writes today."""
     for good_id in ("C1", "c-1", "C_1.a"):
         report_path = emit._dispatch_report_path("docs/plans/example.md", good_id)
@@ -2945,7 +2949,7 @@ def test_dispatch_report_path_accepts_ordinary_row_ids():
 
 
 def test_dispatch_report_path_refuses_windows_hazardous_row_ids():
-    """Review: coordinator:code-reviewer, finding 1, EM-confirmed LIVE --
+    """
     `spine_read` validates row-id presence, type and uniqueness only, never
     character shape, so a row id shaped like a drive letter, a leading
     `~`, a trailing dot/space, a control character, or a Windows reserved
@@ -3106,17 +3110,41 @@ def test_a_solitary_writes_empty_wave_emits_with_no_commit_phase_of_its_own():
 
 def test_the_verdict_waves_paths_are_absent_from_the_preflight_claim():
     """The preflight claims what the run will commit. A wave that commits
-    nothing contributes nothing to claim."""
+    nothing contributes nothing to claim.
+
+    Writes a doc, not a `.py` path, so the assertion stays about void-wave
+    exclusion alone -- a `.py` write's own stem-derived test candidate
+    widens the claim too (see `test_compose_script_widens_the_commit_pathspec_
+    with_the_stem_test_candidate` below), which is a different assertion this
+    one must not be coupled to."""
     waves = [
         [_wave_row("C1", [])],
-        [_wave_row("C2", ["coordinator_core/ops/dispatch_emit/emit.py"])],
+        [_wave_row("C2", ["docs/wiki/dispatch-emit.md"])],
     ]
     script = compose_script(waves, name="wf", description="verdict then write")
     claimed = script.split("Verify that every path in [")[1].split("]")[0]
-    assert claimed == "coordinator_core/ops/dispatch_emit/emit.py", (
+    assert claimed == "docs/wiki/dispatch-emit.md", (
         "the preflight claim is not exactly the writing wave's pathspec"
     )
 
+
+def test_compose_script_widens_the_commit_pathspec_with_the_stem_test_candidate():
+    """state/bug-backlog/2026-08-26-emitted-wave-commit-legs-are-handed-a-wr-
+    c0f443ac1fdb.yaml: a wave's `writes:` names only the production module, but
+    the ACs require the executor to also write the test covering it, so its
+    reported test file used to read as stranded chunk work outside the
+    handed pathspec and halt the commit phase. The commit pathspec (and the
+    preflight claim built from the same union) must admit the stem-derived
+    test candidate up front."""
+    waves = [[_wave_row("C1", ["coordinator_core/ops/brand_new_thing.py"])]]
+    script = compose_script(waves, name="wf", description="one wave")
+
+    preflight_claimed = script.split("Verify that every path in [")[1].split("]")[0]
+    assert "coordinator_core/ops/tests/test_brand_new_thing.py" in preflight_claimed
+
+    commit_pathspec_line = script.split("Pathspec: [")[1].split("]")[0]
+    assert "coordinator_core/ops/tests/test_brand_new_thing.py" in commit_pathspec_line
+    assert "coordinator_core/ops/brand_new_thing.py" in commit_pathspec_line
 
 
 def test_the_commit_prompt_hands_a_determinate_orphan_to_the_em():
@@ -3149,7 +3177,7 @@ def test_a_done_with_concerns_reply_answers_its_brief():
 
 
 def test_a_done_with_concerns_reply_with_closed_backtick_answers_its_brief():
-    """Review: code-reviewer -- the more common markdown convention closes the
+    """The more common markdown convention closes the
     inline-code span right before the colon (`` `DONE_WITH_CONCERNS`: <path> ``);
     the trailing class must admit a backtick too, or this reproduces the exact
     defect the open-backtick case above was fixed for."""

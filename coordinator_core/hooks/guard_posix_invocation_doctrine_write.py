@@ -113,10 +113,11 @@ def _advisory_reason(target: str, hits: list) -> str:
     clis_text = ", ".join(shown)
     if len(clis) > len(shown):
         clis_text += f", +{len(clis) - len(shown)} more"
+    name = Path(target).name
     return (
-        f"{target} adds a POSIX-only `${{VAR:-default}}` invocation "
-        f"reaching {clis_text} -- unrunnable on a PowerShell-only host. "
-        "Use rung 0 / Shape W instead."
+        f"{name} adds a POSIX-only `${{VAR:-default}}` invocation "
+        f"reaching {clis_text} -- unrunnable on PowerShell-only. Use rung "
+        "0 / Shape W instead."
     )
 
 

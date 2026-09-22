@@ -1,7 +1,7 @@
 """Unit tests for coordinator_core.benchmarks.harness's `_percentile` and
 `_collect_samples` helpers.
 
-Review: code-reviewer (Slice C F6, P2) -- these two helpers previously had no
+These two helpers previously had no
 isolated unit coverage; they were proven ONLY transitively by
 test_integration.py's real-subprocess run at N=3, which (per the same
 review's Finding 5) cannot adversarially distinguish a correct percentile
@@ -108,7 +108,7 @@ def test_collect_samples_zero_warmup(mock_time_invocation):
 
 
 def test_run_rejects_n_below_one_before_any_subprocess_spawn():
-    """Review: code-reviewer (Slice B F2, P2) -- `--n 0` must fail loud with
+    """`--n 0` must fail loud with
     a clear message naming the bad param, not an opaque IndexError deep in
     the sample-collection loop. Asserted here without mocking subprocess --
     the ValueError must fire before harness.run() gets anywhere near

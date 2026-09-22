@@ -11,7 +11,7 @@ file writer — pure unit coverage of the classifier and dirty-path matcher
 against a tmp_path tree, matching sibling test files' fixture idiom (no
 real .git/, no daemon spawn).
 
-Review: code-reviewer P1 finding (2026-08-14 slice2) — this module had zero
+This module had zero
 automated test coverage despite already having run once in apply mode
 against the real shared tree; the four rails were entirely unexercised.
 """

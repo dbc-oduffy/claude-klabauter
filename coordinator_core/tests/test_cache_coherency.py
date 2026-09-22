@@ -15,7 +15,6 @@ Spec backlink: pln-tri-plane-boundary-claude-klabauter-side-landing-c-b393a7 § 
 from __future__ import annotations
 
 import os
-import time
 from pathlib import Path
 from typing import Any
 
@@ -192,7 +191,7 @@ class TestAC10MtimeEqual:
         # Restore mtime to original (defeats mtime-keyed cache)
         os.utime(str(hf), original_mtime)
 
-        # Review: code-reviewer — F1: in-body clear removed; autouse fixture provides clean cache at
+        # in-body clear removed; autouse fixture provides clean cache at
         # entry; without this clear a mtime-keyed impl would return a cache hit (stale "open") and
         # FAIL — that is the discrimination the test must provide.
 
@@ -256,7 +255,7 @@ def _write_chain(tmp_path: Path, n: int) -> str:
 
 
 class TestAC13MicroBenchmark:
-    # Review: code-reviewer — F9: slow mark allows `pytest -m "not slow"` for fast-feedback loops
+    # Slow mark allows `pytest -m "not slow"` for fast-feedback loops
     @pytest.mark.slow
     def test_walk_forward_100_files_within_budget(self, tmp_path: Path):
         """AC13: walk_forward across 100+ linked handoffs completes within per-file budget.
@@ -271,13 +270,24 @@ class TestAC13MicroBenchmark:
         # Clear cache to ensure no warm-cache advantage
         dag._FRONTMATTER_CACHE.clear()
 
-        start = time.perf_counter()
-        result = dag.walk_forward(
-            tail_path,
-            edge_kinds={"predecessor"},
-            handoff_dir=str(tmp_path),
-        )
-        elapsed = time.perf_counter() - start
+        from coordinator_core.benchmarks.process_time import in_process_time_ms
+
+        outcome = {}
+
+        def _walk() -> None:
+            # Cleared every call, not just before the first -- in_process_time_ms
+            # may call this more than once to reach its measurement window, and
+            # a warm-cache repeat would understate the cost this budget guards.
+            dag._FRONTMATTER_CACHE.clear()
+            outcome["result"] = dag.walk_forward(
+                tail_path,
+                edge_kinds={"predecessor"},
+                handoff_dir=str(tmp_path),
+            )
+
+        timing = in_process_time_ms(_walk)
+        result = outcome["result"]
+        elapsed = timing["process_time_ms"] / 1000.0
 
         # Verify traversal was complete (all nodes visited)
         assert len(result["nodes"]) == n, (
@@ -288,7 +298,7 @@ class TestAC13MicroBenchmark:
             f"walk_forward terminated early: {result['terminatedEarly']!r}"
         )
 
-        # Review: code-reviewer — F6: per-file assertion tightens SLA guard
+        # per-file assertion tightens SLA guard
         # Arithmetic: ≤2ms/file × 5 files/request = ≤10ms SLA.
         # Widen per_file_budget_ms only with documented arithmetic justification.
         per_file_budget_ms = 2.0

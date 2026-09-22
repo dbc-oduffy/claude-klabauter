@@ -466,7 +466,7 @@ _POSIX_HOME_RE = re.compile(
 # HOST segment happens to precede it on the same line (`\\sizing\n` -- exactly
 # 2 leading backslashes; host segment "sizing", share segment "n" -- the
 # escaped newline's own backslash masquerading as the UNC share separator).
-# Review: coordinator:code-reviewer -- prior wording named a "share" segment
+# Prior wording named a "share" segment
 # reading "share", which does not occur in this example and misled the
 # companion regression test's backslash count.
 # The trailing negative lookahead on the share segment
@@ -682,7 +682,7 @@ def _structured_data_documentary_lines(text: str) -> Set[int]:
                 active_indent = indent
                 lines_out.add(lineno)
             elif in_prose and indent > active_indent:
-                # Review: coordinatorcode-reviewer-3e4f4e1b — a folded
+                # A folded
                 # block-scalar continuation line that merely starts with a
                 # `Word:` shape (e.g. "Note:", "Fix:") still matches the
                 # key-line regex, but it's still folded content of the

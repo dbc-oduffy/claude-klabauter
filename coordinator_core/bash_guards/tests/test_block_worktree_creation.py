@@ -116,7 +116,7 @@ class TestEnvAssignmentPrefix:
 
 
 class TestMentionIsNotInvocation:
-    """Review: code-reviewer -- Finding 2 (P2, 2026-07-28): the pre-fix
+    """2026-07-28): the pre-fix
     `_evaluate` scanned EVERY token in a segment for the first `git`-basename
     match, not just the command-position head, so a `git` mention as an
     ARGUMENT to another command (an echo/printf/grep operand) was treated as

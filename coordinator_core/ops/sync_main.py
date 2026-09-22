@@ -172,7 +172,7 @@ def main(argv: list[str]) -> int:
                     f"Local main is {local_ahead} commit(s) ahead of origin/main. "
                     "Investigate before branching."
                 )
-            # Review: code-reviewer -- dropped a redundant duplicate
+            # Dropped a redundant duplicate
             # `_git("fetch", "origin", "main")` here (byte-identical to the
             # one at the top of this except-block, same args/no different
             # effect). Pure dead-code removal — the resulting git ref state

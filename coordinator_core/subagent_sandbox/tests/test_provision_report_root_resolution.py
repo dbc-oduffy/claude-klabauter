@@ -29,12 +29,21 @@ Spec backlink: state/dispatch-briefs/2026-08-21-catering-costs-what-the-work-cos
 """
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 from coordinator_core.subagent_sandbox import provision_report
+from coordinator_core.subagent_sandbox.provision_report import _provision
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
+# The klabauter#47 section below spawns real `git init` processes (a real
+# repo is load-bearing there -- resolve_git_root's ambient-vs-explicit-cwd
+# distinction is the thing under test); the rest of this file stays spawn-free
+# via the identity-stub/hand-made-`.git` conventions its own docstring states.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _SNIPPET_NAME = "fixture-block"
 
@@ -158,3 +167,98 @@ def test_assemble_contract_blocks_composes_regardless_of_session_cwd(
 
     assert assembled is not None
     assert "Fixture contract block body." in assembled
+
+
+# ---------------------------------------------------------------------------
+# klabauter#47 -- provisioning must key on the TARGET repo, never on this
+# process's own ambient cwd, and must REFUSE rather than guess when the
+# payload hands it no target at all.
+# ---------------------------------------------------------------------------
+
+_TARGET_REPORT_SIDECAR_TYPE = "coordinator:code-reviewer"
+
+
+def _init_git_repo(path: Path) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=path, check=True, **no_console_passthrough_kwargs(),
+    )
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=path, check=True, **no_console_passthrough_kwargs())
+    return path
+
+
+def _write_policy(path: Path) -> Path:
+    policy_path = path / "subagent-sandbox-policy.yaml"
+    policy_path.write_text(
+        yaml.safe_dump(
+            {
+                "confined": [],
+                "exempt": [],
+                "sanctioned_dirs": [],
+                "report_sidecar": [_TARGET_REPORT_SIDECAR_TYPE],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return policy_path
+
+
+def test_provision_refuses_rather_than_guessing_when_cwd_is_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The two-repo control that pins klabauter#47: an ambient repo the
+    calling PROCESS happens to be sitting in (`ambient_repo`, standing in
+    for a warm engine's own boot-time cwd, or any other real repo that just
+    is not this dispatch's target) must never receive a sidecar just
+    because `cwd` was omitted. `_provision` must return `None` and must
+    write NOTHING under `ambient_repo`, rather than resolving
+    `resolve_git_root(None)`'s documented ambient-process-cwd fallback and
+    silently filing the receipt there.
+    """
+    ambient_repo = _init_git_repo(tmp_path / "ambient-repo")
+    policy_path = _write_policy(tmp_path)
+    monkeypatch.chdir(ambient_repo)
+
+    payload = {
+        "agent_id": "abc123def4567890",
+        "agent_type": _TARGET_REPORT_SIDECAR_TYPE,
+        "session_id": "sess-k47-missing-cwd",
+    }
+
+    for absent_cwd in (None, ""):
+        result = _provision(payload, str(policy_path), absent_cwd)
+        assert result is None
+
+    share_dir = ambient_repo / ".coordinator-local" / "subagent-share"
+    assert not share_dir.exists(), (
+        "a falsy cwd must never resolve against this process's ambient cwd -- "
+        f"found {share_dir} written under the ambient (non-target) repo"
+    )
+
+
+def test_provision_keys_on_the_explicit_target_repo_not_the_ambient_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same two-repo control, explicit-cwd arm: with an ambient repo the
+    process is sitting in AND a distinct target repo passed explicitly as
+    `cwd`, the sidecar must land under the TARGET, never under the ambient
+    one -- the shape a multi-repo plan-blitz item needs (its dispatch's own
+    repo, regardless of the dispatching process's own directory).
+    """
+    ambient_repo = _init_git_repo(tmp_path / "ambient-repo")
+    target_repo = _init_git_repo(tmp_path / "target-repo")
+    policy_path = _write_policy(tmp_path)
+    monkeypatch.chdir(ambient_repo)
+
+    payload = {
+        "agent_id": "abc123def4567890",
+        "agent_type": _TARGET_REPORT_SIDECAR_TYPE,
+        "session_id": "sess-k47-explicit-cwd",
+    }
+
+    result = _provision(payload, str(policy_path), str(target_repo))
+    assert result is not None
+    assert (target_repo / result).is_file()
+    assert not (ambient_repo / ".coordinator-local").exists()

@@ -49,7 +49,7 @@ class _StubStampOutcome:
     so `sys.exit(main(...))` receiving the envelope instead of `.exit_code`
     would fail these tests.
 
-    Review: code-reviewer — Finding 1 regression test.
+    Regression test.
     """
 
     exit_code: int

@@ -252,6 +252,42 @@ class TestCommit:
         assert hook.read_text(encoding="utf-8") == "#!/bin/bash\necho new\n"
 
 
+class TestCommitPythonHook:
+    def test_valid_python_hook_swaps_without_sh(self, tmp_path, monkeypatch):
+        hook = tmp_path / "guard.py"
+        _write_hook(hook, body="import sys\nsys.exit(0)\n")
+        scratch = tmp_path / ".guard.py.edit-live-hook.1.scratch"
+        scratch.write_text("import sys\n\ndef main():\n    return 0\n", encoding="utf-8")
+        monkeypatch.setattr(elh.shutil, "which", lambda *_a, **_kw: None)
+
+        rc = elh.cmd_commit([str(hook), str(scratch)])
+        assert rc == elh.EXIT_OK
+        assert "def main():" in hook.read_text(encoding="utf-8")
+        assert not scratch.exists()
+
+    def test_broken_python_hook_refuses_swap(self, tmp_path, capsys):
+        hook = tmp_path / "guard.py"
+        _write_hook(hook, body="import sys\n")
+        scratch = tmp_path / ".guard.py.edit-live-hook.1.scratch"
+        scratch.write_text("def main(:\n    return 0\n", encoding="utf-8")
+
+        rc = elh.cmd_commit([str(hook), str(scratch)])
+        assert rc == elh.EXIT_VALIDATION_FAILED
+        assert hook.read_text(encoding="utf-8") == "import sys\n"
+        assert scratch.exists()
+        assert "does not compile as Python" in capsys.readouterr().err
+
+    def test_python_shebang_without_py_suffix_is_compiled(self, tmp_path):
+        hook = tmp_path / "pre-commit"
+        _write_hook(hook, body="#!/usr/bin/env python3\nimport sys\n")
+        scratch = tmp_path / "pre-commit.scratch"
+        scratch.write_text("#!/usr/bin/env python3\nif True\n    pass\n", encoding="utf-8")
+
+        rc = elh.cmd_commit([str(hook), str(scratch)])
+        assert rc == elh.EXIT_VALIDATION_FAILED
+        assert hook.read_text(encoding="utf-8") == "#!/usr/bin/env python3\nimport sys\n"
+
+
 class TestStageCommitRoundTrip:
     def test_full_workflow_end_to_end(self, tmp_path, capsys):
         # Windows has no POSIX mode bits; os.stat().st_mode & 0o777 is
@@ -274,3 +310,23 @@ class TestStageCommitRoundTrip:
         assert hook.read_text(encoding="utf-8") == "#!/bin/bash\necho v2\n"
         assert stat.S_IMODE(os.stat(hook).st_mode) == mode_before
         assert not scratch.exists()
+
+
+class TestConfigTargetRefused:
+    """`sh -n` accepts a multi-line JSON object, so without this refusal the
+    helper would swap `settings.json` in, where only a SessionStart guard looks."""
+
+    def test_stage_refuses_json(self, tmp_path, capsys):
+        target = tmp_path / "settings.json"
+        target.write_text('{\n  "hooks": {}\n}\n', encoding="utf-8")
+        assert elh.main(["stage", str(target)]) == elh.EXIT_VALIDATION_FAILED
+        assert "hook configuration" in capsys.readouterr().err
+        assert list(tmp_path.iterdir()) == [target]
+
+    def test_commit_refuses_json_and_leaves_it_untouched(self, tmp_path):
+        target = tmp_path / "hooks.json"
+        target.write_text('{\n  "hooks": {}\n}\n', encoding="utf-8")
+        scratch = tmp_path / "scratch.json"
+        scratch.write_text('{\n  "hooks": {"x": 1}\n}\n', encoding="utf-8")
+        assert elh.main(["commit", str(target), str(scratch)]) == elh.EXIT_VALIDATION_FAILED
+        assert target.read_text(encoding="utf-8") == '{\n  "hooks": {}\n}\n'

@@ -83,7 +83,7 @@ def test_happy_path_returns_handler_result(_register_test_ops):
 def test_origin_worktree_stamped_when_supplied(_register_test_ops, monkeypatch):
     captured = {}
 
-    async def _fake_dispatch_message(msg, *, caller=None):
+    async def _fake_dispatch_message(msg, *, caller=None, corr_id=None):
         captured["msg"] = msg
         return {"jsonrpc": "2.0", "id": 1, "result": {}}
 
@@ -100,7 +100,7 @@ def test_origin_worktree_omitted_when_absent_or_empty(
 ):
     captured = {}
 
-    async def _fake_dispatch_message(msg, *, caller=None):
+    async def _fake_dispatch_message(msg, *, caller=None, corr_id=None):
         captured["msg"] = msg
         return {"jsonrpc": "2.0", "id": 1, "result": {}}
 
@@ -122,7 +122,7 @@ def test_dispatch_from_hook_declares_its_own_caller(_register_test_ops, monkeypa
     stack-walk fallback."""
     captured = {}
 
-    async def _fake_dispatch_message(msg, *, caller=None):
+    async def _fake_dispatch_message(msg, *, caller=None, corr_id=None):
         captured["caller"] = caller
         return {"jsonrpc": "2.0", "id": 1, "result": {}}
 
@@ -150,7 +150,7 @@ def test_handler_exception_surfaces_as_hook_dispatch_error(_register_test_ops):
 
 
 def test_absent_result_key_returns_empty_dict(_register_test_ops, monkeypatch):
-    async def _fake_dispatch_message(msg, *, caller=None):
+    async def _fake_dispatch_message(msg, *, caller=None, corr_id=None):
         # Simulate a (hypothetical) success response missing "result" entirely.
         return {"jsonrpc": "2.0", "id": 1}
 
@@ -201,7 +201,7 @@ def test_ops_run_sequentially_in_order_under_one_loop(_register_test_ops, monkey
     run_calls = {"n": 0}
     real_run = asyncio.run
 
-    async def _recording_dispatch_message(msg, *, caller=None):
+    async def _recording_dispatch_message(msg, *, caller=None, corr_id=None):
         seen.append(msg["method"])
         loop_ids.append(id(asyncio.get_running_loop()))
         return {"jsonrpc": "2.0", "id": 1, "result": {"m": msg["method"]}}
@@ -229,7 +229,7 @@ def test_ops_origin_worktree_follows_omit_empty_rule(
 ):
     captured: list = []
 
-    async def _fake_dispatch_message(msg, *, caller=None):
+    async def _fake_dispatch_message(msg, *, caller=None, corr_id=None):
         captured.append(msg)
         return {"jsonrpc": "2.0", "id": 1, "result": {}}
 
@@ -249,7 +249,7 @@ def test_dispatch_ops_from_hook_declares_its_own_caller(_register_test_ops, monk
     distinct from `dispatch_from_hook`'s, for each op in the batch."""
     captured: list = []
 
-    async def _fake_dispatch_message(msg, *, caller=None):
+    async def _fake_dispatch_message(msg, *, caller=None, corr_id=None):
         captured.append(caller)
         return {"jsonrpc": "2.0", "id": 1, "result": {}}
 

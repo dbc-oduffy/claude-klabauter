@@ -101,7 +101,7 @@ def test_allow_queue_enters_poll_loop_and_still_denies(tmp_path, monkeypatch):
     assert rc == _mod._EXIT_LOCK_BUSY
     assert elapsed < 5.0, f"probe wait should be seconds, not the 180s ceiling: {elapsed}s"
     assert "held by" in err
-    # Review: coordinatorcode-reviewer (finding 6) — leg 2 keeps its own
+    # Leg 2 keeps its own
     # negatives even though leg 1 centralises the content contract onto
     # wire_contract.lock_busy_message: this exception is a real LockTimeout
     # raised after an actual multi-attempt poll loop, a genuinely different

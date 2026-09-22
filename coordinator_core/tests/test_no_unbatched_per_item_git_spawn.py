@@ -323,6 +323,23 @@ KNOWN BLIND SPOTS (false-negative-biased, matching every sibling gate's stated p
     dedup silently keeps whichever route was appended first. This can only suppress route
     diversity in a report, never lose a true violation or admit a false one -- acceptable per
     this module's stated false-negative-biased design.
+  - `review_coverage_core.classify_pending_records`'s default-resolver fan-out (`with
+    ThreadPoolExecutor(...) as pool: pool.map(_resolve_one, _distinct_ranges)`) is a per-item
+    `git rev-list` spawn with no syntactic `for`/`while`/comprehension loop BODY for any of the
+    seven routes above to walk -- every route here resolves a loop TARGET inside a loop AST node,
+    and a `ThreadPoolExecutor.map` callback is invisible to all seven by construction, not by any
+    single route's own restriction. Structurally out of scope; named here rather than fabricated
+    as a `_KNOWN_SITES` key no run of this collector can ever emit
+    (`state/bug-backlog/2026-08-08-the-amplification-gate-cannot-see-the-th-a4f2e77dc787.yaml`).
+  - `readers_clean_ops._read_worktree_sweep`'s `for idx, wt in enumerate(worktrees):
+    classify_worktree(wt.path, compare_ref)` loop IS route c-cross-module shaped --
+    `classify_worktree` is imported directly from `agent_worktree_sweep` -- but
+    `classify_worktree`'s own body contains no direct spawn call: it calls `_commits_ahead` and
+    `_status_porcelain_lines`, and the real `git rev-list --count` / `git status --porcelain`
+    calls sit two hops further down, inside THOSE. Excluded by the one-hop-only
+    high-precision-stratum restriction this module states under SCOPE, the same restriction the
+    transitive-deep-tail bullet above names; the same bug row above names this as the audit's
+    other silently undischarged site.
 """
 
 from __future__ import annotations
@@ -573,8 +590,9 @@ _RUNNER_NAME_PREFIXES: tuple[str, ...] = ("run", "git", "spawn")
 _DATED_RATIONALE = re.compile(r"#.*\b(20\d\d)-(\d\d)-(\d\d)\b")
 _CLASS_TAG = re.compile(r"#\s*class:\s*([a-zA-Z0-9-]+)")
 
-_EXEMPT_SITES: set[tuple[str, str, str]] = {
-    # 2026-08-17 -- # class: measurement-is-the-loop. The spawn loop IS the measurement. `_spawn_n_processes` times N sequential
+#: The comment blocks below are kept as dated markers even though the register they annotated
+#: is now empty -- see each block's own text for what it argues and, where retired, how.
+# 2026-08-17 -- # class: measurement-is-the-loop. The spawn loop IS the measurement. `_spawn_n_processes` times N sequential
     # `python -c "import <module>"` children as the fan-in arm's control; batching the N imports
     # into one child measures a different quantity and voids the comparison the module exists for.
     # 2026-08-17 -- # class: measurement-is-the-loop. One FRESH login shell per entrypoint is
@@ -682,40 +700,15 @@ _EXEMPT_SITES: set[tuple[str, str, str]] = {
     # concurrent session's uncommitted work, and ran once that landed and the file went clean.
     # Re-derived at disposition: the two REGROWTH keys the plan predicted from
     # `_commit_published_dests` are NOT observed, though the function is present at HEAD.
-    # 2026-08-19 (wave 4) -- # class: structural-floor. N distinct EXECUTABLES, so no shared
-    # batch target exists at all. `_run_legs` iterates DROP-IN HEALTH LEGS -- independently
-    # authored programs discovered at runtime, each with its own argument surface -- and the
-    # argv it builds comes wholly from the loop target. There is no callee to ask about its
-    # arity (discriminator 8 is blind here because argv0 is not a helper parameter), and no
-    # batch form to measure, because a batch would have to span programs that share nothing.
-    # Relocating the call only moves the flag.
-    #
-    # NOT owed an oracle for the same reason: an oracle measures a claim about a callee's
-    # argument surface, and this row's claim is that there IS no single callee. The honest
-    # remaining move is the hand-rolled-parser rearchitecture named in the successor handoff --
-    # give the legs a uniform argument surface and ONE oracle covers them -- not a bespoke
-    # oracle per leg.
-    ('coordinator_core/ops/install_health_run.py', '_run_legs', 'call'),
-    # 2026-09-18 -- # class: measurement-is-the-loop. `stable-suite-run.py::_triage_isolation`
-    # re-runs each already-FAILED node id alone, in its own process, to decide GENUINE
-    # (fails alone too) vs. ORDER-DEPENDENT (passes alone). The per-node process boundary IS
-    # the measurement: order-dependence means a failure exists only in the presence of other
-    # tests sharing the SAME process (a shared temp marker, registry, or cwd), and batching two
-    # nodes into one process re-admits that exact coupling into the very re-run meant to
-    # isolate it -- the triage would then be unable to tell "fails alone" from "fails alongside
-    # the other batched node". No batch primitive can substitute: this is `pytest`, not `git`,
-    # and there is no cross-node "run each in its own process but report together" form.
-    ('coordinator/bin/stable-suite-run.py', '_triage_isolation', 'run'),
-    # 2026-09-18 -- # class: structural-floor. `mise-census-revalidate.py::run_entry` runs
-    # each `census[]` entry's own INDEPENDENTLY AUTHORED shell `command` -- one row of a
-    # plan's frontmatter, recorded when the plan's premises were mise-prepped, with its own
-    # `--timeout` and its own recorded/observed diff. There is no shared executable or argv
-    # across entries to fold into one spawn (each is arbitrary shell text drawn from a
-    # different plan author, run through a named POSIX shell -- never shell=True/cmd.exe),
-    # the same "N distinct EXECUTABLES, no batch target to measure" shape already frozen at
-    # `install_health_run.py::_run_legs -> call` above. Relocating the call only moves the
-    # flag.
-    ('coordinator/bin/mise-census-revalidate.py', 'revalidate', 'run_entry'),
+    # RETIRED 2026-09-11 -- `install_health_run.py::_run_legs::call` stood here as "N distinct
+    # EXECUTABLES, no shared batch target". The site is now decided, not exempt: `_run_legs`
+    # iterates the module-literal `_NATIVE_LEGS`, and every leg's launch is a declared,
+    # starred `DeclaredLaunch.argv(...)` rather than a discovered drop-in with its own
+    # freeform argument surface. Discriminator 2 (loop-target-derived argv0) and discriminator
+    # 6 (callee-arity read off the declared shape) both reach it now that argv comes from a
+    # declared row instead of an opaque per-program surface. Measured in C1's own
+    # baseline/edit/delta run: `_run_legs::call` retired, exactly the intended key, zero
+    # in-scope collateral.
     # RETIRED 2026-08-19 -- `_common.py::archive_and_commit::create_subprocess_exec` and
     # `updatedocs_gates.py::_gate_queue_prune_sweep::_run` stood here under the same
     # `structural-floor` block. Both are now `_ORACLE_CLAIMS` entries: the first's "M + C" floor
@@ -752,7 +745,28 @@ _EXEMPT_SITES: set[tuple[str, str, str]] = {
     # only because that function merged its two binding maps with the argv0-HEAD map last, so
     # `argv` resolved to the bare `sys.executable` and nothing could look past the interpreter.
     # One merge order, measured: exactly this key, zero collateral.
-}
+_EXEMPT_SITES: frozenset[tuple[str, str, str, int]] = frozenset(
+    {
+        # 2026-09-18 -- # class: measurement-is-the-loop. `stable-suite-run.py::_triage_isolation`
+        # re-runs each already-FAILED node id alone, in its own process, to decide GENUINE
+        # (fails alone too) vs. ORDER-DEPENDENT (passes alone). The per-node process boundary IS
+        # the measurement: order-dependence means a failure exists only in the presence of other
+        # tests sharing the SAME process (a shared temp marker, registry, or cwd), and batching two
+        # nodes into one process re-admits that exact coupling into the very re-run meant to
+        # isolate it -- the triage would then be unable to tell "fails alone" from "fails alongside
+        # the other batched node". No batch primitive can substitute: this is `pytest`, not `git`,
+        # and there is no cross-node "run each in its own process but report together" form.
+        ("coordinator/bin/stable-suite-run.py", "_triage_isolation", "run", 0),
+        # 2026-09-18 -- # class: structural-floor. `mise-census-revalidate.py::run_entry` runs
+        # each `census[]` entry's own INDEPENDENTLY AUTHORED shell `command` -- one row of a
+        # plan's frontmatter, recorded when the plan's premises were mise-prepped, with its own
+        # `--timeout` and its own recorded/observed diff. There is no shared executable or argv
+        # across entries to fold into one spawn (each is arbitrary shell text drawn from a
+        # different plan author, run through a named POSIX shell -- never shell=True/cmd.exe).
+        # Relocating the call only moves the flag.
+        ("coordinator/bin/mise-census-revalidate.py", "revalidate", "run_entry", 0),
+    }
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -770,15 +784,27 @@ class AmpSite:
     route: str  # "a-direct" | "b-local-helper" | "c-cross-module" | "d-injected"
     #             | "e-generic-runner" | "f-default-runner" | "g-forwarded-runner"
     callee: str
+    ordinal: int
+    #: The k-th qualifying (marked-call) occurrence of `callee` within `enclosing`, counted on
+    #: the key `(path, enclosing, callee)` over EVERY marked call -- independent of suppression-
+    #: registry membership and of discriminator qualification outcome (AC10). NOT
+    #: `spawn_policy.SpawnSite.ordinal`'s counter, which counts per-`enclosing` across all
+    #: callees (`_Collector._next_ordinal`); that counter renumbers every downstream anchor when
+    #: an unrelated spawn call to a DIFFERENT callee is inserted above it, this one does not.
+    #: Assigned once, in `find_unbatched_per_item_spawns`'s own pre-pass (`_assign_call_ordinals`),
+    #: never inline at the point a call is checked against `_EXEMPT_SITES`/`_ORACLE_CLAIMS`.
 
     @property
-    def key(self) -> tuple[str, str, str]:
+    def key(self) -> tuple[str, str, str, int]:
         """Structural identity for a frozen-inventory subset assertion (G2): (path, enclosing,
-        callee). Deliberately excludes `lineno` and `route`, matching `spawn_policy.site_key`'s
-        own exclusion of `lineno` from identity -- a line renumbering must not look like a new
-        site, and a route reclassification (e.g. b becoming c after a refactor) is the same
-        underlying site, not a new one."""
-        return (self.path, self.enclosing, self.callee)
+        callee, ordinal) -- a CALL-scoped anchor, not a callee-scoped one. Deliberately excludes
+        `lineno` and `route`, matching `spawn_policy.site_key`'s own exclusion of `lineno` from
+        identity -- a line renumbering must not look like a new site, and a route
+        reclassification (e.g. b becoming c after a refactor) is the same underlying site, not a
+        new one. `ordinal` is what makes two distinct calls to the same callee inside the same
+        function two distinct keys instead of one over-broad key silencing both -- see
+        `AmpSite.ordinal`'s own docstring for how it is counted."""
+        return (self.path, self.enclosing, self.callee, self.ordinal)
 
 
 def _relpath(path: pathlib.Path, root: pathlib.Path) -> str:
@@ -1980,7 +2006,7 @@ def _build_func_index(records: list[_FileRecord]) -> _FuncIndex:
         spawn_sites = record.spawn_sites
 
         spawning_enclosing = {s.enclosing for s in spawn_sites}
-        # Review: reviewer -- keyed by the spawn's OWN dotted enclosing scope (e.g.
+        # Keyed by the spawn's OWN dotted enclosing scope (e.g.
         # "outer._forward"), not the bare top-level function name a lookup by `name` alone
         # would use. A runner candidate's forwarding call can sit inside a nested closure
         # (own_spawn_linenos below matches `name` itself AND any dotted scope nested under
@@ -2015,7 +2041,7 @@ def _build_func_index(records: list[_FileRecord]) -> _FuncIndex:
             index.func_defs[(relpath, name)] = node
             index.funcs_by_name.setdefault(name, []).append((relpath, name))
 
-            # Review: reviewer -- `name` is this function's own bare (top-level) name, but a
+            # `name` is this function's own bare (top-level) name, but a
             # spawn the function reaches only through a nested closure is filed under a
             # DOTTED scope ("name.inner"), not bare "name" -- matching `spawn_linenos_by_func`
             # by exact key alone would miss it (`_generic_runner_param` walks into nested
@@ -4075,6 +4101,52 @@ def _spawn_linenos(spawn_sites) -> set[int]:
     return {s.lineno for s in spawn_sites}
 
 
+def _assign_call_ordinals(
+    calls: list[tuple[ast.Call, tuple[int, int], str, str | None]],
+) -> dict[int, int]:
+    """AC1/AC10: assigns every marked call its `AmpSite.ordinal` -- the k-th call sharing
+    `(enclosing, callee)`, in order of appearance (`(lineno, col_offset)`, ties broken by the
+    caller's own submission order) -- in ONE pass over ALL marked calls, independent of
+    suppression-registry membership and of discriminator qualification outcome. `calls` is every
+    `_QualifyingLoopVisitor.marked_calls` entry for a single file (already
+    `(path, enclosing, callee)`-scoped to that file by construction), never filtered down to
+    calls that reach a register check or pass a discriminator first -- doing that would let
+    suppressing (or discriminator-declining) one call renumber another's anchor, the fail-open
+    surface AC10 exists to forbid.
+
+    Identity is `id(node)` -- the `ast.Call` node itself -- NOT `position`, and NOT
+    `(position, callee)` either: a chained call expression (`token.replace(a, b).replace(c, d)`)
+    puts every hop of the chain at the SAME `(lineno, col_offset)` (Python attributes a call
+    node's position to the leftmost token of the whole chain), and when two hops name the SAME
+    method (as both do here), `(position, callee)` collides too even though these are two
+    genuinely different calls that must get two different ordinals, not refuse. Only the actual
+    node identity tells them apart.
+
+    AC5's loud refusal path: two marked calls sharing the SAME node identity mean the exact same
+    `ast.Call` was submitted twice -- a caller bug, never a fact about two different source
+    calls (`ast.walk` visits each node once), so no real chain, however deep or repetitive,
+    reaches this. Refused loudly here, at the one place the ordinal is actually assigned, rather
+    than silently letting the second submission overwrite the first's ordinal (silent
+    double-suppression under one key). Exercised directly by a unit test that submits one node
+    twice."""
+    ordinal_by_call: dict[int, int] = {}
+    counters: dict[tuple[str, str | None], int] = {}
+    for node, position, enclosing, callee in sorted(calls, key=lambda c: c[1]):
+        node_id = id(node)
+        if node_id in ordinal_by_call:
+            raise RuntimeError(
+                "amplification gate: the same ast.Call node was submitted twice for position "
+                f"{position}, enclosing={enclosing!r}, callee={callee!r} -- indistinguishable "
+                "under the (path, enclosing, callee, ordinal) anchor; refusing to silently "
+                "double-suppress under one key (AC5)."
+            )
+        group = (enclosing, callee)
+        ordinal = counters.get(group, 0)
+        counters[group] = ordinal + 1
+        ordinal_by_call[node_id] = ordinal
+    return ordinal_by_call
+
+
 def find_unbatched_per_item_spawns(
     roots: tuple[pathlib.Path, ...],
     index: _FuncIndex | None = None,
@@ -4135,6 +4207,26 @@ def find_unbatched_per_item_spawns(
 
         imported_here = index.imported_names_by_file.get(relpath, set())
 
+        # AC1/AC10: the ordinal is assigned in its OWN pass, over every marked call in this
+        # file, before any suppression-registry lookup or discriminator runs -- see
+        # `_assign_call_ordinals`'s docstring for why this must not be inline below.
+        marked_call_descriptors: list[tuple[ast.Call, tuple[int, int], str, str | None]] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            position = (node.lineno, node.col_offset)
+            if position not in loop_visitor.marked_calls:
+                continue
+            marked_call_descriptors.append(
+                (
+                    node,
+                    position,
+                    enclosing_by_call.get(position, "<module>"),
+                    _call_callee_name(node),
+                )
+            )
+        ordinal_by_call = _assign_call_ordinals(marked_call_descriptors)
+
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
@@ -4144,12 +4236,13 @@ def find_unbatched_per_item_spawns(
 
             enclosing = enclosing_by_call.get(key, "<module>")
             callee = _call_callee_name(node)
-            if (relpath, enclosing, callee) in _EXEMPT_SITES:
+            ordinal = ordinal_by_call[id(node)]
+            if (relpath, enclosing, callee, ordinal) in _EXEMPT_SITES:
                 continue
             # Same suppression point as `_EXEMPT_SITES`, and deliberately adjacent to it: an
             # oracle claim IS an exemption, differing only in that a test measures it. When this
             # dict holds every claim and that set is empty, the register is gone.
-            if (relpath, enclosing, callee) in _ORACLE_CLAIMS:
+            if (relpath, enclosing, callee, ordinal) in _ORACLE_CLAIMS:
                 continue
             is_direct_spawn_call = node.lineno in spawn_linenos and callee in _SPAWN_API_NAMES
             # Discriminator 6: argv0 derives from this call's own enclosing loop target (or an
@@ -4384,7 +4477,7 @@ def find_unbatched_per_item_spawns(
                 default_name = index.param_runner_defaults.get((relpath, enclosing), {}).get(
                     callee
                 )
-                # Review: reviewer -- a parameter default can only bind a name resolvable in
+                # A parameter default can only bind a name resolvable in
                 # the DEFINING MODULE's own scope: either a same-module function, or a name
                 # imported into this file. The prior unscoped `default_name in
                 # index.direct_spawn_funcs` fallback was a repo-wide bare-name lookup with no
@@ -4443,6 +4536,7 @@ def find_unbatched_per_item_spawns(
                         enclosing=enclosing,
                         route=route,
                         callee=callee or "<unknown>",
+                        ordinal=ordinal,
                     )
                 )
 
@@ -4685,17 +4779,17 @@ class _EnclosingTracker(ast.NodeVisitor):
 #:                The suppression is still unconditional in between, so a git claim can be stale
 #:                for longer than a sibling-CLI one. That is a real weakness and it is written
 #:                here rather than discovered later.
-_ORACLE_CLAIMS: dict[tuple[str, str, str], tuple[str, str]] = {
+_ORACLE_CLAIMS: dict[tuple[str, str, str, int], tuple[str, str]] = {
     # --- sibling CLI writes one record per invocation (fast tier) ---
-    ("coordinator/bin/percolate-mirror.py", "_run_gate_legs", "_run"): (
+    ("coordinator/bin/percolate-mirror.py", "_run_gate_legs", "_run", 0): (
         "test_sibling_cli_single_record::test_percolate_gate_scan_secrets_takes_one_target",
         "fast",
     ),
-    ("coordinator/bin/coordinator-harvest-deferrals.py", "_harvest", "_run_lesson_promote"): (
+    ("coordinator/bin/coordinator-harvest-deferrals.py", "_harvest", "_run_lesson_promote", 0): (
         "test_sibling_cli_single_record::test_lesson_promote_takes_one_record",
         "fast",
     ),
-    ("coordinator/bin/coordinator-harvest-deferrals.py", "_harvest", "_run_queue_append"): (
+    ("coordinator/bin/coordinator-harvest-deferrals.py", "_harvest", "_run_queue_append", 0): (
         "test_sibling_cli_single_record::test_queue_append_takes_one_record",
         "fast",
     ),
@@ -4704,24 +4798,26 @@ _ORACLE_CLAIMS: dict[tuple[str, str, str], tuple[str, str]] = {
     #: immediately before `unlink()`. Any hoist lands before the first unlink and widens exactly
     #: the window the recheck exists to narrow, so the oracle flips a survivor's tracked status
     #: between classification and unlink and asserts the row is refused with a named reason.
-    ("coordinator_core/ops/distill_apply_disposal.py", "apply_disposal_manifest", "_is_tracked"): (
+    (
+        "coordinator_core/ops/distill_apply_disposal.py", "apply_disposal_manifest", "_is_tracked", 0
+    ): (
         "test_toctou_act_time_recheck::"
         "test_apply_disposal_manifest_recheck_fires_adjacent_to_its_own_unlink",
         "fast",
     ),
-    ("coordinator_core/ops/fleet/_findings_reap.py", "reap_findings", "_is_tracked"): (
+    ("coordinator_core/ops/fleet/_findings_reap.py", "reap_findings", "_is_tracked", 0): (
         "test_toctou_act_time_recheck::test_reap_findings_recheck_fires_adjacent_to_its_own_unlink",
         "fast",
     ),
     # --- the N-spawn cost IS the measured quantity (fast tier) ---
     #: The control arm of an A/B measurement whose opposing arm already does the batched form in
     #: the same module. Pinning both arms' spawn counts turns any future "batching fix" red.
-    ("coordinator_core/benchmarks/shim_fanin_measure.py", "_spawn_n_processes", "run"): (
+    ("coordinator_core/benchmarks/shim_fanin_measure.py", "_spawn_n_processes", "run", 0): (
         "test_benchmark_fanin_spawn_count::test_spawn_n_processes_issues_one_spawn_per_module",
         "fast",
     ),
     # --- varying program, observed rather than inferred (fast tier) ---
-    ("coordinator_core/ops/setup_chain_walker.py", "dep_probe_all", "dep_probe"): (
+    ("coordinator_core/ops/setup_chain_walker.py", "dep_probe_all", "dep_probe", 0): (
         "test_dep_probe_varying_program::"
         "test_dep_probe_all_python_import_spawns_have_distinct_argv",
         "fast",
@@ -4737,6 +4833,7 @@ _ORACLE_CLAIMS: dict[tuple[str, str, str], tuple[str, str]] = {
         "coordinator/bin/workday-complete-close.py",
         "cmd_backfill_dispatch_rows",
         "_dispatch_step9_row",
+        0,
     ): (
         "test_step9_backfill_row_isolation::test_one_row_failure_does_not_abort_remaining_rows",
         "fast",
@@ -4746,7 +4843,7 @@ _ORACLE_CLAIMS: dict[tuple[str, str, str], tuple[str, str]] = {
     #: form would silently query the wrong thing rather than error. Not our binary to change.
     #: Weaker than its siblings by construction: it needs npm on PATH, so it is skip-guarded and
     #: degrades to "passes when runnable". Recorded rather than hidden.
-    ("coordinator/bin/check-mcp-versions.py", "main", "_npm_latest"): (
+    ("coordinator/bin/check-mcp-versions.py", "main", "_npm_latest", 0): (
         "test_npm_view_single_package_spec::test_npm_view_usage_names_exactly_one_package_spec",
         "cadence",
     ),
@@ -4755,6 +4852,7 @@ _ORACLE_CLAIMS: dict[tuple[str, str, str], tuple[str, str]] = {
         "coordinator_core/install/uninstall_legs.py",
         "uninstall_reverse_git_config_group",
         "config_unset",
+        0,
     ): ("test_git_argument_surface::test_git_config_unset_takes_exactly_one_key", "cadence"),
     #: RETIRED 2026-08-19 -- `configure_git.py::main::_git_config_set` no longer needs a claim of
     #: any kind. Its loop runs over `_SETTINGS`, a module-level literal tuple fixed at author
@@ -4763,7 +4861,17 @@ _ORACLE_CLAIMS: dict[tuple[str, str, str], tuple[str, str]] = {
     #: alone. The git-arity oracle it named still exists and still passes -- it is simply no
     #: longer load-bearing for this site, which is the better outcome: a bounded loop decided
     #: structurally beats the same loop decided by asking git about its argument surface.
-    ("coordinator_core/ops/fleet/_common.py", "rm_and_commit", "create_subprocess_exec"): (
+    ("coordinator_core/ops/fleet/_common.py", "rm_and_commit", "create_subprocess_exec", 0): (
+        "test_git_argument_surface::test_git_rm_is_atomic_across_its_pathspec",
+        "cadence",
+    ),
+    #: SECOND marked call in this function (the commit-failure restore-from-HEAD `git checkout`
+    #: loop, distinct from the `git rm` loop ordinal 0 names) -- the widened per-call anchor now
+    #: distinguishes it from the one above; both shared one over-broad 3-tuple key before this
+    #: migration and were suppressed together under it. Mechanical widening only (this plan
+    #: changes the key SHAPE, not the disposition): kept on the same oracle claim it already
+    #: shared, not re-litigated into its own rationale here.
+    ("coordinator_core/ops/fleet/_common.py", "rm_and_commit", "create_subprocess_exec", 1): (
         "test_git_argument_surface::test_git_rm_is_atomic_across_its_pathspec",
         "cadence",
     ),
@@ -4777,7 +4885,7 @@ _ORACLE_CLAIMS: dict[tuple[str, str, str], tuple[str, str]] = {
     #: inside any loop. Both were retired by peer work, not by anything here. The oracle they
     #: named still exists, still passes, and is still load-bearing for the sites below — a
     #: retired site is the register shrinking correctly, never a reason to weaken the claim.
-    ("coordinator_core/ops/review_coverage_core.py", "build_segments", "_run"): (
+    ("coordinator_core/ops/review_coverage_core.py", "build_segments", "_run", 0): (
         "test_git_argument_surface::test_git_rev_list_exclusions_are_global",
         "cadence",
     ),
@@ -4785,6 +4893,7 @@ _ORACLE_CLAIMS: dict[tuple[str, str, str], tuple[str, str]] = {
         "coordinator_core/ops/plan_suggest_completion_steps.py",
         "_plans_with_review_trail_coverage",
         "_resolve_range_shas",
+        0,
     ): ("test_git_argument_surface::test_git_rev_list_exclusions_are_global", "cadence"),
     #: SIXTH site, bound 2026-08-27. The family's own comment said "one measured fact, six call
     #: sites" while listing five -- `reviewed_set.py` is the sixth and was never bound, so it
@@ -4795,7 +4904,7 @@ _ORACLE_CLAIMS: dict[tuple[str, str, str], tuple[str, str]] = {
     #: own docstring already records. A green gate over a silently narrowed reviewed set is the
     #: worst outcome available here, so this site is bound to the measured fact rather than left
     #: to the next reader's judgement.
-    ("coordinator_core/review_trail/reviewed_set.py", "fold_in", "_run"): (
+    ("coordinator_core/review_trail/reviewed_set.py", "fold_in", "_run", 0): (
         "test_git_argument_surface::test_git_rev_list_exclusions_are_global",
         "cadence",
     ),
@@ -4815,14 +4924,14 @@ _ORACLE_CLAIMS: dict[tuple[str, str, str], tuple[str, str]] = {
     #: contract to assume. The oracle pins BOTH arms -- collapsing the override arm loses the
     #: per-queue failure attribution, and per-item-ising the default arm is the amplification this
     #: gate exists to catch -- and each arm ships its own fails-when-inverted leg.
-    ("coordinator_core/ops/updatedocs_gates.py", "_gate_queue_prune_sweep", "_run"): (
+    ("coordinator_core/ops/updatedocs_gates.py", "_gate_queue_prune_sweep", "_run", 0): (
         "test_queue_prune_sweep_spawn_split::test_override_cli_issues_one_spawn_per_queue_file",
         "fast",
     ),
 }
 
 
-_KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
+_KNOWN_SITES: frozenset[tuple[str, str, str, int]] = frozenset(
     {
         # OPEN (3) -- wave 4 left these UNDECIDED, and that is recorded rather than laundered.
         # Each chunk named a real batch primitive for its row and then declined it on budget,
@@ -4839,8 +4948,29 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         # sibling cockpit batch on this module already used. Two spawns for the whole vendored
         # set, whatever N is. Pinned by `test_schema_drift_watch.py::TestSchemaAdvisoryBatch::
         # test_process_count_does_not_grow_with_the_set`.
-        ('coordinator_core/bash_guards/dispatch_checks.py', 'check_destructive_rm', '_run_git'),
-        ('coordinator_core/ops/orphan_branch_sweep.py', 'main', '_run'),
+        ('coordinator_core/bash_guards/dispatch_checks.py', 'check_destructive_rm', '_run_git', 0),
+        ('coordinator_core/ops/orphan_branch_sweep.py', 'main', '_run', 0),
+        # OPEN (2), 2026-09-19 -- `coordinator/bin/compose-review-wave.py::compose` arrived via
+        # `coordinator/bin/`'s C1 port (commit eabd94b008) already amplifying: one
+        # `freeze-review-diff` CLI spawn and one `waste-signal.py --attribute-diff` child PER
+        # SLICE, inside the per-slice loop. Both ARE batchable -- a working fix exists, on a
+        # sibling checkout of this same file (`compose-review-wave: one freeze and one waste
+        # attribution per wave, not per slice`): a new `coordinator_core.ops.review_freeze_diff.
+        # freeze_diffs_batch` freezes every slice's range in one `git rev-parse` plus one
+        # `git diff-tree --stdin`, and `_run_waste_attribution` moves outside the loop entirely,
+        # run once over the UNION of every slice's changed paths and split back per slice
+        # (`_slice_attribution_view`). NOT landed here: this branch's `review_freeze_diff.py`
+        # has diverged past that sibling's version (it since grew the K-101 `_uncovered_paths`
+        # coverage-refusal leg the sibling's `freeze_diffs_batch` does not carry), so porting the
+        # sibling's diff verbatim would silently drop that safety check rather than reconcile
+        # with it -- a mechanical port here is a regression, not a fix, and needs its own
+        # reconciled implementation and test pass, not a transcription. `_provision_phase`, the
+        # THIRD site in this same arrival, IS fixed in this pass -- in-process
+        # `provision_report._provision`/`assemble_contract_blocks_for_payload` calls, no
+        # subprocess at all, mirroring the sibling's own `Kira integration: in-process
+        # provisioning` commit, which needed no reconciliation.
+        ('coordinator/bin/compose-review-wave.py', 'compose', '_freeze_slice_diff', 0),
+        ('coordinator/bin/compose-review-wave.py', 'compose', '_run_waste_attribution', 0),
         # OVERTURNED (22) -- returned here from `_EXEMPT_SITES` by the 2026-08-19 ADVERSARIAL
         # RE-VERIFICATION, after the PM rejected wave 4's blanket-exemption shape. Wave 4's own
         # C-review re-argued the twelve disposition sidecars' PROSE; it did not re-derive the
@@ -4889,6 +5019,7 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
             'coordinator_core/ops/ceremony/tail_ops.py',
             'fire_tracker_and_roadmap_detached',
             'spawn_detached',
+            0,
         ),
         #   `configure_git.py::main` -> `_git_config_get`: git config --global --get-regexp
         #   reads all global keys in one call; the block conflated the unbatchable SET side
@@ -4897,15 +5028,45 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         #   rm/add/checkout HEAD -- all accept N pathspecs; nothing here needs per-item
         #   isolation, unlike the rm_and_commit sibling. Row NOT retired this chunk -- see the
         #   over-broad-key note above the `tip_author` row in this same class.
+        #
+        #   Widened per-call anchor, mechanical (this plan changes the key SHAPE only): ordinal 0
+        #   (line 928, the "rm" fallback call the note above already says discriminator 13 now
+        #   reaches) does NOT reappear here -- it is no longer a violation at all, suppressed by
+        #   the discriminator itself, not by this register. The three that remain are the ones
+        #   the note's own "two sibling _run_git calls... share this key" already flagged as
+        #   genuinely unrelated per-item mutations, PLUS a third the note's own count missed
+        #   (ordinal 1 = line 969 `add` staging a denorm write; ordinal 2 = line 975, a revert
+        #   `checkout` on THAT add's own failure; ordinal 3 = line 1015, a revert `checkout` on
+        #   log-append failure) -- measured directly against the live collector with suppression
+        #   emptied, not re-derived from the prose.
         (
             'coordinator_core/ops/distill_apply_disposal.py',
             '_delete_tracked_and_append_log',
             '_run_git',
+            1,
+        ),
+        (
+            'coordinator_core/ops/distill_apply_disposal.py',
+            '_delete_tracked_and_append_log',
+            '_run_git',
+            2,
+        ),
+        (
+            'coordinator_core/ops/distill_apply_disposal.py',
+            '_delete_tracked_and_append_log',
+            '_run_git',
+            3,
         ),
         #   `migrate_branch_canonical_case.py::_migrate` -> `_git`: the per-ref show-ref
         #   --verify is redundant: _enumerate_work_refs already fetched the full
-        #   refs/heads/work/* listing in one for-each-ref earlier in the same function
-        ('coordinator_core/ops/migrate_branch_canonical_case.py', '_migrate', '_git'),
+        #   refs/heads/work/* listing in one for-each-ref earlier in the same function. Widened
+        #   per-call anchor, mechanical: this key already silently covered all four marked calls
+        #   in this function under the 3-tuple shape (ordinals 0-3), measured against the live
+        #   collector with suppression emptied.
+        ('coordinator_core/ops/migrate_branch_canonical_case.py', '_migrate', '_git', 0),
+        ('coordinator_core/ops/migrate_branch_canonical_case.py', '_migrate', '_git', 1),
+        ('coordinator_core/ops/migrate_branch_canonical_case.py', '_migrate', '_git', 2),
+        ('coordinator_core/ops/migrate_branch_canonical_case.py', '_migrate', '_git', 3),
         #   `migrate_completion_log_legacy.py::main` -> `_git_mv`: git mv takes N sources into
         #   one destination DIRECTORY; every call in this loop targets the same legacy_dir
         #   `migrate_cross_repo_layout.py::main` -> `_move_one`: both legs (ls-files
@@ -4939,14 +5100,35 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         #   `central_run_due.py::main` -> `_count_universals`: shells to a DoE-resident
         #   extract-lessons.py whose argv surface is out of tree and could not be verified;
         #   shape matches none of the block's three named classes
-        ('coordinator_core/ops/central_run_due.py', 'main', '_count_universals'),
-        #   `orphan_branch_sweep.py::main` -> `_git`: OVER-BROAD KEY: main contains one _git
-        #   loop-call matching the block's claim and one that does not; a single key silences
-        #   both
-        ('coordinator_core/ops/orphan_branch_sweep.py', 'main', '_git'),
-        #   `register_discovered_repos.py::main` -> `run`: OVER-BROAD KEY: same defect -- one
-        #   matching call, one non-matching call, one key
-        ('coordinator_core/ops/register_discovered_repos.py', 'main', 'run'),
+        ('coordinator_core/ops/central_run_due.py', 'main', '_count_universals', 0),
+        #   `orphan_branch_sweep.py::main` -> `_git`: OVER-BROAD KEY (AC3, split by this plan
+        #   under the widened per-call anchor): `main` holds THREE marked `_git` calls, not the
+        #   two the audit's prose counted. Ordinals 0 (line 467, per-branch author lookup) and 1
+        #   (line 479, per-branch commit-time lookup) ARE the call the governing rationale
+        #   describes: both fire only in the `else` arm of `if batch_ok:`, the retained-fallback
+        #   behind the batched `git log --no-walk` primary a few lines up (same class as this
+        #   file's own `_EXEMPT_SITES` precedent, `main -> _run`, above). Ordinal 2 (line 544,
+        #   the post-merge-commit-count query) is the call the rationale does NOT describe: it is
+        #   unconditional on `batch_ok`, has no antecedent batch call of its own, and runs once
+        #   per branch with a MERGED PR -- surfaced here on its own terms, not silently
+        #   re-suppressed under the fallback story it never satisfied. Measured against the live
+        #   collector with suppression emptied, not re-derived from the prose.
+        ('coordinator_core/ops/orphan_branch_sweep.py', 'main', '_git', 0),
+        ('coordinator_core/ops/orphan_branch_sweep.py', 'main', '_git', 1),
+        ('coordinator_core/ops/orphan_branch_sweep.py', 'main', '_git', 2),
+        #   `register_discovered_repos.py::main` -> `run`: OVER-BROAD KEY (AC3, split by this
+        #   plan under the widened per-call anchor). Ordinal 0 (line 370, the per-key
+        #   `machine-local has repos.<key>` check, fired only when no `snapshot` was supplied) is
+        #   the call the governing rationale describes -- a `has` probe with a batched
+        #   `snapshot`-carrying alternative already present one branch over. Ordinal 1 (line 442,
+        #   the per-key `machine-local set repos.<key> <path>` registration call) is the call the
+        #   rationale does NOT describe -- module docstring's own OVERTURNED note names it
+        #   directly: "the remaining call is genuinely per-repo -- distinct destination key and
+        #   value each", i.e. no batch primitive collapses N distinct (key, path) writes into
+        #   one. Surfaced on its own terms, not silently re-suppressed under the `has`-probe
+        #   rationale it never shared.
+        ('coordinator_core/ops/register_discovered_repos.py', 'main', 'run', 0),
+        ('coordinator_core/ops/register_discovered_repos.py', 'main', 'run', 1),
         #   `setup_chain_walker.py::_sibling_fallback` -> `_functional_probe_ok`: no batch
         #   primary exists anywhere in this function, so the block's retained-fallback shape
         #   does not describe this call site at all
@@ -4957,11 +5139,12 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
             'coordinator_core/ops/setup_chain_walker.py',
             'command_succeeds_native',
             '_run_probe_argv',
+            0,
         ),
         #   `__init__.py::brief` -> `unique_commits`: the exclusion base (`current`) is
         #   IDENTICAL across every range here, so the block's differing-base-narrows defect
         #   does not apply; the real blocker (per-branch attribution) is unstated and untested
-        ('coordinator_core/consolidate_assemble/__init__.py', 'brief', 'unique_commits'),
+        ('coordinator_core/consolidate_assemble/__init__.py', 'brief', 'unique_commits', 0),
         # MISCLASSIFIED (10) -- COLLECTOR FALSE POSITIVES, parked here deliberately rather than
         # routed to `_EXEMPT_SITES`. An exemption asserts the SITE is unbatchable; these sites
         # have nothing to batch at all, so exempting them would file a collector defect under a
@@ -5097,6 +5280,30 @@ def test_every_exemption_still_names_a_live_site(monkeypatch):
     )
 
 
+def test_thread_pool_and_two_hop_sites_are_named_in_known_blind_spots():
+    """Regression pin for `state/bug-backlog/
+    2026-08-08-the-amplification-gate-cannot-see-the-th-a4f2e77dc787.yaml`: two of the row's
+    three named sites -- `review_coverage_core.classify_pending_records`'s
+    `ThreadPoolExecutor.map` fan-out and `readers_clean_ops._read_worktree_sweep` ->
+    `agent_worktree_sweep.classify_worktree`'s two-hop gap -- are real per-item git-spawn shapes
+    this collector structurally cannot see, and neither carries a `_KNOWN_SITES` key (the row's
+    own `proposed_action` forbids fabricating one for a site no run of this collector can ever
+    produce). The row's accepted discharge is a citation in this module's own KNOWN BLIND SPOTS
+    register instead. Scoped to that register specifically, not the whole docstring, so a marker
+    surviving elsewhere in the file while the citing bullet is deleted still goes red."""
+    doc = __doc__ or ""
+    start = doc.index("KNOWN BLIND SPOTS")
+    blind_spots = doc[start:]
+    assert "ThreadPoolExecutor" in blind_spots and "classify_pending_records" in blind_spots, (
+        "classify_pending_records's ThreadPoolExecutor.map fan-out is no longer named in "
+        "KNOWN BLIND SPOTS"
+    )
+    assert "classify_worktree" in blind_spots and "_read_worktree_sweep" in blind_spots, (
+        "readers_clean_ops._read_worktree_sweep -> agent_worktree_sweep.classify_worktree's "
+        "two-hop gap is no longer named in KNOWN BLIND SPOTS"
+    )
+
+
 #: The closed set of exemption classes. An executor who cannot pick one of these four has just
 #: learned their row is not unbatchable-by-construction -- which is the point of a CLOSED set:
 #: wave 4 drifted two ad-hoc names into the sidecars (`fallback-path-residue`,
@@ -5135,7 +5342,7 @@ def _exempt_entry_comment_blocks() -> dict[tuple[str, str, str], str]:
             break
     assert node is not None, "could not locate the _EXEMPT_SITES assignment in this file's AST"
 
-    spans = [(elt.lineno, elt.end_lineno, ast.literal_eval(elt)) for elt in node.elts]
+    spans = [(elt.lineno, elt.end_lineno, ast.literal_eval(elt)) for elt in getattr(node, "elts", ())]
     starts = {start for start, _end, _key in spans}
 
     blocks: dict[tuple[str, str, str], str] = {}
@@ -5247,6 +5454,18 @@ def test_every_exemption_carries_a_dated_rationale():
         "these _EXEMPT_SITES entries name a class outside the closed set "
         f"{sorted(_EXEMPTION_CLASSES)}:\n"
         + "\n".join(f"  {key} -- {cls}" for key, cls in bad_class)
+    )
+
+
+def test_exempt_sites_match_amp_site_key_shape():
+    """`_EXEMPT_SITES` is checked against `AmpSite.key` -- `(path, enclosing, callee, ordinal)`,
+    a 4-tuple -- at the membership test in `find_unbatched_per_item_spawns`. A 3-tuple entry
+    here can never equal a 4-tuple key, so it silently stops suppressing its site instead of
+    raising; this pins the shape so that regression fails loudly instead."""
+    wrong_shape = sorted(key for key in _EXEMPT_SITES if len(key) != 4)
+    assert not wrong_shape, (
+        "these _EXEMPT_SITES entries are not 4-tuples and can never match an AmpSite.key "
+        "lookup:\n" + "\n".join(f"  {key}" for key in wrong_shape)
     )
 
 
@@ -6165,7 +6384,7 @@ def test_route_f_negative_default_is_not_a_spawner(tmp_path):
 
 
 def test_route_e_generic_runner_positive_spawn_in_nested_closure(tmp_path):
-    """Review: reviewer -- a runner candidate whose forwarding call sits inside a NESTED
+    """A runner candidate whose forwarding call sits inside a NESTED
     closure (`_run(argv): def _forward(): subprocess.run(argv); _forward()`) must still be
     recognized. `SpawnSite.enclosing` is a DOTTED scope path (`"_run._forward"`, not bare
     `"_run"`), so `_build_func_index`'s own-spawn-lineno lookup has to match the function's
@@ -6196,7 +6415,7 @@ def test_route_e_generic_runner_positive_spawn_in_nested_closure(tmp_path):
 
 
 def test_route_f_negative_unscoped_default_name_collision(tmp_path):
-    """Review: reviewer -- route f's `default_name in index.direct_spawn_funcs` fallback was
+    """Route f's `default_name in index.direct_spawn_funcs` fallback was
     unscoped by file, so a same-named, unrelated, UNIMPORTED spawning function in another file
     would false-positive route f purely off a bare-name repo-wide match. A parameter default
     can only bind a name resolvable in the defining module's own scope: same-module, or
@@ -8350,6 +8569,137 @@ def test_route_g_pin_against_live_repo():
     violations = find_unbatched_per_item_spawns(_gate_scope_paths())
     route_g_keys = {site.key for site in violations if site.route == "g-forwarded-runner"}
     assert route_g_keys == set()
+
+
+# --------------------------------------------------------------------------
+# C1 (AC1-AC10, "an exemption key names a CALL, not a callee"): the widened
+# `AmpSite.key` anchor's own three new tests (File scope).
+# --------------------------------------------------------------------------
+
+
+def test_ordinal_anchor_survives_line_shift_and_an_unrelated_inserted_call(tmp_path):
+    """AC2: the anchor is not a bare line number, proven three ways against the SAME fixture
+    family -- a line inserted above the anchored call, the surrounding code reformatted, and an
+    unrelated qualifying call to a DIFFERENT callee inserted in the same enclosing function. The
+    third case is the one that actually falsifies the wrong counter key: `AmpSite.ordinal` is
+    counted on `(path, enclosing, callee)`, per AC1, NOT `spawn_policy.SpawnSite.ordinal`'s
+    per-`enclosing`-only counter -- a per-`enclosing`-only counter would renumber `git_log`'s
+    ordinal when the unrelated `git_status` call is inserted above it; the per-callee counter
+    does not."""
+
+    _case_counter = iter(range(1000))
+
+    def _write(body: str) -> dict[str, tuple]:
+        # A fresh subdirectory per case -- never rewriting the same path in place -- so this
+        # test cannot be confused with any staleness in the file-discovery/parse layer; each
+        # case is a clean, independent collector run over its own single-file root.
+        case_dir = tmp_path / f"case_{next(_case_counter)}"
+        case_dir.mkdir()
+        fixture = case_dir / "disc_ordinal_anchor.py"
+        fixture.write_text(body, encoding="utf-8")
+        violations = find_unbatched_per_item_spawns((case_dir,))
+        by_callee = {site.callee: site.key for site in violations}
+        return by_callee
+
+    base = (
+        "import subprocess\n"
+        "\n"
+        "def scan(items):\n"
+        "    for x in items:\n"
+        "        subprocess.run(['git', 'log', x])\n"
+    )
+    base_keys = _write(base)
+    base_key = base_keys["run"]
+
+    # (a) a line inserted above the anchored call, and the call reformatted.
+    shifted = (
+        "import subprocess\n"
+        "\n"
+        "def scan(items):\n"
+        "    # a comment that did not used to be here\n"
+        "    for x in items:\n"
+        "        subprocess.run(\n"
+        "            ['git', 'log', x]\n"
+        "        )\n"
+    )
+    shifted_keys = _write(shifted)
+    assert shifted_keys["run"] == base_key, (
+        "the anchor moved under a line-shifting/reformatting edit that did not touch the call's "
+        "identity -- it is tracking `lineno`, not `(enclosing, callee, ordinal)`"
+    )
+
+    # (b) an unrelated qualifying call to a DIFFERENT callee inserted ABOVE the anchored one.
+    # A per-`enclosing`-only ordinal counter would bump `run`'s ordinal here; the per-
+    # `(enclosing, callee)` counter this plan specifies must not.
+    with_unrelated_call = (
+        "import subprocess\n"
+        "\n"
+        "def scan(items):\n"
+        "    for x in items:\n"
+        "        subprocess.check_call(['git', 'status', x])\n"
+        "        subprocess.run(['git', 'log', x])\n"
+    )
+    with_unrelated_keys = _write(with_unrelated_call)
+    assert with_unrelated_keys["run"] == base_key, (
+        "inserting an unrelated qualifying call to a DIFFERENT callee in the same enclosing "
+        "function renumbered this call's ordinal -- the counter key is `enclosing` alone, not "
+        "`(enclosing, callee)` (AC1's explicit distinction from `spawn_policy.SpawnSite.ordinal`)"
+    )
+
+
+def test_ordinal_assignment_refuses_a_duplicate_call_identity():
+    """AC5: two qualifying calls that are genuinely indistinguishable under the widened anchor
+    produce a loud, test-visible refusal -- never a silent double-suppression under one key.
+    Exercised directly against `_assign_call_ordinals`, the one place the ordinal is actually
+    assigned (see its own docstring for why real source, however deeply a call is chained, can
+    never reach this path organically: `ast.walk` visits each node once, so only a caller
+    submitting the exact same node twice can collide)."""
+    src = "subprocess.run(['git', 'status'])\n"
+    tree = ast.parse(src)
+    call_node = next(n for n in ast.walk(tree) if isinstance(n, ast.Call))
+    position = (call_node.lineno, call_node.col_offset)
+
+    with pytest.raises(RuntimeError, match="indistinguishable"):
+        _assign_call_ordinals(
+            [
+                (call_node, position, "scan", "run"),
+                (call_node, position, "scan", "run"),
+            ]
+        )
+
+
+def test_ordinal_assignment_independent_of_registration(tmp_path, monkeypatch):
+    """AC10: the ordinal is assigned in a pass over ALL marked calls, independent of both
+    suppression-registry membership and discriminator qualification outcome -- registering a
+    suppression entry for one anchored call must not change any OTHER call's assigned anchor.
+    Suppressing the first of two qualifying calls to the same callee in the same function, via
+    `_EXEMPT_SITES`, must leave the second call's ordinal (and therefore its key) unchanged --
+    the fail-open renumbering AC10 exists to forbid would instead make the second call silently
+    inherit the first's now-vacated ordinal 0."""
+    fixture = tmp_path / "disc_ordinal_registration_independence.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def scan(items):\n"
+        "    for x in items:\n"
+        "        subprocess.run(['git', 'log', x])\n"
+        "        subprocess.run(['git', 'log', x, '--stat'])\n",
+        encoding="utf-8",
+    )
+    before = {site.key: site.lineno for site in find_unbatched_per_item_spawns((tmp_path,))}
+    assert len(before) == 2, "fixture must produce exactly two distinct anchored violations"
+
+    first_key = min(before, key=lambda k: before[k])
+    second_key_before = max(before, key=lambda k: before[k])
+
+    monkeypatch.setitem(globals(), "_EXEMPT_SITES", {first_key})
+    after = {site.key: site.lineno for site in find_unbatched_per_item_spawns((tmp_path,))}
+
+    assert first_key not in after, "the exempted call still surfaced as a violation"
+    assert second_key_before in after, (
+        "suppressing the first anchored call changed the second call's ordinal/key -- the "
+        "ordinal pass is not independent of suppression-registry membership (AC10)"
+    )
 
 
 if __name__ == "__main__":

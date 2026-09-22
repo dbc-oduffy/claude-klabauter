@@ -132,6 +132,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
+#include <wctype.h>
 
 /* THE OS-AGNOSTIC HALF LIVES HERE, and used to live in this file. SHA-1,
  * the growable `buf_t`, the JSON envelope reader, and -- the load-bearing
@@ -292,6 +294,25 @@ static char *wide_to_utf8(const wchar_t *w, int *out_len) {
     WideCharToMultiByte(CP_UTF8, 0, w, -1, out, needed, NULL, NULL);
     if (out_len) *out_len = needed - 1; /* exclude the NUL WideCharToMultiByte counted */
     return out;
+}
+
+/* One `"NAME":"VALUE"` member of the envelope's `_env` object, comma-led
+ * after the first, both halves converted to UTF-8. */
+static int env_pair_append_w(buf_t *pairs, const wchar_t *name, const wchar_t *value) {
+    int name_len, val_len;
+    char *name_u8 = wide_to_utf8(name, &name_len);
+    char *val_u8 = name_u8 ? wide_to_utf8(value, &val_len) : NULL;
+    int ok = name_u8 != NULL && val_u8 != NULL;
+    if (ok) {
+        ok &= buf_append_cstr(pairs, pairs->len > 0 ? ",\"" : "\"");
+        ok &= buf_append_json_escaped(pairs, name_u8, (size_t)name_len);
+        ok &= buf_append_cstr(pairs, "\":\"");
+        ok &= buf_append_json_escaped(pairs, val_u8, (size_t)val_len);
+        ok &= buf_append_cstr(pairs, "\"");
+    }
+    free(name_u8);
+    free(val_u8);
+    return ok;
 }
 
 static wchar_t *utf8_to_wide(const char *u8) {
@@ -715,6 +736,34 @@ static int door_basename_declares_stdin_read_w(const wchar_t *basename) {
  * earlier by `emit_hook_deny` immediately below. */
 static int write_all(HANDLE h, const char *data, size_t len);
 
+/* The caller's hook payload, kept for `hook_fall_through` -- see the POSIX
+ * leg's identical pair for why. */
+static const char *g_hook_payload = NULL;
+static size_t g_hook_payload_len = 0;
+
+/* Engine down: pass loudly, never deny -- see `build_hook_pass_loudly_envelope`.
+ * Exit 0 either way; if the envelope cannot be built, an empty stdout is a
+ * pass, and the stderr line keeps it from being a silent one. */
+static int emit_hook_pass_loudly(const char *reason) {
+    buf_t event, out;
+    const char *event_name = NULL;
+    int have_event = buf_init(&event, 32);
+    if (have_event && g_hook_payload &&
+        door_hook_event_name(g_hook_payload, g_hook_payload_len, &event)) {
+        event_name = event.data;
+    }
+    int built = buf_init(&out, 1024) && build_hook_pass_loudly_envelope(&out, reason, event_name);
+    if (have_event) free(event.data);
+    if (!built) {
+        fwprintf(stderr, L"door: guard did not run: %hs\n", reason);
+        free(out.data);
+        return 0;
+    }
+    write_all(GetStdHandle(STD_OUTPUT_HANDLE), out.data, out.len);
+    free(out.data);
+    return 0;
+}
+
 /* Same split as `emit_indeterminate` below: the envelope's bytes are built
  * in `door_core.c` (shared, so the two doors cannot drift in what they
  * tell an operator), only the write is Windows-specific. Exit 0, matching
@@ -762,26 +811,14 @@ static int emit_hook_deny(const char *reason) {
  * `BUILD_ENGINE_ROOT_W` (the build-time fallback) -- either way this
  * function itself performs no resolution of its own, matching the rest
  * of this file's "resolve once, upstream" discipline. */
-static int fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w) {
-    /* HOOK MODE INVERTS THIS FUNCTION'S ENTIRE PURPOSE (door_core.h ::
-     * build_hook_deny_envelope). Every fall-through in this file --
-     * pre-delivery doubt, and the one post-delivery
-     * `is_provably_undispatched` jump in `do_fallback` -- reaches this
-     * function directly or via `fall_through_and_free`, so checking the
-     * flag HERE, first, is what makes the inversion cover every existing
-     * call site (and any added later) without a second edit at each one.
-     * `argc`/`wargv`/`engine_root_w` go unused on this leg -- the caller
-     * declared no argv grammar is going to run here, only a decision. */
-    if (g_door_hook_mode) {
-        (void)argc;
-        (void)wargv;
-        (void)engine_root_w;
-        return emit_hook_deny(
-            "coordinator-door: could not deliver this request to the "
-            "resident engine; denying rather than falling through to the "
-            "cold entrypoint in hook mode");
-    }
-
+/* Resolves the cold entrypoint (`<engine>\\coordinator\\bin\\<own basename>.py`,
+ * or the extensionless sibling) into `script_path_w` (`MAX_PATH * 2` wide
+ * chars) and returns the full interpreter command line, heap-allocated, or
+ * NULL after printing the one diagnostic that names why. Shared by both
+ * fall-through legs so a hook-mode fall-through can never resolve a
+ * different CLI than an ordinary one. */
+static wchar_t *build_fallback_cmdline(int argc, wchar_t **wargv, const wchar_t *engine_root_w,
+                                       wchar_t *script_path_w) {
     const wchar_t *root = (engine_root_w != NULL) ? engine_root_w : BUILD_ENGINE_ROOT_W;
 
     /* `engine_root_w`, when supplied, was already validated by
@@ -809,7 +846,7 @@ static int fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w)
             L"(coordinator_core/install/door_install.py) against this "
             L"machine's published engine, or set COORDINATOR_DOOR_ENGINE_ROOT.\n",
             root);
-        return 1;
+        return NULL;
     }
 
     /* THE NAME-AWARE COLD LEG (C0). Resolves against THIS image's own
@@ -834,16 +871,15 @@ static int fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w)
      * directory as present, so a directory attribute (`FILE_ATTRIBUTE_
      * DIRECTORY`) is rejected at each candidate exactly like the Python
      * side's `is_file()` check. */
-    wchar_t script_path_w[MAX_PATH * 2];
     if (swprintf(script_path_w, MAX_PATH * 2,
                  L"%s\\coordinator\\bin\\%s.py", root, entrypoint_basename) < 0) {
-        return 1;
+        return NULL;
     }
 
     wchar_t extensionless_path_w[MAX_PATH * 2];
     if (swprintf(extensionless_path_w, MAX_PATH * 2,
                  L"%s\\coordinator\\bin\\%s", root, entrypoint_basename) < 0) {
-        return 1;
+        return NULL;
     }
 
     WIN32_FILE_ATTRIBUTE_DATA script_attrs;
@@ -855,7 +891,7 @@ static int fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w)
         int ext_ok = GetFileAttributesExW(extensionless_path_w, GetFileExInfoStandard, &ext_attrs) &&
                      !(ext_attrs.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY);
         if (ext_ok) {
-            memcpy(script_path_w, extensionless_path_w, sizeof(script_path_w));
+            memcpy(script_path_w, extensionless_path_w, sizeof(extensionless_path_w));
         } else {
             fwprintf(stderr,
                 L"door: this image is named %s, and no matching coordinator/bin "
@@ -866,30 +902,30 @@ static int fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w)
                 L"the door under a name that already has one.\n",
                 entrypoint_basename, script_path_w, extensionless_path_w,
                 entrypoint_basename, entrypoint_basename);
-            return 1;
+            return NULL;
         }
     }
 
     buf_t cmdline;
-    if (!buf_init(&cmdline, 4096)) return 1;
+    if (!buf_init(&cmdline, 4096)) return NULL;
 
-    if (!quote_arg_w(&cmdline, PYTHON_BIN_W)) return 1;
-    if (!buf_append(&cmdline, " ", 1)) return 1;
+    if (!quote_arg_w(&cmdline, PYTHON_BIN_W)) return NULL;
+    if (!buf_append(&cmdline, " ", 1)) return NULL;
 
-    if (!quote_arg_w(&cmdline, script_path_w)) return 1;
+    if (!quote_arg_w(&cmdline, script_path_w)) return NULL;
 
     for (int i = 1; i < argc; i++) {
-        if (!buf_append(&cmdline, " ", 1)) return 1;
-        if (!quote_arg_w(&cmdline, wargv[i])) return 1;
+        if (!buf_append(&cmdline, " ", 1)) return NULL;
+        if (!quote_arg_w(&cmdline, wargv[i])) return NULL;
     }
 
     char *cmdline_nul = (char *)malloc(cmdline.len + 1);
-    if (!cmdline_nul) return 1;
+    if (!cmdline_nul) return NULL;
     memcpy(cmdline_nul, cmdline.data, cmdline.len);
     cmdline_nul[cmdline.len] = '\0';
     wchar_t *cmdline_w = utf8_to_wide(cmdline_nul);
     free(cmdline_nul);
-    if (!cmdline_w) return 1;
+    if (!cmdline_w) return NULL;
 
     /* PM ruling: a degrade to cold must not go unnoticed. The door relays
      * the dispatched CLI's stdout, stderr, and exit code as its own --
@@ -915,6 +951,108 @@ static int fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w)
      * stderr is empty or fold it into stdout -- unaffected). This is not a
      * rate limiter or a once-per-session suppression: every degrade prints,
      * on purpose. */
+    return cmdline_w;
+}
+
+static int write_all(HANDLE h, const char *data, size_t len);
+
+
+/* HOOK MODE'S FALL-THROUGH: run the guard cold, never skip it. The Windows
+ * half of `door_posix.c :: hook_fall_through` -- see that function for the
+ * full rationale. Every `fall_through` call site is pre-delivery or provably
+ * undispatched, so the guard runs cold with the payload on its stdin and its
+ * verdict is relayed; stdout is captured, and a nonzero exit or an empty
+ * stdout still denies, because a hook that did not answer must never read as
+ * one that allowed. */
+static int hook_fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w) {
+    wchar_t script_path_w[MAX_PATH * 2];
+    wchar_t *cmdline_w = build_fallback_cmdline(argc, wargv, engine_root_w, script_path_w);
+    if (!cmdline_w) {
+        return emit_hook_pass_loudly("coordinator-door: engine unreachable and no cold entrypoint resolved");
+    }
+
+    SECURITY_ATTRIBUTES sa;
+    ZeroMemory(&sa, sizeof(sa));
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    HANDLE in_r = NULL, in_w = NULL, out_r = NULL, out_w = NULL;
+    if (!CreatePipe(&in_r, &in_w, &sa, 0) || !CreatePipe(&out_r, &out_w, &sa, 0)) {
+        if (in_r) CloseHandle(in_r);
+        if (in_w) CloseHandle(in_w);
+        free(cmdline_w);
+        return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard could not be started");
+    }
+    /* The parent's ends must not leak into the child, or the child never sees
+     * EOF on stdin and the parent never sees EOF on stdout. */
+    SetHandleInformation(in_w, HANDLE_FLAG_INHERIT, 0);
+    SetHandleInformation(out_r, HANDLE_FLAG_INHERIT, 0);
+
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = in_r;
+    si.hStdOutput = out_w;
+    si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+    ZeroMemory(&pi, sizeof(pi));
+
+    BOOL spawned = CreateProcessW(
+        NULL, cmdline_w, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+    free(cmdline_w);
+    CloseHandle(in_r);
+    CloseHandle(out_w);
+    if (!spawned) {
+        CloseHandle(in_w);
+        CloseHandle(out_r);
+        return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard could not be started");
+    }
+
+    /* hook-run reads all of stdin before it writes anything, so writing the
+     * whole payload before reading cannot deadlock on a full pipe. */
+    if (g_hook_payload_len > 0) write_all(in_w, g_hook_payload, g_hook_payload_len);
+    CloseHandle(in_w);
+
+    buf_t verdict;
+    int verdict_ok = buf_init(&verdict, 4096);
+    char chunk[4096];
+    for (;;) {
+        DWORD got = 0;
+        if (!ReadFile(out_r, chunk, sizeof(chunk), &got, NULL) || got == 0) break;
+        if (verdict_ok) verdict_ok = buf_append(&verdict, chunk, (size_t)got);
+    }
+    CloseHandle(out_r);
+
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD exit_code = 1;
+    GetExitCodeProcess(pi.hProcess, &exit_code);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    int answered = verdict_ok && exit_code == 0;
+    size_t i = 0;
+    while (answered && i < verdict.len && (verdict.data[i] == ' ' || verdict.data[i] == '\n' ||
+                                           verdict.data[i] == '\r' || verdict.data[i] == '\t')) {
+        i++;
+    }
+    if (!answered || i == verdict.len) {
+        if (verdict_ok) free(verdict.data);
+        return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard returned no verdict");
+    }
+    write_all(GetStdHandle(STD_OUTPUT_HANDLE), verdict.data, verdict.len);
+    free(verdict.data);
+    return 0;
+}
+
+static int fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w) {
+    if (g_door_hook_mode) {
+        return hook_fall_through(argc, wargv, engine_root_w);
+    }
+
+    wchar_t script_path_w[MAX_PATH * 2];
+    wchar_t *cmdline_w = build_fallback_cmdline(argc, wargv, engine_root_w, script_path_w);
+    if (!cmdline_w) return 1;
+
     fwprintf(stderr,
         L"door: falling through to the cold entrypoint (%s)\n",
         script_path_w);
@@ -1227,6 +1365,8 @@ int main(void) {
                     : "coordinator-door: stdin read failed; refusing");
         }
         have_stdin_payload = 1;
+        g_hook_payload = stdin_payload.data;
+        g_hook_payload_len = stdin_payload.len;
     }
     /* From here to the request-build site further below, every pre-delivery
      * fall-through call site frees its own intermediate allocations but not
@@ -1435,9 +1575,7 @@ int main(void) {
      * `argv`/`cwd` above -- an OP ARGUMENT, exactly like `entrypoint`
      * below and UNLIKE the envelope-level `_caller`/`_env` fields further
      * down: the payload is what the served op reads to do its job, never
-     * transport metadata the server pops before dispatch.
-     * Freed immediately after appending -- `buf_append_json_escaped`
-     * copies the bytes, so `stdin_payload.data` has no further use. */
+     * transport metadata the server pops before dispatch. */
     if (req_ok && have_stdin_payload) {
         req_ok &= buf_append_cstr(&req, ",\"stdin\":\"");
         if (req_ok) {
@@ -1446,10 +1584,9 @@ int main(void) {
         }
         req_ok &= buf_append_cstr(&req, "\"");
     }
-    if (have_stdin_payload) {
-        free(stdin_payload.data);
-        have_stdin_payload = 0;
-    }
+    /* `stdin_payload.data` is NOT freed here: `hook_fall_through` still
+     * needs it if the delivery below fails, and the process exit that follows
+     * every return reclaims it (at most `DOOR_STDIN_MAX_BYTES`). */
 
     /* ADDITIVE, NOT ALWAYS PRESENT (C0). Omitted entirely when this image's
      * own resolved name is the default `coordinator-invoke` -- the server
@@ -1533,11 +1670,17 @@ int main(void) {
      * one; a truncated path is the worst possible value to stamp (the
      * `_settings_home` block's own prior rationale, unchanged here). */
     if (req_ok) {
+        /* Pairs are collected into `env_pairs` first and the `_env` object is
+         * opened in exactly one place below, so "no name resolved" still omits
+         * `_env` entirely without either source of names tracking whether the
+         * other already opened it. */
+        buf_t env_pairs;
+        req_ok &= buf_init(&env_pairs, 256);
+
 #define X(name) L"" #name,
         static const wchar_t *const kDoorEnvNames[] = { DOOR_ENV_SET(X) };
 #undef X
         const size_t kDoorEnvCount = sizeof(kDoorEnvNames) / sizeof(kDoorEnvNames[0]);
-        int env_opened = 0;
         for (size_t i = 0; i < kDoorEnvCount && req_ok; i++) {
             DWORD val_len = GetEnvironmentVariableW(kDoorEnvNames[i], NULL, 0);
             if (val_len <= 1) {
@@ -1555,33 +1698,55 @@ int main(void) {
                 free(val_w);
                 continue;
             }
-            int val_u8_len;
-            char *val_u8 = wide_to_utf8(val_w, &val_u8_len);
+            req_ok &= env_pair_append_w(&env_pairs, kDoorEnvNames[i], val_w);
             free(val_w);
-            if (!val_u8) {
-                req_ok = 0;
-                break;
-            }
-            int name_u8_len;
-            char *name_u8 = wide_to_utf8(kDoorEnvNames[i], &name_u8_len);
-            if (!name_u8) {
-                free(val_u8);
-                req_ok = 0;
-                break;
-            }
-
-            req_ok &= buf_append_cstr(&req, env_opened ? ",\"" : ",\"_env\":{\"");
-            req_ok &= buf_append_json_escaped(&req, name_u8, (size_t)name_u8_len);
-            req_ok &= buf_append_cstr(&req, "\":\"");
-            req_ok &= buf_append_json_escaped(&req, val_u8, (size_t)val_u8_len);
-            req_ok &= buf_append_cstr(&req, "\"");
-            free(name_u8);
-            free(val_u8);
-            env_opened = 1;
         }
-        if (env_opened) {
+
+        /* PREFIX RULE -- `DOOR_ENV_PREFIXES`, the per-session guard override
+         * namespace (`env_forwarding.CALLER_PREFIXES`); the POSIX leg walks
+         * `environ` for the same set. Walked off the environment block
+         * because the names are not known in advance: a guard adds a key and
+         * the door must carry it with no rebuild. Same omit-empty contract
+         * as the declared names; no declared name matches a prefix (pinned
+         * Python-side), so no name is sent twice. Windows env names are
+         * case-insensitive, so the prefix match is too, and the name crosses
+         * upper-cased -- the spelling every guard reads. */
+#define X(prefix) L"" #prefix,
+        static const wchar_t *const kDoorEnvPrefixes[] = { DOOR_ENV_PREFIXES(X) };
+#undef X
+        const size_t kDoorEnvPrefixCount =
+            sizeof(kDoorEnvPrefixes) / sizeof(kDoorEnvPrefixes[0]);
+        wchar_t *env_block = req_ok ? GetEnvironmentStringsW() : NULL;
+        for (const wchar_t *entry = env_block; req_ok && entry && *entry;
+             entry += wcslen(entry) + 1) {
+            const wchar_t *eq = wcschr(entry + 1, L'=');
+            if (eq == NULL || eq[1] == L'\0') continue;
+            size_t name_len = (size_t)(eq - entry);
+            for (size_t p = 0; p < kDoorEnvPrefixCount; p++) {
+                size_t plen = wcslen(kDoorEnvPrefixes[p]);
+                if (name_len <= plen || _wcsnicmp(entry, kDoorEnvPrefixes[p], plen) != 0) {
+                    continue;
+                }
+                wchar_t *name_w = (wchar_t *)malloc((name_len + 1) * sizeof(wchar_t));
+                if (name_w == NULL) {
+                    req_ok = 0;
+                    break;
+                }
+                for (size_t k = 0; k < name_len; k++) name_w[k] = towupper(entry[k]);
+                name_w[name_len] = L'\0';
+                req_ok &= env_pair_append_w(&env_pairs, name_w, eq + 1);
+                free(name_w);
+                break;
+            }
+        }
+        if (env_block) FreeEnvironmentStringsW(env_block);
+
+        if (req_ok && env_pairs.len > 0) {
+            req_ok &= buf_append_cstr(&req, ",\"_env\":{");
+            req_ok &= buf_append(&req, env_pairs.data, env_pairs.len);
             req_ok &= buf_append_cstr(&req, "}");
         }
+        free(env_pairs.data);
     }
 
     /* `_caller.pid` (2026-08-30, docs/plans/2026-08-30-every-op-runs-in-

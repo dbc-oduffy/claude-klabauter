@@ -154,7 +154,7 @@ def test_insert_after_claimed_at(tmp_path):
 
     assert result["exit_code"] == 0, result
     assert result["applied"] is True
-    # Review: code-reviewer (F6) — message field must be present on exit_code 0 responses.
+    # Message field must be present on exit_code 0 responses.
     assert "message" in result, f"exit_code=0 response must include 'message'; got {result!r}"
 
     lines = hpath.read_text(encoding="utf-8").splitlines()
@@ -262,7 +262,7 @@ def test_idempotent_skip(tmp_path):
 
     assert result["exit_code"] == 0, result
     assert result["applied"] is False
-    # Review: code-reviewer (F6) — message field must be present on idempotent-skip path.
+    # Message field must be present on idempotent-skip path.
     assert "message" in result, f"exit_code=0 idempotent response must include 'message'; got {result!r}"
     # File must be byte-identical — no write occurred.
     assert hpath.read_text(encoding="utf-8") == original, (
@@ -455,7 +455,7 @@ def test_kind_force_replace_without_kind_is_rejected(tmp_path):
 def test_insert_relative_path_resolves_from_worktree(tmp_path):
     """stamp accepts a repo-relative handoff_path and resolves against the worktree (P9).
 
-    Review: code-reviewer (F3) — AC15 P9 gap: main_worktree_root is only called on the
+    AC15 P9 gap: main_worktree_root is only called on the
     relative-path branch; all prior tests pass absolute paths. This test exercises that
     branch and verifies the file is written at <worktree>/state/handoffs/, not
     <worktree>/.git/state/handoffs/.
@@ -702,7 +702,7 @@ def test_rejects_absolute_path_with_no_repo_root(tmp_path):
     """An absolute handoff_path with repo_root=None is rejected outright — no
     containment fallback exists for the callerless-repo_root case.
 
-    Review: code-reviewer (Finding 1/2) — before the fix, this branch fell
+    Before the fix, this branch fell
     through to an unguarded `p.resolve()` with zero containment check, reaching
     locked_rmw with an out-of-tree target. locked_rmw is mocked here (rather
     than left real) because with repo_root=None the *lock-sidecar* derivation

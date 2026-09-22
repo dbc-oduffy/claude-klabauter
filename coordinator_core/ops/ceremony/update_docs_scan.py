@@ -52,6 +52,9 @@ from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.distill.curation_status import compute_curation_status
+from coordinator_core.execute_plan_assemble.close_out_and_stamp import (
+    reconcile_tracker_shipped_counts,
+)
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 from coordinator_core.ipc import CEREMONY_BUDGET_SECS, register_op
 from coordinator_core.lifecycle_constants import SPEC_SKIP_STATUSES
@@ -74,6 +77,19 @@ Key Files — "coordinator_core/DIRECTORY.md — full module map")."""
 GIT_LOG_WINDOW_DAYS = 14
 """Bounded git-log lookback window for Phase 1 state-detection (named module
 constant, not prose, per AC8)."""
+
+GIT_LOG_WINDOW_MAX_COMMITS = 300
+"""Hard ceiling on the number of commits `--since=<GIT_LOG_WINDOW_DAYS days>`
+is allowed to walk. `--name-only` fans out one line per touched file per
+commit, so output size scales with commits x files-touched-per-commit, not
+with any fixed per-call cost -- an active repo's window can carry the scan
+past its ceremony budget regardless of GIT_LOG_WINDOW_DAYS. 300 keeps this
+call in the tens-of-milliseconds range even on a high-churn window (measured:
+~1MB / ~2450 commits in ~0.7s on this box), an order of magnitude under both
+CEREMONY_BUDGET_SECS and the process-time budget this scan otherwise risks
+spending itself down to nothing. A window that hits the ceiling degrades
+`commit_count`/`touched_paths` to a most-recent-N sample (see `truncated`
+below) rather than growing the read unboundedly."""
 
 # --- Phase 8b constants (named, per AC8) -----------------------------------
 
@@ -181,15 +197,24 @@ def _phase1_state_detection(worktree_root: Path, *, now: _dt.datetime) -> dict[s
 
 
 def _phase1_git_log_window(worktree_root: Path, *, now: _dt.datetime) -> dict[str, Any]:
-    """Bounded `git log` scan of the last GIT_LOG_WINDOW_DAYS. Degrades to
-    {"available": False} on any non-git-repo / git-invocation failure — this
-    is a diagnostic signal, not a correctness gate, so a fixture tree lacking
-    a .git dir is a legitimate state, never an error."""
+    """Bounded `git log` scan of the last GIT_LOG_WINDOW_DAYS, capped at
+    GIT_LOG_WINDOW_MAX_COMMITS commits regardless of how many the window
+    holds. Degrades to {"available": False} on any non-git-repo /
+    git-invocation failure — this is a diagnostic signal, not a correctness
+    gate, so a fixture tree lacking a .git dir is a legitimate state, never
+    an error."""
     since = (now - _dt.timedelta(days=GIT_LOG_WINDOW_DAYS)).strftime("%Y-%m-%d")
     kwargs: dict[str, Any] = no_console_creationflags()
     try:
         proc = subprocess.run(
-            ["git", "log", f"--since={since}", "--name-only", "--pretty=format:%H"],
+            [
+                "git",
+                "log",
+                f"--since={since}",
+                f"--max-count={GIT_LOG_WINDOW_MAX_COMMITS}",
+                "--name-only",
+                "--pretty=format:%H",
+            ],
             cwd=worktree_root,
             capture_output=True,
             text=True,
@@ -222,6 +247,7 @@ def _phase1_git_log_window(worktree_root: Path, *, now: _dt.datetime) -> dict[st
         "since_days": GIT_LOG_WINDOW_DAYS,
         "commit_count": commit_count,
         "touched_paths": sorted(touched_paths),
+        "truncated": commit_count >= GIT_LOG_WINDOW_MAX_COMMITS,
     }
 
 
@@ -404,6 +430,37 @@ def _classify_tasks_cohort(worktree_root: Path) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# AC7 — tracker_reconcile_preview
+# ---------------------------------------------------------------------------
+
+TRACKER_REL_PATH_PROJECT = "docs/project-tracker.md"
+"""The hand-curated `N of M` tracker `reconcile_tracker_shipped_counts`
+reconciles against (AC7) -- distinct from `TRACKER_REL_PATH` above, which
+names the source-tree map Phase 1 checks for staleness."""
+
+
+def _tracker_reconcile_preview(worktree_root: Path) -> list[dict[str, Any]]:
+    """Read-only AC7 preview leg: reuses `close_out_and_stamp.reconcile_
+    tracker_shipped_counts` -- the exact same compute `apply_tracker_
+    reconciliation` uses to WRITE -- so this scan reports the identical
+    stale `N of M` edits without ever touching the tracker file on disk
+    (module docstring: this op performs NO filesystem writes of any kind).
+
+    Returns `[]` when `docs/project-tracker.md` is absent or unreadable, or
+    when the reconciler finds nothing to reconcile -- never raises, mirroring
+    every other Phase 1/8/8b leg's malformed-input tolerance."""
+    tracker_path = worktree_root / TRACKER_REL_PATH_PROJECT
+    if not tracker_path.is_file():
+        return []
+    try:
+        text = tracker_path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    _new_text, edits = reconcile_tracker_shipped_counts(text, worktree_root)
+    return edits
+
+
+# ---------------------------------------------------------------------------
 # JSON-RPC handler
 # ---------------------------------------------------------------------------
 
@@ -448,5 +505,5 @@ def _ceremony_update_docs_scan(params: dict, repo_root: Optional[Path] = None) -
         "phase1": phase1,
         "phase8_lineage_backstop": lineage_edges,
         "phase8b_prune": prune_rows,
-        "tracker_reconcile_preview": [],
+        "tracker_reconcile_preview": _tracker_reconcile_preview(worktree_root),
     }

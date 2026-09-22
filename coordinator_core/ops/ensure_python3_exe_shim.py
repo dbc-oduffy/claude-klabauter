@@ -265,7 +265,7 @@ def _install_shim(python_bin: str, check_only: bool) -> int:
     #     is NOT isolated the way python.exe is, with no error at all. Fail
     #     loud instead of installing a differently-behaving interpreter.
     #
-    #     Review: code-reviewer (P2) — this preflight is deliberately ahead
+    # This preflight is deliberately ahead
     #     of the `already_valid` idempotency early-return below, not an
     #     oversight of where it belongs. A byte-identical existing shim is
     #     still wrongly isolated when the trap is present: the shim was
@@ -405,7 +405,7 @@ def _classify_python3() -> dict:
             capture_output=True,
             timeout=_APPX_STUB_PROBE_TIMEOUT_S,
             stdin=subprocess.DEVNULL,
-            # Review: code-reviewer (F2) — `resolved` is an unverified PATH hit
+            # `resolved` is an unverified PATH hit
             # (could be an AppX stub or worse); guard against stdin-block hangs.
             **no_console_creationflags(),
         )

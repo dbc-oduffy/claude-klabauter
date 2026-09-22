@@ -214,6 +214,41 @@ class TestDetectorBPositiveOwnership:
         assert result["disposition"] == "continued"
 
 
+class TestDetectorAMultipleClaimedArchivedHandoffs:
+    """2026-08-08 bug-backlog (`state/bug-backlog/2026-08-08-a-display-only-
+    chain-classifier-became-a-5325e659f324.yaml`): a chain_id that claimed
+    more than one archived predecessor handoff over its lifetime used to be
+    classified off the alphabetically-FIRST sorted match, regardless of
+    which claim was actually most recent — an unrelated older "closed" record
+    could outrank a later "continued" one for the same session."""
+
+    def test_last_sorted_archived_claim_wins_not_the_first(self, tmp_path):
+        sid = "chain-sid-multi-claim"
+        repo = _make_repo(tmp_path)
+        archive_dir = repo / "archive" / "handoffs"
+        archive_dir.mkdir(parents=True)
+        (archive_dir / "2026-01-01-earlier.md").write_text(
+            f"---\nclaimed_by: {sid}\npredecessor: none\n"
+            "deployment_state: closed\n---\nbody\n",
+            encoding="utf-8",
+        )
+        (archive_dir / "2026-06-01-later.md").write_text(
+            f"---\nclaimed_by: {sid}\npredecessor: none\n"
+            "deployment_state: continued\n---\nbody\n",
+            encoding="utf-8",
+        )
+
+        result = rctd._classify_sync(repo, sid, {})
+
+        assert result["exit_code"] == 0
+        assert result["disposition"] == "continued"
+        assert result["chain_terminal"] is True
+        assert (
+            result["evidence"]["consumed_handoff"]
+            == "archive/handoffs/2026-06-01-later.md"
+        )
+
+
 class TestHandlerUnresolvedGuard:
     def test_handler_returns_error_envelope_when_sid_unresolvable(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)

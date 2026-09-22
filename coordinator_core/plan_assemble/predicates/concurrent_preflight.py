@@ -80,7 +80,7 @@ def _frontmatter_block(text: str) -> str:
     """The text between the leading `---` markers, or `""` if *text* does
     not open with a frontmatter block.
 
-    Review: code-reviewer — `_SOURCE_MEMO_RE` was being applied to the
+    `_SOURCE_MEMO_RE` was being applied to the
     entire plan file text, so a plan whose BODY prose happens to contain a
     line literally starting with `source_memo:` (e.g. quoting another
     plan's frontmatter) would be picked up as if it were real frontmatter.

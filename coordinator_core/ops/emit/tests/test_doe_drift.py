@@ -65,7 +65,7 @@ from coordinator_core.ops.emit.doe_drift import (
     run_drift_check,
 )
 
-# Review: code-reviewer (F6) — load-bearing negative-spec: AheadOfReleaseWarning must NOT
+# load-bearing negative-spec: AheadOfReleaseWarning must NOT
 # subclass DriftWarning.  The re-vendor post-check kills on DriftWarning but only logs plain
 # UserWarning; a regression in the class hierarchy would silently break that gate.
 assert not issubclass(AheadOfReleaseWarning, DriftWarning), (
@@ -74,7 +74,7 @@ assert not issubclass(AheadOfReleaseWarning, DriftWarning), (
 
 # Reuse the EXISTING normalizer and typed sentinels from the shared normalizers module.
 # AC_NORMALIZER: these are the shared AC5-PROVENANCE oracles.
-# Review: code-reviewer (F2) — import from normalizers (production module) rather than
+# Import from normalizers (production module) rather than
 # cross-importing from test_emit_parity (test leaf); avoids pytest collection-isolation
 # breakage and makes the surface available for future runtime callers.
 from coordinator_core.ops.emit.normalizers import (
@@ -272,7 +272,7 @@ class TestFreshnessRef:
         the "pin behind tag" (False) path — not the indeterminate-via-non-git-tmp_path
         path that the previous mock gap inadvertently tested.
 
-        Review: code-reviewer (F3) — add _tag_is_ancestor_of_pin mock so the test
+        Add _tag_is_ancestor_of_pin mock so the test
         exercises the explicit pin-behind path (return_value=False) rather than the
         indeterminate path that fires when tmp_path is not a git repo.  Removes the
         real subprocess call and makes the test name accurate.
@@ -402,7 +402,7 @@ class TestFreshnessRef:
         Must emit a warning and not raise — the expected path during the initial
         strang-02 window before DoE publishes the ref.
 
-        Review: code-reviewer (F1) — updated to mock probe_freshness_ref returning None
+        Updated to mock probe_freshness_ref returning None
         (ref absent on origin) so the test isolates state (A) cleanly; check_freshness
         now probes origin even when pin is ABSENT.
         """
@@ -443,7 +443,7 @@ class TestFreshnessRef:
         DriftWarning category is
         distinguishable from routine warnings so callers can escalate it in test suites.
 
-        Review: code-reviewer (F1) — exercises the "ref now present on origin but pin
+        Exercises the "ref now present on origin but pin
         still ABSENT" transition; mocks probe to return a real SHA.
         """
         origin_sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"  # 40 hex chars
@@ -528,7 +528,7 @@ class TestFreshnessRef:
 class TestTagIsAncestorOfPin:
     """Direct unit tests of _tag_is_ancestor_of_pin exit-code → return-value mapping.
 
-    Review: code-reviewer (F4) — no test previously called _tag_is_ancestor_of_pin
+    No test previously called _tag_is_ancestor_of_pin
     directly; all coverage was via check_freshness (which mocks the function at the
     call site).  These tests validate the subprocess handling logic — the highest-risk
     surface in the diff — without hitting the filesystem.

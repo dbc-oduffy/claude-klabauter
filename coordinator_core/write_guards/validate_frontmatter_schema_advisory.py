@@ -106,6 +106,8 @@ from typing import Any, Callable, Optional, TypeVar
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.write_guards.validate_frontmatter_schema_deny import (
     _is_doe_owned_repo as _deny_guard_is_doe_owned_repo,
+    _run_report_glob_match_is_content_thin,
+    _validate_whole_document_records,
 )
 from coordinator_core.dag import check_lineage_reachability as _check_lineage_reachability
 from coordinator_core.data_root import content_root_for
@@ -135,6 +137,20 @@ MATCHERS = ["Write", "Edit", "MultiEdit"]
 PRIORITY = 100
 
 _GUARDED_TOOLS = ("Write", "Edit", "MultiEdit")
+
+# Unconditional stand-down for `state/priority-ledger/*` — mirrors the
+# own-inbox / lineage-reachability / grouping-approval / handoff-kind-enum
+# stand-downs below: `block_priority_ledger_edit` (PRIORITY 114) claims
+# every file under this directory unconditionally with its own, far more
+# specific "hand-editing this disk-truth ledger" advisory, so this module's
+# generic schema-shape warning has no business firing there and winning the
+# "first non-None advisory wins" race ahead of it. Path-tail regex, same
+# shape as `block_priority_ledger_edit._LEDGER_RE` (not imported from there
+# to avoid coupling this module's stand-down to that guard's own internal
+# regex object identity).
+# Spec backlink: state/bug-backlog/2026-08-06-priority-ledger-advisory-is-
+# swallowed-by-7d2cb865e06f.yaml
+_PRIORITY_LEDGER_RE = re.compile(r"(^|/)state/priority-ledger/[^/]+$")
 
 _MEMO_SCHEMA_NAMES = ("cross-repo-memo", "archived-memo")
 _DOE_CLAUDE_REGISTRY_KEY = "repos.doe_claude"
@@ -346,7 +362,7 @@ def build_violation_payload_advisory(
     payload: Optional[dict] = None,
     git_root: Optional[str] = None,
 ) -> Optional[dict]:
-    # Review: staff-eng (B8 leg (d)+(f)) -- this builder hand-rolled its own
+    # This builder hand-rolled its own
     # "see docs/reference/guard-override-keys.md" pointer, unconditionally,
     # for every audience including a dispatched subagent. Routed through
     # `bash_guards._helpers.operator_override_note` so it degrades to the
@@ -1221,7 +1237,7 @@ def _evaluate_schema_validation_advisory(
 ) -> Optional[dict]:
     match_mode = schema.get("match_mode")
 
-    if match_mode == "whole-document-yaml":
+    if match_mode in ("whole-document-yaml", "whole-document-records"):
         try:
             if repo_rel.lower().endswith(".json"):
                 try:
@@ -1241,7 +1257,10 @@ def _evaluate_schema_validation_advisory(
                 payload=payload,
                 git_root=git_root,
             )
-        validation_result = validate_frontmatter_obj(parsed, schema)
+        if match_mode == "whole-document-records":
+            validation_result = _validate_whole_document_records(parsed, schema)
+        else:
+            validation_result = validate_frontmatter_obj(parsed, schema)
 
     elif match_mode == "no-frontmatter":
         validation_result = {"ok": True}
@@ -1361,6 +1380,65 @@ def _grouping_approval_fires(prospective_content: str) -> bool:
         return _check_plan_tasks_grouping_approval(prospective_content) is not None
     except Exception:  # noqa: BLE001 — fail-open, never block on infra
         return False
+
+
+_PLAN_STATUS_SCHEMA_NAME = "plan"
+
+
+def _plan_status_off_enum_fires(
+    schema_name: Optional[str],
+    schema: dict,
+    frontmatter: Optional[dict],
+    tool_name: str,
+    abs_file_path: str,
+) -> bool:
+    """True when the deny sibling's plan-status-off-enum branch
+    (`_evaluate_plan_status_enum`, plan C5) would fire on this payload.
+
+    Mirrors that function's predicate exactly — same ``schema_name ==
+    "plan"`` scope, same absent/non-scalar/off-enum trigger, same
+    changed-from-on-disk gate — so the two can never both fire on one
+    payload. Kept as a boolean, mirroring `_grouping_approval_fires`,
+    `_handoff_kind_off_enum_fires` and `_queue_deferral_grant_fires` above,
+    because this side never renders the message; it only needs to know
+    whether to stand down.
+
+    Reads `abs_file_path` itself, only after the prospective value is
+    already found off-enum — mirrors the deny sibling's own I/O-avoidance
+    for a Write (nothing else in this module's `check()` reads the file for
+    a Write either); a fresh read here rather than a value threaded from
+    `check()`'s own Edit/MultiEdit branches is the same known-redundant-read
+    tradeoff `_grouping_approval_fires` above already accepts for this
+    module.
+    """
+    if schema_name != _PLAN_STATUS_SCHEMA_NAME or not frontmatter:
+        return False
+    enum_values = list((schema.get("properties") or {}).get("status", {}).get("enum") or [])
+    if not enum_values:
+        return False
+    status = frontmatter.get("status")
+    if status is None:
+        off_enum = True
+    elif isinstance(status, (dict, list)):
+        off_enum = True
+    else:
+        off_enum = status not in enum_values
+    if not off_enum:
+        return False
+
+    try:
+        with open(abs_file_path, "r", encoding="utf-8") as fh:
+            prior_text = fh.read()
+    except OSError:
+        return True  # new file — always "changes" the status
+    try:
+        prior_fm = parse_frontmatter(prior_text).get("frontmatter")
+    except Exception:  # noqa: BLE001 — fail-open toward firing, matching the
+        # deny sibling's own sentinel-on-exception (`_plan_status_from_text`)
+        return True
+    if not prior_fm:
+        return True
+    return prior_fm.get("status") != status
 
 
 _QUEUE_FAMILY_DIRS = ("improvement-queue", "debt-backlog", "bug-backlog")
@@ -1502,6 +1580,9 @@ def check(payload: dict) -> Optional[dict]:
     if not repo_rel:
         return None
 
+    if _PRIORITY_LEDGER_RE.search(repo_rel.replace("\\", "/")):
+        return None
+
     registry = _load_doe_registry()
     doe_claude_realpath = _doe_claude_realpath(registry["doe_root"])
 
@@ -1556,6 +1637,10 @@ def check(payload: dict) -> Optional[dict]:
     frontmatter = parse_frontmatter(prospective_content).get("frontmatter")
 
     match = match_schema(repo_rel, frontmatter, schemas)
+    if match and _run_report_glob_match_is_content_thin(
+        match.get("schemaName"), match.get("schema"), frontmatter
+    ):
+        match = None
     if not match:
         # Unconditional stand-down, and it stays that way. One sub-case of
         # this seam — a frontmatter block that OPENS and does not parse —
@@ -1613,6 +1698,13 @@ def check(payload: dict) -> Optional[dict]:
     # on non-plan documents. Do not "fix" this asymmetry with the
     # neighbouring handoff-kind check without a real `plan` schema to key on.
     if _grouping_approval_fires(prospective_content):
+        return None
+
+    # Plan-status off-enum (plan C5) is the deny sibling's territory too —
+    # the third always-WARN finding, rendered by that module in BOTH modes —
+    # so this one stands down in lockstep, same mutual-exclusivity reasoning
+    # as the grouping-approval stand-down immediately above.
+    if _plan_status_off_enum_fires(schema_name, schema, frontmatter, tool_name, abs_file_path):
         return None
 
     # Out-of-enum handoff `kind` (2026-07-29 D3) is the fourth UNCONDITIONAL

@@ -188,6 +188,7 @@ class TestAppendSucceedsAndUnblocksGuard:
             "\n"
             "```yaml\n"
             "schema_version: 1\n"
+            "relation: complementary\n"
             "applied: [F1, F2]\n"
             "escalated-disagree: [F4]\n"
             "escalated-ask: [F6, F9]\n"
@@ -354,7 +355,10 @@ class TestIdempotentSecondCall:
         first_text = sidecar.read_text(encoding="utf-8")
 
         result = mod.append_dispositions(
-            sidecar, {"escalated-ask": ["F1"]}, git_root=tmp_path
+            sidecar,
+            {"escalated-ask": ["F1"]},
+            git_root=tmp_path,
+            relation=mod.RELATION_SUPERSEDE,
         )
         assert result["already_dispositioned"] is True
         assert result["prior_blocks"] == 1
@@ -368,6 +372,54 @@ class TestIdempotentSecondCall:
         assert second_text.rindex("escalated-ask: [F1]") > second_text.rindex(
             "supersedes_block: 1"
         )
+
+    def test_complementary_slice_appends_carry_no_supersession_marker(self, tmp_path):
+        """claude-klabauter#48: a partitioned review's slices are complementary
+        by construction, and the default relation must reflect that — a second
+        append from a DIFFERENT slice integrator must never carry
+        `supersedes_block`, or a later reader following that marker wrongly
+        concludes the first slice's dispositions were withdrawn."""
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "codereview-sliceA.md",
+            agent_type="coordinator:code-reviewer", body=_FINDINGS_BODY,
+        )
+        mod.append_dispositions(sidecar, {"applied": ["F1"]}, git_root=tmp_path)
+        result = mod.append_dispositions(
+            sidecar, {"escalated-ask": ["F4"]}, git_root=tmp_path
+        )
+        assert result["relation"] == mod.RELATION_COMPLEMENTARY
+        text = sidecar.read_text(encoding="utf-8")
+        assert text.count("## Integrator Dispositions") == 2
+        assert "supersedes_block" not in text
+        assert text.count("relation: complementary") == 2
+
+    def test_relation_is_stated_in_every_block_not_only_on_supersession(self, tmp_path):
+        """A reader must never have to infer the relation from the marker's
+        absence — the relation is named explicitly, every time."""
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "codereview-sliceA.md",
+            agent_type="coordinator:code-reviewer", body=_FINDINGS_BODY,
+        )
+        mod.append_dispositions(sidecar, {"applied": ["F1"]}, git_root=tmp_path)
+        mod.append_dispositions(
+            sidecar,
+            {"escalated-ask": ["F1"]},
+            git_root=tmp_path,
+            relation=mod.RELATION_SUPERSEDE,
+        )
+        text = sidecar.read_text(encoding="utf-8")
+        assert "relation: complementary" in text
+        assert "relation: supersede" in text
+
+    def test_invalid_relation_is_refused(self, tmp_path):
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "codereview-sliceA.md",
+            agent_type="coordinator:code-reviewer", body=_FINDINGS_BODY,
+        )
+        with pytest.raises(mod.DispositionsError):
+            mod.append_dispositions(
+                sidecar, {"applied": ["F1"]}, git_root=tmp_path, relation="bogus"
+            )
 
     def test_a_first_block_carries_no_supersession_fields(self, tmp_path):
         """Byte-parity with DoE's documented example survives the history.
@@ -1678,18 +1730,21 @@ class TestPartitionAuditEndToEnd:
 
         return "```json\n" + _json.dumps({"findings": [{"t": i} for i in range(n)]}) + "\n```\n"
 
-    def test_the_audit_reads_the_array_off_the_actual_file(self, tmp_path):
+    def test_a_holed_partition_is_refused_and_nothing_is_written(self, tmp_path):
         root, sc = self._sidecar(
             tmp_path,
             "---\nagent_type: coordinator:code-reviewer\n---\n\n" + self._json_block(7),
         )
-        result = mod.append_dispositions(
-            sc, {"applied": ["1", "3", "5"], "deferred": ["2"], "verified-no-action": ["4"]},
-            git_root=root,
-        )
-        assert result["partition_audit"] == {"unbucketed": ["6", "7"]}
+        before = sc.read_text(encoding="utf-8")
+        with pytest.raises(mod.DispositionsError, match="unbucketed"):
+            mod.append_dispositions(
+                sc, {"applied": ["1", "3", "5"], "deferred": ["2"], "verified-no-action": ["4"]},
+                git_root=root,
+            )
+        assert sc.read_text(encoding="utf-8") == before
+        assert mod._DISPOSITIONS_HEADING not in before
 
-    def test_the_both_shape_sidecar_is_still_audited(self, tmp_path):
+    def test_the_both_shape_sidecar_still_refuses_a_hole(self, tmp_path):
         # 19 of 307 live sidecars carry both; _detect_findings_shape calls
         # them `review-findings`, which is exactly why the audit must not key
         # on its verdict. Argued in the docstring, exercised here.
@@ -1699,8 +1754,9 @@ class TestPartitionAuditEndToEnd:
         )
         root, sc = self._sidecar(tmp_path, body)
         assert mod._detect_findings_shape(body)[0] == mod._SHAPE_REVIEW_FINDINGS
-        result = mod.append_dispositions(sc, {"applied": ["1"]}, git_root=root)
-        assert result["partition_audit"] == {"unbucketed": ["2", "3"]}
+        with pytest.raises(mod.DispositionsError, match="unbucketed"):
+            mod.append_dispositions(sc, {"applied": ["1"]}, git_root=root)
+        assert sc.read_text(encoding="utf-8") == body
 
     def test_no_findings_skips_the_audit_entirely(self, tmp_path):
         root, sc = self._sidecar(
@@ -1724,26 +1780,45 @@ class TestPartitionAuditEndToEnd:
         result = mod.append_dispositions(sc, {"applied": ["1", "2"]}, git_root=root)
         assert result["partition_audit"] == {"ambiguous_block": ["true"]}
 
-    def test_a_multi_class_report_renders_parseable_yaml_in_order(self, tmp_path):
-        import yaml
-
+    def test_a_multi_class_report_with_a_hole_and_an_overlap_is_refused(self, tmp_path):
+        # Holed (unbucketed) AND overlapping (duplicated), alongside an
+        # out-of-range id and an unrecognized one -- the hole/overlap must
+        # still trip the refusal even sharing a call with the WARN-only
+        # classes, and nothing lands on disk.
         root, sc = self._sidecar(
             tmp_path,
             "---\nagent_type: coordinator:code-reviewer\n---\n\n" + self._json_block(4),
         )
-        mod.append_dispositions(
-            sc, {"applied": ["1", "9", "summary"], "deferred": ["1"]}, git_root=root
-        )
-        fence = sc.read_text(encoding="utf-8").split("```yaml", 1)[1].split("```", 1)[0]
-        parsed = yaml.safe_load(fence)
-        audit = parsed["partition_audit"]
-        assert audit["unbucketed"] == [2, 3, 4]
-        assert audit["duplicated"] == [1]
-        assert audit["out_of_range"] == [9]
-        assert audit["unrecognized"] == ["summary"]
-        assert list(audit) == ["unbucketed", "duplicated", "out_of_range", "unrecognized"]
+        before = sc.read_text(encoding="utf-8")
+        with pytest.raises(mod.DispositionsError) as excinfo:
+            mod.append_dispositions(
+                sc, {"applied": ["1", "9", "summary"], "deferred": ["1"]}, git_root=root
+            )
+        message = str(excinfo.value)
+        assert "unbucketed" in message
+        assert "duplicated" in message
+        assert sc.read_text(encoding="utf-8") == before
 
-    def test_the_cli_prints_the_warning_to_stderr(self, tmp_path, capsys, monkeypatch):
+    def test_out_of_range_and_unrecognized_alone_still_warn_not_refuse(self, tmp_path):
+        # A complete, non-overlapping partition (1, 2 covered once each) that
+        # also names an out-of-range id and an unrecognized one: neither class
+        # is a hole or an overlap, so the call still lands and the audit still
+        # renders in the block rather than raising.
+        root, sc = self._sidecar(
+            tmp_path,
+            "---\nagent_type: coordinator:code-reviewer\n---\n\n" + self._json_block(2),
+        )
+        result = mod.append_dispositions(
+            sc, {"applied": ["1", "2", "9", "summary"]}, git_root=root
+        )
+        audit = result["partition_audit"]
+        assert "unbucketed" not in audit
+        assert "duplicated" not in audit
+        assert audit["out_of_range"] == ["9"]
+        assert audit["unrecognized"] == ["summary"]
+        assert "partition_audit:" in sc.read_text(encoding="utf-8")
+
+    def test_the_cli_refuses_a_holed_partition_with_exit_one(self, tmp_path, capsys, monkeypatch):
         root, sc = self._sidecar(
             tmp_path,
             "---\nagent_type: coordinator:code-reviewer\n---\n\n" + self._json_block(3),
@@ -1751,9 +1826,20 @@ class TestPartitionAuditEndToEnd:
         monkeypatch.chdir(root)
         code = mod.main(["--sidecar", str(sc), "--applied", "1", "--root", str(root)])
         captured = capsys.readouterr()
+        assert code == 1
+        assert "unbucketed" in captured.err
+        assert mod._DISPOSITIONS_HEADING not in sc.read_text(encoding="utf-8")
+
+    def test_the_cli_still_warns_on_a_non_hole_non_overlap_mismatch(self, tmp_path, capsys, monkeypatch):
+        root, sc = self._sidecar(
+            tmp_path,
+            "---\nagent_type: coordinator:code-reviewer\n---\n\n" + self._json_block(2),
+        )
+        monkeypatch.chdir(root)
+        code = mod.main(["--sidecar", str(sc), "--applied", "1,2,9", "--root", str(root)])
+        captured = capsys.readouterr()
         assert code == 0
         assert "WARNING" in captured.err
-        assert "do not cover" in captured.err
 
 
 class TestMultiPassEnvelopeSidecar:
@@ -1804,32 +1890,33 @@ class TestMultiPassEnvelopeSidecar:
         assert spans == [(1, 8), (9, 12)]
         assert candidates == 1
 
-    def test_the_second_passs_ids_are_in_range_by_file_order(self, tmp_path):
+    def test_the_second_passs_ids_alone_leaves_pass_one_a_hole_and_is_refused(self, tmp_path):
         body = "## Envelope\n\n" + self._envelope(8) + "\n## Envelope (pass 2)\n\n" + self._envelope(4, start=8)
         root, sc = self._sidecar(tmp_path, body)
-        result = mod.append_dispositions(
-            sc,
-            {"applied": ["finding-9", "finding-10", "finding-11"], "verified-no-action": ["finding-12"]},
-            git_root=root,
-        )
-        audit = result["partition_audit"]
-        assert audit is not None
-        # 1..8 are pass one's, dispositioned on their own block; nothing is
-        # out of range and nothing is ambiguous any more.
-        assert "out_of_range" not in audit
-        assert "ambiguous_block" not in audit
-        assert audit["unbucketed"] == [str(i) for i in range(1, 9)]
+        before = sc.read_text(encoding="utf-8")
+        # 1..8 are pass one's, left uncovered by this call -- a hole, refused
+        # before anything is written.
+        with pytest.raises(mod.DispositionsError, match="unbucketed"):
+            mod.append_dispositions(
+                sc,
+                {"applied": ["finding-9", "finding-10", "finding-11"], "verified-no-action": ["finding-12"]},
+                git_root=root,
+            )
+        assert sc.read_text(encoding="utf-8") == before
 
     def test_remapping_the_second_pass_onto_one_through_four_is_never_clean(self, tmp_path):
         # The structural point: no id spelling maps pass two's findings onto
         # pass one's positions and audits clean. 1..4 now leaves 5..12
-        # unbucketed, so a false close cannot present itself as a complete one.
+        # unbucketed, so a false close cannot present itself as a complete one
+        # -- and a hole this wide is refused, not merely warned about.
         body = "## Envelope\n\n" + self._envelope(8) + "\n## Envelope (pass 2)\n\n" + self._envelope(4, start=8)
         root, sc = self._sidecar(tmp_path, body)
-        result = mod.append_dispositions(
-            sc, {"applied": ["1", "2", "3"], "verified-no-action": ["4"]}, git_root=root
-        )
-        assert result["partition_audit"]["unbucketed"] == [str(i) for i in range(5, 13)]
+        before = sc.read_text(encoding="utf-8")
+        with pytest.raises(mod.DispositionsError, match="unbucketed"):
+            mod.append_dispositions(
+                sc, {"applied": ["1", "2", "3"], "verified-no-action": ["4"]}, git_root=root
+            )
+        assert sc.read_text(encoding="utf-8") == before
 
     def test_the_block_records_which_numbering_the_ids_were_read_in(self, tmp_path):
         import yaml
@@ -1862,7 +1949,7 @@ class TestMultiPassEnvelopeSidecar:
         assert result["partition_audit"] == {"ambiguous_block": ["true"]}
 
     def test_a_bare_block_coexisting_with_a_real_envelope_is_still_ambiguous(self, tmp_path):
-        # Review: S8 reviewer F1 -- the union-of-envelopes branch used to
+        # The union-of-envelopes branch used to
         # hardcode candidate_blocks=1 whenever any real envelope existed,
         # silently dropping a co-existing bare (unidentified) block instead
         # of tripping `ambiguous_block`. This is the missing arm: one real

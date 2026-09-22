@@ -126,9 +126,9 @@ def test_quick_wrap_calls_auto_commit_in_process(qw_repo, monkeypatch):
     _stub_facts_all_computed(monkeypatch, qw_repo)
     monkeypatch.setattr(qwa, "commit_session_offer_async", _fake)
 
-    envelope = qwa.brief()
+    envelope = qwa.brief(commit=True)
 
-    assert calls, "quick_wrap_assemble.brief() must call commit_session_offer_async in-process"
+    assert calls, "quick_wrap_assemble.brief(commit=True) must call commit_session_offer_async in-process"
     assert calls[0][0] == _SID
     assert calls[0][3] == "attended"
     assert "safe-commit-offer" not in [d["cli"] for d in envelope["directives"]]
@@ -141,7 +141,7 @@ def test_quick_wrap_auto_commit_failure_does_not_block_completion(qw_repo, monke
     _stub_facts_all_computed(monkeypatch, qw_repo)
     monkeypatch.setattr(qwa, "commit_session_offer_async", _boom)
 
-    envelope = qwa.brief()  # must not raise
+    envelope = qwa.brief(commit=True)  # must not raise
 
     assert envelope["gates"]["commit_outcome"]["status"] == "error"
     assert "next_move" in envelope
@@ -156,7 +156,7 @@ def test_quick_wrap_renders_outcome_and_residue(qw_repo, monkeypatch):
     _stub_facts_all_computed(monkeypatch, qw_repo)
     monkeypatch.setattr(qwa, "commit_session_offer_async", _fake)
 
-    envelope = qwa.brief()
+    envelope = qwa.brief(commit=True)
 
     outcome = envelope["gates"]["commit_outcome"]
     assert outcome["status"] == "committed"

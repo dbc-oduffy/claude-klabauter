@@ -106,7 +106,7 @@ class TestCorruptSiblingDraftIsSkipped:
         is skipped rather than treated as a match or a failure — a
         stray/corrupt sibling draft must not block an unrelated send."
 
-        Review: coordinatorcode-reviewer Finding 1/2 — pins the fix for
+        Pins the fix for
         `except OSError:` (too narrow; `UnicodeDecodeError` is a `ValueError`
         subclass) missing this exact case. Fails against the pre-fix
         `except OSError:` and passes once widened to `(OSError, ValueError)`.

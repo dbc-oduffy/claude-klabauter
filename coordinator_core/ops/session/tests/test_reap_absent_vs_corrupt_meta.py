@@ -174,7 +174,7 @@ class TestNonSessionStoresAreNeverReaped:
     passes for the unrelated reason tested above."""
 
     def test_cold_populated_non_session_store_is_not_reaped(self, tmp_path, monkeypatch):
-        # Review: coordinator:code-reviewer (P1) -- the uuid-shape gate runs
+        # The uuid-shape gate runs
         # before the denylist check, so "decisions" (non-uuid) is already
         # rejected by the uuid gate and this test would pass even if the
         # denylist check were deleted. Bypass the uuid gate so the assertion

@@ -960,7 +960,7 @@ class TestAggregateIncludesCockpitSource:
 
         assert report["status"] == STATUS_INDETERMINATE
         assert [d["schema"] for d in report["indeterminate"]] == [_VENDOR_SOURCE_NAME]
-        # Review: code-reviewer — restore assertion dropped as accidental collateral
+        # Restore assertion dropped as accidental collateral
         # of appending TestResolveScanSchemasDir below; the docstring's coverage claim
         # (an unresolved cockpit side must not mask real JSON-schema matches) needs it.
         assert sorted(report["matched"]) == sorted([_SCHEMA_A, _SCHEMA_B])
@@ -974,7 +974,7 @@ class TestResolveScanSchemasDir:
     """
 
     def test_explicit_schemas_dir_wins_outright(self, tmp_path: Path) -> None:
-        # Review: overengineering-reviewer — rung 1 returns before any mirror
+        # Rung 1 returns before any mirror
         # lookup is consulted, so an explicit arg needs no mirror/source
         # fixture or monkeypatches to prove it wins; trimmed to the assertion.
         explicit = tmp_path / "explicit-schemas"
@@ -1045,7 +1045,7 @@ class TestResolveScanSchemasDir:
 
         assert _resolve_scan_schemas_dir(None) == VENDORED_SCHEMAS_DIR
 
-    # Review: overengineering-reviewer — removed
+    # Removed
     # test_is_published_engine_mirror_raising_falls_back_to_module_relative:
     # same single `except Exception` and same assertion as
     # test_engine_root_raising_falls_back_to_module_relative above; which call
@@ -1232,3 +1232,59 @@ class TestScanReportsSchemasDirDegrade:
         assert report["status"] == STATUS_MATCH
         assert report["schemas_dir_rung"] is not None
         assert report["schemas_dir_degrade_reason"] is None
+
+
+class TestScanIndeterminateForPublishScrubbedCopies:
+    """A stamped build's own vendored copies are publish-scrubbed — a byte
+    comparison against upstream HEAD is invalid by construction, so `_scan`
+    must report INDETERMINATE without even attempting the comparison (zero
+    git spawns). C2 of docs/plans/2026-09-11-boundary-identifiers-survive-publish.md.
+    """
+
+    def _stamped_root(self, tmp_path: Path) -> Path:
+        root = tmp_path / "stamped-build"
+        schemas_dir = root / "coordinator_core" / "frontmatter" / "schemas"
+        schemas_dir.mkdir(parents=True)
+        (schemas_dir / "x.schema.json").write_text(
+            json.dumps({"type": "object"}), encoding="utf-8"
+        )
+        (root / "coordinator_core" / "_engine_stamp").write_text("sha:deadbeef\n", encoding="utf-8")
+        return schemas_dir
+
+    def test_stamped_dir_reports_indeterminate_without_calling_batch(
+        self, fake_doe: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        schemas_dir = self._stamped_root(tmp_path)
+
+        def _boom(*args, **kwargs):
+            raise AssertionError(
+                "check_schema_drift_advisory_batch must not be called for a "
+                "stamped build's publish-scrubbed vendored copies"
+            )
+
+        monkeypatch.setattr(schema_drift_watch, "check_schema_drift_advisory_batch", _boom)
+
+        report = scan_vendored_schema_drift(doe_repo_path=fake_doe, schemas_dir=schemas_dir)
+
+        assert report["status"] == STATUS_INDETERMINATE
+        assert report["drifted"] == []
+        assert report["matched"] == []
+        assert len(report["indeterminate"]) == 1
+        assert report["indeterminate"][0]["schema"] == "x.schema.json"
+
+    def test_unstamped_twin_gives_existing_behaviour(
+        self, fake_doe: Path, tmp_path: Path
+    ) -> None:
+        root = tmp_path / "unstamped-checkout"
+        schemas_dir = root / "coordinator_core" / "frontmatter" / "schemas"
+        schemas_dir.mkdir(parents=True)
+        (schemas_dir / "x.schema.json").write_text(
+            json.dumps({"type": "object"}), encoding="utf-8"
+        )
+        # No _engine_stamp file written — this is the unstamped twin.
+
+        report = scan_vendored_schema_drift(doe_repo_path=fake_doe, schemas_dir=schemas_dir)
+
+        assert report["status"] != STATUS_INDETERMINATE or not any(
+            "publish-scrubbed" in d["detail"] for d in report["indeterminate"]
+        )

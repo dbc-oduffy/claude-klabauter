@@ -288,7 +288,7 @@ class TestResolveCandidateCore:
         assert result["resolved_id"] == "pln-only"
         assert result["reason"] is None
 
-    # Review: coordinator:code-reviewer — both gates in resolve_candidate use
+    # Both gates in resolve_candidate use
     # strict `<`, so score == min_score and gap == min_gap currently
     # auto-resolve (inclusive-pass at the edge). Nothing pinned that
     # convention before; the two tests below make it a named contract so a

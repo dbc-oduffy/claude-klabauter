@@ -111,6 +111,21 @@ def test_uncatalogued_when_no_rule_covers(real_atlas: RecordedAtlas) -> None:
     assert recorded_system_for_path("coordinator_core/some_new_pkg/x.py", real_atlas) is None
 
 
+def test_rule10_covers_group_em_housekeeping_review_trail(real_atlas: RecordedAtlas) -> None:
+    """`group_em/`, `housekeeping/`, and `review_trail/` appeared with no
+    directory-to-system rows (2026-08-31 census, cluster R25), leaving every
+    file under them uncatalogued; confirms all three now resolve."""
+    assert recorded_system_for_path("coordinator_core/group_em/watch.py", real_atlas) is not None
+    assert (
+        recorded_system_for_path("coordinator_core/housekeeping/cycle.py", real_atlas)
+        is not None
+    )
+    assert (
+        recorded_system_for_path("coordinator_core/review_trail/records.py", real_atlas)
+        is not None
+    )
+
+
 # --- load_recorded_atlas --------------------------------------------------
 
 def test_load_recorded_atlas_real_repo(real_atlas: RecordedAtlas) -> None:

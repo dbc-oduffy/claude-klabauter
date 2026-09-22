@@ -272,7 +272,6 @@ def split_unquoted_newlines(cmd_text: str) -> str:
         embedding a literal newline in the value, e.g.
         ``msg="line one \\`` + newline + ``line two"`` -> ``"line one line
         two"``) -- confirmed empirically against real bash (2026-07-30,
-        Review: coordinator:code-reviewer P2 finding): both characters are
         REMOVED, same as the unquoted case below, and the two lines join
         with no separator emitted at all;
       - backslash-CR-LF inside double quotes is a DIFFERENT case, deliberately
@@ -315,7 +314,7 @@ def split_unquoted_newlines(cmd_text: str) -> str:
     while i < n:
         c = cmd_text[i]
         if quote is not None:
-            # Review: coordinator:code-reviewer P2 -- `\<newline>` (LF only)
+            # `\<newline>` (LF only)
             # is a real line continuation even inside double quotes and
             # must be REMOVED like the unquoted case below, confirmed
             # empirically against real bash. `\<CR><LF>` is NOT a

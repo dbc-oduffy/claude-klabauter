@@ -186,12 +186,12 @@ def rollup(results: list[GateResult]) -> dict[str, Any]:
     }
 
 
-# Review: coordinator:code-reviewer — log-size ceiling for the JSON-RPC
+# log-size ceiling for the JSON-RPC
 # response body; every gate function truncated stdout/stderr to the same
 # literal magic number at 5+ call sites with no named rationale.
 _DETAIL_TAIL_CHARS = 2000
 
-# Review: coordinator:code-reviewer — CLAUDE.md: "every op is held to an
+# CLAUDE.md: "every op is held to an
 # end-to-end invocation budget," but _run passed no timeout= to
 # subprocess.run, so one hung external CLI could stall updatedocs.gates
 # indefinitely. The per-CLI ceiling is now the named external-tool carve-out
@@ -333,7 +333,7 @@ def _run(
     None as, at minimum, UNAVAILABLE — see module docstring's verdict enum).
 
     Interpreter selection is by file extension, never `os.access(X_OK)` —
-    Review: coordinator:code-reviewer — os.access(path, os.X_OK) is not a
+    os.access(path, os.X_OK) is not a
     reliable executability signal cross-platform: on Windows it returns True
     for effectively any existing file, so a POSIX-only "exec directly" branch
     would fire there too and every shelled-out gate would go UNAVAILABLE; and
@@ -602,7 +602,7 @@ def _gate_plugin_wiki(_repo_root: Path, settings_home: Path, overrides: dict) ->
     # exit 0. Never collapse "0 missing-bundled warnings present" into CLEAN —
     # this is the memo's own worked example of the trap.
     #
-    # Review: coordinator:code-reviewer — regex-over-freetext is the sole
+    # regex-over-freetext is the sole
     # CONTRADICTION-detection mechanism and is fragile to upstream wording
     # drift (a DoE-claude-owned CLI this repo does not control). The memo's
     # own worked example ("clean (161 validated, 31 missing-bundled
@@ -679,7 +679,7 @@ def _gate_skill_anchor_links(_repo_root: Path, settings_home: Path, overrides: d
         )
 
     unresolved_match = _UNRESOLVED_RE.search(stdout)
-    # Review: coordinator:code-reviewer — same regex-brittleness concern as
+    # Same regex-brittleness concern as
     # 11g's _VALIDATED_RE (see that gate's canary comment). Unlike 11g, there
     # is no documented worked example proving "N unresolved" always appears
     # on a clean exit 0 here, so a silent-absence default to 0 is left as-is
@@ -787,7 +787,7 @@ def _gate_queue_prune_sweep(repo_root: Path, settings_home: Path, overrides: dic
             overall_fail = True
             lines.append(f"YAML prune CLI missing for {family_dir}: {cli_path}")
             continue
-        # Review: coordinator:code-reviewer — the YAML leg's exit code was
+        # The YAML leg's exit code was
         # previously discarded, defeating the F9 fix's whole purpose (a
         # caller must be able to branch on prune-closed-*.py's non-zero
         # exit on partial-archive failure). Nonzero/unrecognized MUST NOT

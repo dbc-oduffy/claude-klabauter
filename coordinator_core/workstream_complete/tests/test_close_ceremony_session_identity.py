@@ -337,7 +337,7 @@ def test_an_engine_without_even_the_warm_accessor_still_resolves(
 def test_an_engine_without_even_the_warm_accessor_still_resolves_under_warm(
     disposition_module, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """# Review: coordinator:code-reviewer (Finding 2, P2) — the sibling test above
+    """# The sibling test above
     only exercises the blend-reinstatement rung on the cold path, where blending
     ambient `os.environ` is harmless because it IS the caller. The rung this
     module falls to when even `attributable_session_id` is missing reinstates
@@ -377,7 +377,7 @@ def _pre_provenance_bin_module():
     shape no released copy of this file ever had, and a test that would then
     pin a failure mode that cannot occur.
 
-    # Review: coordinator:code-reviewer (Finding 6, P2) — this stand-in's
+    # This stand-in's
     # `resolve_session_id` calls `core.resolve_session_id`, the actual older
     # accessor a real pre-provenance bin script shipped with, not today's
     # warm/cold-safe `attributable_session_id`. Calling the current accessor

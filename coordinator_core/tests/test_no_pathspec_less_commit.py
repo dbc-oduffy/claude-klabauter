@@ -397,15 +397,6 @@ _KNOWN_BARE_COMMIT_SITES: frozenset[tuple[str, str, str]] = frozenset(
             "_trigger_destructive_git_revert",
             "_run",
         ),
-        # SELF-CREATED REPO. `tmp = tempfile.mkdtemp(prefix="altlive-branchset-")` then
-        # `git init -q -b main` on it in the same function, before either bare commit call
-        # (the initial seed commit and the branch-candidate commit) fires. RETIRES with a
-        # fixture rework, if ever done.
-        (
-            "coordinator_core/bash_guards/_alternative_liveness.py",
-            "_trigger_guard_branch_set_precedence",
-            "_run",
-        ),
         # SELF-CREATED REPO. `sample()` builds `root` under `tempfile.mkdtemp(...)`, and
         # `build_fixture(root)` runs `_git(["init", "-q", "-b", "probe/baseline"], root)` as
         # the first call in the same function before this bare commit. A one-shot benchmark

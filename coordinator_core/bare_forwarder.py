@@ -28,7 +28,7 @@ def forward(name: str, argv: list[str] | None = None) -> None:
     because this rung's result is ``execv``'d directly and must be
     executable, while pyresolve's is invoked via ``subprocess.run([sys.executable,
     ...])`` and only needs to exist.
-    Review: code-reviewer — Finding 1, 2026-07-24-codereview-sliceowns-zero-claude-klabauter
+    2026-07-24-codereview-sliceowns-zero-claude-klabauter
     sidecar (docstring overstated "precedence" match; tightened to "ordering"
     plus the predicate-divergence rationale).
 
@@ -36,7 +36,7 @@ def forward(name: str, argv: list[str] | None = None) -> None:
     behavior for direct `python -m` invocation); callers that already have an
     explicit argv (e.g. an entrypoint's own `main(argv)` parameter) should
     pass it through so the forwarded args and the declared argv can't diverge.
-    Review: code-reviewer — Finding 1, 2026-07-22-codereview-slice... sidecar
+    2026-07-22-codereview-slice... sidecar
     (machine_local_forwarder.main(argv) silently ignored its own argv param,
     forwarding sys.argv instead; widened here so the two stay in sync by
     construction rather than by test-author discipline).

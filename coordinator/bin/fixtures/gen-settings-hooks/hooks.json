@@ -15,7 +15,7 @@
           {
             "type": "mcp_tool",
             "server": "example-mcp-server",
-            "tool": "session_heartbeat",
+            "tool": "example_bookkeeping_tool",
             "input": { "session_id": "${session_id}" },
             "timeout": 3
           },

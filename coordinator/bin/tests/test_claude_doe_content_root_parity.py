@@ -173,7 +173,7 @@ def test_the_empty_root_is_not_a_plugin_root_in_either_spelling(claude_doe) -> N
 
 
 def test_both_twins_declare_the_same_marker_tuple() -> None:
-    """Review: overengineering-reviewer finding 5 — moved here from the
+    """Moved here from the
     two-way `coordinator_core` parity file, which this file absorbed.
 
     Independent of which twin the launcher is pinned against above: this is the

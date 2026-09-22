@@ -1266,7 +1266,7 @@ def test_main_index_resync_retries_through_lock_contention(tmp_path: Path, monke
 def test_main_index_resync_persistent_failure_log_is_honest_about_scope(
     tmp_path: Path, monkeypatch, caplog
 ):
-    """Review: code-reviewer P2 (2026-08-13) — on a persistent (retry-
+    """On a persistent (retry-
     exhausted) resync failure, the error log must NOT claim every batched
     path is confirmed affected (git update-index applies positionally and
     can partially succeed before failing on a later path). The message must

@@ -611,9 +611,16 @@ _CLAIM_INDEX_PATH = _REPO_ROOT / "coordinator_core" / "session" / "claim_index.p
 _EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES = frozenset(
     {
         # Reaper: drops a dead session's claim. Writes, never refuses.
+        # RENAMED 2026-09-21: c63e3defc8 ("An aborted walk is not evidence
+        # that a peer is dead") extracted the `claim_index.lookup(...)` call
+        # out of `_claimants` (which only slices the already-fetched result)
+        # into its own `_lookup` closure, so it could be re-run for the
+        # TOCTOU re-read alongside the new `result.complete` check. Same call
+        # site, same behaviour this entry already covers -- the enclosing def
+        # changed name, not what it does.
         (
             "coordinator_core/session/claims.py",
-            "_clear_path_claim_if_dead._claimants",
+            "_clear_path_claim_if_dead._lookup",
         ),
         # Neighbour discovery: who else holds paths near mine. Fail-soft by
         # its own contract (a raising lookup degrades every path to
@@ -628,6 +635,20 @@ _EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES = frozenset(
         (
             "coordinator_core/session/holder_evidence.py",
             "_claim_scope_overlap",
+        ),
+        # C5 recency resolution (docs/plans/2026-08-27-safe-commit-offer-
+        # excludes-a-live-agent.md): resolves `edit_ts` for every in-flight
+        # agent claim `compute_offer`'s own `commit_set` answer (already
+        # pinned below) already surfaced, in one pass. Wrapped in a bare
+        # `except Exception` that degrades to an empty timestamp map and
+        # never raises; an unresolvable timestamp folds the path back into
+        # `safe_paths` rather than excluding it (see the BIAS paragraph in
+        # `compute_offer`'s own docstring) -- it can only ever soften an
+        # already-computed exclusion, never manufacture a new one, so it is
+        # not a second ownership gate.
+        (
+            "coordinator_core/ops/session/safe_commit_offer.py",
+            "compute_offer",
         ),
     }
 )
@@ -696,6 +717,36 @@ _EXPECTED_CLAIM_INDEX_ANSWER_CALL_SITES = frozenset(
             "commit_set",
             "coordinator_core/ops/session/safe_commit_offer.py",
             "full_ownership_map",
+        ),
+        # REPORT-ONLY (own docstring's word): attaches the peer-owned-dirty
+        # entries it builds to the returned envelope's `excluded` list AFTER
+        # `commit_session_offer_async`'s commit groups already ran --
+        # `compute_offer` (already pinned above) is still the only reader
+        # that turns a claim into what gets committed. Never re-enters a
+        # pathspec.
+        (
+            "commit_set",
+            "coordinator_core/ops/session/safe_commit_offer.py",
+            "_excluded_with_peer_owned_dirty",
+        ),
+        # REPORT-ONLY (own docstring's word, AC4): computed strictly after
+        # `group_results` already landed and never fed back into
+        # `safe_set`/`resolved_groups` -- attributes post-commit residue to a
+        # live peer so it isn't misreported as this session's leftover, it
+        # does not gate what committed.
+        (
+            "commit_set",
+            "coordinator_core/ops/session/safe_commit_offer.py",
+            "_compute_residue",
+        ),
+        # REPORT-ONLY (own docstring's word), the pre-commit `dry_run` twin
+        # of `_compute_residue`: attaches a `Reconciliation` to the returned
+        # envelope for an offer that has NOT committed anything, never reads
+        # it back into a pathspec.
+        (
+            "commit_set",
+            "coordinator_core/ops/session/safe_commit_offer.py",
+            "_reconcile_offer",
         ),
     }
 )

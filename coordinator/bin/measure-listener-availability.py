@@ -531,7 +531,7 @@ def _engine_commits(engine_root: Path, since: datetime, until: datetime) -> list
     part of the measurement, not a nicety: an outage with a deploy behind it and an outage from
     natural churn are different findings that a duration alone cannot tell apart.
     """
-    # Review: coordinator:overengineering-reviewer (finding 3) -- routes through
+    # Routes through
     # coordinator_core.ops.ceremony.git_native._git instead of a hand-rolled
     # subprocess.run (which also lacked the Windows-safe creationflags/stdin
     # handling every other git call site in this codebase carries).

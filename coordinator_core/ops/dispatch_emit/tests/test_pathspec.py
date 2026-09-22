@@ -13,7 +13,9 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
     NoTestTargetError,
     _map_written_path_to_test_target,
     NoWritesDeclaredError,
+    candidate_test_additions,
     commit_pathspec,
+    commit_pathspec_or_none,
     is_concrete_surface,
     terminal_test_scope,
 )
@@ -499,3 +501,190 @@ def test_a_prose_spine_does_not_swallow_the_zero_contribution_refusal():
     waves = [[_wave_row("C1", [])], [_wave_row("C2", [])]]
     with pytest.raises(NoTestTargetError):
         terminal_test_scope(waves)
+
+
+# ---------------------------------------------------------------------------
+# repo-supplied test-locator suffixes -- AC4, AC5a, AC5c, AC6
+#
+# `test_locator_suffixes` is read from a fixture repo's own
+# `coordinator.local.md` (via `doc_registry.resolve_test_locator_config`,
+# mirroring `resolve_doc_registry_config`'s resolution pattern), never
+# monkeypatched or injected past that module -- these tests write a real
+# `coordinator.local.md` under `tmp_path` and pass it as `repo_root`, the
+# same fixture shape the data-fixture/flat-directory tests above already use.
+# ---------------------------------------------------------------------------
+
+
+def _write_local_md(root, suffixes):
+    (root / "coordinator.local.md").write_text(
+        "---\n"
+        f"test_locator_suffixes: [{', '.join(suffixes)}]\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+
+def test_terminal_test_scope_resolves_a_configured_non_py_suffix(tmp_path):
+    # AC5a: a repo-declared `*.test.ts` convention lets a non-.py written path
+    # resolve to its sibling test, the same stem-derivation ladder as .py.
+    _write_local_md(tmp_path, ["*.test.ts"])
+    driver = tmp_path / "src/widgets/foo.test.ts"
+    driver.parent.mkdir(parents=True)
+    driver.write_text("", encoding="utf-8")
+    waves = [[_wave_row("C1", ["src/widgets/foo.ts"])]]
+    scope = terminal_test_scope(waves, repo_root=tmp_path)
+    assert scope == ["src/widgets/foo.test.ts"]
+
+
+def test_map_written_path_to_test_target_resolves_a_configured_non_py_suffix(tmp_path):
+    # Same case, asserted directly against the mapper (mirrors the existing
+    # `_map_written_path_to_test_target` direct-assertion pattern above).
+    _write_local_md(tmp_path, ["*.test.ts"])
+    driver = tmp_path / "src/widgets/foo.test.ts"
+    driver.parent.mkdir(parents=True)
+    driver.write_text("", encoding="utf-8")
+    assert (
+        _map_written_path_to_test_target("src/widgets/foo.ts", repo_root=tmp_path)
+        == "src/widgets/foo.test.ts"
+    )
+
+
+def test_a_written_test_locator_file_is_its_own_target(tmp_path):
+    # A row whose deliverable IS the configured-suffix test file resolves to
+    # itself, ahead of derivation -- same shape as the .py self-test-file case.
+    _write_local_md(tmp_path, ["*.test.ts"])
+    waves = [[_wave_row("C1", ["src/widgets/foo.test.ts"])]]
+    scope = terminal_test_scope(waves, repo_root=tmp_path)
+    assert scope == ["src/widgets/foo.test.ts"]
+
+
+def test_terminal_test_scope_treats_an_unresolved_configured_suffix_as_an_omission(tmp_path):
+    # AC5a's testability half: once a suffix is configured, a matching path
+    # with no sibling test present is an authoring omission (refuses), not
+    # prose (empty scope) -- `_is_testable_surface` must recognise the suffix.
+    _write_local_md(tmp_path, ["*.test.ts"])
+    waves = [[_wave_row("C1", ["src/widgets/bar.ts"])]]
+    with pytest.raises(NoTestTargetError) as excinfo:
+        terminal_test_scope(waves, repo_root=tmp_path)
+    assert "bar.ts" in str(excinfo.value)
+
+
+def test_terminal_test_scope_does_not_derive_an_unconfigured_suffix(tmp_path):
+    # Absent any `test_locator_suffixes` override, resolution stays
+    # byte-identical to .py-only: a non-.py path maps to nothing and is prose
+    # (empty scope), never an omission -- the suffix ladder must not fire
+    # without an explicit repo-level opt-in.
+    driver = tmp_path / "src/widgets/foo.test.ts"
+    driver.parent.mkdir(parents=True)
+    driver.write_text("", encoding="utf-8")
+    waves = [[_wave_row("C1", ["src/widgets/foo.ts"])]]
+    assert terminal_test_scope(waves, repo_root=tmp_path) == []
+    assert (
+        _map_written_path_to_test_target("src/widgets/foo.ts", repo_root=tmp_path)
+        is None
+    )
+
+
+def test_candidate_test_targets_matches_suffix_by_own_source_suffix_not_prefix(tmp_path):
+    # `_locator_source_suffix` reads a pattern's own trailing suffix
+    # (`*.test.ts` -> `.ts`), so a path with a DIFFERENT suffix never matches
+    # even though the pattern's literal string starts with `*.test`.
+    _write_local_md(tmp_path, ["*.test.ts"])
+    waves = [[_wave_row("C1", ["src/widgets/foo.test.js"])]]
+    # foo.test.js has suffix .js, not .ts -- the configured *.test.ts pattern
+    # does not cover it, and it is not itself a .py test file, so it is prose.
+    assert terminal_test_scope(waves, repo_root=tmp_path) == []
+
+
+# ---------------------------------------------------------------------------
+# candidate_test_additions — state/bug-backlog/2026-08-26-emitted-wave-
+# commit-legs-are-handed-a-wr-c0f443ac1fdb.yaml: a wave's writes:-derived
+# pathspec never includes the test file an AC-satisfying executor is
+# required to write, so that executor's own reported test file reads as an
+# unaccounted-for divergence to the commit agent.
+# ---------------------------------------------------------------------------
+
+
+def test_candidate_test_additions_derives_the_co_located_test_for_a_py_path():
+    assert candidate_test_additions(
+        ["coordinator_core/ops/dispatch_emit/brand_new.py"]
+    ) == ["coordinator_core/ops/dispatch_emit/tests/test_brand_new.py"]
+
+
+def test_candidate_test_additions_ignores_non_py_paths():
+    assert candidate_test_additions(["docs/wiki/dispatch-emit.md"]) == []
+
+
+def test_candidate_test_additions_ignores_a_path_that_is_already_a_test_file():
+    # A test file is its own target, never a source a further test is derived
+    # for -- deriving would ask for `tests/test_test_foo.py`.
+    assert candidate_test_additions(["coordinator_core/ops/tests/test_foo.py"]) == []
+
+
+def test_candidate_test_additions_dedupes_and_preserves_order():
+    assert candidate_test_additions(
+        [
+            "coordinator_core/ops/a.py",
+            "coordinator_core/ops/b.py",
+            "coordinator_core/ops/a.py",
+        ]
+    ) == [
+        "coordinator_core/ops/tests/test_a.py",
+        "coordinator_core/ops/tests/test_b.py",
+    ]
+
+
+def test_candidate_test_additions_empty_for_an_empty_pathspec():
+    assert candidate_test_additions([]) == []
+
+
+# ---------------------------------------------------------------------------
+# commit_pathspec_or_none — klabauter#35: both NoWritesDeclaredError shapes
+# degrade to None, so a depended-on writeless row does not sink emission
+# ---------------------------------------------------------------------------
+
+
+def test_commit_pathspec_or_none_returns_the_same_pathspec_when_writes_exist():
+    wave = [_wave_row("C1", ["coordinator_core/ops/dispatch_emit/pathspec.py"])]
+
+    assert commit_pathspec_or_none(wave) == commit_pathspec(wave)
+
+
+def test_commit_pathspec_or_none_degrades_undeclared_solo_row_to_none():
+    """Refusal shape 1: a single UNDECLARED, non-concrete-surface row. This is
+    the shape that sank a whole plan's emission -- `_all_writes_declared_empty`
+    cannot reach it, so `commit_pathspec` was called and raised."""
+    wave = [_wave_row("C1", UNDECLARED, surface="an epistemic premise")]
+
+    with pytest.raises(NoWritesDeclaredError):
+        commit_pathspec(wave)
+    assert commit_pathspec_or_none(wave) is None
+
+
+def test_commit_pathspec_or_none_degrades_all_empty_writes_to_none():
+    """Refusal shape 2: every row declares `writes: []`."""
+    wave = [_wave_row("C1", []), _wave_row("C2", [])]
+
+    with pytest.raises(NoWritesDeclaredError):
+        commit_pathspec(wave)
+    assert commit_pathspec_or_none(wave) is None
+
+
+def test_commit_pathspec_or_none_still_raises_on_a_directory_shaped_write():
+    """A directory-shaped `writes:` entry is an authoring defect the refusal
+    exists to surface, never a legitimate nothing-to-commit shape -- so it must
+    NOT be swallowed into None alongside the two above."""
+    wave = [_wave_row("C1", ["coordinator_core/ops/dispatch_emit/"])]
+
+    with pytest.raises(DirectoryShapedWriteError):
+        commit_pathspec_or_none(wave)
+
+
+def test_commit_pathspec_or_none_never_returns_an_empty_list():
+    """The documented caller contract: None means no commit phase, and any
+    other return is a legal pathspec needing no second truthiness check."""
+    wave = [_wave_row("C1", ["coordinator_core/ops/dispatch_emit/pathspec.py"])]
+
+    result = commit_pathspec_or_none(wave)
+
+    assert result is not None and result != []

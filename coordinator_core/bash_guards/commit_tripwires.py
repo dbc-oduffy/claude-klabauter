@@ -139,6 +139,10 @@ from coordinator_core.git.divergence import (
     DivergenceCheckFailed,
     diverging_paths as _diverging_paths,
 )
+from coordinator_core.git.commit_trailers import (
+    _paragraph_is_trailer_shaped as _ct_paragraph_is_trailer_shaped,
+    _split_paragraphs as _ct_split_paragraphs,
+)
 
 #: Emitted when the divergence read is INDETERMINATE, never when it is clean.
 #: Register (docs/wiki/guard-messaging.md): one fact, once, plus a terse
@@ -479,7 +483,7 @@ def check_machine_path_leak(rel_path: str, cwd: Optional[str] = None) -> Optiona
 # resolution-mechanism writeup; this section is the implementation only.
 # ---------------------------------------------------------------------------
 
-# Review: code-reviewer (Finding 1) -- derived from
+# Derived from
 # `registration_quad._SURFACE_FILES` (the single source of truth for which file
 # each of the five quad surfaces lives in) rather than re-listed here, so the two
 # files cannot drift again the way they did when `_EAGER_OP_MODULES` was added as
@@ -501,7 +505,7 @@ except Exception:
         }
     )
 
-# Review: code-reviewer (Finding 3) -- anchored to the start of a (stripped) line so
+# Anchored to the start of a (stripped) line so
 # a docstring/comment that merely QUOTES this decorator shape as a usage example
 # (e.g. this module's own docstring, or ipc.py's register_op() docstring) does not
 # get treated as a real registration. Residual, acknowledged rather than silently
@@ -535,7 +539,7 @@ def _same_tree(path_a: str, path_b: str) -> bool:
     return os.path.normcase(os.path.realpath(path_a)) == os.path.normcase(os.path.realpath(path_b))
 
 
-# Review: code-reviewer (Finding 1) -- one batched `git grep --cached` subprocess
+# One batched `git grep --cached` subprocess
 # across every candidate path, replacing a `git show :<path>` spawned PER staged
 # file. `--cached` searches the INDEX (staged blobs), never the working tree --
 # preserving the same "judges the commit, not the worktree" guarantee (AC17) the
@@ -580,7 +584,7 @@ def _prune_baselined_classification(violation, baseline):
         for surface, path in violation.missing_surface_files
         if surface != "OP_CLASSIFICATION"
     )
-    # Review: code-reviewer (Finding 4) -- dropped the no-op
+    # Dropped the no-op
     # `surfaces_present=violation.surfaces_present` kwarg; `dataclasses.replace`
     # already preserves any field not passed.
     return dataclasses.replace(
@@ -627,7 +631,7 @@ def check_registration_quad_completeness(cwd: Optional[str] = None) -> Optional[
     ]
     surface_staged = any(f in _REGISTRATION_SURFACE_FILES for f in staged)
 
-    # Review: code-reviewer (Finding 1) -- test the free check (surface_staged, from
+    # Test the free check (surface_staged, from
     # `staged` already in hand) and the "no .py under coordinator_core/ at all"
     # case BEFORE spending a single subprocess on content. A large non-registration
     # refactor that never touches a quad-surface file and stages no .py under
@@ -664,7 +668,7 @@ def check_registration_quad_completeness(cwd: Optional[str] = None) -> Optional[
     except Exception:
         OP_CLASSIFICATION = _OP_KEY_SCOPE = OP_MODULE_MAP = None  # type: ignore[assignment]
 
-    # Review: code-reviewer (Finding 1) -- the fast path must also check the
+    # The fast path must also check the
     # fifth surface (`_EAGER_OP_MODULES`), keyed by an op's `OP_MODULE_MAP`
     # module path, not just the original three tables. Without this, an op
     # complete in `OP_CLASSIFICATION`/`_OP_KEY_SCOPE`/`OP_MODULE_MAP` but
@@ -699,7 +703,7 @@ def check_registration_quad_completeness(cwd: Optional[str] = None) -> Optional[
     except Exception:
         return None
 
-    # Review: code-reviewer (Finding 2) -- this call runs the full discovery walk
+    # This call runs the full discovery walk
     # (re-imports every op module reachable from coordinator_core.ops, plus the
     # three quad-surface tables) with no params. A syntax/import error in any of
     # those -- the exact shape of a commit mid-editing this guard's own target
@@ -1233,5 +1237,110 @@ def check_undeclared_staged_deletion(
         listed,
         operator_override_note(
             "COORDINATOR_OVERRIDE_UNDECLARED_DELETION", payload=payload
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 15. TRAILER-DEMOTED-TO-BODY -- a trailer-shaped line sitting one paragraph
+# above the commit's real trailer block, silently read as body prose.
+#
+# The incident this guards (state/bug-backlog/2026-09-19-a-blank-line-turns-
+# a-git-trailer-into-bo-964db9e54ea6.yaml, P1): three chunk commits on
+# 2026-08-21 were written with successive `-m` flags --
+#
+#     -m "..." -m "Deliverable-Id: dlv-..." -m "Co-Authored-By: Claude Opus 5 <...>"
+#
+# -- each `-m` becoming its own blank-line-separated paragraph. `git` parses
+# ONLY the message's final paragraph as trailers (see
+# `coordinator_core.git.commit_trailers._extract_trailer_block`'s own
+# docstring for the same rule, verified against real `git interpret-
+# trailers`), so `Deliverable-Id` landed as body text -- present to a human
+# reading `git log`, invisible to `git log --format=%(trailers:...)` and
+# every consumer that reads trailers that way. `close-out-and-stamp` reported
+# all eight chunk ids missing over a range that provably contained every one
+# of them.
+#
+# PREDICATE: every paragraph of the message except the LAST is checked with
+# `_paragraph_is_trailer_shaped` (the same per-line `Token: value`-or-
+# continuation regex `commit_trailers.py` already defines and this module
+# reuses rather than re-derives). Any hit is a trailer-shaped paragraph git
+# will never parse as one, because a blank line separates it from the
+# paragraph git actually reads.
+#
+# This is deliberately NOT bounded by `_trailing_region_lines` (the WIDER
+# reading `extract_closure_facts` uses to stay robust to an `-m`-built
+# message when reading a message THIS engine already composed): widening the
+# boundary here would absorb the exact demoted paragraph the incident
+# depends on back into the "recognized" region and the guard would never
+# fire on its own reference shape -- `_extract_trailer_block`'s single-last-
+# paragraph reading is the one that matches what `git log --format=%(trailers:
+# ...)` actually does, and that is the question this check answers.
+#
+# POSTURE: advisory only, matching Checks 13/14's posture, for the same
+# reason -- this reads only the commit-line-visible message
+# (`_commit_message_from_tokens` fails open on `-F`/`-C`/editor-composed
+# forms) and a real, if narrower, false-positive surface exists (a
+# deliberately quoted prior commit message in the body, colon-shaped
+# metadata prose). Never denies.
+# ---------------------------------------------------------------------------
+
+
+def check_trailer_demoted_to_body(
+    commit_seg_tokens: Optional[List[str]],
+    payload: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """Advisory detail string when this commit's own message carries a
+    trailer-shaped paragraph (per ``_paragraph_is_trailer_shaped``) that is
+    neither the message's FIRST paragraph (the subject -- git always reads
+    the first paragraph as the subject regardless of its shape, so a subject
+    written `prefix: description` style, this repo's own convention, must
+    never be mistaken for a demoted trailer) nor its LAST (the paragraph git
+    actually parses as the trailer block). The blank line on either side of
+    such a paragraph demotes it to body prose, invisible to
+    ``git log --format='%(trailers:...)'`` and everything that reads
+    trailers that way (see module comment block above for the recorded
+    incident). ``None`` when the message is not knowable from the command
+    line (see ``_commit_message_from_tokens``), when it has fewer than three
+    paragraphs (nothing sits strictly between a subject and a trailing
+    block), or when every paragraph in between is ordinary prose.
+    """
+    if commit_seg_tokens is None:
+        return None
+
+    message = _commit_message_from_tokens(commit_seg_tokens)
+    if message is None:
+        return None
+
+    paragraphs = _ct_split_paragraphs(message)
+    if len(paragraphs) < 3:
+        return None
+
+    demoted = [
+        p for p in paragraphs[1:-1] if _ct_paragraph_is_trailer_shaped(p)
+    ]
+    if not demoted:
+        return None
+
+    listed = "\n".join(
+        "  %s" % line for paragraph in demoted for line in paragraph
+    )
+
+    return (
+        "TRAILER DEMOTED TO BODY: this commit message has a trailer-shaped "
+        "line separated from the message's final paragraph by a blank line. "
+        "`git` parses ONLY the last paragraph as trailers, so the line(s) "
+        "below will land as ordinary body prose -- readable to a human, "
+        "invisible to `git log --format=%%(trailers:...)` and everything "
+        "that reads trailers that way.\n\n"
+        "%s\n\n"
+        "Fix: join it into the same trailing paragraph as the rest of the "
+        "trailers -- drop the extra `-m` (or the blank line) that separates "
+        "them.\n\n"
+        "%s"
+    ) % (
+        listed,
+        operator_override_note(
+            "COORDINATOR_OVERRIDE_TRAILER_DEMOTED_TO_BODY", payload=payload
         ),
     )

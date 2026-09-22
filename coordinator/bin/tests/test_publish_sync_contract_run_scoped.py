@@ -133,7 +133,7 @@ def test_load_ignore_is_checked_regardless_of_which_modes_are_in_the_run():
 
 
 def test_zero_pipe_row_collapses_modes_in_run_to_none():
-    """Review: coordinator:code-reviewer P2 — a row with no `|` at all must
+    """A row with no `|` at all must
     force the conservative check-the-whole-table fallback (`None`), not be
     silently dropped from the set-builder while sibling rows narrow the
     scope regardless."""

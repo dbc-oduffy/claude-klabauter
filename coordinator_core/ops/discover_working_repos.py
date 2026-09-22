@@ -558,18 +558,20 @@ def _tier_b() -> List[str]:
 # Dispatch.
 # ---------------------------------------------------------------------------
 
-def main(argv: Sequence[str]) -> int:
-    """Port of discover-working-repos.sh's top-level tier dispatch.
+def discover_repo_paths() -> List[str]:
+    """Return every working repo this tier dispatch discovers, one entry per
+    repo, in `_emit_form` (forward-slash, no trailing slash) — the exact list
+    `main()` would otherwise only print.
 
-    Exit-code contract: ALWAYS returns 0 — this is a best-effort discovery
-    helper (never a gate); the caller (`/setup` Phase 2 Step 4) falls
-    through to an interactive Tier-C prompt on empty stdout, so there is no
-    failure signal to distinguish via exit code. Matches the bash oracle,
-    which has no non-zero exit path at all. An unexpected internal error is
-    swallowed to stderr rather than propagated, preserving that contract
-    (advisory / never-block posture per PORTER-BRIEF-ADDENDUM.md § 3b).
+    Extracted so a second caller (`cross-repo-memo --list-receivers`, per
+    klabauter#40) can consume the discovered-repo set in-process to compare
+    it against the addressable-receiver registry, without shelling out to
+    this module and re-parsing its stdout. Same never-block contract as
+    `main()`: an unexpected internal error in any tier degrades that tier to
+    empty (logged to stderr) rather than propagating — a caller comparing
+    against this list must already treat empty as "nothing discovered", not
+    as an error signal, exactly like the pre-existing stdout contract.
     """
-    del argv  # no CLI flags — mirrors the bash oracle (no arg parsing)
     try:
         a_out = _tier_a()
     except Exception as exc:  # noqa: BLE001 — never-block contract
@@ -590,9 +592,7 @@ def main(argv: Sequence[str]) -> int:
 
     if a_out:
         combined = list(a_out) + list(a5_out)
-        for line in _sort_unique(_gate_and_dedup(combined, mirror_keys)):
-            print(line)
-        return 0
+        return _sort_unique(_gate_and_dedup(combined, mirror_keys))
 
     try:
         b_out = _tier_b()
@@ -602,11 +602,26 @@ def main(argv: Sequence[str]) -> int:
 
     if b_out or a5_out:
         combined = list(b_out) + list(a5_out)
-        for line in _sort_unique(_gate_and_dedup(combined, mirror_keys)):
-            print(line)
-        return 0
+        return _sort_unique(_gate_and_dedup(combined, mirror_keys))
 
-    # All tiers empty — exit 0 with no stdout; caller handles Tier C interactively.
+    # All tiers empty — caller handles Tier C interactively.
+    return []
+
+
+def main(argv: Sequence[str]) -> int:
+    """Port of discover-working-repos.sh's top-level tier dispatch.
+
+    Exit-code contract: ALWAYS returns 0 — this is a best-effort discovery
+    helper (never a gate); the caller (`/setup` Phase 2 Step 4) falls
+    through to an interactive Tier-C prompt on empty stdout, so there is no
+    failure signal to distinguish via exit code. Matches the bash oracle,
+    which has no non-zero exit path at all. An unexpected internal error is
+    swallowed to stderr rather than propagated, preserving that contract
+    (advisory / never-block posture per PORTER-BRIEF-ADDENDUM.md § 3b).
+    """
+    del argv  # no CLI flags — mirrors the bash oracle (no arg parsing)
+    for line in discover_repo_paths():
+        print(line)
     return 0
 
 

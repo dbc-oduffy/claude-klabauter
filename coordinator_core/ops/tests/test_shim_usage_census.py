@@ -47,7 +47,7 @@ def test_record_invocation_never_truncates_across_calls(tmp_path):
 
 
 def test_census_never_invoked_target_reports_false_without_series_file(tmp_path):
-    # Review: coordinator:code-reviewer -- P2, no series file on disk must
+    # No series file on disk must
     # be distinguishable from a series that affirmatively shows zero rows;
     # series_present=False is the "we have not been watching yet" signal.
     report = shim_usage_census.census(["baton-assemble"], repo_root=tmp_path)
@@ -61,7 +61,7 @@ def test_census_never_invoked_target_reports_false_without_series_file(tmp_path)
 
 
 def test_census_distinguishes_no_series_from_empty_series(tmp_path):
-    # Review: coordinator:code-reviewer -- P2. A series file that exists
+    # A series file that exists
     # but has no rows for this name must report series_present=True while
     # invoked stays False -- distinct from the no-file-at-all case above.
     series_path = tmp_path / ".coordinator-local" / "shim-usage-census.jsonl"
@@ -106,7 +106,7 @@ def test_record_invocation_never_raises_when_repo_root_unresolvable(monkeypatch)
 
 
 def test_record_invocation_never_raises_on_non_serializable_name(tmp_path):
-    # Review: coordinator:code-reviewer -- nit, malformed `name` was named
+    # nit, malformed `name` was named
     # in the dispatch brief's risk list but not exercised. json.dumps
     # raises on a non-serializable object; the outer except Exception must
     # swallow it, same as any other write failure.
@@ -125,12 +125,17 @@ def test_record_invocation_write_cost_is_far_below_a_rev_parse_spawn(tmp_path):
     see plan's own "no block-sampled benchmarks" caution), just a floor
     check that the write is not accidentally doing something expensive
     (fsync, lock acquisition, a spawn) that would eat the C8/C9 win."""
+    from coordinator_core.benchmarks.process_time import in_process_time_ms
+
     n = 200
-    start = time.perf_counter()
-    for i in range(n):
-        shim_usage_census.record_invocation("baton-assemble", repo_root=tmp_path, now=float(i))
-    elapsed_ms = (time.perf_counter() - start) * 1000.0
-    per_call_ms = elapsed_ms / n
+
+    def _writes() -> None:
+        for i in range(n):
+            shim_usage_census.record_invocation(
+                "baton-assemble", repo_root=tmp_path, now=float(i)
+            )
+
+    per_call_ms = in_process_time_ms(_writes)["process_time_ms"] / n
     assert per_call_ms < 5.0, f"per-invocation census write cost {per_call_ms:.4f}ms too high"
 
 

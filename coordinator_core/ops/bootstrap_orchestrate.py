@@ -434,7 +434,7 @@ def _coordinator_currency_write(actual_path: str, plugin_root: str) -> bool:
         try:
             with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(contents)
-            # Review: code-reviewer — mkstemp hardcodes 0600 regardless of
+            # Mkstemp hardcodes 0600 regardless of
             # umask; os.replace preserves that mode across the rename, so
             # without this chmod the stamp ends up owner-only instead of the
             # 644 a bash `printf > file` redirect (the retired oracle's
@@ -659,7 +659,7 @@ def main(argv: List[str]) -> int:
     if not selected_repos:
         _print("")
         _print("repo-setup: no repos selected. Nothing to do.")
-        # Review: code-reviewer — F6, this early-return bypassed the
+        # This early-return bypassed the
         # any_path_rejected check the success path (below) honors, silently
         # losing the exit-3 malformed-path-rejection signal the module
         # docstring's exit-code table documents.
@@ -675,7 +675,7 @@ def main(argv: List[str]) -> int:
     # ---- bootstrap each selected repo --------------------------------------
     succeeded: List[str] = []
     failed: List[str] = []
-    # Review: code-reviewer — F7, renamed from skipped_already_current (the
+    # Renamed from skipped_already_current (the
     # only path that populates it is bs_exit == 2, "not a git repo" — the
     # old name implied "already up to date, nothing to do").
     skipped_not_git_repo: List[str] = []
@@ -710,6 +710,8 @@ def main(argv: List[str]) -> int:
                                 "commit",
                                 "-m",
                                 "chore(coordinator): record currency stamp",
+                                "--",
+                                "docs/coordinator-currency.yaml",
                             ],
                             timeout=_GIT_TIMEOUT_SECS,
                             stdin=subprocess.DEVNULL,

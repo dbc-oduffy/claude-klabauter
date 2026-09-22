@@ -18,10 +18,19 @@ Negative-spec:
 
 from __future__ import annotations
 
+import subprocess
+import sys
+
+import pytest
+
 from unittest import mock
+
+from pathlib import Path
 
 from coordinator_core.orient_assemble import readers_health_reaper as rhr
 from coordinator_core.ops.reap_in_flight_claims import SurveyResult
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_two_integer_contract_produces_expected_directive():
@@ -73,12 +82,48 @@ def test_reader_goes_quiet_rather_than_killing_orientation(monkeypatch):
     assert result.judgment_points == []
 
 
-def test_collect_survives_a_raising_survey(monkeypatch):
-    """The property that actually matters, asserted at the collect() seam the
-    assembler calls rather than only at the private reader."""
+def test_an_unexpected_raise_is_not_swallowed_by_the_reader(monkeypatch):
+    """The reader absorbs `OSError` -- the vanishing-file race it is built for
+    -- and nothing else.
+
+    This case asserts the inverse of the one above, and replaces an earlier
+    test that pinned a bare `except Exception` here. Keeping orientation
+    alive across a raising reader is still required, but it is asserted
+    against `orient_assemble.brief()` in
+    `test_brief_survives_a_raising_reader` -- the seam that owns the loop.
+    Holding it here as well is what forced the clause wide enough to hide a
+    real `ModuleNotFoundError` in this very module."""
     def _boom(_repo_root):
         raise RuntimeError("survey blew up")
 
     monkeypatch.setattr(rhr, "_reap_survey", _boom)
-    result = rhr.collect("day")
-    assert isinstance(result.directives, list)
+    with pytest.raises(RuntimeError, match="survey blew up"):
+        rhr.collect("day")
+
+
+def test_probe_subcommands_are_callable_in_a_clean_interpreter():
+    """The loaded probes CLI reaches `coordinator/bin/lib` on its own.
+
+    Its subcommands `import lib`, which resolves only when `coordinator/bin`
+    is on `sys.path`. Both sanctioned entry paths arrange that for
+    themselves -- a directly-run script gets its own dir as `sys.path[0]`,
+    and the warm door calls `_ensure_bin_dir_importable()` -- but this reader
+    loads the CLI by file location, which is neither. The reader must
+    therefore bootstrap it, and this runs in a SUBPROCESS because inside a
+    pytest session some unrelated import has usually put the directory on
+    `sys.path` already, which is exactly the ambient luck that hid the
+    original defect.
+    """
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import coordinator_core.orient_assemble.readers_health_reaper as r;"
+            "print(r._health_probes.cmd_working_repo_registration([]))",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(_REPO_ROOT),
+    )
+    assert "ModuleNotFoundError" not in proc.stderr, proc.stderr
+    assert proc.returncode == 0, proc.stderr

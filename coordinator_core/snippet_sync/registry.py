@@ -350,7 +350,7 @@ def load_registry(registry_path: Path) -> dict[str, Any]:
                     f"snippet-registry: [snippet.{name}] missing required field '{required}'",
                     exit_code=1,
                 )
-        # Review: code-reviewer — presence-only validation let a scalar
+        # presence-only validation let a scalar
         # `consumers` value (e.g. a bare-string paste-drift typo instead of a
         # 1-element list) pass silently, then get iterated char-by-char by
         # resolve_consumers downstream. Fail loud here instead.
@@ -682,7 +682,7 @@ def list_for(
                 cond_type = cond["condition_type"]
                 if cond_type == "file-exists":
                     fe_path = _sibling_plugin_file_exists_path(cond_path) or (plugin_root / cond_path)
-                    # Review: code-reviewer — mirror resolve_consumers' existence
+                    # Mirror resolve_consumers' existence
                     # gate (a file-exists conditional consumer is only "active"
                     # if it currently resolves on disk); otherwise list_for could
                     # report a snippet as covering a path that verify/resolve_consumers

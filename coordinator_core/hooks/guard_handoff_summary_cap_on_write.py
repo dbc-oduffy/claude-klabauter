@@ -107,12 +107,10 @@ def _split_frontmatter(text: str) -> "tuple[dict | None, str]":
 def _warn_reason(target: str, length: int) -> str:
     """The prose diagnosis (the only part `message_envelope.CEILING`
     counts)."""
+    name = Path(target).name
     return (
-        f"summary-cap: {target}'s `summary:` frontmatter is {length} chars, "
-        f"over the {_HANDOFF_SUMMARY_CAP}-char cap "
-        "(coordinator/schemas/handoff.schema.json). A normalizer caps this "
-        "field at handoff creation but not on a later hand-edit -- the "
-        "write proceeds; fix the field on the next edit."
+        f"{name}: summary is {length} chars, over the {_HANDOFF_SUMMARY_CAP}-char "
+        "schema cap. Write proceeds; fix on the next edit."
     )
 
 

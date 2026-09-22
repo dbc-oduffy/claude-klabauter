@@ -64,7 +64,7 @@ class _RealEngineClaudeKlabauter:
     mktcache_gate_env = staticmethod(pct_engine.mktcache_gate_env)
     run_entrypoint_gate = staticmethod(pct_engine.run_entrypoint_gate)
     enumerate_gate_entrypoints = staticmethod(pct_engine.enumerate_gate_entrypoints)
-    # Review: code-reviewer — pinned to 1 for hermetic test determinism
+    # Pinned to 1 for hermetic test determinism
     # (also inherited by _NoOpEngineClaudeKlabauter below); not the production
     # default, so tuning the real worker-cap default will NOT show up here.
     derive_worker_cap = staticmethod(lambda: 1)
@@ -141,9 +141,9 @@ class TestModulePrefixResolution:
         modules, search_paths, resolved = publish._function_gate_modules_and_search_paths_for_repo_root(
             staging_dir, "coordinator_core"
         )
-        assert modules == ["data_root"], (
-            "the dotted seed name must be rewritten to match the STAGED file location "
-            "(no coordinator_core/ package directory exists inside the staging tree)"
+        assert modules == ["coordinator_core.data_root"], (
+            "the dotted seed name stays package-qualified; the pre-swap gate binds "
+            "the staged tree as coordinator_core"
         )
         assert resolved == {"coordinator_core/data_root.py"}
         assert search_paths == [""]
@@ -185,8 +185,7 @@ class TestModulePrefixResolution:
         lib-based (bare-import) entries into scope, staged one level down
         (`lib/coordinator_registry.py`) -- their module NAMES stay bare
         (`coordinator_registry`), only their SEARCH DIR shifts to the
-        staged-relative `lib`, unlike the dotted `coordinator_core.data_root`
-        entry which needs its name rewritten too."""
+        staged-relative `lib`."""
         staging_dir = tmp_path / "staging"
         lib_dir = staging_dir / "lib"
         lib_dir.mkdir(parents=True)

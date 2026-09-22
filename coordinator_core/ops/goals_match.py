@@ -97,7 +97,7 @@ def _collect_goals(goals_dir: Path) -> List[dict]:
         fname = fpath.name
         quarantine.scanned()
         try:
-            # Review: code-reviewer — normalise CRLF at read time so Windows-authored
+            # Normalise CRLF at read time so Windows-authored
             # goal files take the "---\n" frontmatter-extraction path correctly.
             raw = fpath.read_text(encoding="utf-8").replace("\r\n", "\n")
             # Defensive frontmatter extraction: if the file starts with "---\n",
@@ -106,7 +106,7 @@ def _collect_goals(goals_dir: Path) -> List[dict]:
             if raw.startswith("---\n"):
                 parts = raw.split("---\n", 2)
                 # parts = ["", frontmatter, optional-body]; parts[1] is always present.
-                # Review: code-reviewer — len(parts) >= 2 was always-true inside this
+                # len(parts) >= 2 was always-true inside this
                 # branch; the else raw arm was dead code. Set fm_text directly.
                 fm_text = parts[1]
             else:
@@ -131,7 +131,7 @@ def _collect_goals(goals_dir: Path) -> List[dict]:
             continue
 
         # Only offer active goals in the nudge; achieved/abandoned are silently excluded.
-        # Review: code-reviewer — absent status (None) is a data error distinct from
+        # Absent status (None) is a data error distinct from
         # an intentionally non-active goal; log a warning so the operator can diagnose
         # why no candidates are being suggested rather than silently returning [].
         status_val = fm.get("status")

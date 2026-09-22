@@ -230,3 +230,113 @@ def test_parallel_key_is_never_read():
             gate=False,
         )
     ]
+
+
+def _v4_fragment() -> dict:
+    """schema_version 4: two stages, each naming the signal bucket it absorbs.
+
+    The named stage already carries two personas, so the `full` tier's cap of 3
+    admits exactly one more and the standard tier's cap of 2 admits none —
+    which is what makes the same fragment discriminate the two tiers below.
+    """
+    return {
+        "schema": "review-roster-fragment",
+        "schema_version": 4,
+        "blocking_verdicts": {"coordinator:code-reviewer": "BLOCKED"},
+        "tiers": {
+            "full": {
+                "stages": [
+                    {
+                        "agents": ["coordinator:premise-checker"],
+                        "accepts_signals": "preflight",
+                    },
+                    {
+                        "agents": [
+                            "coordinator:code-reviewer",
+                            "coordinator:staff-eng",
+                            "coordinator:vp-product",
+                        ],
+                        "gate": True,
+                        "accepts_signals": "named",
+                    },
+                ]
+            },
+            "standard": {
+                "stages": [
+                    {
+                        "agents": [
+                            "coordinator:code-reviewer",
+                            "coordinator:staff-eng",
+                            "coordinator:vp-product",
+                        ],
+                        "gate": True,
+                        "accepts_signals": "named",
+                    }
+                ]
+            },
+        },
+    }
+
+
+def test_accepts_signals_routes_each_bucket_to_its_own_stage():
+    """A signal lands on the stage whose `accepts_signals` names its bucket,
+    and nowhere else. A bucket no stage accepts is dropped silently — the
+    fragment decides which buckets exist, not the caller."""
+    stages = parse_stages(
+        _v4_fragment(),
+        "full",
+        signals={
+            "preflight": ["coordinator:prior-art-checker"],
+            "named": ["coordinator:docs-checker"],
+            "unclaimed": ["coordinator:coverage-auditor"],
+        },
+    )
+    assert stages[0].agents == [
+        "coordinator:premise-checker",
+        "coordinator:prior-art-checker",
+    ]
+    assert stages[1].agents == [
+        "coordinator:code-reviewer",
+        "coordinator:staff-eng",
+        "coordinator:vp-product",
+        "coordinator:docs-checker",
+    ]
+    assert all(
+        "coordinator:coverage-auditor" not in stage.agents for stage in stages
+    )
+
+
+def test_accepts_signals_honours_the_tier_persona_cap():
+    """The same signal is admitted on `full` (cap 3) and refused on `standard`
+    (cap 2), because the fragment's gated stage already carries two personas.
+    A non-persona signal is never capped."""
+    signals = {
+        "named": ["coordinator:eng-director", "coordinator:docs-checker"],
+    }
+
+    full = parse_stages(_v4_fragment(), "full", signals=signals)
+    assert full[1].agents[-2:] == [
+        "coordinator:eng-director",
+        "coordinator:docs-checker",
+    ]
+
+    standard = parse_stages(_v4_fragment(), "standard", signals=signals)
+    assert "coordinator:eng-director" not in standard[0].agents
+    assert standard[0].agents[-1] == "coordinator:docs-checker"
+
+
+def test_a_signal_already_on_the_stage_is_not_duplicated():
+    stages = parse_stages(
+        _v4_fragment(),
+        "full",
+        signals={"named": ["coordinator:staff-eng"]},
+    )
+    assert stages[1].agents.count("coordinator:staff-eng") == 1
+
+
+def test_omitted_signals_leave_a_v4_fragment_untouched():
+    """`None` is the ordinary call shape for every caller below v4; it must not
+    be read as "no signals matched" in some way that alters the stages."""
+    assert parse_stages(_v4_fragment(), "full") == parse_stages(
+        _v4_fragment(), "full", signals={}
+    )

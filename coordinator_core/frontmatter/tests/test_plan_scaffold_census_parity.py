@@ -125,7 +125,7 @@ class TemplateMirrorParityTest(unittest.TestCase):
         ]
 
     def test_mirror_carries_every_emitted_census_line(self):
-        # Review: code-reviewer (Finding 5, minor) -- a bare per-line `assertIn` (the
+        # A bare per-line `assertIn` (the
         # prior form) only asks "does each line appear somewhere in the mirror," which
         # passes unchanged if the two census lines were split apart, reordered, or
         # duplicated elsewhere in plan.json. Sliced to a contiguous, positional block

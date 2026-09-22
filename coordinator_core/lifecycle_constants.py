@@ -67,7 +67,7 @@ HANDOFF_ANCHOR_EXCLUDED_STATUSES = frozenset({"consumed", "archived", "abandoned
 # frozen/flippability-terminal at the plan_status_transition site and maps to
 # BLOCKED (not DONE) at the liveness site — three defensible, independent
 # answers, not a bug. Plan: 2026-07-27-plan-line-item-resolution-model.md § C8b.
-PLAN_ARCHIVABLE_STATUS = frozenset({"implemented", "superseded", "abandoned"})
+PLAN_ARCHIVABLE_STATUS = frozenset({"implemented", "closed_partial", "superseded", "abandoned"})
 
 # Backward-compatible alias: ops/fleet/archive_plans.py imports this name
 # directly and is out of this rename's write-scope (owned by a concurrent
@@ -100,7 +100,16 @@ SPEC_SKIP_STATUSES = frozenset({"superseded", "abandoned", "partial"})
 # despite being absent from the schema enum: documented defensive tolerance,
 # a separate question, not drift to reconcile here.
 PLAN_ORPHAN_TERMINAL_STATUS = frozenset(
-    {"implemented", "shipped", "complete", "executed", "superseded", "abandoned", "deferred"}
+    {
+        "implemented",
+        "closed_partial",
+        "shipped",
+        "complete",
+        "executed",
+        "superseded",
+        "abandoned",
+        "deferred",
+    }
 )
 
 # Question answered: "can this sizing-object's file be safely git-mv'd into

@@ -551,6 +551,29 @@ class TestPowerShellDialectWiring:
         assert guard.dialect_from_tool_name("PowerShell") is Dialect.POWERSHELL
         assert guard.dialect_from_tool_name("Read") is None
 
+    @requires_powershell_grammar
+    def test_powershell_banner_example_names_the_resolved_interpreter(self):
+        # Regression for state/bug-backlog/2026-08-18-generic-spawn-
+        # advisories-hardcode-python-c789cb245c5c.yaml: this PowerShell-leg
+        # generic advisory used to embed a literal `python3 -c` example,
+        # unlike the sibling grep-via-bash path which resolves the real
+        # interpreter via `_bt_python3_invocation`. A bare `python3` is
+        # frequently absent from PATH on a stock Windows box -- exactly the
+        # dialect this branch serves. Asserted structurally (the resolved
+        # invocation itself), not a second hardcoded literal.
+        payload = {
+            "tool_name": "PowerShell",
+            "tool_input": {
+                "command": 'Write-Host "=== facts ==="; pwd; whoami; git status; git rev-parse HEAD'
+            },
+            "session_id": "sess1",
+            "cwd": "/repo",
+        }
+        out = guard.check(payload, host_is_windows=True)
+        assert out is not None
+        ctx = out["hookSpecificOutput"]["additionalContext"]
+        assert guard._mb_python3_invocation() in ctx
+
 
 class TestDispatchReachability:
     """C6, pln-the-shape-classifier-reaches-a-e743e5 § AC14/AC15.
@@ -670,7 +693,7 @@ class TestDispatchReachability:
 
 
 class TestCrashPropagatesForFailClosed:
-    """Review: code-reviewer -- Finding 3: this guard is registered in
+    """This guard is registered in
     `dispatch.py`'s `guard_chain` with `fail_closed=True`, whose whole
     contract is that an internal bug reaches `dispatch._crash_deny` rather
     than being swallowed as a silent allow. Before this fix, `check()`

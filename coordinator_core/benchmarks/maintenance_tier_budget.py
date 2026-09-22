@@ -84,7 +84,7 @@ def _churn(repo: Path, commits: int) -> None:
       a newline does not gain a second one in the blob.
     """
     branch = run_git(["symbolic-ref", "--short", "HEAD"], cwd=str(repo)).stdout.strip()
-    # Review: code-reviewer (F3) — a detached HEAD used to fall back to a
+    # A detached HEAD used to fall back to a
     # hardcoded "refs/heads/master" guess. Say-so-don't-guess: fail loud
     # instead, naming the repo that could not resolve a branch, rather than
     # silently fast-importing onto a possibly-nonexistent ref.

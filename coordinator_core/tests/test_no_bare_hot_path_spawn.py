@@ -162,7 +162,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 #: Paths are `coordinator_core`-relative, POSIX-separated.
 _GATE_SCOPE_DIRS: tuple[str, ...] = ("",)
 
-# Review: overengineering-reviewer -- `_TEST_TREE_GATE_SCOPE_DIRS` used to be
+# `_TEST_TREE_GATE_SCOPE_DIRS` used to be
 # a second, separately-defined scope tuple whose one value ("" -- no
 # scoping) only mirrored `_GATE_SCOPE_DIRS`'s shape rather than expressing a
 # real, distinct need. `find_bare_test_tree_spawns` now defaults its
@@ -393,7 +393,7 @@ def _collect_no_console_names(stmts: list[ast.stmt]) -> set[str]:
 #: tag, which this gate honours directly rather than via a duplicate register.
 _EXEMPT_CALL_SITES: set[tuple[str, int]] = set()
 
-# Review: overengineering-reviewer -- `_TEST_TREE_EXEMPT_CALL_SITES` used to
+# `_TEST_TREE_EXEMPT_CALL_SITES` used to
 # be a second, module-level, empty-by-construction registry mirroring
 # `_EXEMPT_CALL_SITES`'s shape for an arm that has never needed one. The
 # shared `_bare_spawns_in_population` engine already carries the exemption
@@ -747,6 +747,33 @@ def test_no_bare_hot_path_spawn():
     assert violations == [], "\n\n".join(_format_violation(site) for site in violations)
 
 
+def test_no_bare_hot_path_spawn_in_publish_py():
+    """`coordinator/bin/publish.py`-scoped regression for
+    state/bug-backlog/2026-08-08-all-11-subprocess-sites-in-publish-py-la-c5108b1585b6.yaml:
+    no `coordinator/bin/` site was ever in `_GATE_SCOPE_DIRS`'s reach (the
+    standing gate above only walks `coordinator_core`), so every bare
+    `subprocess` spawn in `publish.py` went unflagged.
+
+    Deliberately scoped to this one file rather than landed via a
+    `_GATE_SCOPE_DIRS`/walk-root widening covering all of `coordinator/bin`:
+    a repo-wide widening surfaces ~95 pre-existing bare-spawn sites across
+    other `coordinator/bin` files outside this fix's footprint, and even the
+    un-widened standing gate above is independently red on HEAD from
+    unrelated `coordinator_core` sites (`benchmarks/process_time.py`,
+    `hooks/runtime_tripwire_stop_watcher.py`) -- a full-directory widening
+    here would not go green and would exceed this fix's remit. The
+    `coordinator/bin/`-wide gap the bug record's `proposed_action` names is
+    real and larger than this one file; closing it for every site is a
+    follow-up outside this record's scope.
+    """
+    violations = [
+        site
+        for site in find_bare_hot_path_spawns(REPO_ROOT / "coordinator" / "bin")
+        if site.path == "publish.py"
+    ]
+    assert violations == [], "\n\n".join(_format_violation(site) for site in violations)
+
+
 def find_double_console_suppressions(
     root: pathlib.Path,
 ) -> list[BareSpawnSite]:
@@ -768,7 +795,7 @@ def find_double_console_suppressions(
     can only see under-application will keep re-admitting the sweep's own
     over-application."""
 
-    # Review: overengineering-reviewer -- was a THIRD, divergent file walk
+    # Was a THIRD, divergent file walk
     # (`root.rglob("*.py")`), disagreeing with the other two arms of this
     # gate about which files are in the repo. Routed through the same
     # `discover_source_files`/`DEFAULT_EXCLUDE` population they share.

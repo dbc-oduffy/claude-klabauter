@@ -56,7 +56,7 @@ def _rows(tasks_yaml: str) -> list[dict]:
 # A defer grouping holding exactly one backlogged row, and its correct
 # digest.
 #
-# Review: code-reviewer (Finding 1) — re-pointed from `spun_off` to
+# re-pointed from `spun_off` to
 # `backlogged`. DoE's 2026-08-05 ruling relaxed `spun_off` out of the
 # pm_approved/grouping-approval gate entirely and gave it its own ungated
 # grouping (C3); every test built on this fixture that expects the
@@ -166,7 +166,7 @@ class TestLegacyUnchanged:
         the legacy corpus — DoE asked for exactly this and every existing
         `pm_approved: true` row in both corpora depends on it.
 
-        Review: code-reviewer (Finding 1) — re-pointed from `spun_off` to
+        re-pointed from `spun_off` to
         `backlogged`: DoE's 2026-08-05 ruling relaxed `spun_off` out of this
         gate entirely, so it no longer demonstrates the gate firing.
         """
@@ -240,7 +240,7 @@ class TestPredicate:
     def test_stale_digest_rejects(self):
         """The row set changed after approval — a widened cut-set.
 
-        Review: code-reviewer (Finding 1) — the added row re-pointed from
+        The added row re-pointed from
         `spun_off` to `backlogged`: `spun_off` now occupies its own
         grouping, so it never widened `defer`'s membership and this
         assertion was vacuously true against an unchanged digest.
@@ -516,7 +516,7 @@ class TestDigestNegativeSpec:
         )
 
     def test_re_dispositioning_changes_both_touched_groupings(self):
-        """Review: code-reviewer (Finding 1) — `before` re-pointed from
+        """`before` re-pointed from
         `spun_off` to `backlogged`: since DoE's 2026-08-05 ruling gave
         `spun_off` its OWN grouping, it was never in `defer` to begin with,
         so this transition no longer touched `defer` at all and the

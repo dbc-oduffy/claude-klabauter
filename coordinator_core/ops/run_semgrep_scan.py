@@ -89,7 +89,7 @@ _CREATIONFLAGS = no_console_creationflags()
 _DEFAULT_CONFIG = "auto"
 _STDERR_LOG_TAIL = 2000
 
-# Review: code-reviewer — neither the git-diff scoping call nor the semgrep
+# Neither the git-diff scoping call nor the semgrep
 # scan itself carried a timeout; a stuck semgrep run or an unresponsive git
 # invocation wedged this op's worker thread forever. Two separate constants
 # since semgrep (an externally-invoked scanner over caller-supplied files)
@@ -223,7 +223,7 @@ def _run_semgrep_scan(params: dict, repo_root: Optional[Path] = None) -> dict:
             "commit the scan scope is diffed against — there is no whole-tree default)"
         )
     if diff_base.startswith("-"):
-        # Review: code-reviewer (F5, nit) — diff_base is passed positionally
+        # diff_base is passed positionally
         # to `git diff` with no `--` separator; a value beginning with `-`
         # would be misparsed as a git flag rather than a revision.
         raise ValueError(

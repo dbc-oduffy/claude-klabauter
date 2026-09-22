@@ -117,7 +117,7 @@ def test_cited_in_range_count_matches_per_token_baseline(tmp_path: Path) -> None
 def test_batch_resolve_commits_process_failure_unresolves_all_tokens(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """Review: code-reviewer (F2, P2) — a non-zero `cat-file --batch-check`
+    """A non-zero `cat-file --batch-check`
     exit degrades the WHOLE token set to unresolved (`{tok: None for tok in
     tokens}`), not just the one that triggered the failure. This is the
     intended fail-closed direction (an entire-body cat-file hiccup should

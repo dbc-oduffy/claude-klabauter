@@ -485,7 +485,6 @@ def _handler(params: dict, repo_root=None) -> dict:
 
     readme_modified = False
     if docs_readme.is_file():
-        # Review: coordinatorcode-reviewer.a986dd968d6771f99, Finding 5 —
         # link target is relative to docs_readme's own directory (docs/), the
         # same shape plan_capture_persist.readme_row() uses for the routed
         # path; the prior "docs/plans/..." form double-prefixed docs/ for a

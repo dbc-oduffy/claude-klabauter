@@ -1227,7 +1227,6 @@ def _run_close_commit_tail(
             # `empty_consumed_set` flag had no reader; this one is read by
             # `apply()`'s own report, below). `resolve_ship_stamp_candidates`
             # always executes whenever a commit is being attempted at all.
-            # Review: coordinator:code-reviewer (Finding 3, 2026-08-30) --
             # shared constant instead of a second inline construction, so the
             # two sites cannot drift on field values.
             ship_outcome = directives_commit_tail.EMPTY_SHIP_STAMP_OUTCOME
@@ -1304,7 +1303,7 @@ def _run_close_commit_tail(
         # outcome is unknown/failed -- any ship-stamp write already landed on
         # disk (see the block above) rides no commit, so it is reverted
         # rather than left standing for the archival sweep to act on.
-        # Review: overengineering-reviewer -- `ship_outcome` is always a
+        # `ship_outcome` is always a
         # value here (never None): both branches above assign one, and the
         # `kwargs is None` path already returned before this frame is
         # reached. Dropped the dead `is not None` guard.
@@ -1330,7 +1329,7 @@ def _run_close_commit_tail(
         "integrity_breach": result.integrity_breach,
         "diagnostics": list(result.diagnostics),
     }
-    # Review: overengineering-reviewer -- `ship_outcome` is always-a-value
+    # `ship_outcome` is always-a-value
     # here (see the earlier guard's own note); dropped the equivalent dead
     # `is not None` check that used to wrap this block.
     # WRITE-LANDS-THEN-COMMIT-FAILS: the stamp is durable only once this
@@ -1598,6 +1597,25 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
                 composition_budget=composition_budget,
             )
         except TransportFailure as exc:
+            # 2026-08-25 bug-backlog (a TransportFailure abort releases no
+            # claim at all): this branch sits ABOVE the unconditional
+            # `_run_close_commit_tail` seam below, so a transport failure out
+            # of `_execute_directives` used to return without releasing
+            # either claim class DR-358 requires -- a session that died here
+            # looked, to every downstream reader, identical to one still
+            # actively holding both claims. Best-effort, matching the same
+            # release calls `_run_close_commit_tail`'s own unconditional
+            # placement makes on every other exit path; neither helper ever
+            # raises (see each one's own docstring), so this cannot turn a
+            # transport failure into a worse one.
+            worktree_root = envelope.get("artifact", {}).get("path")
+            if worktree_root:
+                directives_commit_tail._release_committed_path_claims(  # noqa: SLF001 - same best-effort release _run_close_commit_tail's own seam makes unconditionally
+                    worktree_root, sid or "", effective_decisions.get("stage_paths") or ()
+                )
+                directives_commit_tail._release_governing_plan_claim(  # noqa: SLF001 - AC5 companion release, same seam
+                    worktree_root, effective_decisions.get("governing_plan_slug")
+                )
             return int(WorkstreamApplyExitCode.TRANSPORT_FAIL), {
                 "error": str(exc),
                 "landed": [],

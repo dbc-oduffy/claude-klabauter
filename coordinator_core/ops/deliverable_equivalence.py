@@ -105,7 +105,7 @@ def _artifact_cache_key(worktree_root: Path) -> _EquivalenceCacheKey:
     `_reset_*` helpers. A missing artifact keys as ``None``, distinct from any
     real stat tuple.
 
-    Review: coordinatorreview-integrator (failopen-caches P2) — keyed on
+    Keyed on
     ``(st_mtime_ns, st_size)`` rather than ``st_mtime`` alone. A bare float
     mtime collides for two rapid in-process rewrites landing within the
     filesystem's mtime resolution window (same defect class C4's
@@ -159,14 +159,14 @@ class DeliverableLedgerValidationError(ValueError):
 
 _DELIVERABLE_LEDGER_CACHE: Dict[_EquivalenceCacheKey, List[Dict[str, Any]]] = {}
 
-# Review: coordinatorcode-reviewer s1-ledger-seam Finding 2 — _ledger_artifact_readable
+# _ledger_artifact_readable
 # used to re-read+re-parse the whole YAML artifact on every call, unmemoized, inside
 # dual_read_deliverable_ids_for_corpus's per-record loop (N reads for N artifacts) while
 # load_deliverable_ledger right beside it was already memoized. Memoized here, reset
 # alongside the ledger memo below so tests don't see cross-test staleness.
 _LEDGER_ARTIFACT_READABLE_CACHE: Dict[_EquivalenceCacheKey, bool] = {}
 
-# Review: coordinatorcode-reviewer s1-ledger-seam Finding 1 — dual_read_deliverable_id
+# dual_read_deliverable_id
 # never called validate_deliverable_ledger_rows, so a malformed row (non-string
 # deliverable_id/evidence_source) was silently skipped by _ledger_evidence_index's own
 # `continue` and surfaced as "genuine_miss" rather than the loud failure
@@ -412,7 +412,7 @@ def validate_deliverable_ledger_rows(rows: List[Dict[str, Any]]) -> None:
 # ---------------------------------------------------------------------------
 
 
-# Review: coordinatorcode-reviewer c2f6a1ea — F1: YAML 1.1's null-literal set
+# YAML 1.1's null-literal set
 # includes `Null`/`NULL` alongside lowercase `null`, not just `null`/`~`/empty.
 # A hand-authored `deliverable_id: Null  # ...` line would otherwise normalize
 # to the literal string "Null" and become a ledger primary key — the exact
@@ -454,7 +454,7 @@ def _normalize_extracted_deliverable_id(raw: Optional[str]) -> Optional[str]:
         if close != -1:
             value = value[1:close]
         else:
-            # Review: coordinatorcode-reviewer f292d223 — F7: an unterminated
+            # An unterminated
             # quote (`"dlv-x` with no closing quote) previously fell straight
             # through to `value[1:]` with no comment stripping, leaving a
             # trailing inline comment un-stripped. Deliberate now: treat the
@@ -673,7 +673,7 @@ def _ledger_artifact_readable(worktree_root: Path) -> bool:
             content = artifact_path.read_text(encoding="utf-8")
             parsed = yaml.safe_load(content)
         except Exception as exc:  # noqa: BLE001 — any read/parse failure means "unreadable"
-            # Review: coordinatorcode-reviewer s1-ledger-seam Finding 4 — this used to
+            # This used to
             # swallow the exception with no logging, unlike load_deliverable_ledger's
             # identical failure mode which logs a WARNING. This False becomes the
             # caller-visible "ledger_unreadable" outcome, so log at the same level
@@ -787,7 +787,7 @@ def dual_read_deliverable_id(
             extract_fm_field as read_frontmatter_field,
         )
 
-    # Review: coordinatorcode-reviewer c2f6a1ea — F2: the `or None` is redundant;
+    # The `or None` is redundant;
     # _normalize_extracted_deliverable_id already maps "" to None via
     # _YAML_NULL_LITERALS and accepts None directly.
     fm_canonical = _normalize_extracted_deliverable_id(
@@ -799,7 +799,7 @@ def dual_read_deliverable_id(
 
     ledger_rows = load_deliverable_ledger(worktree_root)
 
-    # Review: coordinatorcode-reviewer s1-ledger-seam Finding 1 — this seam used to
+    # This seam used to
     # consume ledger_rows straight through _ledger_evidence_index, which silently
     # `continue`s past any row with a non-string deliverable_id/evidence_source. A
     # malformed-but-present row then surfaced as "genuine_miss" — exactly the

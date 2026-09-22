@@ -88,7 +88,7 @@ def test_malformed_settings_fails_open(tmp_path, monkeypatch):
 
 
 def test_mkdir_failure_fails_open(tmp_path, monkeypatch):
-    """Review: code-reviewer (F3) -- mkdir() raising OSError must fail open
+    """mkdir() raising OSError must fail open
     (ok=False, ERROR-prefixed message), never raise, matching the malformed-
     JSON test's shape."""
     monkeypatch.setattr(subprocess, "run", _forbid_subprocess)
@@ -105,7 +105,7 @@ def test_mkdir_failure_fails_open(tmp_path, monkeypatch):
 
 
 def test_write_failure_fails_open(tmp_path, monkeypatch):
-    """Review: code-reviewer (F3) -- write_text() raising OSError on the
+    """write_text() raising OSError on the
     fresh-write path must fail open (ok=False, ERROR-prefixed message)."""
     monkeypatch.setattr(subprocess, "run", _forbid_subprocess)
 

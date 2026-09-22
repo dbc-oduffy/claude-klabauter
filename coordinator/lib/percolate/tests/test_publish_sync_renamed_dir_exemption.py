@@ -426,7 +426,7 @@ class TestProcessTargetLedgerExemption:
         # an exemption that was never actually loaded.
         assert "WOULD ABORT" in capsys.readouterr().err
 
-        # Review: coordinator:code-reviewer -- the dry-run leg above alone does
+        # The dry-run leg above alone does
         # not distinguish "this code path was never reached" (pre-fix, when the
         # ledger load was gated on `and not dry_run` and never ran under
         # `dry_run=True`) from "this code path was reached and degraded"
@@ -484,7 +484,7 @@ class TestProcessTargetLedgerExemption:
 
         assert "WOULD ABORT" in capsys.readouterr().err
 
-        # Review: coordinator:code-reviewer -- real-run leg, same rationale as
+        # real-run leg, same rationale as
         # AC4's addition above: only this leg proves the catch fired on the
         # path that used to run uncaught before this commit.
         real_publish, real_target = _mirror_target(tmp_path, "ac5real", dst_dirs=("renamed-target",))

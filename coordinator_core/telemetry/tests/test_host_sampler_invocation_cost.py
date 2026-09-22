@@ -30,12 +30,25 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.benchmarks.process_time import (
+    IS_DARWIN,
+    IS_WINDOWS,
+    batched_process_time_ms,
+)
 from coordinator_core.telemetry import host_sampler
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _SAMPLER_SCRIPT = Path(host_sampler.__file__).resolve()
+
+
+def _require_supported_platform() -> None:
+    if not (IS_WINDOWS or IS_DARWIN):
+        pytest.skip(
+            "process-time accounting has no primitive for this platform -- "
+            "see coordinator_core.benchmarks.process_time module docstring"
+        )
 
 
 def test_direct_script_invocation_avoids_package_init(tmp_path: Path) -> None:
@@ -76,10 +89,12 @@ def test_direct_script_invocation_avoids_package_init(tmp_path: Path) -> None:
 
 def test_end_to_end_invocation_cost_ratchet(tmp_path: Path) -> None:
     """Enforcement half of the FULL invocation-cost budget -- see
-    host_sampler.py's ``_MAX_INVOCATION_COST_MS`` for the derivation. Takes
-    the min of several spawns as the noise floor (this box runs 50-70
-    concurrent sessions; subprocess wall-clock timing is noisy under that
-    load -- see that constant's own comment).
+    host_sampler.py's ``_MAX_INVOCATION_COST_MS`` for the derivation. Gates
+    on PROCESS TIME (batched user+kernel CPU time via
+    ``coordinator_core.benchmarks.process_time.batched_process_time_ms``),
+    never wall clock -- wall clock on this box measures peer load (50-70
+    concurrent sessions is the design condition), not cost (see that
+    module's docstring and CLAUDE.md's "The brightline").
 
     Every spawn sets ``COORDINATOR_HOST_SAMPLER_SINK_OVERRIDE`` to a
     tmp_path-local file (see host_sampler.py's "Sink override" / "Measuring
@@ -87,32 +102,37 @@ def test_end_to_end_invocation_cost_ratchet(tmp_path: Path) -> None:
     process-spawn-to-exit cost, not sink placement, and must never land a
     row in any real, git-resolved sink (this repo's included) purely because
     the benchmark ran from a checkout on disk."""
+    _require_supported_platform()
     (tmp_path / ".git").mkdir()
     import os
-    import time
 
     sink_override = tmp_path / "benchmark-host-samples.jsonl"
     env = dict(os.environ)
     env["COORDINATOR_HOST_SAMPLER_SINK_OVERRIDE"] = str(sink_override)
 
-    times_ms = []
-    for _ in range(5):
-        t0 = time.perf_counter()
-        result = subprocess.run(
-            [sys.executable, str(_SAMPLER_SCRIPT)],
-            cwd=str(tmp_path),
-            capture_output=True,
-            env=env,
-            timeout=30,
-            **no_console_creationflags(),
-        )
-        times_ms.append((time.perf_counter() - t0) * 1000.0)
-        assert result.returncode == 0, result.stderr
+    result = batched_process_time_ms(
+        [sys.executable, str(_SAMPLER_SCRIPT)], k=10, env=env, cwd=str(tmp_path)
+    )
+    assert result["rc"] == 0
 
-    floor_ms = min(times_ms)
-    assert floor_ms <= host_sampler._MAX_INVOCATION_COST_MS, (
-        f"host_sampler.py full invocation floor {floor_ms:.1f}ms exceeds its "
-        f"{host_sampler._MAX_INVOCATION_COST_MS}ms high-water mark (samples: "
-        f"{[round(t, 1) for t in times_ms]}) -- shrink the invocation cost, "
-        "don't raise the ratchet."
+    process_time_ms = result["process_time_ms"]
+    assert process_time_ms <= host_sampler._MAX_INVOCATION_COST_MS, (
+        f"host_sampler.py full invocation process time {process_time_ms:.1f}ms "
+        f"exceeds its {host_sampler._MAX_INVOCATION_COST_MS}ms high-water mark "
+        f"(k={result['k']}) -- shrink the invocation cost, don't raise the "
+        "ratchet."
+    )
+
+    # Spawn-count leg: the module's contract is "no subprocess spawn
+    # anywhere" -- compare against the bare floor of a same-test batch, so
+    # this stays correct even under a venv redirector that is itself two
+    # processes.
+    floor_result = batched_process_time_ms(
+        [sys.executable, "-c", "pass"], k=10, cwd=str(tmp_path)
+    )
+    assert result["procs_per_call"] <= floor_result["procs_per_call"], (
+        f"host_sampler.py invocation spawned {result['procs_per_call']} "
+        f"procs/call, exceeding the bare-interpreter floor of "
+        f"{floor_result['procs_per_call']} -- the module's contract is no "
+        "subprocess spawn anywhere."
     )

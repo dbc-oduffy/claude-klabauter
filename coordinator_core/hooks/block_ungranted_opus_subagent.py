@@ -261,9 +261,8 @@ def _resolve_parent_model(transcript_path: Any) -> Optional[str]:
 def _deny_reason(subagent_type: str, resolved_model: str, note: str) -> str:
     return (
         f"AGENT DISPATCH BLOCKED: subagent_type={subagent_type!r} resolves to "
-        f"a gated model ({resolved_model!r}, {note}) with no persona pin and no "
-        "PM grant set for this session. Pass model: \"sonnet\" (or \"haiku\"), "
-        "or dispatch coordinator:executor for implementation work."
+        f"{resolved_model!r} ({note}, no persona pin, no PM grant). "
+        "Pass model: \"sonnet\"/\"haiku\", or dispatch coordinator:executor."
     )
 
 

@@ -134,7 +134,7 @@ def _git_common_dir(git_dir: Path, cwd: Optional[Path] = None) -> Path:
 
 def _append_log(reap_log: Path, message: str) -> None:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    # Review: code-reviewer (Finding 4) — force LF regardless of platform newline
+    # Force LF regardless of platform newline
     # translation; the bash oracle's `>>` redirection always appends a literal LF,
     # including on Windows/MSYS, so default text-mode writes (which would emit CRLF
     # on native Windows Python) would break byte-for-byte log parity.
@@ -228,7 +228,7 @@ def _env_float(name: str, default: float) -> float:
 
 
 def main(argv: list[str]) -> int:
-    # Review: code-reviewer (Finding 1) — the bash oracle never inspects $@ at all;
+    # The bash oracle never inspects $@ at all;
     # an argparse-based flag surface printed the docstring to stdout on --help and
     # exited 2 on any stray arg, both violating the "no stdout" / byte-for-byte
     # parity contract documented above. `argv` is intentionally unused, matching

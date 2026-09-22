@@ -387,7 +387,7 @@ def test_select_best_sha_picks_max_committer_timestamp_among_real_shas(git_fixtu
 
 
 def test_select_best_sha_treats_real_epoch_zero_as_a_winning_candidate(git_fixture, monkeypatch):
-    """Review: code-reviewer — _batch_committer_timestamps' docstring warns
+    """_batch_committer_timestamps' docstring warns
     that a REAL committer timestamp of literal epoch 0 must never be
     conflated with "unresolvable" (that conflation is the exact P4 fail-open
     defect class fixed above). Pin it: a genuinely-epoch-0 commit mixed with

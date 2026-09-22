@@ -100,7 +100,7 @@ idempotency without the interpreter-global side effect. Callers that genuinely n
 `REPO_DOE_CLAUDE` in a CHILD process's environment pass it explicitly via `env=`
 (as `install.maximalist` and `install.sandbox_check` already do).
 
-Review: code-reviewer — `coordinator_core.engine_root`'s negative-spec cites this
+`coordinator_core.engine_root`'s negative-spec cites this
 module as the deliberately-asymmetric counter-example. That cross-reference is now
 STALE: both resolvers are pure. The two modules agree; engine_root's note should be
 updated when that file is next touched.
@@ -128,7 +128,7 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from coordinator_core import machine_resolver as _machine_resolver
 from coordinator_core import resolve_coordinator_clone as _resolve_coordinator_clone
@@ -369,7 +369,7 @@ def _cf_marketplace_cache_rung() -> Optional[str]:
     if not os.path.isdir(cache_parent):
         return None
     best: Optional[str] = None
-    best_key = (-1, -1, -1)
+    best_key: Optional[Tuple[int, int, int]] = None
     try:
         entries = os.listdir(cache_parent)
     except OSError:
@@ -378,18 +378,12 @@ def _cf_marketplace_cache_rung() -> Optional[str]:
         child = os.path.join(cache_parent, name)
         if not os.path.isdir(child):
             continue
-        parts = (name.split(".") + ["0", "0", "0"])[:3]
-        nums: List[int] = []
-        for part in parts:
-            digits = ""
-            for ch in part:
-                if ch.isdigit():
-                    digits += ch
-                else:
-                    break
-            nums.append(int(digits) if digits else 0)
+        parts = name.split(".")
+        if len(parts) > 3 or any(not part.isdigit() for part in parts):
+            continue
+        nums: List[int] = [int(part) for part in parts] + [0] * (3 - len(parts))
         key = (nums[0], nums[1], nums[2])
-        if key > best_key:
+        if best_key is None or key > best_key:
             best_key = key
             best = child
     return best
@@ -526,7 +520,7 @@ def coordinator_doe_root() -> Optional[str]:
             resolved_root = resolved_fallback
         else:
             # Rung 2.75: codename-free ladder (C1B) -- see module docstring.
-            # Review: B2 (MAJOR, 2026-08-08) -- this ladder was previously
+            # B2 (MAJOR, 2026-08-08) -- this ladder was previously
             # placed AHEAD of rungs 2/2.5, so a stale marketplace install or
             # pointer file could outrank DR-071's canonical registry anchor
             # on a private dev box. DR-071 ratifies repos.doe_claude as the

@@ -14,7 +14,7 @@ ending in one terminal ``coordinator:test-runner`` phase.
 
 ``workflow_scaffold._compose_script`` is NOT wrapped or extended here. It
 hardcodes a literal ``TODO: prompt for {title}`` body, a fixed
-``label: 'work:<title>'``, and emits NO ``agentType`` at any call site — this
+``label: 'work:<title>'``, and emits NO ``agentType`` at any call site. This
 module needs per-phase ``agentType`` (``coordinator:executor`` for wave rows,
 ``coordinator:git-commit-agent`` for commit phases, ``coordinator:test-runner``
 for the terminal phase) and real prompt bodies, neither of which
@@ -107,8 +107,8 @@ This is distinct from two shapes that stay exactly as they were: the
 mixed case (SOME rows `writes: []` alongside real contributors) already
 warns and continues inside `commit_pathspec` by design and is not folded
 into the all-empty branch; the all-UNDECLARED case (refusal 1, no row
-declares at all) still raises, since `_all_writes_declared_empty` only
-matches rows that explicitly declare.
+declares at all) still raises, since `pathspec.commit_pathspec_or_none`
+yields `None` only for rows that explicitly declare.
 See state/bug-backlog/2026-09-11-an-all-empty-writes-wave-sinks-the-whole-emit.yaml.
 
 ## Top-level body, never a defined-but-uninvoked wrapper (BREAK-CLASS FIX)
@@ -340,12 +340,14 @@ from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.pathspec import (
     NoTestTargetError,
     commit_pathspec,
+    commit_pathspec_or_none,
     commit_prefixes,
-    is_zero_contribution,
     terminal_test_scope,
+    candidate_test_additions,
 )
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, read_spine
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow, _normalize_path, build_waves
+from coordinator_core.ops.dispatch_emit.work_label import build_work_label
 from coordinator_core.executor_return_contract import (
     FOOTPRINT_CONSTRAINT_TEMPLATE,
     done_summary_constraint,
@@ -915,6 +917,24 @@ def _dedupe_preserve_order(paths: list[str]) -> list[str]:
     return ordered
 
 
+def _widen_with_test_candidates(paths: list[str]) -> list[str]:
+    """``paths`` plus each entry's stem-derived test-file candidate
+    (``pathspec.candidate_test_additions``), deduped, order preserved.
+
+    The widening a committer's handed pathspec needs so an AC-satisfying
+    executor's own test file reads as declared rather than a stranded-work
+    divergence (state/bug-backlog/2026-08-26-emitted-wave-commit-legs-are-
+    handed-a-wr-c0f443ac1fdb.yaml) -- see that function's docstring for why
+    an unwritten candidate costs nothing here. Applied at every site that
+    feeds a pathspec to a dispatched committer or its preflight, never to
+    ``pathspec.commit_pathspec``'s own return, which stays the exact,
+    unwidened ``writes:`` derivation its other callers pin.
+    """
+    if not paths:
+        return paths
+    return _dedupe_preserve_order([*paths, *candidate_test_additions(paths)])
+
+
 def _is_immutable_body_path(path: str) -> bool:
     """True if ``path`` names a ``docs/plans/*.md`` or ``docs/problems/*.md``
     immutable body file — the exact denial surface of
@@ -946,7 +966,16 @@ def _row_agent_type(row: WaveRow) -> str:
     a row writing both an immutable ``docs/plans/*.md``/``docs/problems/*.md``
     body and ordinary code is incoherent regardless of who runs it, so an
     explicit ``agent_type`` does not reconcile the two halves and
-    ``MixedAgentTypeRowError`` still fires.
+    ``MixedAgentTypeRowError`` still fires. ``UnroutableWorkKindRowError``
+    sits beside it for the same reason: no choice of runner reconciles
+    "must run something" with "writes only a surface whose only permitted
+    writer is forbidden to run anything." An override selects WHO runs a
+    coherent row; it never makes an incoherent one coherent.
+
+    ``UnverifiableEnricherRowError`` deliberately stays BELOW the override:
+    its own message names ``agent_type`` as the documented escape hatch for
+    a false positive, so honouring the override there is the designed
+    behaviour rather than a suppression.
 
     Absent an override: a row writing ANY ``docs/plans/*.md`` or
     ``docs/problems/*.md`` path routes to ``coordinator:enricher`` —
@@ -968,6 +997,17 @@ def _row_agent_type(row: WaveRow) -> str:
                 "path — split the row instead of guessing an agentType"
             )
 
+        if immutable_body and row.change_kind in _EXECUTION_TIER_CHANGE_KINDS:
+            raise UnroutableWorkKindRowError(
+                f"row {row.id!r} declares change_kind {row.change_kind!r} — "
+                "execution-tier work — but writes only an immutable "
+                "docs/plans/*.md or docs/problems/*.md body, which only "
+                "coordinator:enricher may write and which its charter "
+                "forbids it to earn by running anything. Split the row: an "
+                "executor row that runs and records to an ordinary path, an "
+                "enricher row that folds the result into the body"
+            )
+
     if row.agent_type:
         if not _AGENT_TYPE_GRAMMAR_RE.match(row.agent_type):
             raise MalformedAgentOverrideError(
@@ -979,16 +1019,6 @@ def _row_agent_type(row: WaveRow) -> str:
     if row.writes is UNDECLARED:
         return _EXECUTOR_AGENT_TYPE
     if immutable_body:
-        if row.change_kind in _EXECUTION_TIER_CHANGE_KINDS:
-            raise UnroutableWorkKindRowError(
-                f"row {row.id!r} declares change_kind {row.change_kind!r} — "
-                "execution-tier work — but writes only an immutable "
-                "docs/plans/*.md or docs/problems/*.md body, which only "
-                "coordinator:enricher may write and which its charter "
-                "forbids it to earn by running anything. Split the row: an "
-                "executor row that runs and records to an ordinary path, an "
-                "enricher row that folds the result into the body"
-            )
         if _row_verification_runs(row):
             raise UnverifiableEnricherRowError(
                 f"row {row.id!r} writes under docs/plans/ or docs/problems/, so "
@@ -1746,7 +1776,10 @@ def _row_return_contract(row: WaveRow, plan_path: str) -> str:
         footprint = list(row.writes) + [report_path]
         parts.append(
             FOOTPRINT_CONSTRAINT_TEMPLATE.replace(
-                "[list]", ", ".join([*footprint, *row.writes_under])
+                "[list]",
+                ", ".join(
+                    _fenced_paths(footprint, row.writes_under, row.surface)
+                ),
             )
         )
     else:
@@ -1774,6 +1807,33 @@ def _row_return_contract(row: WaveRow, plan_path: str) -> str:
     )
     parts.append(_stop_rule_clause())
     return "\n\n".join(parts)
+
+
+def _fenced_paths(footprint, writes_under, surface) -> list:
+    """What the executor is permitted to touch: its committable paths, its
+    run-time prefixes, and its own declared ``surface``.
+
+    The surface is here because the fence and the commit pathspec answer
+    different questions, and conflating them strands rows. A row whose
+    target is gitignored drops it from ``writes:`` -- correctly, since a
+    gitignored path is never a committable write -- and that same drop then
+    fences its executor out of the one file its body tells it to write.
+    Measured three times in one session: a K-016 append to
+    ``.coordinator-local/kill-ledger.md``, and two ``cross-repo-memo`` rows
+    whose drafts land under ``.coordinator-local/memo-outbox/``. All three
+    executors read the fence correctly, reported BLOCKED, and were right to.
+
+    Widening the fence cannot widen a commit: the wave's pathspec is built
+    from ``writes``/``writes_under`` alone and never reads this list. The
+    surface is likewise kept out of the DONE summary's porcelain clause,
+    which runs over concrete paths only -- a directory surface there would
+    report peers' untracked files as this row's work
+    (``_prefix_claim_field``).
+    """
+    fenced = [*footprint, *writes_under]
+    if surface and surface not in fenced:
+        fenced.append(surface)
+    return fenced
 
 
 #: The label a ``writes_under:`` row's executor lists its run-time-named
@@ -1942,7 +2002,7 @@ def _wave_agent_calls(
             f"  {binder}await agent("
             f"{_prompt_literal(row)}, "
             "{ "
-            f"label: {_js_string_literal(f'work:{row.id}')}, "
+            f"label: {_js_string_literal(build_work_label(row.id))}, "
             f"phase: {_js_string_literal(phase_title)}, "
             f"agentType: {_js_string_literal(_degrade_agent_type(row_agent_type, agent_type_host))}, "
             f"{_model_opt(row_agent_type, row.agent_model)} "
@@ -1956,7 +2016,7 @@ def _wave_agent_calls(
             "    () => agent("
             f"{_prompt_literal(row)}, "
             "{ "
-            f"label: {_js_string_literal(f'work:{row.id}')}, "
+            f"label: {_js_string_literal(build_work_label(row.id))}, "
             f"phase: {_js_string_literal(phase_title)}, "
             f"agentType: {_js_string_literal(_degrade_agent_type(row_agent_type, agent_type_host))}, "
             f"{_model_opt(row_agent_type, row.agent_model)} "
@@ -2198,6 +2258,9 @@ _PROVENANCE_HEADING = (
     "your scoped-commit route commits only the paths in the pathspec. Never "
     "unstage, revert, or commit a peer's paths, and never ask "
     "for the index to be cleared."
+    "\n\nThe working tree too: a dirty or untracked path "
+    "no report in this wave names belongs to a peer: never commit it, refuse "
+    "over it, or name it. Scope checks to your own pathspec."
     "\n\nREPORTED PATHS OUTSIDE THE PATHSPEC. The check is ONE-DIRECTIONAL BY "
     "DEFAULT, with one exception: a reported path under a DISPATCH-LAYER "
     f"BOOKKEEPING prefix -- {_BOOKKEEPING_PREFIX_RENDER} -- is not chunk "
@@ -2441,11 +2504,17 @@ def _commit_agent_call(
     )
     deliverable_rule = (
         " A Deliverable-Id trailer is attached to this commit automatically"
-        " by the commit route itself (ceremony.commit_v2's apply_missing_trailers"
-        " call, not a git hook) -- do not pass a flag for it and do"
-        " not hand-write one into the message body. If the trailer resolves"
-        " to an id you did not expect, report it; that is never grounds to"
-        " amend, reset, or re-commit."
+        " -- via the SAME resolver `ceremony.commit_v2` calls internally"
+        " (`coordinator_core.git.commit_trailers.apply_missing_trailers`),"
+        " not a git hook. `commit_paths` fires no git hooks of its own"
+        " (it lands via commit-tree plumbing), so nothing attaches the"
+        " trailer unless you call the resolver yourself: BEFORE calling"
+        " `commit_paths`, run"
+        " `message = apply_missing_trailers(message, repo, paths)`."
+        " That call resolves the id, it does not invent one -- do not pass"
+        " a flag for it and do not hand-write one into the message body"
+        " yourself. If the trailer resolves to an id you did not expect,"
+        " report it; that is never grounds to amend, reset, or re-commit."
         if deliverable_id
         else ""
     )
@@ -2504,7 +2573,6 @@ def _commit_agent_call(
         f" before using it, and never use it to escape a commit you could"
         f" have made: it asserts your pathspec is clean, which the run"
         f" cannot check for you."
-        # Review: overengineering-reviewer flagged this sentence as
         # unconditional payload for a reader who cannot act on it —
         # dispositioned "accepted" in the sidecar, but the dispatching EM
         # overrode: three separate repos have misattributed this exact
@@ -3284,29 +3352,6 @@ def _gitignore_degraded_narration() -> str:
     )
 
 
-def _all_writes_declared_empty(rows: list[WaveRow]) -> bool:
-    """True iff every row in ``rows`` declares ``writes:`` (none UNDECLARED,
-    checked by sentinel identity, never truthiness) and every declared
-    contribution is empty -- the exact all-empty shape
-    ``pathspec.commit_pathspec``'s refusal 2 raises on
-    (state/bug-backlog/2026-09-11-an-all-empty-writes-wave-sinks-the-whole-emit.yaml).
-
-    Distinct from the mixed case (staff review finding P0-1: some rows
-    declare ``writes: []`` alongside others that contribute real paths) --
-    that shape already warns-and-continues inside ``commit_pathspec`` itself
-    and must not be folded into this branch; this function only returns
-    ``True`` when EVERY row contributes nothing. Also distinct from refusal
-    1 (every row UNDECLARED), which still raises unchanged -- an UNDECLARED
-    row never reaches this check as a declared, zero-contribution row.
-
-    A row declaring ``writes_under:`` is never zero-contribution here, even
-    when its ``writes:`` is empty: its files exist by the time the commit
-    phase runs, only their names are unknown at emit time, so its wave
-    keeps a commit phase.
-    """
-    return bool(rows) and all(is_zero_contribution(row) for row in rows)
-
-
 def compose_script(
     waves: list[list[WaveRow]],
     *,
@@ -3330,7 +3375,7 @@ def compose_script(
     ``pathspec.commit_pathspec`` and propagates unchanged for every shape
     except one: a wave/batch where every row declares ``writes: []`` (none
     UNDECLARED, union empty) never reaches ``commit_pathspec`` at all —
-    ``_all_writes_declared_empty`` detects it first, this function emits
+    ``pathspec.commit_pathspec_or_none`` returns ``None`` for it, this function emits
     that wave's agent calls with NO commit phase after them and a one-line
     comment in the script saying why, and contributes nothing to the
     preflight union for it. The all-UNDECLARED refusal (refusal 1) and the
@@ -3384,12 +3429,11 @@ def compose_script(
     # -- that wave gets no commit phase at all (see the per-batch loop below
     # and module docstring § An all-empty wave gets no commit phase), so it
     # must not raise or contribute to the preflight union either. Refusal 1
-    # (every row UNDECLARED) is untouched: ``_all_writes_declared_empty``
+    # (every row UNDECLARED) is untouched: ``commit_pathspec_or_none``
     # only matches a wave where every row explicitly declares, so that shape
     # still reaches ``commit_pathspec`` and still raises.
     wave_pathspecs = [
-        [] if _all_writes_declared_empty(wave) else commit_pathspec(wave)
-        for wave in waves
+        _widen_with_test_candidates(commit_pathspec_or_none(wave) or []) for wave in waves
     ]
     # ONE batched spawn over the whole-run union, before any per-wave or
     # per-batch pathspec is filtered against it -- a batch's pathspec is
@@ -3485,7 +3529,7 @@ def compose_script(
             # `_stop_rule_halt_gate`.
             stop_gate = _stop_rule_halt_gate(stopped_var, wave_title)
 
-            if _all_writes_declared_empty(batch):
+            if commit_pathspec_or_none(batch) is None:
                 # Every row in this batch declares `writes: []` -- no commit
                 # phase is emitted (state/bug-backlog/2026-09-11-an-all-empty
                 # -writes-wave-sinks-the-whole-emit.yaml); `commit_pathspec`
@@ -3498,7 +3542,7 @@ def compose_script(
                 body_blocks.append(stop_gate)
                 continue
 
-            batch_pathspec_raw = commit_pathspec(batch)
+            batch_pathspec_raw = _widen_with_test_candidates(commit_pathspec(batch))
             batch_gitignored = [p for p in batch_pathspec_raw if p in gitignored]
             batch_pathspec = [p for p in batch_pathspec_raw if p not in gitignored]
 
@@ -3599,7 +3643,7 @@ _NON_DONE_STATUS_JS_RE = (
 #: so an executor that writes prose ahead of its `DONE: <path>` line is not
 #: misread as having skipped the brief.
 _ANY_STATUS_JS_RE = (
-    # Review: code-reviewer -- the trailing class admitted "*"/"_" but not
+    # The trailing class admitted "*"/"_" but not
     # "`", so a reply closing its inline-code span before the colon (e.g.
     # `` `DONE_WITH_CONCERNS`: <path> ``) fell through unmatched even though
     # the opening class already admits the leading backtick.

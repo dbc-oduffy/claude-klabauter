@@ -11,7 +11,7 @@ This module (C1) ships the read-only floor: the one p4 spawn helper
 It does NOT ship the session-changelist minter (C2), the push leg (C3), the
 checkout guard (D5), or the verb fence (D6) — those are later plan rows.
 
-# Review: overengineering-reviewer F1 (integrator-applied) — no in-repo
+# No in-repo
 # consumer ever imported this package's re-export facade; every caller
 # reaches for submodules directly. The facade also shadowed the
 # `session_change` submodule for any `from coordinator_core.p4 import

@@ -142,7 +142,7 @@ def test_canonical_present_emits_feed_with_valid_provenance(tmp_path):
     # timezone-aware ISO-8601 with UTC offset (ends in "Z" per EmitContext.resolve's format).
     assert prov["observed_at"].endswith("Z")
     datetime.strptime(prov["observed_at"], "%Y-%m-%dT%H:%M:%SZ")  # raises on malformed
-    # Review: code-reviewer (Finding 4) — the above asserts the literal string shape
+    # The above asserts the literal string shape
     # EmitContext happens to produce today, not the actual AC2 criterion (timezone-aware
     # observed_at, i.e. "would pass rag's provenance.py validation"). Reimplement rag's
     # own Z-normalization + aware-datetime check here so this test fails if the
@@ -219,7 +219,7 @@ def test_draft_present_but_canonical_absent_still_no_ops(tmp_path):
 def test_canonical_present_but_invalid_yaml_raises_structured_value_error(tmp_path):
     """Present-but-malformed canonical (invalid YAML syntax) must raise a structured
     ValueError, not let yaml.YAMLError bubble uncaught out of the JSON-RPC handler.
-    # Review: code-reviewer (Finding 1/2) — proves the module's "never crashes" claim
+    # Proves the module's "never crashes" claim
     # actually holds for a present-but-garbage canonical, not just an absent one.
     """
     _init_bare_git_repo(tmp_path)
@@ -235,7 +235,7 @@ def test_canonical_present_but_non_dict_raises_structured_value_error(tmp_path):
     """Present-but-non-dict canonical (valid YAML that parses to a bare list) must raise a
     structured ValueError rather than silently forwarding a non-dict value downstream into
     build_feed, where it would break the AC5 subset-check contract silently at the consumer.
-    # Review: code-reviewer (Finding 1/2/5) — also verifies the Optional[dict] promise on
+    # Also verifies the Optional[dict] promise on
     # read_canonical's return type is now honest (Finding 5 is subsumed by this guard).
     """
     _init_bare_git_repo(tmp_path)
@@ -407,6 +407,6 @@ def test_strategic_emit_classification_mirrors_strategic_generate():
     not just against a fixed literal, so future divergence between the two ops'
     classification is caught even if someone edits strategic.generate without touching
     this test.
-    # Review: code-reviewer (Finding 6) — equality-with-sibling-op check, not fixed literal.
+    # equality-with-sibling-op check, not fixed literal.
     """
     assert classify("strategic.emit") == classify("strategic.generate")

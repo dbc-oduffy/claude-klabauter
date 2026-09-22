@@ -61,7 +61,7 @@ def test_op_returns_post_advisory_shape_for_a_firing_payload(tmp_path, monkeypat
     repo = tmp_path / "repo"
     _init_repo(repo)
 
-    # Review: coordinatorcode-reviewer.a986dd968d6771f99, Finding 2 — this is
+    # This is
     # the sole test in this file that lets the real routed path run, so it is
     # the one place a residual subprocess spawn (Finding 1) would otherwise
     # go undetected. Spy on the real subprocess.run call (not mocked out —
@@ -186,7 +186,7 @@ def test_op_reads_claude_project_dir_from_payload_env_not_os_environ(tmp_path, m
 
 
 def test_op_readme_row_shape_matches_between_routed_and_fallback_paths(tmp_path, monkeypatch) -> None:
-    """Review: coordinatorcode-reviewer.a986dd968d6771f99, Finding 5 — the
+    """The
     routed path's README row (plan_capture_persist.readme_row()) and the
     fallback path's inline-built row must resolve to the same link-target
     shape for the same docs/README.md, since neither test previously

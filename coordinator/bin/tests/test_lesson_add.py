@@ -304,7 +304,7 @@ def test_below_threshold_no_match(tmp_path):
     New title tokens: {test, lesson, about, foobar, pattern, usage} (6 tokens).
     Existing title tokens: {test, lesson, about, routing, unique, words} (6 tokens).
     Intersection = {test, lesson, about} = 3; overlap = 3/6 = 0.50 < 0.60 → no match.
-    Review: code-reviewer strang-08-slice3 — (F9/dispatch-F8) threshold boundary coverage.
+    Threshold boundary coverage.
     """
     mock_run = _run_double(returncode=0)
 
@@ -327,7 +327,7 @@ def test_at_threshold_blocks_delegation(tmp_path):
     New title tokens: {test, lesson, about, foobar, pattern, usage} (6 tokens).
     Existing title tokens: {test, lesson, about, foobar, pattern, other} (6 tokens).
     Intersection = {test, lesson, about, foobar, pattern} = 5; overlap = 5/6 ≈ 0.83 ≥ 0.60 → match.
-    Review: code-reviewer strang-08-slice3 — (F9/dispatch-F8) threshold boundary coverage.
+    Threshold boundary coverage.
     """
     tmpdir = str(tmp_path)
     _write_lesson_yaml(tmpdir, "Test lesson about foobar pattern other")
@@ -614,6 +614,100 @@ def test_delegation_carries_the_served_session_not_the_servers_spawner(monkeypat
 
 
 # ---------------------------------------------------------------------------
+# `sibling_only` gate on the delegated child (locator-door leak) — 2026-09-21
+#
+# A bare `coordinator-queue-append` on PATH resolves to the shared warm-door
+# binary, whose JSON-RPC payload carries argv and cwd and NO env — a
+# QUEUE_APPEND_OUTPUT_ROOT this process is honouring for its own dedup scan
+# never reaches a door-routed child, which then writes under the resident
+# server's own environment instead of the test sandbox
+# (state/bug-backlog/2026-08-31-lesson-add-reports-duplicates-of-files-that-
+# do-not-exist.yaml's `dedupe_finding`). `coordinator-harvest-deferrals.py`
+# already carries the fix for the sibling `LESSON_PROMOTE_OUTBOX_ROOT` leak;
+# this pins the same behavior here.
+# ---------------------------------------------------------------------------
+
+
+def test_child_pinned_to_tree_under_active_isolation_redirect(monkeypatch):
+    """Under PYTEST_CURRENT_TEST + QUEUE_APPEND_OUTPUT_ROOT, the delegated
+    child must be resolved sibling-only — never the PATH-resolved door."""
+    import _queue_append_locator
+
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "isolation-redirect-test")
+    monkeypatch.setenv(_cli_mod._QUEUE_APPEND_OUTPUT_ROOT_ENV, "/fake/override-root")
+
+    mock_result = unittest.mock.MagicMock()
+    mock_result.returncode = 0
+
+    with (
+        unittest.mock.patch.object(_cli_mod, "_dedup_check", return_value=[]),
+        unittest.mock.patch.object(
+            _queue_append_locator, "find_cli_cmd",
+            return_value=["python3", str(_BIN_DIR / "coordinator-queue-append.py")],
+        ) as mock_find,
+        unittest.mock.patch("subprocess.run", return_value=mock_result),
+    ):
+        _invoke()
+
+    assert mock_find.call_args.kwargs.get("sibling_only") is True, (
+        "an active isolation redirect must pin the child to this tree's "
+        "source, or the redirect silently never reaches it"
+    )
+
+
+def test_child_not_pinned_without_isolation_redirect(monkeypatch):
+    """No QUEUE_APPEND_OUTPUT_ROOT set → the door stays the resolution
+    target (live dispatch must not be routed to the source checkout)."""
+    import _queue_append_locator
+
+    monkeypatch.delenv(_cli_mod._QUEUE_APPEND_OUTPUT_ROOT_ENV, raising=False)
+
+    mock_result = unittest.mock.MagicMock()
+    mock_result.returncode = 0
+
+    with (
+        unittest.mock.patch.object(_cli_mod, "_dedup_check", return_value=[]),
+        unittest.mock.patch.object(
+            _queue_append_locator, "find_cli_cmd",
+            return_value=["python3", str(_BIN_DIR / "coordinator-queue-append.py")],
+        ) as mock_find,
+        unittest.mock.patch("subprocess.run", return_value=mock_result),
+    ):
+        _invoke()
+
+    assert mock_find.call_args.kwargs.get("sibling_only") is False, (
+        "a live invocation with no redirect set must keep resolving through "
+        "the door"
+    )
+
+
+def test_child_cli_must_come_from_tree_predicate(monkeypatch):
+    """Direct unit coverage on the gate: both PYTEST_CURRENT_TEST and a
+    non-empty QUEUE_APPEND_OUTPUT_ROOT are required to pin the tree."""
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv(_cli_mod._QUEUE_APPEND_OUTPUT_ROOT_ENV, raising=False)
+    assert _cli_mod._child_cli_must_come_from_tree() is False, (
+        "no redirect and no test marker: must not pin"
+    )
+
+    monkeypatch.setenv(_cli_mod._QUEUE_APPEND_OUTPUT_ROOT_ENV, "/fake/override-root")
+    assert _cli_mod._child_cli_must_come_from_tree() is False, (
+        "a redirect inherited outside a test run must not pin the tree — "
+        "mirrors _isolation_root's own gate"
+    )
+
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "predicate-test")
+    assert _cli_mod._child_cli_must_come_from_tree() is True, (
+        "redirect + test marker together must pin the tree"
+    )
+
+    monkeypatch.delenv(_cli_mod._QUEUE_APPEND_OUTPUT_ROOT_ENV, raising=False)
+    assert _cli_mod._child_cli_must_come_from_tree() is False, (
+        "test marker alone, with no redirect, must not pin"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Child-stderr relay on the warm (no-fd) leg — 2026-09-01
 #
 # `no_console_passthrough_kwargs()` hands the child real fds, but its own
@@ -706,6 +800,78 @@ def test_success_relays_nothing_and_returns_zero():
     rc, emitted, _ = _run_with_stdio({}, b"", 0)
     assert rc == 0
     assert emitted == ""
+
+
+def test_success_relays_child_stdout_artifact_path_when_piped():
+    """Fileno-less leg (this CLI running in-process under `workstream_
+    complete.apply`'s `redirect_stdout` capture): `no_console_passthrough_
+    kwargs` routes the delegated `coordinator-queue-append` spawn's stdout
+    through `subprocess.PIPE`, and `coordinator-queue-append` prints the
+    path it wrote on success. `main()` must re-print that captured text on
+    its own stdout so the apply report's progress line can name the
+    artifact a lesson-add directive wrote instead of only its exit code
+    (state/bug-backlog/2026-08-31-a-lesson-loss-is-unauditable-the-apply-
+    r-21ac0862a751.yaml)."""
+    import subprocess as _sp
+
+    written_path = "state/lessons/2026-09-21-some-lesson-title.yaml"
+    mock_result = unittest.mock.MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = (written_path + "\n").encode("utf-8")
+
+    import _queue_append_locator
+
+    captured_out = io.StringIO()
+    with (
+        unittest.mock.patch.object(_cli_mod, "_dedup_check", return_value=[]),
+        unittest.mock.patch.object(
+            _queue_append_locator, "find_cli_cmd",
+            return_value=["python3", str(_BIN_DIR / "coordinator-queue-append.py")],
+        ),
+        unittest.mock.patch("subprocess.run", return_value=mock_result),
+        unittest.mock.patch(
+            "coordinator_core.win_portability.no_console_passthrough_kwargs",
+            return_value={"stdout": _sp.PIPE},
+        ),
+        unittest.mock.patch("sys.stdout", captured_out),
+    ):
+        rc = _invoke()
+
+    assert rc == 0
+    assert written_path in captured_out.getvalue(), (
+        "success must re-print the piped child stdout so the artifact "
+        "path reaches the caller's own captured stdout"
+    )
+
+
+def test_success_relays_nothing_when_stdout_not_piped():
+    """Real-fd leg (an interactive terminal): the child already wrote
+    straight to the operator's console, so `result.stdout` stays `None`
+    and nothing is re-printed — no duplicate line."""
+    mock_result = unittest.mock.MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = None
+
+    import _queue_append_locator
+
+    captured_out = io.StringIO()
+    with (
+        unittest.mock.patch.object(_cli_mod, "_dedup_check", return_value=[]),
+        unittest.mock.patch.object(
+            _queue_append_locator, "find_cli_cmd",
+            return_value=["python3", str(_BIN_DIR / "coordinator-queue-append.py")],
+        ),
+        unittest.mock.patch("subprocess.run", return_value=mock_result),
+        unittest.mock.patch(
+            "coordinator_core.win_portability.no_console_passthrough_kwargs",
+            return_value={"stdout": 1, "stderr": 2},
+        ),
+        unittest.mock.patch("sys.stdout", captured_out),
+    ):
+        rc = _invoke()
+
+    assert rc == 0
+    assert captured_out.getvalue() == ""
 
 
 # ---------------------------------------------------------------------------

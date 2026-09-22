@@ -8,6 +8,12 @@ from `coordinator.local.md` frontmatter, following the existing
 `fast_test_cmd`/`full_test_cmd` convention (no new config file). This module
 is the single pinned interface both ops (and their tests) author against.
 
+This module also carries `resolve_test_locator_config` (mirrors
+`resolve_doc_registry_config`'s resolution pattern), the repo-supplied
+test-locator key resolver `coordinator_core.ops.dispatch_emit.pathspec`
+reads for its non-`.py` test-target derivation convention. See
+`resolve_test_locator_config`'s docstring.
+
 Reuses `coordinator_core.resolve_validation_cmd.cs_read_local_md_key` for the
 actual frontmatter extraction — this module does not reimplement YAML
 parsing; it only interprets the flat string each key resolves to (a YAML
@@ -104,6 +110,54 @@ def _parse_int(raw: str, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
+
+
+DEFAULT_TEST_LOCATOR_SUFFIXES: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class TestLocatorConfig:
+    """Resolved per-repo test-locator configuration.
+
+    Mirrors `DocRegistryConfig`: `test_locator_suffixes` carries the fleet
+    default (an empty list — no additional convention) whenever the repo's
+    `coordinator.local.md` declares no `test_locator_suffixes:` override.
+    This dataclass carries only the repo-declared convention itself; it does
+    not derive test-target candidates — that derivation lives in
+    `coordinator_core.ops.dispatch_emit.pathspec` (`_candidate_test_targets`),
+    which is the consumer of this config, not this module's concern.
+    """
+
+    test_locator_suffixes: List[str] = field(
+        default_factory=lambda: list(DEFAULT_TEST_LOCATOR_SUFFIXES)
+    )
+
+
+def resolve_test_locator_config(repo_root: str) -> TestLocatorConfig:
+    """Resolve the repo-supplied test-locator config from `coordinator.local.md`.
+
+    Mirrors `resolve_doc_registry_config`'s resolution pattern exactly: one
+    `cs_read_local_md_key` call for the single flat top-level key
+    `test_locator_suffixes` (a YAML flow-style list, e.g. `[*.test.ts]`),
+    parsed via the shared `_parse_flow_list` helper. `repo_root` is the
+    consumer repo's root (the directory containing its `coordinator.local.md`),
+    never a cwd-implicit default — callers resolve their own root first.
+
+    This key extends `_candidate_test_targets`'s pytest-only (`.py`-stem)
+    convention with repo-declared non-`.py` suffix conventions (e.g. a TS
+    repo's `*.test.ts` sibling convention). Absent the key (or the file
+    itself), resolution degrades to `DEFAULT_TEST_LOCATOR_SUFFIXES` (`[]`) —
+    additive, opt-in, byte-identical to today's behaviour when unset, same
+    pattern as `execution_mode`'s fails-toward-the-old-default rule. Never
+    raises for a missing file, a missing key, or a malformed list value.
+    """
+    suffixes_raw = cs_read_local_md_key(repo_root, "test_locator_suffixes")
+    test_locator_suffixes = (
+        _parse_flow_list(suffixes_raw)
+        if suffixes_raw.strip()
+        else list(DEFAULT_TEST_LOCATOR_SUFFIXES)
+    )
+    return TestLocatorConfig(test_locator_suffixes=test_locator_suffixes)
 
 
 def resolve_doc_registry_config(repo_root: str) -> DocRegistryConfig:

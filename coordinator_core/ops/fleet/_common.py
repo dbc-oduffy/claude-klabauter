@@ -209,7 +209,7 @@ _SESSION_ID_ENV_KEYS: tuple = (
 #   claude-klabauter-initiated commit; without them that branch is never selected on
 #   Windows.
 #
-# Review: code-reviewer F1 (2026-07-28) — COMSPEC was here and is NOT: it
+# COMSPEC was here and is NOT: it
 # names the interpreter Windows uses for shell=True/os.system()/ShellExecute
 # calls, the exact "names an executable to run" shape GIT_SSH_COMMAND is
 # stripped for. Checked before deciding (not assumed): this repo's own
@@ -360,6 +360,7 @@ async def _empty_private_index_breach(
         env=env,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        **no_console_creationflags(),
     )
     out, stderr = await proc.communicate()
     if proc.returncode != 0:
@@ -477,7 +478,6 @@ async def _update_index_with_retry(argv: List[str], *, cwd: Path, env: dict) -> 
     per-item annotation) rather than silently discarding it, which is exactly
     the failure mode this helper's retry hardening + return contract close.
 
-    Review: code-reviewer P2 (2026-08-13, distill.apply_disposal integration)
     — this is the ONE shared spawn point for archive_and_commit's,
     rm_and_commit's, AND distill_apply_disposal's main-index resync calls, so
     the Windows console-visibility suppression belongs here rather than
@@ -535,7 +535,7 @@ def _make_git_env(*, idx_path: Optional[str] = None) -> dict:
     platform/identity state the hooked commit path needs to run at all on
     Windows and under non-default settings-homes.
 
-    Review: code-reviewer F2 (2026-07-28) — the D1 set is NOT a single
+    The D1 set is NOT a single
     uniform "not a redirect vector" claim; it splits into two honestly
     distinct risk categories, and only one of them is actually clean:
       - Direct-injection vectors (stripped, never forwarded): GIT_SSH_COMMAND,
@@ -970,7 +970,7 @@ def check_repo_root(
 # ---------------------------------------------------------------------------
 # Shared handoffs filesystem helpers — live-scanner + archive-dest
 # ---------------------------------------------------------------------------
-# Review: code-reviewer F1/F2 — extracted from identical definitions in
+# Extracted from identical definitions in
 # archive_handoffs (C1) and archive_shipped_handoffs (C2); single home
 # prevents divergence when handoffs directory or archive destination convention changes.
 
@@ -1061,7 +1061,7 @@ def collect_live_handoff_paths(worktree_root: Path) -> List[Path]:
 # 2026-07-14 claim-lock-liveness slice1 review)
 # ---------------------------------------------------------------------------
 #
-# Review: code-reviewer — session.reap._reap_orphaned_claims and
+# session.reap._reap_orphaned_claims and
 # archive_handoffs._is_terminal Check 4 must agree on the SAME claim-dir path
 # convention (<common_dir>/coordinator-sessions/<claim-class>-claims/<name>) or
 # a future rename silently no-ops one side (the plan's own warning). Hoisted
@@ -1535,7 +1535,7 @@ async def _resync_main_index_for_moves(
     if not relevant_moves:
         return
 
-    # Review: code-reviewer F1 — see this function's docstring
+    # See this function's docstring
     # ("Path-scoped index-from-HEAD restore") for the full rationale on
     # why a single `git restore --staged` over both paths preserves the
     # unconditional-on-lookup guarantee atomically. Batched 2026-08-19
@@ -2348,7 +2348,7 @@ async def archive_and_commit(
         # a no-op archival commit. `_empty_private_index_breach` itself is
         # UNCHANGED and still guards `rm_and_commit`'s own private-index seam
         # below; this is a second, independent guard for this function only.
-        # Review: code-reviewer (2026-08-27) — traced the full spine_error
+        # Traced the full spine_error
         # if/elif chain above and PROVED `head_spine is not None` is
         # unreachable-as-False here: `head_spine is None` sets spine_error on
         # the very first branch, so `spine_error is None` already implies
@@ -2704,7 +2704,7 @@ async def rm_and_commit(
     def _rel_id(p: Path) -> Optional[str]:
         """Return the repo-relative id for p, or None if p is not under worktree_root.
 
-        Review: code-reviewer — slice1 F1: a bare .relative_to() call raises
+        slice1 F1: a bare .relative_to() call raises
         ValueError uncaught for a path outside worktree_root, which would sink
         the whole batch and break the per-item isolation this function otherwise
         guarantees. Callers must treat a None return as "route this path into
@@ -2726,7 +2726,7 @@ async def rm_and_commit(
     try:
         base_env = _make_git_env(idx_path=idx_path)
 
-        # Review: code-reviewer — slice1 F1: classify not-under-worktree-root paths
+        # slice1 F1: classify not-under-worktree-root paths
         # up front, once, so every downstream site (read-tree-failure comprehension,
         # main loop, commit-failure restore loop, index-resync loop) only ever sees
         # paths that DO resolve to a valid id — no per-site guard needed.
@@ -2750,6 +2750,7 @@ async def rm_and_commit(
             env=base_env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            **no_console_creationflags(),
         )
         _out, stderr = await proc.communicate()
         if proc.returncode != 0:
@@ -2795,6 +2796,7 @@ async def rm_and_commit(
                 env=base_env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                **no_console_creationflags(),
             )
             _out, stderr = await proc.communicate()
 
@@ -2911,7 +2913,7 @@ async def rm_and_commit(
             # file, so there is nothing to rename back — restore each reaped
             # path from HEAD instead.
             main_env_for_restore = _make_git_env()
-            # Review: code-reviewer — slice1 F2: track restore rc per path. When
+            # slice1 F2: track restore rc per path. When
             # the restore-from-HEAD itself fails, the file is genuinely gone
             # (real data-loss on a shared tree) — that is a more severe condition
             # than an ordinary commit-failed reversion and must surface distinctly.
@@ -2926,6 +2928,7 @@ async def rm_and_commit(
                     env=main_env_for_restore,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
+                    **no_console_creationflags(),
                 )
                 _out, restore_stderr = await proc.communicate()
                 if proc.returncode != 0:

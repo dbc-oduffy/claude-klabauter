@@ -193,7 +193,7 @@ def test_handler_resolves_repo_root_from_params_and_coerces_since_days(tmp_path,
     if since_days_param is not None:
         params["since_days"] = since_days_param
 
-    # Review: code-reviewer — Finding 1. Handler is a plain sync `def`
+    # Handler is a plain sync `def`
     # (engine auto-offloads via asyncio.to_thread), called directly.
     result = _handler(params, repo_root=None)
 

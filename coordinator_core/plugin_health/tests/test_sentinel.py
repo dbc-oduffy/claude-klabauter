@@ -757,7 +757,7 @@ def test_run_prereq_probe_function_source_failed_when_native_callable_raises(tmp
     monkeypatch.setattr(prereq_probe, "probe_all", _raise)
     state, ndjson = _run_prereq_probe_function(tmp_path, "_co_prereq_probe_all")
     assert state == "source_failed"
-    # Review: code-reviewer (nit) — source_failed now carries the exception
+    # source_failed now carries the exception
     # type/message instead of a bare "" so a coding-defect signature mismatch
     # is visible in the sentinel JSON rather than folded into a bare "raised".
     assert ndjson == "RuntimeError: boom"

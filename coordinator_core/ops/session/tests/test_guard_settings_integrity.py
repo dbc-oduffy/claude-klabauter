@@ -407,6 +407,75 @@ def test_guardless_sessions_silent_on_empty_observations(monkeypatch):
     assert evaluate_guardless_sessions() == ""
 
 
+def test_evaluate_settings_integrity_composes_guardless_session_banner(
+    tmp_path, monkeypatch
+):
+    """`evaluate_settings_integrity` -- the function the registered SessionStart
+    op (`session.guard_settings_integrity` -> `_handler`) actually calls -- must
+    surface a guardless peer session, not merely `evaluate_guardless_sessions`
+    in isolation (see that function's own test coverage above). A guardless
+    session cannot self-report (see module section docstring), so an already-
+    guarded peer's OWN SessionStart hook is the only path this signal has to
+    reach an EM at all; a wired-but-uncalled lens is indistinguishable from no
+    lens."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    _write_settings(config_dir, {"foo@bar": True})
+    _write_installed(config_dir, {"foo@bar": [{"scope": "user"}]})
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.detect_guardless_sessions.detect",
+        lambda: DetectionResult(
+            cannot_determine=False,
+            reason=None,
+            observed=[
+                ProcessObservation(
+                    pid=17152, command_line="claude.exe --dangerously-skip-permissions", guarded=False
+                )
+            ],
+            guardless=[
+                ProcessObservation(
+                    pid=17152, command_line="claude.exe --dangerously-skip-permissions", guarded=False
+                )
+            ],
+        ),
+    )
+
+    text = evaluate_settings_integrity(config_dir)
+    assert "17152" in text
+    assert "claude-doe" in text
+
+
+def test_evaluate_settings_integrity_own_config_banner_survives_guardless_composition(
+    tmp_path, monkeypatch
+):
+    """Composition must not let either lens clobber the other: an own-config
+    banner (declared-true-but-unreachable plugin) and a guardless-peer banner
+    firing together both reach the returned text."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    _write_settings(config_dir, {"example-game-repo@example-game-workbench-repo": True})
+    _write_installed(config_dir, {"other@marketplace": [{"scope": "user"}]})
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.detect_guardless_sessions.detect",
+        lambda: DetectionResult(
+            cannot_determine=False,
+            reason=None,
+            observed=[
+                ProcessObservation(pid=17152, command_line="claude.exe", guarded=False)
+            ],
+            guardless=[
+                ProcessObservation(pid=17152, command_line="claude.exe", guarded=False)
+            ],
+        ),
+    )
+
+    text = evaluate_settings_integrity(config_dir)
+    assert "example-game-repo@example-game-workbench-repo" in text
+    assert "17152" in text
+
+
 def test_is_inline_install_true_on_flat_published_mirror(tmp_path):
     """A container registers the flat mirror: its repo root IS the content root,
     gated by `.claude-plugin/plugin.json`, with no `coordinator/` segment."""
@@ -427,6 +496,26 @@ def test_is_inline_install_false_on_bare_directory(tmp_path):
     bare.mkdir()
     (config_dir / ".doe-root").write_text(str(bare), encoding="utf-8")
 
+    assert _gsi.is_inline_install(config_dir) is False
+
+
+@pytest.mark.parametrize("migrated_body", ["", "/nonexistent/DoE-claude\n"])
+def test_non_live_migrated_rung_does_not_shadow_live_legacy(tmp_path, monkeypatch, migrated_body):
+    """A migrated pointer caught blank mid-rewrite (or stale) armed the
+    kill-switch on a live inline install by shadowing the live legacy rung."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    settings_home = tmp_path / "settings_home"
+    (settings_home / "machine-local").mkdir(parents=True)
+    (settings_home / "machine-local" / ".doe-root").write_text(migrated_body, encoding="utf-8")
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
+    doe = tmp_path / "DoE-claude"
+    (doe / "coordinator").mkdir(parents=True)
+    (config_dir / ".doe-root").write_text(str(doe) + "\n", encoding="utf-8")
+
+    assert _gsi.is_inline_install(config_dir) is True
+
+    (config_dir / ".doe-root").write_text("/nonexistent/legacy\n", encoding="utf-8")
     assert _gsi.is_inline_install(config_dir) is False
 
 

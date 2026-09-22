@@ -329,7 +329,7 @@ def _citations_verified(ctx: PredicateContext) -> Any:
     Passes `doc_relative_checker` (not just `repo_exists`) so a plan citing
     a path relative to its OWN directory — rather than repo-root-relative —
     resolves correctly instead of reading as a false `absent`/fabrication.
-    Review: code-reviewer — Finding (P2). Does not pass `sibling_checkers`
+    Does not pass `sibling_checkers`
     or `read_target_text`: this predicate checks fabrication over a plan
     BODY, not a doc with markdown-link anchors, and cross-repo citations are
     intentionally out of scope here (matches `verify_doc`'s own negative-spec
@@ -501,7 +501,7 @@ def _git_grep_count(repo_root: Path, token: str) -> Optional[int]:
     """Number of files under `repo_root` containing a literal-string hit for
     `token`, via `git grep -F -c` — the fast path.
 
-    Review: code-reviewer — Finding (P2), integrator disposition. A prior
+    Integrator disposition. A prior
     revision on this workstream replaced this native `git grep` call with a
     `git ls-files` enumeration plus a per-file, in-process Python
     `read_text` + substring scan, on the stated rationale that plain
@@ -523,7 +523,7 @@ def _git_grep_count(repo_root: Path, token: str) -> Optional[int]:
     way) — but the two paths do NOT agree on results in general, only on
     this module's actual call-site input class.
 
-    Review: code-reviewer — Findings (P2/P3), integrator disposition. Two
+    Integrator disposition. Two
     concrete divergences, both real and both currently unexercised:
     (1) binary files — `git grep` searches binary byte content by default
     (it only suppresses printing binary *match text*, not matching itself;

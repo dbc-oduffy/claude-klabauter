@@ -92,6 +92,12 @@ def _fallback_trailers(commit: str) -> List[str]:
         text=True,
         **leaf_spawn_creationflags(),
     )
+    if interp_r.returncode != 0:
+        print(
+            f"{_PROG}: git interpret-trailers --parse failed (rc={interp_r.returncode}): "
+            f"{interp_r.stderr.strip()} — treating as zero trailers, this may be wrong",
+            file=sys.stderr,
+        )
     interpreted = interp_r.stdout
 
     results: List[str] = []

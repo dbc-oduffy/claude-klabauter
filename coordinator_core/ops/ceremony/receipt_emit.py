@@ -295,7 +295,7 @@ def emit_receipt(
         ``(path, computed_op_tail)`` — the path the receipt was written to and
         the op_tail dict that was embedded in the receipt.
 
-    Review: code-reviewer F7 — returning computed_op_tail alongside the path
+    Returning computed_op_tail alongside the path
     guarantees callers receive exactly the op_tail that was written to the receipt
     (computed once from ctx.nodes), eliminating the double-computation pattern that
     allowed the response op_tail to silently diverge from the persisted receipt.
@@ -350,7 +350,7 @@ def emit_receipt(
         scope_mode=ctx.scope_mode,
         nodes=ctx.nodes,
         op_tail=op_tail,
-        # Review: code-reviewer 2026-07-08 Finding 5 — thread sid (already available
+        # Thread sid (already available
         # here from emit_receipt's own param) into the receipt body so a read-back
         # site can verify the resolved shard's body-level sid matches the sid it
         # asked for (defense-in-depth on top of Finding 1's filename anchoring).

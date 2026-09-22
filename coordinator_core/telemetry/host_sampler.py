@@ -114,7 +114,9 @@ collection ``_MAX_SAMPLE_COST_MS`` alone could see):
     ``_task_xml``'s native ``WorkingDirectory`` element), so no upward walk
     is ever needed in the deployed path. ``_MAX_INVOCATION_COST_MS`` bounds
     the FULL
-    ``python <path> host_sampler.py`` wall-clock, verified by a
+    ``python <path> host_sampler.py`` process time (batched user+kernel CPU
+    time via ``coordinator_core.benchmarks.process_time
+    .batched_process_time_ms``, never wall clock), verified by a
     subprocess-spawning test (marked ``spawns_process``) -- the number a
     scheduler actually pays, which ``_MAX_SAMPLE_COST_MS`` alone cannot see.
 
@@ -260,15 +262,20 @@ _MAX_SAMPLE_COST_MS = 250.0
 
 # Ratchet high-water mark for the FULL process-spawn-to-exit invocation cost
 # (import + collection + write) -- the number a scheduler actually pays, not
-# just the in-process slice `_MAX_SAMPLE_COST_MS` bounds. Derived at the
+# just the in-process slice `_MAX_SAMPLE_COST_MS` bounds. Gated axis is
+# PROCESS TIME (batched user+kernel CPU time across the spawned process,
+# via coordinator_core.benchmarks.process_time.batched_process_time_ms),
+# never wall clock -- wall clock on this box measures peer load (50-70
+# concurrent sessions is the design condition), not cost. Derived at the
 # 20-minute/72-fires-per-day cadence (see module docstring's "Cadence
-# arithmetic" and "Invocation-cost ratchet"). Measured interleaved
-# before/after on this box (n=20+ each, subprocess.run wall clock under
-# genuine 50-70-session concurrent load, so noisy -- reported as the tight
-# low cluster, with an intermittent high cluster at 2-3x that from box
-# load spikes unrelated to this code):
-#     pre-fix (package-import path):  ~117-120ms floor
-#     post-fix (direct-script path):  ~52-62ms floor
+# arithmetic" and "Invocation-cost ratchet"). Historical figures below are
+# wall-clock context from the original before/after measurement (n=20+
+# each, subprocess.run wall clock under genuine 50-70-session concurrent
+# load, so noisy -- reported as the tight low cluster, with an intermittent
+# high cluster at 2-3x that from box load spikes unrelated to this code),
+# kept for provenance only, not the gated quantity:
+#     pre-fix (package-import path):  ~117-120ms floor (wall-clock)
+#     post-fix (direct-script path):  ~52-62ms floor (wall-clock)
 # roughly a 50% cut in the common case. Even a full 500ms/fire (4-8x the
 # measured floor, generous headroom for a busier box, cold disk cache, or
 # a load-spike run) at 72 fires/day is 36s/day of wall clock and 72

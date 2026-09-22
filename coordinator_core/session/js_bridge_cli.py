@@ -174,6 +174,10 @@ def _cmd_claim_path(args: List[str]) -> int:
             agent_id=dir_name if is_agent_dir else None,
             verb=touch_record.VERB_TOUCH,
             path=normalized or "",
+            # A declared hold, not an observation: `claim-path` exists for
+            # writers outside the Edit/Write hook, and its claim must keep
+            # refusing a peer's commit exactly as it did before the axis.
+            kind=touch_record.KIND_WRITE,
         )
     except (OSError, ValueError) as exc:
         sys.stderr.write(

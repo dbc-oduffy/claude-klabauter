@@ -298,7 +298,7 @@ def _parse_edge_kinds(raw: object) -> Optional[Set[str]]:
         parts = {str(k).strip() for k in raw if k}
         return parts if parts else None
     if isinstance(raw, set):
-        # Review: code-reviewer — set branch did not filter falsy elements (e.g. None → "None"),
+        # Set branch did not filter falsy elements (e.g. None → "None"),
         # unlike the list/tuple branch which filters via `if k`. Align both branches.
         return {str(k) for k in raw if k} or None
     return None
@@ -790,7 +790,7 @@ def blocked_by_dependents_many(
         if isinstance(blocked_by, str):
             blocked_by = [blocked_by]
         if blocked_by is not None and not isinstance(blocked_by, (list, tuple)):
-            # Review: code-reviewer (P2, Finding 5) — a present-but-malformed
+            # A present-but-malformed
             # `blocked_by` (e.g. a dict/int from bad YAML) is "we could not
             # fully look", not "this handoff does not reference the
             # candidate" — silently `continue`-ing past it fails OPEN,
@@ -810,7 +810,7 @@ def blocked_by_dependents_many(
         for entry in blocked_by:
             if not isinstance(entry, str) or not entry:
                 continue
-            # Review: code-reviewer (nit, Finding 6) — an `id_index.get(entry)`
+            # An `id_index.get(entry)`
             # fallback here was removed as unreachable dead code: a candidate's
             # `identifiers` and `id_index` (built by `_index_by_id` over
             # `all_handoffs`) are both keyed from the exact same
@@ -1010,7 +1010,7 @@ async def _handoff_has_live_children(params: dict, repo_root: Optional[Path] = N
     # ------------------------------------------------------------------
     # C1b-ii: repo_root is the router-supplied git common dir.
     #
-    # Review: code-reviewer (F1) — repo_root is the git common dir (<worktree>/.git), so
+    # repo_root is the git common dir (<worktree>/.git), so
     # main_worktree_root() (= common_dir.parent) correctly derives the worktree root.
     if repo_root is not None:
         worktree_root = main_worktree_root(repo_root)  # router common_dir → worktree root

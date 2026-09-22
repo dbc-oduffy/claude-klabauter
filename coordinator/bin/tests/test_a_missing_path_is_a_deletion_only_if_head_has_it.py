@@ -164,7 +164,7 @@ def test_an_absent_directory_is_refused_not_called_a_deleted_file(tmp_path, caps
     ...), none of which match the bare directory name, so it falls to the
     refusal instead.
 
-    Review: code-reviewer Finding 2 on the committer-P0 slice.
+    code-reviewer Finding 2 on the committer-P0 slice.
     """
     root = _repo(tmp_path)
     import shutil

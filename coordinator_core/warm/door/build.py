@@ -60,6 +60,11 @@ _CORE_HEADER = Path(__file__).resolve().parent / "door_core.h"
 #: `_CORE_HEADER`, not just a data file that happens to sit next to them.
 _ENV_SET_HEADER = Path(__file__).resolve().parent / "door_env_set.h"
 
+#: Every file compiled into `door.exe`, in the order `write_provenance`
+#: records them. `door_install.committed_prebuilt_source_drift` reads the
+#: same tuple, so a new translation unit reaches both with one edit.
+SOURCES = (_SOURCE, _CORE_SOURCE, _CORE_HEADER, _ENV_SET_HEADER)
+
 #: Must equal door.c's `ENGINE_ROOT_SIDECAR_FILENAME` verbatim -- the two
 #: are never derived from a shared constant because one is a C wide-string
 #: macro and the other a Python `Path` component; keep them in lockstep by
@@ -151,7 +156,7 @@ def _compiler_version(kind: str, compiler_path: str) -> str:
 
 
 def write_provenance(
-    output_exe: Path, source_path: Path, kind: str, compiler_path: str, engine_root: Path,
+    output_exe: Path, kind: str, compiler_path: str, engine_root: Path,
     *, image_sha256: str | None = None,
 ) -> Path:
     """Records, next to `output_exe`, the SHA-256 of the `door.c` this
@@ -213,11 +218,8 @@ def write_provenance(
     Defaults to `None`/self-computed so a direct or test caller that has
     no digest handy keeps working unchanged."""
     provenance = {
-        "door_c_sha256": _sha256_file(source_path),
-        "sources": {
-            path.name: _sha256_file(path)
-            for path in (source_path, _CORE_SOURCE, _CORE_HEADER, _ENV_SET_HEADER)
-        },
+        "door_c_sha256": _sha256_file(_SOURCE),
+        "sources": {path.name: _sha256_file(path) for path in SOURCES},
         "image_sha256": image_sha256 if image_sha256 is not None else _sha256_file(output_exe),
         "compiler": kind,
         "compiler_version": _compiler_version(kind, compiler_path),
@@ -384,7 +386,7 @@ def build(
 
     write_sidecar(output, engine_root)
     image_sha256 = _sha256_file(output)
-    write_provenance(output, _SOURCE, kind, compiler_path, engine_root, image_sha256=image_sha256)
+    write_provenance(output, kind, compiler_path, engine_root, image_sha256=image_sha256)
 
     return output
 

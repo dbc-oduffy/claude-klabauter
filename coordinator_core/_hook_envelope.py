@@ -284,3 +284,31 @@ def no_advisory() -> dict:
     or the hook is disabled by a session sentinel.
     """
     return {}
+
+
+def payload_of(params: object) -> dict:
+    """The hook payload, from either params shape a `hooks.*` handler receives.
+
+    Two shapes reach these handlers and nothing normalises between them:
+
+      - WRAPPED, `{"payload": <event>}` — what both engine doors send
+        (`warm/hook_http.py :: build_request` and `coordinator/bin/hook-run.py`).
+      - FLAT, the event itself — what the cold DoE guard chain passes.
+
+    A handler that assumes one silently fail-opens through the other: it reads
+    no `tool_name`/`tool_input`, matches nothing, and returns the same no-op
+    envelope a clean pass returns. Measured on `hooks.preuse_bash_dispatch`,
+    where a denied command and an allowed one produced byte-identical output
+    through the doors, and reproduced on `hooks.block_worktree_tool`.
+
+    The two shapes are unambiguous: a real hook event carries no `payload` key.
+    So a `payload` that is present but not a dict is neither shape, and is not
+    guessed at: it returns `{}`, exactly as a non-dict `params` does, so callers
+    can read fields off the result without re-checking.
+    """
+    if not isinstance(params, dict):
+        return {}
+    if "payload" not in params:
+        return params
+    inner = params["payload"]
+    return inner if isinstance(inner, dict) else {}

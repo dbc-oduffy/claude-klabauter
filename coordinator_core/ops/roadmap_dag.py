@@ -478,7 +478,7 @@ def assemble_roadmap_dag(roadmap_id: str, worktree_root: Path) -> Dict[str, Any]
         stub_id = str(raw_stub_id)
 
         # Deduplicate — keep first occurrence (live stubs are appended before archived; live wins)
-        # Review: code-reviewer — "most recently scanned" was backwards; live stubs are appended first by _collect_stub_paths
+        # "most recently scanned" was backwards; live stubs are appended first by _collect_stub_paths
         if stub_id in stub_id_set:
             _LOG.warning(
                 "roadmap_dag: duplicate stub_id=%r found at %s "

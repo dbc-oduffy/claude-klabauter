@@ -90,6 +90,7 @@ from coordinator_core.ceremony_common.json_payload_flag import (
     detect_conflicting_payload_channels,
     resolve_json_payload_flag,
 )
+from coordinator_core.module_load_lock import held_during_load
 from coordinator_core.contract import apply_base
 from coordinator_core.contract.apply_base import (
     APPLY_EXIT_OK,
@@ -537,7 +538,7 @@ def _dispatch_handoff_author_fork(args: list[str], repo_root: Path) -> dict[str,
         # (`_usage`, the malformed-`--decisions`-JSON and unrecognized-
         # argument prints in `main_apply`). Review: code-reviewer (P1) --
         # `degraded` had no non-test consumer anywhere in the tree.
-        # Review: code-reviewer -- the engine's own `reason` string (which
+        # The engine's own `reason` string (which
         # already distinguishes `below-threshold` "nothing scored high
         # enough" from `too-close` "a genuine tie", per
         # match_core.ResolutionReason) is surfaced directly rather than
@@ -961,7 +962,7 @@ def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) ->
         no claim to. A stranded PRISTINE scaffold is still cleaned up, which is
         what this cleanup was written for.
         """
-        # Review: code-reviewer -- the literal "handoff" here is intentional,
+        # The literal "handoff" here is intentional,
         # not a divergence from `_compensate_d1_scaffold`'s `--type`-routed
         # doc_type lookup: this handler (d6) is reachable ONLY for
         # kind="handoff" today (`_build_directives` never emits d6 for
@@ -1015,7 +1016,7 @@ def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) ->
         reconciled = True
     if not reconciled and reconcile_error is not None:
         print(
-            # Review: code-reviewer -- one fact, stated once, per
+            # One fact, stated once, per
             # docs/wiki/guard-messaging.md § Register: this predecessor WAS
             # claimed, and the frontmatter re-stamp was refused by validation.
             "baton-assemble apply: handoff.supersede_predecessor degraded -- "
@@ -1699,6 +1700,12 @@ def _load_doc_new_module() -> Any:
     directory is on `sys.path` -- see that function's docstring for the silent
     failure this repaired.
 
+    The check-cache/register/exec sequence runs under `module_load_lock.
+    held_during_load(module_name)` so a second concurrent caller (warm engine,
+    shared threads) blocks on the first's `exec_module` rather than racing it
+    over the same `sys.modules[module_name]` slot -- see that module's
+    docstring for the half-executed-module hazard this closes.
+
     Negative-spec: does NOT spawn a subprocess, does NOT call the generator's
     `main()`, and does NOT write anything -- only the pure scaffolder functions
     named in `_GENERATOR_SCAFFOLDERS` are ever invoked off the loaded module.
@@ -1712,19 +1719,23 @@ def _load_doc_new_module() -> Any:
 
     script_path = _resolve_claude_klabauter_bin() / "coordinator-doc-new.py"
     module_name = "_baton_assemble_coordinator_doc_new"
-    loader = importlib.machinery.SourceFileLoader(module_name, str(script_path))
-    spec = importlib.util.spec_from_file_location(module_name, script_path, loader=loader)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"baton_assemble.apply: could not load {script_path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    try:
-        exec_module_with_own_dir_on_path(spec.loader, module, str(script_path.parent))
-    except BaseException:
-        sys.modules.pop(module_name, None)
-        raise
-    _DOC_NEW_MODULE["module"] = module
-    return module
+    with held_during_load(module_name):
+        cached = _DOC_NEW_MODULE.get("module")
+        if cached is not None:
+            return cached
+        loader = importlib.machinery.SourceFileLoader(module_name, str(script_path))
+        spec = importlib.util.spec_from_file_location(module_name, script_path, loader=loader)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"baton_assemble.apply: could not load {script_path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        try:
+            exec_module_with_own_dir_on_path(spec.loader, module, str(script_path.parent))
+        except BaseException:
+            sys.modules.pop(module_name, None)
+            raise
+        _DOC_NEW_MODULE["module"] = module
+        return module
 
 
 def _render_pristine_scaffold(doc_type: str, fm_text: str) -> Optional[str]:
@@ -2367,7 +2378,6 @@ def _finalize_report(exit_code: int, report: dict[str, Any]) -> tuple[int, dict[
     # whether the run landed, which is the exact failure class this function
     # exists to close. No caller populates either today; this makes that a
     # guarantee rather than a coincidence nothing checks.
-    # Review: coordinator:code-reviewer (ab5f5c7c) Finding 1.
     report.pop("status", None)
     report.pop("verdict", None)
     return exit_code, {"status": status, "verdict": verdict, **report}
@@ -2396,7 +2406,6 @@ def _verdict_line(status: str, report: dict[str, Any]) -> str:
     # `apply_base.execute_directives`', not this module's), so on a replay the
     # bare count reads as work that did not happen. Naming the replayed ids
     # keeps the headline honest without re-deriving what landed.
-    # Review: coordinator:code-reviewer (ab5f5c7c) Finding 2.
     replayed_ids = [
         str(entry.get("directive_id"))
         for entry in (report.get("replayed") or [])

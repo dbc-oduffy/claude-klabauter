@@ -136,7 +136,7 @@ def test_mutation_kill_inverted_start_clause(chain: dict) -> None:
 
 
 def test_legacy_wrapper_git_not_on_path_fails_closed_not_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Review: code-reviewer — Finding 3. Pins `_is_ancestor`'s new fail-closed
+    """`_is_ancestor`'s new fail-closed
     contract on the git-missing exception path (mirrors
     `test_sibling_fact.py::test_commit_ancestor_git_not_on_path_is_indeterminate`,
     which covers the public `is_ancestor` but not this legacy bare-bool wrapper).

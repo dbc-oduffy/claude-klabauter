@@ -2696,7 +2696,6 @@ def test_no_third_test_exemption_entry_lacks_all_four_evidence_markers():
                     "Windows leg, live caller) are required, or no grant"
                 )
 
-    # Review: coordinator:code-reviewer (2026-08-14, wfc-S1 finding 3) --
     # the loop above provides zero live coverage while no real EXEMPTIONS
     # entry invokes the third admission test (true as of this drain), and
     # the prior `assert checked_any_third_test_entry in (True, False)`

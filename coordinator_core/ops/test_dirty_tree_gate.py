@@ -319,11 +319,42 @@ def test_unknown_argument_exits_two(tmp_path, isolated_plugin_root, capsys):
     assert rc == 2
 
 
+def test_git_status_failure_diagnosed_not_silently_clean(tmp_path, isolated_plugin_root, capsys):
+    """A failed `git status --porcelain` must not read as an indistinguishable
+    clean tree: the gate keeps its fail-open contract (status_out degrades to
+    "", so the loop below finds nothing to classify) but now names the
+    failure on stderr instead of staying silent about it."""
+    repo = _make_repo(tmp_path, "t-status-fail")
+    (repo / "orphan.txt").write_text("untracked\n")
+
+    real_run = subprocess.run
+
+    def fake_run(cmd, *args, **kwargs):
+        if "status" in cmd:
+            return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="fatal: boom\n")
+        return real_run(cmd, *args, **kwargs)
+
+    cwd = os.getcwd()
+    os.chdir(repo)
+    try:
+        with mock.patch(
+            "coordinator_core.ops.dirty_tree_gate.subprocess.run", side_effect=fake_run
+        ):
+            rc = main(["--terminator", "test"])
+    finally:
+        os.chdir(cwd)
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert "git status --porcelain failed" in captured.err
+    assert "fatal: boom" in captured.err
+
+
 # ---------------------------------------------------------------------------
 # _build_known_scope — claim-ledger desync (AC4, docs/plans/2026-08-07-claim-
 # state-ledger-first-authoritative-read.md § C3)
 #
-# Review: overengineering-reviewer — migrated from
+# Migrated from
 # ops/ceremony/tests/test_commit_gates_known_scope.py, whose lockstep-parity
 # purpose (running this predicate side-by-side with a second, now-deleted
 # `ceremony/commit_gates.py::_build_known_scope` copy) died when 629cd7724b

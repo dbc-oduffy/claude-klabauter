@@ -94,6 +94,7 @@ from types import ModuleType
 from typing import List, Optional, Tuple, Union
 
 from coordinator_core.locked_write import LockTimeout, held_lock
+from coordinator_core.module_load_lock import held_during_load
 from coordinator_core.session import claim_index
 from coordinator_core.session import claim_neighbours
 from coordinator_core.session import core
@@ -139,6 +140,12 @@ def handoff_lifecycle() -> ModuleType:
     Fail-loud when the accessor file is absent: a tree without it is a broken
     install, and falling back to a local dual-read would be exactly the
     second raw read site the single-accessor guard exists to forbid.
+
+    The check-cache/register/exec sequence runs under `module_load_lock.
+    held_during_load(module_name)` so a second concurrent caller (warm
+    engine, shared threads) blocks on the first's `exec_module` rather than
+    racing it over the same `sys.modules[module_name]` slot — see that
+    module's docstring for the half-executed-module hazard this closes.
     """
     global _handoff_lifecycle_cache
     if _handoff_lifecycle_cache is not None:
@@ -150,23 +157,27 @@ def handoff_lifecycle() -> ModuleType:
             "resolve claim holders without the single shared lifecycle read "
             "site (never inline a dual-read here)"
         )
-    spec = importlib.util.spec_from_file_location(
-        "_claude_klabauter_handoff_lifecycle_accessor", _HANDOFF_LIFECYCLE_ACCESSOR_PATH
-    )
-    if spec is None or spec.loader is None:
-        raise RuntimeError(
-            "coordinator_core.session.claims.handoff_lifecycle: importlib "
-            f"could not build a spec for {_HANDOFF_LIFECYCLE_ACCESSOR_PATH}"
+    module_name = "_claude_klabauter_handoff_lifecycle_accessor"
+    with held_during_load(module_name):
+        if _handoff_lifecycle_cache is not None:
+            return _handoff_lifecycle_cache
+        spec = importlib.util.spec_from_file_location(
+            module_name, _HANDOFF_LIFECYCLE_ACCESSOR_PATH
         )
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-    except Exception:
-        sys.modules.pop(spec.name, None)
-        raise
-    _handoff_lifecycle_cache = module
-    return module
+        if spec is None or spec.loader is None:
+            raise RuntimeError(
+                "coordinator_core.session.claims.handoff_lifecycle: importlib "
+                f"could not build a spec for {_HANDOFF_LIFECYCLE_ACCESSOR_PATH}"
+            )
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        try:
+            spec.loader.exec_module(module)
+        except Exception:
+            sys.modules.pop(spec.name, None)
+            raise
+        _handoff_lifecycle_cache = module
+        return module
 
 
 # ---------------------------------------------------------------------------
@@ -470,7 +481,7 @@ def atomic_dedup_append(touched: str, entry: str) -> bool:
         # locked — reading last-event state and appending as two unguarded
         # steps races the dedup DECISION even with an atomic append.
         #
-        # Review: coordinatorcode-reviewer-7ca5d82a Finding 3 — mirrors
+        # Mirrors
         # scope.touch()'s reversed-scan-and-break: only entry's own last
         # event is ever needed, so scan backward and stop at the first
         # match rather than building a Dict[str, str] over every distinct
@@ -498,7 +509,7 @@ def atomic_dedup_append(touched: str, entry: str) -> bool:
         except OSError:
             return  # silent-failure contract — never block the caller
 
-    # Review: coordinatorcode-reviewer-feb6d8e8 Finding 3 — the closure above
+    # The closure above
     # has no return value: this outer function's own contract is
     # unconditional ``return True`` on every path (bash ``return 0`` on
     # every path, see docstring's "Silent-failure contract"), regardless of
@@ -514,7 +525,7 @@ def atomic_dedup_append(touched: str, entry: str) -> bool:
                 anchor_root=anchor,
                 timeout=_ATOMIC_DEDUP_APPEND_LOCK_TIMEOUT_SECS,
             ):
-                # Review: coordinatorcode-reviewer-feb6d8e8 Finding 4 — this
+                # This
                 # flag is set INSIDE the `with` block, immediately after the
                 # scan+append returns, not after the `with` statement exits.
                 # An exception raised by held_lock's own RELEASE path
@@ -789,6 +800,42 @@ def _claim_base(class_: str, baton_repo_root: str, cwd: Optional[str]) -> Option
     if not base:
         return None
     return base
+
+
+def claim_dir_for(
+    class_: str,
+    basename: str,
+    baton_repo_root: str = "",
+    cwd: Optional[str] = None,
+) -> Optional[Path]:
+    """Resolve the on-disk claim directory (``<base>/<class>-claims/
+    <basename>``) a classed claim of this shape lives at — the SAME
+    base+claim_dir arithmetic ``clear_claim_if_dead`` performs before it
+    applies its own liveness gate, exposed as a public seam so a caller that
+    only needs to know WHERE a claim would live (never whether one is
+    live, or how to interpret its absence) does not have to re-derive the
+    join by hand.
+
+    Fail-open: returns ``None`` on ANY resolution failure (bad/absent baton
+    root, unresolvable sessions dir, or any other exception), never raises.
+    A caller that must distinguish WHY resolution failed — a bad baton root
+    (loud refusal) from an absent sessions dir (idempotent no-op) — runs its
+    own check before calling this, as ``clear_claim_if_dead`` does; this
+    function collapses both into the same ``None`` because it makes no
+    claim about what either failure should mean to its caller.
+    """
+    try:
+        if baton_repo_root:
+            if not (Path(baton_repo_root) / ".git").is_dir():
+                return None
+            base = str(Path(baton_repo_root) / ".git" / "coordinator-sessions")
+        else:
+            base = core.sessions_dir(cwd)
+        if not base:
+            return None
+        return Path(base) / f"{class_}-claims" / basename
+    except Exception:  # noqa: BLE001 - fail-open resolution helper, see docstring
+        return None
 
 
 #: Repo-relative artifact-path templates for the two claim classes
@@ -1349,7 +1396,7 @@ class ClaimRelocationError(OSError):
     wrong; resolve the collision first) apart from "the move broke" (retry
     might just work) — this exception restores that distinction.
 
-    Review: code-reviewer — the two failure modes were both a bare `False`
+    The two failure modes were both a bare `False`
     return; separated so callers can discriminate collision from OS error.
     """
 
@@ -1465,7 +1512,7 @@ def relocate_artifact_claim(
     if not old_claim_dir.is_dir():
         return True  # nothing claimed at the old name — nothing to relocate
 
-    # Review: code-reviewer — TOCTOU window, accepted and named rather than
+    # TOCTOU window, accepted and named rather than
     # closed. Between this `exists()` check and the `os.replace` below, a
     # peer's `claim_artifact` could create a claim dir at `new_basename`; on
     # POSIX, `os.rename`/`os.replace` onto an existing EMPTY directory
@@ -1989,9 +2036,24 @@ def _release_path_claim_artifact(
     plane), mirroring ``release_artifact``'s existing identity-checked
     contract for the three classed forms: releases only what THIS session
     (or its own dispatched-agent fan-out) holds, never a peer's claim,
-    liveness never enters into it. Unlike ``release_committed_claims`` this
-    is NOT gated on the path being git-clean -- this is an explicit release
-    of one named path, not a post-commit sweep.
+    liveness never enters into it. Neither this nor
+    ``scope.release_own_path_claims`` is gated on the path being git-clean
+    (that term was deleted by PM ruling 2026-08-26); the difference is
+    scope, not condition -- one named path here, a caller-supplied set
+    there.
+
+    THIS IS THE OPERATOR ROUTE OUT OF A STALE HOLD, in flight or landed,
+    and it is reachable as ``session-claim-cli release-artifact artifact
+    <repo-relative-path>``. It has been reachable the whole time and was
+    twice read as absent: once from the verb list (see ``_SUBCOMMANDS``'s
+    own note in that CLI) and once from ``coordinator-safe-commit``'s
+    refusal text, which used to send a holder at
+    ``release_committed_claims`` and then warn that the name meant what it
+    said. A session sitting on a stale READ claim declined to call a
+    committed-path API against a peer's uncommitted file, correctly, and
+    the peer stayed blocked
+    (``state/bug-queue/2026-09-20-the-touch-record-cannot-distinguish-a-
+    read-touch-from-a-write-touch.yaml``).
 
     Always returns True (mirrors ``release_artifact``'s own "no-op paths are
     successes, not errors" contract): a bad baton root, unresolvable
@@ -2085,8 +2147,11 @@ def _clear_path_claim_if_dead(
     if not base:
         return True  # no sessions dir -> no claim can exist -> idempotent
 
-    def _claimants() -> List[str]:
-        return claim_index.lookup([path], sessions_dir=base, cwd=cwd).get(path, [])
+    def _lookup():
+        return claim_index.lookup([path], sessions_dir=base, cwd=cwd)
+
+    def _claimants(result) -> List[str]:
+        return result.get(path, [])
 
     my_sid = core.resolve_session_id(cwd)
 
@@ -2097,11 +2162,27 @@ def _clear_path_claim_if_dead(
             if sid != my_sid and liveness.session_live(sid, cwd)
         ]
 
-    claimants = _claimants()
+    result = _lookup()
+    claimants = _claimants(result)
     if claim_index.UNANSWERABLE in claimants:
         print(
             f"cs_clear_claim_if_dead: claim ownership for {path!r} could not "
             f"be verified (claim index unanswerable) -- refusing to clear",
+            file=sys.stderr,
+        )
+        return False
+    if not result.complete:
+        # A positive claimant list from an INCOMPLETE walk is not
+        # trustworthy: the walk may have read a dead holder's touched.txt
+        # and aborted before reaching a live peer's, yielding claimants=[dead
+        # sid] with the live peer's claim unread. Only the empty-list branch
+        # signals incompleteness via UNANSWERABLE (see claim_index.lookup's
+        # docstring) -- the non-empty branch returns claimants verbatim
+        # regardless of completeness, so this consumer must check
+        # `.complete` itself rather than rely on UNANSWERABLE membership.
+        print(
+            f"cs_clear_claim_if_dead: claim index rebuild for {path!r} was "
+            "incomplete -- refusing to clear",
             file=sys.stderr,
         )
         return False
@@ -2141,11 +2222,19 @@ def _clear_path_claim_if_dead(
 
     # TOCTOU re-read — bracket the write, mirroring the mkdir-plane's own
     # double claim_holder_live read around its rm.
-    claimants2 = _claimants()
+    result2 = _lookup()
+    claimants2 = _claimants(result2)
     if claim_index.UNANSWERABLE in claimants2:
         print(
             f"cs_clear_claim_if_dead: aborting clear of path claim {path!r} "
             f"-- claim index became unanswerable on re-read",
+            file=sys.stderr,
+        )
+        return False
+    if not result2.complete:
+        print(
+            f"cs_clear_claim_if_dead: aborting clear of path claim {path!r} "
+            "-- claim index rebuild became incomplete on re-read",
             file=sys.stderr,
         )
         return False
@@ -2178,6 +2267,7 @@ def release_artifact(
     basename: str,
     baton_repo_root: str = "",
     cwd: Optional[str] = None,
+    my_sid: Optional[str] = None,
 ) -> bool:
     """Port of ``cs_release_artifact <class> <basename> [baton_repo_root]`` (1030-1062).
 
@@ -2193,12 +2283,22 @@ def release_artifact(
     NO-OP success. A bare rm without this check would race an inline dead-PID
     takeover and could delete a live peer's claim.
 
-    ``my_sid`` is resolved ONCE and passed to BOTH ``claim_held_by_me`` reads
-    (called TWICE — intentional TOCTOU re-read): the second read then varies
-    only on the claim-dir CONTENT (the actual race), not on a re-resolution of
-    my own id. If an inline takeover (rm + mkdir + new session_id) slipped in
-    after the first check, the recheck no longer matches our id and we skip —
-    never delete a live peer's claim.
+    ``my_sid``, once resolved (from the ``my_sid`` parameter when the caller
+    passes one, else ``core.resolve_session_id(cwd)``), is passed to BOTH
+    ``claim_held_by_me`` reads (called TWICE — intentional TOCTOU re-read):
+    the second read then varies only on the claim-dir CONTENT (the actual
+    race), not on a re-resolution of my own id. If an inline takeover
+    (rm + mkdir + new session_id) slipped in after the first check, the
+    recheck no longer matches our id and we skip — never delete a live
+    peer's claim.
+
+    A caller that has already resolved and holder-gate-validated an explicit
+    identity (e.g. one scoped via ``apply_base.session_identity``, which
+    ``core.resolve_session_id``'s ambient-env fallback cannot see — a
+    separate, private ``ContextVar`` set) passes it as ``my_sid`` so this
+    function trusts that identity rather than re-deriving a possibly-absent
+    or possibly-different one from the ambient environment. Omitted (the
+    default), behaviour is unchanged: resolve from ``cwd`` alone.
 
     ORDERING CONTRACT (enforced by the CALLER, not here): the caller MUST
     revert the artifact's frontmatter (status in_progress -> open, clear stamps)
@@ -2255,7 +2355,7 @@ def release_artifact(
         return True  # already absent — no-op
 
     # Resolve my id ONCE; pass it to both TOCTOU reads (F1).
-    my_sid = core.resolve_session_id(cwd)
+    my_sid = my_sid if my_sid is not None else core.resolve_session_id(cwd)
     if not liveness.claim_held_by_me(str(claim_dir), my_sid, cwd):
         return True  # not the holder — no-op
     # TOCTOU re-read before rm (the second call IS the two-read discipline).
@@ -2359,8 +2459,13 @@ def clear_claim_if_dead(
 
     Base resolution: a SUPPLIED-but-bad baton root FAILS LOUD (False + stderr,
     mirroring ``claim_artifact`` — this function is EM-callable and must
-    surface errors, NOT the reaper's silent skip). An ABSENT sessions dir (no
-    baton) is an idempotent success (no claim can exist).
+    surface errors, NOT the reaper's silent skip), checked here rather than
+    inside ``claim_dir_for`` so the loud refusal keeps its own message. An
+    ABSENT sessions dir (no baton) is an idempotent success (no claim can
+    exist) — indistinguishable, once past that check, from an absent claim
+    dir, since ``claim_dir_for`` (the shared base+claim_dir arithmetic
+    ``session-claim-cli``'s not-found precheck also calls) returns ``None``
+    for either.
 
     LIVENESS: delegates ENTIRELY to ``liveness.claim_holder_live`` — the
     canonical predicate. NEVER ``ps -p`` / ``kill -0`` on a stored pid
@@ -2394,23 +2499,17 @@ def clear_claim_if_dead(
         )
         return False
 
-    if baton_repo_root:
-        if not (Path(baton_repo_root) / ".git").is_dir():
-            print(
-                f"cs_clear_claim_if_dead: baton repo root <{baton_repo_root}> "
-                f"is not a git repo",
-                file=sys.stderr,
-            )
-            return False
-        base = str(Path(baton_repo_root) / ".git" / "coordinator-sessions")
-    else:
-        base = core.sessions_dir(cwd)
-        if not base:
-            return True  # missing sessions dir -> no claim can exist -> idempotent
+    if baton_repo_root and not (Path(baton_repo_root) / ".git").is_dir():
+        print(
+            f"cs_clear_claim_if_dead: baton repo root <{baton_repo_root}> "
+            f"is not a git repo",
+            file=sys.stderr,
+        )
+        return False
 
-    claim_dir = Path(base) / f"{class_}-claims" / basename
-    if not claim_dir.is_dir():
-        return True  # idempotent on absent claim dir
+    claim_dir = claim_dir_for(class_, basename, baton_repo_root, cwd)
+    if claim_dir is None or not claim_dir.is_dir():
+        return True  # missing sessions dir / absent claim dir -> idempotent
 
     # Liveness gate — read 1: refuse if the holder is still live.
     if liveness.claim_holder_live(str(claim_dir), cwd):
@@ -2448,7 +2547,11 @@ def clear_claim_if_dead(
     # reconcile_dead_handoff_claim_frontmatter's docstring for the crash-
     # disposition rationale this ordering buys.
     if class_ == "handoff":
-        reconcile_dead_handoff_claim_frontmatter(basename, Path(base))
+        # claim_dir == <sessions_dir>/<class>-claims/<basename> (BASENAME-ONLY
+        # for the classed forms this function handles — see claim_dir_for),
+        # so climbing two parents recovers the same sessions_dir claim_dir_for
+        # itself resolved, without a second core.sessions_dir spawn.
+        reconcile_dead_handoff_claim_frontmatter(basename, claim_dir.parent.parent)
 
     shutil.rmtree(claim_dir, ignore_errors=True)
     return True
@@ -2619,7 +2722,7 @@ def reconcile_dead_handoff_claim_frontmatter(basename: str, sessions_dir: Path) 
     # in its own diagnostic message — as _unclaim's caller-supplied fallback;
     # _unclaim itself prefers the handoff frontmatter's claimed_by/consumed_by
     # over this when present.
-    # Review: coordinator:code-reviewer — _read_holder's fallback rungs return
+    # _read_holder's fallback rungs return
     # the non-empty sentinel "unknown", or a raw pid string, when the claim
     # dir has no session_id file; neither is a real session id, and passing
     # either through as reaped_from would let _unclaim's resolution chain
@@ -3196,6 +3299,7 @@ def self_claim(path: str, cwd: Optional[str] = None) -> bool:
                 agent_id=None,
                 verb=touch_record.VERB_TOUCH,
                 path=entry,
+                kind=touch_record.KIND_WRITE,
             )
         except (OSError, ValueError) as exc:
             # fail-open — self-claim attribution is advisory and must never
@@ -3236,6 +3340,7 @@ def self_claim(path: str, cwd: Optional[str] = None) -> bool:
             agent_id=None,
             verb=touch_record.VERB_TOUCH,
             path=entry,
+            kind=touch_record.KIND_WRITE,
         )
     except (OSError, ValueError) as exc:
         # fail-open — self-claim attribution is advisory and must never

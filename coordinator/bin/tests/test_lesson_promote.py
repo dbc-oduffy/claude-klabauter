@@ -24,6 +24,8 @@ import unittest.mock
 import uuid as _uuid_mod
 from pathlib import Path
 
+import pytest
+
 # ---------------------------------------------------------------------------
 # Path setup — locate CLI relative to this test file
 # test file: coordinator/bin/tests/test_lesson_promote.py
@@ -45,6 +47,28 @@ _loader = importlib.machinery.SourceFileLoader("coordinator_lesson_promote", str
 _spec = importlib.util.spec_from_loader("coordinator_lesson_promote", _loader)
 _cli_mod = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
 _loader.exec_module(_cli_mod)
+
+
+# ---------------------------------------------------------------------------
+# Isolation — every test in this file drives main() through a mocked
+# _cc_route, but main()'s klabauter#33 DOE_ROOT-gate (coordinator-lesson-
+# promote.py, immediately above the _cc_route("queue.promote", ...) call)
+# fires on ambient env alone, before _cc_route is ever reached, and routes
+# straight to the real legacy write path instead. None of the tests below
+# set or depend on these four vars, so clearing them ambient-proofs the
+# mock without touching what any test asserts.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clear_ambient_resolution_env(monkeypatch):
+    for var in (
+        "DOE_ROOT",
+        "REPO_DOE_CLAUDE",
+        _cli_mod._OUTBOX_ROOT_ENV,
+        _cli_mod._WIKI_ROOT_ENV,
+    ):
+        monkeypatch.delenv(var, raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +148,109 @@ def test_native_from_repo_explicit_in_params():
     assert params.get("from_repo") == "test-repo-name", (
         "from_repo must be passed explicitly in params — not left for op to default"
     )
+
+
+def test_native_doe_root_explicit_in_params():
+    """claude-klabauter#33: the CLI's own resolved doe_root() is passed explicitly
+    in params so the native queue.promote op's write lands under the SAME
+    DoE-claude root --target-wiki validation already checked, instead of the op
+    re-resolving on its own (which has no DOE_ROOT rung — see
+    coordinator_core.ops.coordinator_doe_root's docstring)."""
+    fake_result = {"out_path": "/fake/path.yaml"}
+
+    with (
+        unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=fake_result) as mock_route,
+        unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
+        unittest.mock.patch.object(_cli_mod, "doe_root", return_value="/fake/resolved-doe-root"),
+        unittest.mock.patch("sys.stdout", io.StringIO()),
+    ):
+        _cli_mod.main(_MINIMAL_ARGV)
+
+    params = mock_route.call_args[0][1]
+    assert params.get("doe_root") == "/fake/resolved-doe-root", (
+        "the CLI-resolved doe_root() value must be threaded into queue.promote's params"
+    )
+
+
+def test_native_doe_root_omitted_from_params_when_unresolvable():
+    """claude-klabauter#33: when the CLI's own doe_root() is unresolvable, the
+    'doe_root' key is omitted from params entirely (never a garbage/None value)
+    — the native op falls back to its own resolution, which then reports the
+    skip through the existing {skipped: True, reason} contract."""
+    fake_result = {"out_path": "/fake/path.yaml"}
+
+    def _raise_unresolvable():
+        raise _cli_mod._DoeUnresolvable("no route to doctrine repo")
+
+    with (
+        unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=fake_result) as mock_route,
+        unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
+        unittest.mock.patch.object(_cli_mod, "doe_root", side_effect=_raise_unresolvable),
+        unittest.mock.patch("sys.stdout", io.StringIO()),
+    ):
+        _cli_mod.main(_MINIMAL_ARGV)
+
+    params = mock_route.call_args[0][1]
+    assert "doe_root" not in params, (
+        "doe_root must be OMITTED (not set to None/garbage) when unresolvable"
+    )
+
+
+def test_native_success_echoes_write_destination():
+    """claude-klabauter#33: on native success, stdout echoes the write
+    destination labelled ('Lesson outbox entry written: <path>'), not just a
+    bare path — the cheap self-evidence check the issue asked for."""
+    fake_result = {
+        "out_path": "/fake/doe/state/lessons-outbox/2026-09-19T00-00-00Z-x.yaml",
+        "entry_id": "fake-id",
+        "from_repo": "doe-claude",
+        "change_kind": "doctrine-edit",
+        "target_wiki": "docs/wiki/test-wiki.md",
+    }
+    captured_out = io.StringIO()
+
+    with (
+        unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=fake_result),
+        unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
+        unittest.mock.patch("sys.stdout", captured_out),
+    ):
+        rc = _cli_mod.main(_MINIMAL_ARGV)
+
+    assert rc == 0
+    out = captured_out.getvalue()
+    assert "Lesson outbox entry written: " + fake_result["out_path"] in out, (
+        f"success stdout must label the write destination; got: {out!r}"
+    )
+
+
+def test_native_skip_remediation_names_doe_root_and_machine_local():
+    """claude-klabauter#33: a native skipped:true result must print a
+    Remediation block naming both levers (machine-local + DOE_ROOT), matching
+    the legacy_fn / --target-wiki validation skip messages — previously this
+    branch printed only a bare warn line with no remediation guidance at all."""
+    skipped_result = {"skipped": True, "reason": "doe root unresolvable"}
+    captured_err = io.StringIO()
+
+    with (
+        unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=skipped_result),
+        unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
+        unittest.mock.patch("sys.stderr", captured_err),
+    ):
+        rc = _cli_mod.main(_MINIMAL_ARGV)
+
+    assert rc == _cli_mod._EXIT_DOE_UNRESOLVABLE
+    err = captured_err.getvalue()
+    assert "Remediation:" in err, "native skip must print a Remediation block"
+    assert "machine-local set repos.doe_claude" in err
+    assert "DOE_ROOT=" in err
 
 
 def test_native_params_contain_required_fields():
@@ -226,7 +353,7 @@ def test_legacy_fn_outbox_schema(tmp_path):
 
     Closes the 'distinct outbox schema preserved' clause of AC4 by opening the
     written file and asserting the three invariants at the file level.
-    Review: code-reviewer strang-08-slice3 — (F2) added to verify file-level schema shape.
+    Added to verify file-level schema shape.
     """
     outbox = tmp_path / "outbox"
     outbox.mkdir()
@@ -305,7 +432,7 @@ def test_skipped_emits_warn_to_stderr():
     )
     err = captured_err.getvalue()
     assert "warn:" in err, "must emit 'warn:' prefix on skipped"
-    # Review: code-reviewer strang-08-slice3 — (F5) assert the specific reason string is
+    # Assert the specific reason string is
     # interpolated, not just the always-present template text; proves {reason} is wired.
     assert "CLAUDE_KLABAUTER_ROOT unresolvable at write time" in err, (
         "reason field must be interpolated into WARN message"
@@ -349,7 +476,7 @@ def test_skipped_without_reason_key():
         rc = _cli_mod.main(_MINIMAL_ARGV)
 
     assert rc == _cli_mod._EXIT_DOE_UNRESOLVABLE
-    # Review: code-reviewer strang-08-slice3 — (F6) assert the default fallback string is
+    # Assert the default fallback string is
     # used when reason key is absent; "warn:" alone is nearly unconditional.
     # C1 (2026-07-06): lesson-promote now routes central writes to DoE, so the
     # default fallback is "DOE_ROOT unresolvable" (was "CLAUDE_KLABAUTER_ROOT unresolvable").
@@ -378,7 +505,7 @@ def test_write_entry_inside_legacy_fn():
     """Grep-gate: _write_entry() call is inside the legacy_fn body."""
     source = _source()
     fn_start = source.index("def legacy_fn(")
-    # Review: code-reviewer strang-08-slice3 — (F7) widened from 1500 to 3000 to avoid
+    # Widened from 1500 to 3000 to avoid
     # latent false-negative if legacy_fn body grows.
     fn_body = source[fn_start:fn_start + 3000]
     assert "_write_entry(" in fn_body, (
@@ -430,4 +557,62 @@ def test_no_retired_transport():
     for pattern in ("coordinator_core.client", "AF_UNIX", "auth_token", "three-state"):
         assert pattern not in source, (
             f"retired transport pattern '{pattern}' must not appear in coordinator-lesson-promote"
+        )
+
+
+class TestInheritedAmbientEnvDoesNotBypassMockedRoute:
+    """klabauter#33's DOE_ROOT-gate (immediately above the _cc_route("queue.promote",
+    ...) call in main()) reads os.environ directly and, when it fires, calls
+    legacy_fn() straight through, skipping _cc_route entirely. Every test in this
+    module mocks _cc_route but none of them controlled that env before
+    _clear_ambient_resolution_env existed, so a DOE_ROOT already present in the
+    process this suite runs under (a live DoE-claude dev shell, say) would fire
+    the gate ahead of any test's own mocking and land a real write.
+
+    The class-scoped fixture below stands in for that inherited-before-pytest
+    state: class scope is instantiated ahead of the module's function-scoped
+    _clear_ambient_resolution_env, so by the time the test body (and that
+    isolation fixture) run, DOE_ROOT is already sitting in os.environ exactly as
+    it would be if the invoking shell had exported it.
+    """
+
+    @classmethod
+    @pytest.fixture(scope="class", autouse=True)
+    def _inherited_shell_export(cls, tmp_path_factory):
+        ambient_root = tmp_path_factory.mktemp("ambient-doe-claude")
+        prior_doe_root = os.environ.get("DOE_ROOT")
+        prior_repo_doe_claude = os.environ.get("REPO_DOE_CLAUDE")
+        os.environ["DOE_ROOT"] = str(ambient_root)
+        os.environ.pop("REPO_DOE_CLAUDE", None)
+        try:
+            yield ambient_root
+        finally:
+            if prior_doe_root is None:
+                os.environ.pop("DOE_ROOT", None)
+            else:
+                os.environ["DOE_ROOT"] = prior_doe_root
+            if prior_repo_doe_claude is not None:
+                os.environ["REPO_DOE_CLAUDE"] = prior_repo_doe_claude
+
+    def test_route_is_still_exercised(self, _inherited_shell_export):
+        fake_result = {"out_path": "/fake/path.yaml"}
+        captured_out = io.StringIO()
+        with (
+            unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=fake_result) as mock_route,
+            unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
+            unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+            unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
+            unittest.mock.patch("sys.stdout", captured_out),
+        ):
+            rc = _cli_mod.main(_MINIMAL_ARGV)
+
+        assert mock_route.call_count == 1, (
+            "an env inherited from the invoking process must not bypass the mocked _cc_route"
+        )
+        assert rc == 0
+
+        outbox = _inherited_shell_export / "state" / "lessons-outbox"
+        written = list(outbox.glob("*.yaml")) if outbox.is_dir() else []
+        assert written == [], (
+            f"no write may land under an inherited-ambient DOE_ROOT; found {written}"
         )

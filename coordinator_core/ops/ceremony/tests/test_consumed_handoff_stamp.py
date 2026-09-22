@@ -74,7 +74,9 @@ from coordinator_core.ops.ceremony.push import (
     PUSH_MODE_NONE,
     PUSH_MODE_SYNC,
     PUSH_STATUS_DECLINED,
+    PUSH_STATUS_PUSHED,
 )
+from .fixtures.push_repo import init_push_repo
 from .fixtures.real_git import make_diverged_path, real_git_repo
 from coordinator_core.op_budget_suspension import OpSuspendedError
 from coordinator_core.win_portability import no_console_creationflags
@@ -914,6 +916,93 @@ def test_post_commit_happy_path_stamps_and_follow_up_commits_pushed(repo_with_re
 
 
 # ---------------------------------------------------------------------------
+# state/bug-backlog/2026-08-10-no-test-exercises-push-with-retry-s-reba-
+# cc84495b2bb1.yaml -- no test drove push_with_retry's reject -> fetch ->
+# rebase --onto -> re-push branch at this follow-up call site, so a
+# regression reverting the post-push sha re-read (Review: code-reviewer,
+# Finding 1, sidecar state/subagent-share/0bbf5710-eb91-434d-b8b3-
+# ed14ceb9893d/coordinatorcode-reviewer-e01429e3.md) would show green. Real
+# bare remote plus a concurrent peer push -- no git call is mocked -- forces
+# the reject for real, exercising the actual rebase.
+# ---------------------------------------------------------------------------
+
+
+def test_follow_up_commit_survives_rebase_retry_and_lands_the_rewritten_sha(
+    tmp_path, monkeypatch
+):
+    """`push_with_retry` can fetch + `git rebase --onto` this follow-up
+    commit on a rejected push before re-pushing, which rewrites its sha. A
+    concurrent peer push lands on the shared branch first, forcing a genuine
+    non-fast-forward reject; the returned sha must be the post-rebase
+    commit `resolve_post_push_sha` adopted, never the pre-push sha
+    `commit_scoped` minted before the reject fired."""
+    repo = init_push_repo(tmp_path, branch="work/rebase-retry")
+    origin = tmp_path / "origin.git"
+
+    peer = tmp_path / "peer"
+    subprocess.run(
+        ["git", "clone", "-q", "--branch", "work/rebase-retry", str(origin), str(peer)],
+        capture_output=True, text=True, check=True, **no_console_creationflags(),
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "peer@t.example"],
+        cwd=str(peer), capture_output=True, text=True, check=True, **no_console_creationflags(),
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "peer"],
+        cwd=str(peer), capture_output=True, text=True, check=True, **no_console_creationflags(),
+    )
+    (peer / "peer.txt").write_text("peer\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "-A"],
+        cwd=str(peer), capture_output=True, text=True, check=True, **no_console_creationflags(),
+    )
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "peer commit"],
+        cwd=str(peer), capture_output=True, text=True, check=True, **no_console_creationflags(),
+    )
+    subprocess.run(
+        ["git", "push", "-q", "origin", "work/rebase-retry"],
+        cwd=str(peer), capture_output=True, text=True, check=True, **no_console_creationflags(),
+    )
+
+    (repo / "state" / "handoffs").mkdir(parents=True, exist_ok=True)
+    (repo / "state" / "handoffs" / "some-handoff.md").write_text("ours\n", encoding="utf-8")
+
+    captured_pre_push_sha: dict = {}
+    real_resolve_post_push_sha = m.resolve_post_push_sha
+
+    def _spy_resolve_post_push_sha(worktree_root, pre_push_sha):
+        captured_pre_push_sha["sha"] = pre_push_sha
+        return real_resolve_post_push_sha(worktree_root, pre_push_sha)
+
+    monkeypatch.setattr(m, "resolve_post_push_sha", _spy_resolve_post_push_sha)
+
+    follow_up_sha, pushed, push_status, error = m._commit_and_push_follow_up(
+        repo, ["state/handoffs/some-handoff.md"], "deadbeef", push_mode=PUSH_MODE_SYNC
+    )
+
+    assert error is None, error
+    assert pushed is True
+    assert push_status == PUSH_STATUS_PUSHED
+    # The rebase-retry branch genuinely fired: the sha `commit_scoped` minted
+    # before the reject differs from the sha that finally landed.
+    assert captured_pre_push_sha["sha"] is not None
+    assert follow_up_sha != captured_pre_push_sha["sha"]
+
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(repo), capture_output=True, text=True, check=True, **no_console_creationflags(),
+    ).stdout.strip()
+    assert follow_up_sha == head
+    remote_log = subprocess.run(
+        ["git", "--git-dir", str(origin), "log", "--oneline", "work/rebase-retry"],
+        capture_output=True, text=True, check=True, **no_console_creationflags(),
+    ).stdout
+    assert follow_up_sha[:7] in remote_log
+
+
+# ---------------------------------------------------------------------------
 # AC17 follow-up commit routes through commit_scoped -- a peer's
 # deliberately-staged partial-hunk content on a path in the stamped set
 # survives verbatim (the claude-klabauter 506748a0 incident shape, closed).
@@ -945,6 +1034,107 @@ def test_follow_up_commit_preserves_peer_staged_divergence(tmp_path):
     # Worktree content is untouched -- commit_scoped never re-derives the
     # diverged path's content from the worktree.
     assert (repo / "state/handoffs/some-handoff.md").read_text(encoding="utf-8") == "WORKTREE\n"
+
+
+# ---------------------------------------------------------------------------
+# state/bug-backlog/2026-08-10-no-test-exercises-push-with-retry-s-reba-
+# cc84495b2bb1.yaml -- the rebase-retry branch of `push_with_retry` rewrites
+# THIS follow-up commit's own sha; `resolve_post_push_sha` is what keeps the
+# returned sha the one that actually landed. Real git required: a genuine
+# non-fast-forward reject (a peer's real push, landed via a second clone,
+# left unfetched here) cannot be exhibited by a mocked git.
+# ---------------------------------------------------------------------------
+
+
+def test_follow_up_push_rebase_retry_returns_rewritten_sha_not_stale_pre_push(
+    repo_with_remote, tmp_path, monkeypatch
+):
+    """A peer's push lands on the shared branch between this call's own
+    commit and its own push attempt, forcing `push_with_retry` down its
+    reject -> fetch -> rebase --onto -> re-push ladder. That rebase REWRITES
+    the follow-up commit's sha, so the pre-push `rev_parse_head` capture
+    inside `_commit_and_push_follow_up` is stale the moment the ladder
+    retries. Without `resolve_post_push_sha`'s post-push re-read, the
+    returned sha would still be that stale value -- one that never actually
+    reaches the remote."""
+    repo = repo_with_remote
+    branch = "work/test/consumed-handoff-stamp"
+
+    peer = tmp_path / "peer-clone"
+    subprocess.run(
+        ["git", "clone", "-q", str(tmp_path / "origin.git"), str(peer)],
+        check=True, capture_output=True, **no_console_creationflags(),
+    )
+    subprocess.run(
+        ["git", "checkout", "-q", branch],
+        cwd=str(peer), check=True, capture_output=True, **no_console_creationflags(),
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "peer@t.example"],
+        cwd=str(peer), check=True, capture_output=True, **no_console_creationflags(),
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "peer"],
+        cwd=str(peer), check=True, capture_output=True, **no_console_creationflags(),
+    )
+    (peer / "peer-only.txt").write_text("landed by a peer\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "--", "peer-only.txt"],
+        cwd=str(peer), check=True, capture_output=True, **no_console_creationflags(),
+    )
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "peer commit"],
+        cwd=str(peer), check=True, capture_output=True, **no_console_creationflags(),
+    )
+    subprocess.run(
+        ["git", "push", "-q", "origin", branch],
+        cwd=str(peer), check=True, capture_output=True, **no_console_creationflags(),
+    )
+
+    (repo.root / "state" / "handoffs" / "follow-up-stub.md").write_text(
+        "stub content\n", encoding="utf-8"
+    )
+
+    # Records every real `rev_parse_head` read this call chain makes --
+    # `_commit_and_push_follow_up`'s own pre-push capture is always the
+    # first entry, regardless of how many `push_with_retry`/
+    # `resolve_post_push_sha` reads follow it.
+    seen_shas: list[str] = []
+    real_rev_parse_head = m.git_native.rev_parse_head
+
+    def _recording_rev_parse_head(worktree_root):
+        result = real_rev_parse_head(worktree_root)
+        if result.ok:
+            seen_shas.append(result.stdout.strip())
+        return result
+
+    monkeypatch.setattr(m.git_native, "rev_parse_head", _recording_rev_parse_head)
+
+    follow_up_sha, pushed, push_status, error = m._commit_and_push_follow_up(
+        repo.root, ["state/handoffs/follow-up-stub.md"], "deadbeef",
+        push_mode=PUSH_MODE_SYNC,
+    )
+
+    assert error is None, error
+    assert pushed is True
+    assert push_status == m.PUSH_STATUS_PUSHED
+    assert seen_shas, "rev_parse_head was never called -- test is not exercising the read it means to pin"
+
+    pre_push_sha = seen_shas[0]
+    assert follow_up_sha is not None
+    # The rebase-retry ladder genuinely fired and rewrote the commit: the
+    # returned sha is not the stale pre-push one.
+    assert follow_up_sha != pre_push_sha
+
+    assert repo.head_sha() == follow_up_sha
+    assert repo._git(
+        "rev-list", "--count", f"origin/{branch}..HEAD"
+    ).stdout.strip() == "0"
+    # The stale pre-push sha never reached the remote -- confirms a real
+    # rewrite happened rather than the two values coincidentally matching.
+    remote_log = repo.log_messages(remote=True, remote_branch=branch)
+    assert pre_push_sha[:7] not in remote_log
+    assert follow_up_sha[:7] in remote_log
 
 
 # ---------------------------------------------------------------------------

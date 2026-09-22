@@ -112,7 +112,7 @@ _TRIPWIRE_COMMENT = re.compile(r"<!--\s*TRIPWIRE:|#\s*TRIPWIRE:")
 def _is_excepted(path: str, text: str) -> bool:
     """Evaluate the six allowed-exception patterns.
 
-    Review: code-reviewer (2026-07-22, Finding 1) — path-based exemptions
+    path-based exemptions
     (`/tests/`, `/docs/wiki/`) test against `path` only; content-based
     exemptions test against `text` (the matched line itself) only. Previously
     all six were tested against a combined `path:lineno:text` string, which

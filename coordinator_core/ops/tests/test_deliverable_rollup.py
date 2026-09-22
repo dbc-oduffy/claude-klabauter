@@ -176,7 +176,7 @@ class RollupRepo:
 
         Purpose: exercises the recursive archive/handoffs/**/*.md scan path.
         """
-        # Review: code-reviewer — add archive-handoff writer to exercise archive/handoffs/**/*.md
+        # Add archive-handoff writer to exercise archive/handoffs/**/*.md
         # scan glob (F4); the recursive pattern differs structurally from the flat *.md paths.
         path = self.root / "archive" / "handoffs" / subdir / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -353,7 +353,12 @@ def _reset_central_root_memo(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     _rollup_mod._reset_central_root_cache()
 
+    # COORDINATOR_ENGINE_ROOT is the live var name (the CLAUDE_KLABAUTER_ROOT -> COORDINATOR_ENGINE_ROOT
+    # dual-read window is closed; coordinator_engine_root_env() answers from the new name only).
+    # Both are cleared so a process-level COORDINATOR_ENGINE_ROOT (e.g. set by this host's own
+    # install/session environment) cannot leak into a test expecting worktree-local fallback.
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     monkeypatch.setattr(_rollup_mod, "_machine_local_get", lambda key: None)
 
     yield
@@ -569,7 +574,7 @@ def test_absent_deliverable_id_param(rollup_repo: RollupRepo) -> None:
     result = _handler({}, repo_root=rollup_repo.common_dir)
 
     # When deliverable_id is absent/empty the handler returns an empty payload.
-    # Review: code-reviewer — pin echoed deliverable_id="" to confirm the producer contract
+    # Pin echoed deliverable_id="" to confirm the producer contract
     # guarantees deliverable_id is present in every response, including the absent-param path.
     assert result["deliverable_id"] == ""
     assert result["resolution_mode"] == "direct"
@@ -622,7 +627,7 @@ def test_malformed_deliverable_id_safe_empty(
 
     # Schema keys must be present.
     assert result["resolution_mode"] == "direct"
-    # Review: code-reviewer — assert value, not just type; a bug matching traversal tokens
+    # Assert value, not just type; a bug matching traversal tokens
     # would still pass advances_initiatives==[] but produce non-zero artifacts_matched.
     assert result["artifacts_matched"] == 0
     assert isinstance(result["advances_initiatives"], list)
@@ -691,7 +696,7 @@ def test_handoff_scan_path(rollup_repo: RollupRepo) -> None:
     """A stub handoff carrying deliverable_id + non-null initiative FK is found via
     the state/handoffs/*.md scan glob.
 
-    Review: code-reviewer (F3) — state/handoffs/*.md scan path was untested;
+    state/handoffs/*.md scan path was untested;
     write_handoff() existed but was never called. Confirms multi-surface scan, not just docs/plans.
     """
     rollup_repo.write_handoff(
@@ -707,7 +712,7 @@ def test_handoff_scan_path(rollup_repo: RollupRepo) -> None:
     )
 
     _assert_schema(result, "dlv-handoff-scan")
-    assert result["artifacts_matched"] == 1  # Review: code-reviewer — each test writes exactly one artifact; >= 1 would miss inflation bugs
+    assert result["artifacts_matched"] == 1  # Each test writes exactly one artifact; >= 1 would miss inflation bugs
     initiative_ids = {e["id"] for e in result["advances_initiatives"]}
     assert "init-handoff-h" in initiative_ids
 
@@ -721,7 +726,7 @@ def test_archive_handoff_scan_path(rollup_repo: RollupRepo) -> None:
     """A stub handoff in archive/handoffs/<subdir>/ is found via the recursive
     archive/handoffs/**/*.md scan glob.
 
-    Review: code-reviewer (F4) — archive/handoffs/**/*.md scan path was untested;
+    archive/handoffs/**/*.md scan path was untested;
     no archive fixture existed. The recursive **/*.md pattern differs structurally
     from the flat *.md patterns for the other two surfaces and was completely dark.
     """
@@ -739,7 +744,7 @@ def test_archive_handoff_scan_path(rollup_repo: RollupRepo) -> None:
     )
 
     _assert_schema(result, "dlv-archive-scan")
-    assert result["artifacts_matched"] == 1  # Review: code-reviewer — each test writes exactly one artifact; >= 1 would miss inflation bugs
+    assert result["artifacts_matched"] == 1  # Each test writes exactly one artifact; >= 1 would miss inflation bugs
     initiative_ids = {e["id"] for e in result["advances_initiatives"]}
     assert "init-archive-i" in initiative_ids
 
@@ -788,7 +793,7 @@ def test_traversal_guard_in_initiative_id(rollup_repo: RollupRepo) -> None:
     (e.g. '../../evil') resolves to no initiative entry — the traversal guard in
     _resolve_initiative rejects it before any path construction.
 
-    Review: code-reviewer (F2) — initiative_id from artifact frontmatter was used
+    initiative_id from artifact frontmatter was used
     in path construction without a traversal guard; an accidental '../../other' value
     could silently read the wrong YAML. The guard now rejects such ids pre-path-join.
     """
@@ -966,6 +971,96 @@ def test_ac3_coincident_dir_realpath_equivalence(
 
 
 # ---------------------------------------------------------------------------
+# Published-mirror refusal (mirrors queue_append's sibling guard, 2026-08-28)
+#
+# `deliverable.rollup`'s `_claude_klabauter_root` previously had no `_refuse_published_mirror`
+# rung at all: under the publish identifier transform, the machine-local registry
+# key it reads is rewritten to name the published mirror, so a published engine
+# would resolve "the central repo" to itself and hand `_central_initiatives_dir`
+# a write-target path inside the gitignored build artifact.
+#
+# Backlink: state/bug-backlog/2026-08-28-deliverable-rollup-writes-initiatives-into-the-published-mirror.yaml
+# ---------------------------------------------------------------------------
+
+
+def test_claude_klabauter_root_refuses_a_root_that_is_the_published_mirror(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A machine-local registry hit that names the published mirror must NOT be
+    returned as the resolved root — this op has no dedicated unresolvable
+    exception (unlike queue_append), so refusal degrades to None, same as any
+    other unresolvable root."""
+    # Rung 1.5 (`engine.source_root`) stubbed absent so this exercises the
+    # repo-named registry rung under test, not whichever key this box has.
+    monkeypatch.setattr(_rollup_mod, "_engine_source_root", lambda: None)
+    monkeypatch.setattr(_rollup_mod, "_machine_local_get", lambda key: "/repos/publish-mirror")
+    monkeypatch.setattr(_rollup_mod, "_is_published_engine_mirror", lambda root: True)
+    monkeypatch.setattr(_rollup_mod, "coordinator_engine_root_env", lambda _name: "")
+
+    assert _rollup_mod._claude_klabauter_root() is None
+
+
+def test_claude_klabauter_root_returns_a_live_working_tree_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The negative case: a registry hit that is NOT the published mirror is
+    returned unchanged."""
+    monkeypatch.setattr(_rollup_mod, "_engine_source_root", lambda: None)
+    monkeypatch.setattr(_rollup_mod, "_machine_local_get", lambda key: "/repos/claude-klabauter")
+    monkeypatch.setattr(_rollup_mod, "_is_published_engine_mirror", lambda root: False)
+    monkeypatch.setattr(_rollup_mod, "coordinator_engine_root_env", lambda _name: "")
+
+    assert _rollup_mod._claude_klabauter_root() == "/repos/claude-klabauter"
+
+
+def test_env_override_route_is_also_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The env rung is guarded too — it is the rung the warm server poisons."""
+    from coordinator_core.telemetry import op_latency
+
+    monkeypatch.setattr(_rollup_mod, "coordinator_engine_root_env", lambda _name: "/repos/publish-mirror")
+    monkeypatch.setattr(op_latency, "execution_route", lambda: op_latency.IN_PROCESS)
+    monkeypatch.setattr(_rollup_mod, "_is_published_engine_mirror", lambda root: True)
+
+    assert _rollup_mod._claude_klabauter_root() is None
+
+
+def test_transform_proof_key_wins_over_a_mirror_naming_registry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The published engine's own Rung 2 names the mirror; Rung 1.5 must win.
+
+    Simulating the mirror-run engine means making the repo-named lookup return
+    the mirror, which is what the publish transform does to that key.
+    """
+    monkeypatch.setattr(_rollup_mod, "coordinator_engine_root_env", lambda _name: "")
+    monkeypatch.setattr(_rollup_mod, "_engine_source_root", lambda: "/repos/claude-klabauter")
+    monkeypatch.setattr(_rollup_mod, "_machine_local_get", lambda key: "/repos/publish-mirror")
+
+    assert _rollup_mod._claude_klabauter_root() == "/repos/claude-klabauter"
+
+
+def test_central_initiatives_dir_falls_back_when_root_is_the_mirror(
+    rollup_repo: RollupRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end: a central root that resolves to the published mirror does
+    NOT become the initiatives write-target — `_central_initiatives_dir` falls
+    back to worktree-local `state/initiatives/`, exactly like an unresolvable
+    root, and an FK that only exists locally still resolves."""
+    from coordinator_core.ops.deliverable_rollup import _central_initiatives_dir
+    from coordinator_core.ops.fleet._common import main_worktree_root
+
+    monkeypatch.setattr(_rollup_mod, "_engine_source_root", lambda: None)
+    monkeypatch.setattr(_rollup_mod, "_machine_local_get", lambda key: "/repos/publish-mirror")
+    monkeypatch.setattr(_rollup_mod, "_is_published_engine_mirror", lambda root: True)
+
+    worktree_root = main_worktree_root(rollup_repo.common_dir)
+    resolved_dir = _central_initiatives_dir(worktree_root)
+    expected_dir = worktree_root / "state" / "initiatives"
+
+    assert resolved_dir.resolve() == expected_dir.resolve()
+
+
+# ---------------------------------------------------------------------------
 # (xiii) AC4 — resolve-once: _central_initiatives_dir called once per handler call
 # ---------------------------------------------------------------------------
 
@@ -1115,7 +1210,7 @@ def test_ac10_machine_local_get_memoized_across_handler_calls(
     assert result1["advances_initiatives"][0]["id"] == "memo-initiative"
     assert result2["advances_initiatives"][0]["id"] == "memo-initiative"
 
-    # Review: code-reviewer — == 1 not <= 1: call_count==0 would mean memoization skipped
+    # == 1 not <= 1: call_count==0 would mean memoization skipped
     # resolution entirely (incorrect pass — AC10 would be unverified).
     assert mock_get.call_count == 1, (
         f"_machine_local_get was called {mock_get.call_count} times across two handler "
@@ -1505,7 +1600,7 @@ def test_fork_equivalence_absent_entry_does_not_silently_merge(rollup_repo: Roll
 
     assert result["artifacts_matched"] == 1
 
-    # Review: coordinatorcode-reviewer-67ffaa7e Finding 1 — the duplicate line above was
+    # The duplicate line above was
     # a copy-paste slip; strengthened to assert both legs independently, matching the
     # rest of the suite's evidence-of-both-directions style.
     beta_result = _handler({"deliverable_id": "dlv-beta"}, repo_root=rollup_repo.common_dir)

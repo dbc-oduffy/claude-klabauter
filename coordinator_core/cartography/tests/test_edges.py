@@ -42,7 +42,6 @@ import pytest
 
 # ---------------------------------------------------------------------------
 # Import guard — MUST precede any test so @register_op fires first.
-# Review: code-reviewer (P1, 2026-07-12-workflow-review-cartography.md) —
 # this file never imported the op module, so register_op never fired and the
 # @register_op-decorated handler body (param extraction, error behavior) was
 # exercised by nothing.
@@ -149,7 +148,7 @@ def test_build_edges_aggregates_multiple_files(tmp_path):
 
 
 def test_root_level_init_py_gets_sentinel_module_name_not_empty(tmp_path):
-    """Review: code-reviewer (nit, Finding 3, 2026-07-12-codereview-
+    """
     slicecartography-substrate-b-wave) — a root-level __init__.py must not
     produce an empty module name ("" for `from`); falls back to the
     containing directory's (target_root's) basename."""
@@ -301,7 +300,7 @@ def test_op_happy_path(tmp_path):
 
 
 def test_op_guards_target_root_before_build_edges_is_called(tmp_path, monkeypatch):
-    """Review: code-reviewer (P2, Finding 2, 2026-07-12-codereview-slicecartography-
+    """
     substrate-b-wave) — cartography.edges must validate target_root via
     path_guard(target_root, ".") at the handler boundary, mirroring
     cartography.tree/file_index, BEFORE build_edges runs any per-file work.

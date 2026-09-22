@@ -326,7 +326,7 @@ class TestCanonicalClaimEntry:
 # bare `tmp_path`-derived file with no `.git` ancestor, so
 # `_atomic_dedup_append_lock_anchor` returns None for all of them and none
 # of them ever exercise the `with held_lock(...)` branch this class covers.
-# Review: coordinatorcode-reviewer-feb6d8e8 Finding "No test in this diff
+# coordinatorcode-reviewer-feb6d8e8 Finding "No test in this diff
 # exercises the new locked path at all."
 # ---------------------------------------------------------------------------
 
@@ -606,7 +606,7 @@ class TestClaimArtifact:
         )
 
     def test_relocate_os_failure_raises_not_false(self, tmp_path, monkeypatch):
-        """Review: code-reviewer P2 — a genuine `os.replace` failure must be
+        """A genuine `os.replace` failure must be
         distinguishable from the collision `False` above: it now raises
         `ClaimRelocationError` instead of returning a conflated `False`."""
         repo = _make_repo(tmp_path)
@@ -1389,6 +1389,42 @@ class TestClearClaimIfDead:
         )
 
 
+class TestClaimDirFor:
+    """`claim_dir_for` is the shared base+claim_dir arithmetic
+    `clear_claim_if_dead` resolves against before its liveness gate, and
+    `session-claim-cli`'s not-found precheck calls the SAME function --
+    asserted structurally here rather than by two independent copies."""
+
+    def test_resolves_the_same_dir_clear_claim_if_dead_operates_on(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        cdir = _make_claim(repo, "plan", "real-plan")
+        assert claims.claim_dir_for("plan", "real-plan", cwd=str(repo)) == cdir
+
+    def test_bad_baton_root_returns_none(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        assert (
+            claims.claim_dir_for(
+                "plan", "x", baton_repo_root=str(tmp_path / "nope"), cwd=str(repo)
+            )
+            is None
+        )
+
+    def test_unresolvable_sessions_dir_returns_none(self, tmp_path):
+        # Not a git repo at all -> core.sessions_dir("") -> claim_dir_for None.
+        assert claims.claim_dir_for("memo", "x", cwd=str(tmp_path)) is None
+
+    def test_baton_repo_root_resolves_under_its_own_git_dir(self, tmp_path):
+        (tmp_path / "baton").mkdir()
+        baton_repo = _make_repo(tmp_path / "baton")
+        cdir = _make_claim(baton_repo, "handoff", "some-handoff")
+        assert (
+            claims.claim_dir_for(
+                "handoff", "some-handoff", baton_repo_root=str(baton_repo)
+            )
+            == cdir
+        )
+
+
 # ---------------------------------------------------------------------------
 # class_ == "artifact" (PATH-TOUCH claim plane widening)
 #
@@ -1497,6 +1533,31 @@ class TestClearClaimIfDeadArtifactClass:
         assert _claim_dir(repo, "memo", "m-live").is_dir()
 
         assert claims.clear_claim_if_dead("bogus", "x", cwd=str(repo)) is False
+
+    def test_incomplete_walk_with_positive_claimants_refuses(self, tmp_path, monkeypatch):
+        # state/bug-backlog/2026-08-11-clear-claim-if-dead-clears-a-live-peer-s-
+        # fa8f1f77608a.yaml: claim_index.lookup returns a positive claimant
+        # list VERBATIM when the rebuild walk aborted -- incompleteness is
+        # signalled ONLY on the empty branch (UNANSWERABLE). A walk that read
+        # a dead holder's touched.txt but aborted before reaching a live
+        # peer's yields claimants=[dead sid], and a consumer that only checks
+        # UNANSWERABLE membership would clear a path a live peer still holds.
+        repo = _make_repo(tmp_path)
+        dead_sid = "11111111-1111-4111-8111-111111111111"
+        live_sid = "22222222-2222-4222-8222-222222222222"
+        _write_session(repo, dead_sid, _stale())
+        _write_session(repo, live_sid, _fresh())
+
+        def _fake_lookup(paths, sessions_dir=None, cwd=None):
+            result = claim_index._LookupResult((p, [dead_sid]) for p in paths)
+            result.complete = False
+            result.abort_cause = "test-forced-partial-walk"
+            result.edit_ts = {}
+            result.recorded_name = {}
+            return result
+
+        monkeypatch.setattr(claim_index, "lookup", _fake_lookup)
+        assert claims.clear_claim_if_dead("artifact", self._TARGET, cwd=str(repo)) is False
 
 
 class TestClaimArtifactRefusesTheArtifactClass:
@@ -1716,7 +1777,7 @@ class TestListClaimsBySession:
     def test_list_claims_by_session_survives_archive_style_state_ship_and_archive_do_not_release(
         self, tmp_path
     ):
-        # Review: code-reviewer slice 2 (2026-07-27), Finding 1 — this test is
+        # This test is
         # FIXTURE-ONLY: it hand-writes a shipped-looking handoff file next to
         # a claim dir and reads the claim dir straight back; it never calls
         # `handoff_transition._ship` or `wsc_commit._native_cs_release_artifact`,
@@ -2261,7 +2322,7 @@ class TestReconcileDeadHandoffClaimFrontmatter:
     def test_reaped_from_session_absent_when_no_claim_dir_evidence_recoverable(
         self, tmp_path
     ):
-        """Review: coordinator:code-reviewer — a dead claim with no
+        """A dead claim with no
         claimed_by/consumed_by frontmatter AND no session_id file in the
         claim dir must unclaim successfully with reaped_from_session left
         unset entirely, never written as the literal _read_holder sentinel

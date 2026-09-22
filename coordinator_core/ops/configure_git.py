@@ -94,7 +94,7 @@ class GitSetting:
     unset_group: str | None = None
 
 
-# Review: code-reviewer — Finding 4 (2026-07-22 sidecar, nit): dropped typing.List/
+# Dropped typing.List/
 # Tuple/Optional/Sequence in favor of builtin generics for consistency with
 # machine_local_forwarder.py, landed in the same port wave and already using
 # builtin-generic form — both files carry `from __future__ import annotations`,

@@ -35,7 +35,13 @@ _ZERO_SHA = bytes(20)
 
 
 def _entry_fixed(
-    mode: int, size: int, mtime: int, name_len: int, extended: bool, mtime_nsec: int = 0
+    mode: int,
+    size: int,
+    mtime: int,
+    name_len: int,
+    extended: bool,
+    mtime_nsec: int = 0,
+    stage: int = 0,
 ) -> bytes:
     fixed = struct.pack(
         ">IIIIIIIIII",
@@ -52,6 +58,7 @@ def _entry_fixed(
     flags = min(name_len, 0x0FFF)
     if extended:
         flags |= 0x4000
+    flags |= (stage & 0x3) << 12
     fixed += struct.pack(">H", flags)
     if extended:
         fixed += struct.pack(">H", 0)
@@ -71,6 +78,7 @@ def _build_index(entries, *, version=2):
             len(name),
             e.get("extended", False),
             e.get("mtime_nsec", 0),
+            e.get("stage", 0),
         )
         entry_len = len(fixed) + len(name) + 1
         padding = (8 - (entry_len % 8)) % 8
@@ -332,3 +340,23 @@ def test_bad_signature_raises(tmp_path):
 
     with pytest.raises(IndexParseError):
         parse_index_stat(repo)
+
+
+def test_unmerged_entry_never_reads_as_staged(tmp_path):
+    """A conflicted path (stage != 0) must never come back as an ordinary
+    `IndexIdentity` -- `commit.py::commit_paths` calls `parse_index_identity`
+    directly with its own pathspec and treats every returned entry as staged
+    content, so a silent pass-through here would let a commit land
+    mid-conflict. Mirrors `git_state._parse_index_bytes`'s identical rule.
+    """
+    repo = _plain_repo(tmp_path)
+    raw = _build_index(
+        [{"name": "conflicted.txt", "mode": 0o100644, "size": 3, "mtime": 100, "stage": 2}]
+    )
+    _write_index(repo / ".git", raw)
+
+    with pytest.raises(IndexParseError):
+        parse_index_identity(repo)
+
+    with pytest.raises(IndexParseError):
+        parse_index_identity(repo, wanted=["conflicted.txt"])

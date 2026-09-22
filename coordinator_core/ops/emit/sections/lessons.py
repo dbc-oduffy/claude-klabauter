@@ -21,7 +21,7 @@ Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19) — § SECTION 8.5,
 Producer: bin/lib/emit-lesson-summaries.py (§ C3 producer, frozen).
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P09
 
-Review: code-reviewer — Finding 2 (DR-060 production-leak scope gap): the frozen
+The frozen
 producer has since been fixed at source to relativize its own provenance path (see
 ``cross-repo/archive/2026-07-21-claude-klabauter-em-lessons-producer-absolute-provenance-
 path-relativize-at-source.md``), so the leak this finding named is closed upstream.
@@ -49,7 +49,7 @@ _PRODUCER_REL = ("bin", "lib", "emit-lesson-summaries.py")
 def _relativize_if_absolute(path_value: object, root: object) -> object:
     """Reduce an absolute *path_value* to *root*-relative POSIX; pass through otherwise.
 
-    Review: code-reviewer — Finding 2, mirrors ``review_trail.py::_relativize_path``'s
+    Mirrors ``review_trail.py::_relativize_path``'s
     approach (resolve + relative_to, ``ValueError``-fallback to the original value when
     the path is outside *root* or not a real filesystem path) so both belt-and-suspenders
     consumers of the frozen producer's output normalize identically.

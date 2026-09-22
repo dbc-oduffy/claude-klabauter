@@ -128,7 +128,7 @@ _DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-")
 # nothing (the pair simply isn't offered).
 _LOCUS_RE = re.compile(r"\b[\w./-]+\.(?:py|js|ts|md|json|yaml|yml|toml|sh)\b")
 
-# Review: code-reviewer F6 — a URL path segment (e.g.
+# A URL path segment (e.g.
 # https://example.com/v2/config.yaml) matches _LOCUS_RE and, once reduced to
 # a basename, can collide with an unrelated repo-relative citation of the
 # same trailing segment (config.yaml). Stripping URLs out of the text before
@@ -167,7 +167,7 @@ _MAX_PAIRS_PER_LOCUS = 3
 # read they were going to do anyway (every memo is triaged regardless), while a
 # FALSE candidate risks retiring a live ask. Precision over recall.
 #
-# Review: code-reviewer F4 — a bare absolute count doesn't scale across
+# A bare absolute count doesn't scale across
 # corpus sizes: on a small inbox (e.g. 4 open memos) an absolute floor alone
 # would treat a locus most of a small team's genuinely-related thread cites
 # as noise, while on a large inbox (200+ memos) that same absolute count
@@ -214,7 +214,7 @@ _BASIS_RANK = {
 # only pairs when exactly one same-sender earlier memo exists to be it —
 # an ambiguous multi-candidate case is skipped rather than guessed.
 _SUPERSEDING_VERB_RE = re.compile(r"\bsupersed(?:e|es|ed|ing)\b", re.IGNORECASE)
-# Review: code-reviewer F1 — a bare "authoritative ... disagree" proximity
+# A bare "authoritative ... disagree" proximity
 # window false-positives on an unrelated same-line clause pair, e.g. "Our
 # position remains authoritative, though regional offices disagree on this
 # point." The confirmed real string is "read this one as authoritative WHERE
@@ -291,7 +291,7 @@ def _nearest_earlier_same_sender(newer: dict, records: list[dict]) -> Optional[d
     `_cites_memo_by_slug`). It returns the nearest earlier candidate and does
     not disambiguate among ties; the caller applies no uniqueness check.
 
-    Review: code-reviewer F3 — nearest-by-date is a heuristic PROXY for "the
+    nearest-by-date is a heuristic PROXY for "the
     memo this prose refers to," with no topical correlation at all. A sender
     running two concurrent unrelated threads could have this resolve to the
     wrong one: the true referent is an older thread, but a different,
@@ -518,7 +518,7 @@ def _read_memo(path: Path) -> Optional[dict]:
     `_unreadable` in the handler) rather than swallowed silently.
     """
     try:
-        # Review: code-reviewer F1 — UnicodeDecodeError (a ValueError subclass,
+        # UnicodeDecodeError (a ValueError subclass,
         # not an OSError subclass) is raised by read_text() on a non-UTF-8
         # file and must be caught here too, or one stray binary/mis-encoded
         # file in the inbox crashes the whole sweep, contradicting this
@@ -532,7 +532,7 @@ def _read_memo(path: Path) -> Optional[dict]:
     try:
         frontmatter = parse_yaml(split.fm_text)
     except ValueError:
-        # Review: code-reviewer F5 — parse_yaml's only documented parse-
+        # parse_yaml's only documented parse-
         # failure signal is ValueError (see _parse_inline_list's malformed-
         # inline-list raise in schema_validate.py); narrowed from a bare
         # `except Exception` so a genuine parser bug (e.g. AttributeError
@@ -700,7 +700,7 @@ def _supersession_candidates(records: list[dict]) -> list[dict]:
     (AC3) — enforced by running the passes in rank order and having each
     later pass skip a pair already claimed in `seen_pairs`.
 
-    Review: code-reviewer F2 — `seen_pairs` is keyed on an UNORDERED
+    `seen_pairs` is keyed on an UNORDERED
     frozenset({name_a, name_b}), not an ordered tuple. The declared pass runs
     first and its direction is the sender's own claim, so declared wins
     unconditionally; the inferred pass only ever SKIPS a pair already in
@@ -766,7 +766,7 @@ def _supersession_candidates(records: list[dict]) -> list[dict]:
     for i, newer in enumerate(records):
         for older in records[i + 1:]:
             newer_rec, older_rec = newer, older
-            # Review: code-reviewer F3 — a record with no resolvable date
+            # A record with no resolvable date
             # stores the `datetime.date.min` sentinel (see `_build_candidates`
             # below) so it always sorts as "older" against a genuinely dated
             # record. Skipping either side when `created_known` is False

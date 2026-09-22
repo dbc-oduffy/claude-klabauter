@@ -207,6 +207,113 @@ def test_write_elision_skips_identical_write(monkeypatch):
     assert reading.age_seconds == pytest.approx(1000.0)
 
 
+def _jsonl_line(message_id: str, input_tokens, cache_creation=0, cache_read=0) -> str:
+    import json as _json
+
+    return _json.dumps(
+        {
+            "message": {
+                "id": message_id,
+                "usage": {
+                    "input_tokens": input_tokens,
+                    "cache_creation_input_tokens": cache_creation,
+                    "cache_read_input_tokens": cache_read,
+                },
+            }
+        }
+    )
+
+
+class TestTranscriptFallback:
+    """C1 of the 2026-09-19 "tell a cloud EM compaction is inbound" plan: a
+    cloud session writes no sidecar, so `read_usage` falls back to the
+    transcript JSONL the hook payload already names."""
+
+    def test_no_sidecar_no_transcript_path_returns_none(self):
+        assert read_usage("sess-no-fallback", now=1000.0) is None
+
+    def test_falls_back_to_transcript_when_sidecar_absent(self, tmp_path):
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text(
+            _jsonl_line("msg-1", 100, cache_creation=50, cache_read=200) + "\n",
+            encoding="utf-8",
+        )
+        reading = read_usage(
+            "sess-fallback", now=1000.0, transcript_path=str(transcript)
+        )
+        assert reading is not None
+        assert reading.context_window["total_input_tokens"] == 350
+        assert reading.age_seconds == 0.0
+
+    def test_sidecar_wins_over_transcript_when_both_present(self, tmp_path):
+        session_id = "sess-sidecar-wins"
+        write_usage(session_id, {"used_percentage": 55.0}, now=1000.0)
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text(
+            _jsonl_line("msg-1", 999999) + "\n", encoding="utf-8"
+        )
+        reading = read_usage(
+            session_id, now=1000.0, transcript_path=str(transcript)
+        )
+        assert reading is not None
+        assert reading.context_window == {"used_percentage": 55.0}
+
+    def test_dedupes_by_message_id_rather_than_summing(self, tmp_path):
+        """Every content-block record of one API response repeats that
+        response's usage -- summing them over-counts."""
+        transcript = tmp_path / "transcript.jsonl"
+        lines = [_jsonl_line("msg-1", 100, cache_read=200) for _ in range(4)]
+        transcript.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        reading = read_usage(
+            "sess-dedupe", now=1000.0, transcript_path=str(transcript)
+        )
+        assert reading is not None
+        assert reading.context_window["total_input_tokens"] == 300
+
+    def test_rejects_streaming_placeholder_rows(self, tmp_path):
+        transcript = tmp_path / "transcript.jsonl"
+        lines = [
+            _jsonl_line("msg-1", 0),
+            _jsonl_line("msg-2", 1),
+            _jsonl_line("msg-3", 5000, cache_read=10000),
+        ]
+        transcript.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        reading = read_usage(
+            "sess-placeholder", now=1000.0, transcript_path=str(transcript)
+        )
+        assert reading is not None
+        assert reading.context_window["total_input_tokens"] == 15000
+
+    def test_reads_a_bounded_tail_not_the_whole_file(self, tmp_path):
+        """A huge leading garbage blob must not be parsed -- only the final
+        256 KiB tail is read, with its first (partial) line discarded."""
+        transcript = tmp_path / "transcript.jsonl"
+        padding = ("x" * 1000 + "\n") * 400  # ~400 KiB of junk lines
+        real_line = _jsonl_line("msg-real", 42, cache_read=8)
+        transcript.write_text(padding + real_line + "\n", encoding="utf-8")
+        reading = read_usage(
+            "sess-tail", now=1000.0, transcript_path=str(transcript)
+        )
+        assert reading is not None
+        assert reading.context_window["total_input_tokens"] == 50
+
+    def test_missing_transcript_file_returns_none(self):
+        reading = read_usage(
+            "sess-missing-transcript",
+            now=1000.0,
+            transcript_path="/nonexistent/path/transcript.jsonl",
+        )
+        assert reading is None
+
+    def test_garbage_transcript_returns_none(self, tmp_path):
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text("not json\nnot json either\n", encoding="utf-8")
+        reading = read_usage(
+            "sess-garbage-transcript", now=1000.0, transcript_path=str(transcript)
+        )
+        assert reading is None
+
+
 def test_write_elision_does_not_apply_across_different_blocks():
     session_id = "sess-no-elide-on-change"
     write_usage(session_id, {"used_percentage": 10.0}, now=1000.0)

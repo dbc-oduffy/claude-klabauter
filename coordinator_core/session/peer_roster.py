@@ -183,9 +183,14 @@ def build_roster(
     matches the filter, is marked `is_self=True` explicitly, never silently
     dropped and never silently left indistinguishable from a peer.
 
-    Self resolution uses TWO independent signals, mirroring
-    `reachability.resolve_address`'s own `own_session` classification
-    (same rationale, same fallback):
+    Self resolution checks `reachability._canonical_self_sid()` first --
+    the per-request carried identity, authoritative when present, exactly
+    mirroring `reachability.resolve_address`'s own precedence (see that
+    accessor's docstring for why: a warm-served request's `self_record()`
+    otherwise always resolves to the server's spawner). Only when it
+    returns `None` do the legacy TWO independent signals below apply,
+    mirroring `reachability.resolve_address`'s own `own_session`
+    classification for that case (same rationale, same fallback):
 
       1. `harness_registry.self_record()` -- the primary, pid-keyed signal.
       2. `reachability._socket_env_self_match` -- `CLAUDE_CODE_MESSAGING_SOCKET`
@@ -294,14 +299,21 @@ def build_roster(
     effective_root = repo_root if repo_root else os.getcwd()
 
     try:
-        self_info = harness_registry.self_record()
+        self_sid = reachability._canonical_self_sid()
     except Exception:
-        if raise_on_failure:
-            raise
-        self_info = None
-    self_sid = self_info[0] if self_info is not None else None
+        self_sid = None
+    legacy_self_signals = self_sid is None
 
-    if self_sid is None:
+    if legacy_self_signals:
+        try:
+            self_info = harness_registry.self_record()
+        except Exception:
+            if raise_on_failure:
+                raise
+            self_info = None
+        self_sid = self_info[0] if self_info is not None else None
+
+    if legacy_self_signals and self_sid is None:
         for candidate_sid in snapshot:
             try:
                 matched = reachability._socket_env_self_match(candidate_sid, snapshot)

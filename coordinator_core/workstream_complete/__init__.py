@@ -281,6 +281,10 @@ from coordinator_core.ops.ceremony.wsc_disposition import (
 )
 from coordinator_core.ipc import _is_dispatch_engine_stamped  # noqa: SLF001 - C11: cold-fallback reachability check, coordinator-lesson-add needs schema.describe (DR-315 s2)
 from coordinator_core.ops.fleet._common import handoff_archive_dest
+from coordinator_core.orientation.regenerate_cache import (  # C3 pinboard idempotence wiring (2026-08-08 bug-backlog): resolves the cache file this call site's read_existing_pinboard needs
+    read_existing_pinboard as _read_existing_pinboard,
+    resolve_cache_file as _resolve_orientation_cache_file,
+)
 from coordinator_core.pickup_assemble import compute_repo_identity_gate  # C2: foreign-repo gate
 from coordinator_core.pickup_assemble import resolve_repo_root  # AC8: NOT zero-spawn — runs `git rev-parse --show-toplevel` via `_run_git`, one subprocess spawn per resolution
 from coordinator_core.resolution.facade import resolve_operator_config
@@ -1324,22 +1328,99 @@ def build_deletion_blocks_check_directive(
         return None
     args = [msg_file]
     if stage_paths:
-        # Normalised to repo-relative forward slashes because `gate_scope`
-        # membership is exact-string matching against `git diff --cached
-        # --name-status` output, which always spells paths that way. A caller
-        # handing over Windows separators would drop silently OUT of the scope
-        # while the same value still drove the commit pathspec (git accepts
-        # both there) -- the gate would then be narrower than the commit,
-        # which is the one direction that weakens it (2026-08-26 review,
-        # slice 4). Doing it here rather than trusting an upstream guarantee:
-        # `decisions` is operator-supplied JSON and carries no such contract.
+        # Pathspec separator normalisation (platform-conditional, POSIX
+        # backslashes are legal filename characters) now lives at the one
+        # shared choke point every caller of the CLI passes through --
+        # `commit_gates._parse_cli_args` -- rather than being redone
+        # unconditionally here (2026-08-26 bug-backlog, P2+P3: this
+        # builder is not the only present or future producer of this
+        # pathspec, and an unconditional strip here would corrupt a POSIX
+        # filename that genuinely contains a backslash). This builder
+        # forwards `stage_paths` as-is.
         args.append("--")
-        args.extend(str(path).replace("\\", "/") for path in stage_paths)
+        args.extend(str(path) for path in stage_paths)
     return _directive(
         "d-deletion-blocks",
         "check-workstream-complete-deletion-blocks",
         args,
     )
+
+
+def _existing_pinboard_line(repo_root: Path) -> Optional[str]:
+    """Disk-derived current `## Pinboard` line, for `build_pinboard_directive`'s
+    `existing_pinboard_line` satisfaction check (C3,
+    docs/plans/2026-08-08-wsc-judgment-directive-boundary.md).
+
+    Returns `None` when the orientation cache file does not exist yet — the
+    build_pinboard_directive caller already treats `None` as "not verified"
+    rather than "satisfied", so a missing cache degrades to the pre-wiring
+    M4 (structural, non-emission) behavior, never a false already_satisfied.
+
+    NEGATIVE SPEC: never raises on a missing/unreadable cache file --
+    `read_existing_pinboard` itself returns "" for that case, and an empty
+    string is a real (non-matching) pinboard line, not a sentinel for
+    "absent"; only a genuinely absent cache file yields `None` here."""
+    cache_file = _resolve_orientation_cache_file(repo_root)
+    if not cache_file.is_file():
+        return None
+    return _read_existing_pinboard(cache_file)
+
+
+def _consumed_handoff_ship_paths(
+    gate: SessionShapeGate, repo_root: Path, decisions: dict[str, Any]
+) -> list[str]:
+    """Emit predicate for `d-ship-consumed-handoff:<basename>` (C1,
+    docs/plans/2026-09-11-the-memo-lifecycle-closes-its-own-handoffs.md),
+    enforced here rather than inside `directives_memo_lifecycle.build_
+    consumed_handoff_ship_directives` — mirroring how `build_complete_entry_
+    directive` gates its own `--consumed-handoff` flag at this same assembly
+    layer, and because `directives_commit_tail` already imports `directives_
+    memo_lifecycle` (see that module's own `_memo_lifecycle` alias): a
+    reverse import from the memo-lifecycle module back into commit-tail
+    would be circular, so the one real design decision below (non-overlap
+    with the live commit-tail ship-stamp) can only live at this call site,
+    which already imports both.
+
+    Three gates, all required:
+      1. `canonicalize(gate.disposition) == PREDECESSOR_CONSUMED` — a close
+         that consumed nothing has no baton to ship.
+      2. The raw path resolves to a real file on disk via the private
+         `_resolve_handoff_path_str` (defined later in this module) —
+         an unresolvable path contributes nothing, never a directive with a
+         guessed/empty path argument; resolution failure is instead surfaced
+         through `gates.consumed_handoff_completeness`.
+      3. NON-OVERLAP with `directives_commit_tail.resolve_ship_stamp_
+         candidates` — that seam wins for any basename it would itself
+         stamp this run (an EM-supplied delivery sha is better evidence than
+         a scope-path derivation, and it reverts on a failed commit while a
+         directive cannot — see the plan's Anti-scope on double-shipping).
+         Calling the seam's own resolver here, rather than re-deriving a
+         one-conjunct approximation, keeps every conjunct it checks
+         (truthy `session_id`, basename held by THIS session, `disposition
+         == "shipped"`, a truthy `shipped_in`, and the record still present
+         under `state/handoffs/`) in sync with that function by construction.
+
+    Returns repo-relative, forward-slashed path strings (`Path.as_posix()`)
+    ready for `directives_memo_lifecycle.build_consumed_handoff_ship_
+    directives` to consume directly — never an `os.sep`-joined path.
+    """
+    if canonicalize(gate.disposition) != PREDECESSOR_CONSUMED:
+        return []
+    own_shipped_basenames = {
+        Path(relpath).name
+        for relpath, _sha in directives_commit_tail.resolve_ship_stamp_candidates(
+            repo_root, gate.sid, decisions
+        )
+    }
+    paths: list[str] = []
+    for raw_path in gate.consumed_handoff_paths:
+        resolved = _resolve_handoff_path_str(repo_root, raw_path)
+        if resolved is None:
+            continue
+        if resolved.name in own_shipped_basenames:
+            continue
+        paths.append(resolved.relative_to(repo_root).as_posix())
+    return paths
 
 
 def build_directives(
@@ -1460,6 +1541,16 @@ def build_directives(
 
     # -- Step 2.65/2.66/2.67 (C2c): memo lifecycle + deletion blocks --
     directives.extend(directives_memo_lifecycle.build_directives(decisions))
+    # C1 (docs/plans/2026-09-11-the-memo-lifecycle-closes-its-own-handoffs.md):
+    # emitted here, well before the two terminal-sweep appends below, so
+    # `d-ship-consumed-handoff:*` always precedes `d-sweep-terminal-handoffs`
+    # — see `_consumed_handoff_ship_paths`'s own docstring for the ordering
+    # constraint this satisfies by construction.
+    directives.extend(
+        directives_memo_lifecycle.build_consumed_handoff_ship_directives(
+            _consumed_handoff_ship_paths(gate, repo_root, effective_decisions)
+        )
+    )
     deletion_blocks_check_directive = build_deletion_blocks_check_directive(
         decisions.get("msg_file"), decisions.get("stage_paths")
     )
@@ -1470,6 +1561,7 @@ def build_directives(
     pinboard_directive = directives_session_hygiene.build_pinboard_directive(
         orientation_cache_exists=bool(decisions.get("orientation_cache_exists")),
         pinboard_note=decisions.get("pinboard_note"),
+        existing_pinboard_line=_existing_pinboard_line(repo_root),
     )
     if pinboard_directive is not None:
         directives.append(pinboard_directive)
@@ -1544,6 +1636,25 @@ def build_directives(
         )
     )
     review_partition = decisions.get("review_partition") or {}
+    if not isinstance(review_partition, dict):
+        # 2026-08-21 bug-backlog (a string crashes build_directives with a raw
+        # `AttributeError` out of `.get()`): `review-partition-strategy`'s
+        # judgment point answers with one of these same short strings (e.g.
+        # `"by-concern"`), and that key sits one line away in the same
+        # decisions payload -- a caller who just answered that point has
+        # every reason to believe the value belongs here too. Named refusal,
+        # not a crash: this key is the engine's INPUT for freeze/integrator
+        # directives (a mapping with `range`/`slices`), never the strategy
+        # choice itself.
+        raise ValueError(
+            f"decisions['review_partition'] must be a mapping with 'range' and "
+            f"'slices' keys (optionally 'integrator_spec_tsv'), got "
+            f"{review_partition!r} ({type(review_partition).__name__}) — this is "
+            "NOT the same key as review-partition-strategy's judgment-point "
+            "answer (e.g. 'by-concern'); that strategy choice belongs under "
+            "decisions['review-partition-strategy'] or wherever that judgment "
+            "point's disposition is recorded, never here"
+        )
     if review_partition.get("range") and review_partition.get("slices"):
         slices = [
             directives_review.ReviewSlice(slice_id=str(s["slice_id"]), paths=tuple(str(p) for p in s["paths"]))
@@ -2230,8 +2341,12 @@ _LEG_A_TERMINAL_PLAN_STATUS = frozenset(
 # (namespace-stripped) names a `coordinator_core.reviewer_vocabulary.
 # CLOSE_RECEIPT_REVIEWERS` member, whose `lead_session_id` matches this baton's
 # session id, whose `spawned_at` timestamp falls inside this baton's claim
-# window (`claimed_at` -> now — AC2b), and whose BODY is non-empty (AC5:
-# non-empty is the whole content test, never a judgment on quality).
+# window (`claimed_at` -> now — AC2b), and whose content test the review-trail
+# credit module's session-summary predicate passes (C4:
+# `review_trail.receipt_credit._receipt_counts` — a session where the
+# completion writer is live requires this sidecar's OWN `review_completion`
+# block plus authored content; a session where it never ran falls back to a
+# non-blank body). "Dispatched, never completed" is no longer credit.
 # Missing, blank, unreadable, wrong agent type, or outside the window all
 # resolve toward BLOCKING (constraint 4: ambiguity favors more review, never
 # less). This module only READS the receipt C2/C3 stamp at dispatch
@@ -2353,9 +2468,19 @@ def _compute_review_receipt_gate(
     block satisfies (a) `agent_type` (namespace-stripped) names a
     `reviewer_vocabulary.CLOSE_RECEIPT_REVIEWERS` member, (b) `session_id` equals
     `sid`, (c) `stamped_at` resolves neither strictly before `claimed_at`
-    (when both parse) nor strictly after now, and (d) the sidecar's body
-    (post-frontmatter text) is non-blank (AC5). Missing, blank, unreadable,
-    or outside the window -> `blocks=True`, `detail` names what to do.
+    (when both parse) nor strictly after now, and (d) `review_trail.
+    receipt_credit._receipt_counts` (C3's completion-writer-aware content
+    predicate, computed once via `_compute_session_summary` over every extant
+    share-root directory — never `sidecar_dirs[0]` alone) is True for this
+    sidecar. Missing, blank, unreadable, outside the window, or dispatched
+    but never completed -> `blocks=True`, `detail` names what to do; the
+    "dispatched, never completed" case gets its own detail text (below) when
+    a counting-vocabulary review receipt was refused specifically because
+    the session's completion writer ran and this sidecar carries no
+    session-matching `review_completion` block of its own.
+
+    The `integrator_receipt:` leg is unchanged by this chunk (Anti-scope):
+    it still counts on a plain non-blank body, no completion predicate.
 
     C11 — WHY THE RECEIPT BLOCK AND NOT THE SIDECAR HEADER. The first
     implementation keyed on the sidecar's top-level `agent_type` /
@@ -2383,12 +2508,17 @@ def _compute_review_receipt_gate(
         )
 
     from coordinator_core.reviewer_vocabulary import CLOSE_RECEIPT_REVIEWERS
+    from coordinator_core.review_trail.receipt_credit import (
+        _compute_session_summary,
+        _has_own_completion,
+        _receipt_counts,
+    )
 
     # Both share roots -- see machinery_paths.share_roots. A receipt written
     # by a pre-relocation session must not read as "no receipt" and block a
     # close.
     sidecar_dirs = [Path(d) / sid for d in _share_roots(str(root))]
-    # Review: code-reviewer (S10 finding 2) — the gate now globs every extant
+    # The gate now globs every extant
     # root (see AC2b note below), so the detail text must name all of them
     # rather than only sidecar_dirs[0]; naming just the first root misled a
     # human reading the block when the actual receipt (or the actual block
@@ -2417,8 +2547,14 @@ def _compute_review_receipt_gate(
 
     integrator_receipts: list[str] = []
     reviewer_hit: Optional[str] = None
+    # First such counting-vocabulary review receipt the widened loop refused
+    # BECAUSE the session's completion writer is live and this sidecar
+    # carries no completion block of its own (C4 step 3) -- the path is
+    # share-root-neutral: the first hit across every `extant_sidecar_dirs`
+    # entry in sorted-candidate order, never `sidecar_dirs[0]` specifically.
+    dispatched_never_completed_path: Optional[str] = None
 
-    # Review: code-reviewer (S10 finding 3) — sort within each root, then
+    # Sort within each root, then
     # concatenate, matching this fix's own rationale comment above (legacy
     # root considered after current-root) rather than a single sort across
     # both roots' candidates together.
@@ -2427,7 +2563,9 @@ def _compute_review_receipt_gate(
         for extant_dir in extant_sidecar_dirs
         for candidate in sorted(extant_dir.glob("*.md"))
     ]
-    for candidate in candidates:
+
+    parsed_candidates: list[tuple[Path, dict, str, Any]] = []
+    for candidate in sorted(candidates):
         try:
             text = candidate.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -2440,7 +2578,17 @@ def _compute_review_receipt_gate(
         body = parsed.get("body")
         if not isinstance(frontmatter, dict):
             continue
+        parsed_candidates.append((candidate, frontmatter, text, body))
 
+    # C3's session summary -- computed once, over the SAME set of directories
+    # (both share roots), never per-directory: a twin under one root must be
+    # able to lend content to a run-report under the other.
+    summary = _compute_session_summary(
+        [(frontmatter, text) for _candidate, frontmatter, text, _body in parsed_candidates],
+        sid,
+    )
+
+    for candidate, frontmatter, text, body in parsed_candidates:
         # C11: read the RECEIPT BLOCK the dispatch seam splices in
         # (`provision_report._splice_review_receipt` /
         # `_splice_integrator_receipt`), never the sidecar's generic
@@ -2460,13 +2608,38 @@ def _compute_review_receipt_gate(
             receipt_agent_type = receipt.get("agent_type")
             if not isinstance(receipt_agent_type, str):
                 continue
-            # AC5: a blank sidecar is an ABORTED review, not a pass. The
-            # receipt exists (it is stamped at dispatch, before the agent
-            # runs) precisely so that "dispatched then died" is
-            # distinguishable from "never dispatched" -- both must block, and
-            # this is the check that makes the distinction cost nothing.
-            if not isinstance(body, str) or not body.strip():
-                continue
+
+            if sink is None:
+                # `review_receipt` leg: C4 replaces the bare body-blank check
+                # with C3's completion/content predicate (AC5 is no longer
+                # "non-blank body", it is "authored content the completion
+                # writer, if live, actually produced"). Anti-scope: the
+                # `integrator_receipt` leg below is untouched.
+                bare = (
+                    receipt_agent_type.rpartition(":")[2]
+                    if ":" in receipt_agent_type
+                    else receipt_agent_type
+                )
+                if bare not in CLOSE_RECEIPT_REVIEWERS:
+                    continue
+                if not _receipt_counts(frontmatter, text, sid, summary):
+                    if (
+                        dispatched_never_completed_path is None
+                        and summary.session_has_completion
+                        and not _has_own_completion(frontmatter, sid)
+                    ):
+                        dispatched_never_completed_path = candidate.as_posix()
+                    continue
+            else:
+                # `integrator_receipt` leg (Anti-scope): a blank sidecar is
+                # an ABORTED review, not a pass. The receipt exists (it is
+                # stamped at dispatch, before the agent runs) precisely so
+                # that "dispatched then died" is distinguishable from
+                # "never dispatched" -- both must block, and this is the
+                # check that makes the distinction cost nothing.
+                if not isinstance(body, str) or not body.strip():
+                    continue
+
             stamped_at = _parse_review_receipt_timestamp(receipt.get("stamped_at"))
             if window_start is not None and stamped_at is not None and stamped_at < window_start:
                 continue
@@ -2477,9 +2650,6 @@ def _compute_review_receipt_gate(
                 sink.append(candidate.as_posix())
                 continue
 
-            bare = receipt_agent_type.rpartition(":")[2] if ":" in receipt_agent_type else receipt_agent_type
-            if bare not in CLOSE_RECEIPT_REVIEWERS:
-                continue
             if reviewer_hit is None:
                 reviewer_hit = candidate.as_posix()
 
@@ -2497,6 +2667,24 @@ def _compute_review_receipt_gate(
             applies=True,
             blocks=False,
             detail=f"review receipt found: {reviewer_hit}{applied}",
+        )
+
+    if dispatched_never_completed_path is not None:
+        # Step 3: a counting-vocabulary reviewer WAS dispatched for this
+        # session, but the session's completion writer ran and this sidecar
+        # never gained its own `review_completion` block -- "dispatched,
+        # never completed", not "never dispatched". Follow
+        # docs/wiki/guard-messaging.md § Register: one fact, once, plus the
+        # terse alternative. Every other blocking case keeps
+        # `no_receipt_detail`'s text unchanged.
+        return ReviewReceiptGate(
+            applies=True,
+            blocks=True,
+            detail=(
+                f"review receipt for session {sid!r} at "
+                f"{dispatched_never_completed_path} was dispatched, never "
+                "completed — wait for it to finish or re-dispatch"
+            ),
         )
 
     return ReviewReceiptGate(applies=True, blocks=True, detail=no_receipt_detail)
@@ -2975,7 +3163,7 @@ def _evaluate_consumed_handoff_completeness_element(root: Path, raw_path: str) -
     if resolved is not None:
         try:
             text = resolved.read_text(encoding="utf-8")
-        # Review: coordinatorcode-reviewer-c13e4663 Finding 1 — UnicodeDecodeError is a
+        # UnicodeDecodeError is a
         # ValueError subclass, not an OSError; leg A must degrade to indeterminate for
         # a non-UTF-8 handoff too, never propagate out of brief() uncaught.
         except (OSError, UnicodeDecodeError):
@@ -3097,11 +3285,18 @@ def compute_consumed_handoff_completeness_gate(
     )
 
 
-#: The four directives this gate blocks, named once and shared by every
-#: disposition that clears it. `__init__.py`'s assembly layer hangs the
+#: The four STATIC directives this gate blocks, named once and shared by
+#: every disposition that clears it. `__init__.py`'s assembly layer hangs the
 #: matching `depends_on` edges off these same four ids (see the
 #: `consumed_handoff_completeness_gate.blocks` branch in `build_directives`);
 #: the two lists are the same fact stated at both ends and must not drift.
+#: C1 (docs/plans/2026-09-11-the-memo-lifecycle-closes-its-own-handoffs.md)
+#: adds a FIFTH, PER-RUN member — `d-ship-consumed-handoff:<basename>` — on
+#: top of this fixed four; it is never folded into this tuple (the ship ids
+#: are per-run, this constant is static) but every arm below that lists this
+#: constant in `resolves` must UNION it with `extra_resolve_ids` too, or an
+#: EM reaching the gate by that arm still cannot ship (see this function's
+#: own `extra_resolve_ids` paragraph).
 _CONSUMED_HANDOFF_COMPLETENESS_RESOLVES = (
     "d-claim-plan-execution-lock",
     "d-stamp-plan-implemented",
@@ -3110,7 +3305,10 @@ _CONSUMED_HANDOFF_COMPLETENESS_RESOLVES = (
 )
 
 
-def build_consumed_handoff_completeness_judgment_point(gate: ConsumedHandoffCompletenessGate) -> dict[str, Any]:
+def build_consumed_handoff_completeness_judgment_point(
+    gate: ConsumedHandoffCompletenessGate,
+    extra_resolve_ids: "Sequence[str]" = (),
+) -> dict[str, Any]:
     """AC3/AC4 — blocks the remaining four attribution/tail directives when
     `gate.blocks` is True (`d-run-wsc-tail` and `d-reconcile-completion-
     commits` were two more members, removed with the rest of Step 3's
@@ -3129,6 +3327,19 @@ def build_consumed_handoff_completeness_judgment_point(gate: ConsumedHandoffComp
     d-harvest-deferrals-1, and d-complete-entry in `resolves`, and
     `stop-and-handoff` is the inert arm matching SKILL.md's own
     mutual-exclusion rule.
+
+    `extra_resolve_ids` (C1, docs/plans/2026-09-11-the-memo-lifecycle-
+    closes-its-own-handoffs.md): the caller's own per-run `d-ship-consumed-
+    handoff:<basename>` ids — see `_CONSUMED_HANDOFF_COMPLETENESS_RESOLVES`'s
+    own docstring for why they cannot live inside that static tuple. Unioned
+    into `resolves` on EVERY arm below that already lists the static
+    constant (both `verified-complete-proceed` and `override-known-in-
+    flight`) — wiring only one arm would leave `d-ship-consumed-handoff:*`
+    permanently blocked whenever an EM reaches the gate by the other,
+    commonest, arm. `stop-and-handoff` names an empty `resolves` regardless
+    (nothing is stamped on that arm, ship directive included). Defaults to
+    `()`, reproducing this function's pre-C1 behaviour exactly for any
+    caller that does not pass it.
 
     `verified-complete-proceed` (2026-08-31) is the third arm, and it exists
     because the other two named the wrong world for the commonest way this
@@ -3184,19 +3395,20 @@ def build_consumed_handoff_completeness_judgment_point(gate: ConsumedHandoffComp
         "is to stop. Proceed with /workstream-complete anyway, and on which claim?"
     )
 
+    resolves_ids = list(_CONSUMED_HANDOFF_COMPLETENESS_RESOLVES) + list(extra_resolve_ids)
     dispositions = []
     if not live_child_blocking:
         dispositions.append(
             build_disposition(
                 "verified-complete-proceed",
-                resolves=list(_CONSUMED_HANDOFF_COMPLETENESS_RESOLVES),
+                resolves=list(resolves_ids),
                 guidance=(
                     "The work IS finished; what the gate found is a record that was never "
                     "written — typically a governing plan left at a non-terminal `status:` "
                     "that `d-stamp-plan-implemented` is itself the remedy for. Pick this only "
                     "after checking each criterion above against HEAD by hand; the ceremony "
                     "has no AC-reconciliation step and this disposition does not verify "
-                    "anything on your behalf. Same four directives as "
+                    "anything on your behalf. Same directives as "
                     "`override-known-in-flight` — the difference is which claim the record "
                     "carries."
                 ),
@@ -3205,7 +3417,7 @@ def build_consumed_handoff_completeness_judgment_point(gate: ConsumedHandoffComp
     dispositions.append(
         build_disposition(
             "override-known-in-flight",
-            resolves=list(_CONSUMED_HANDOFF_COMPLETENESS_RESOLVES),
+            resolves=list(resolves_ids),
             guidance=(
                 "The work is genuinely still in flight and you are proceeding anyway, "
                 "knowing that. Correct whenever a live successor still names this "
@@ -3456,7 +3668,7 @@ def _read_consumed_handoff_text(repo_root: Path, gate: SessionShapeGate) -> Opti
         return None
     try:
         return candidate.read_text(encoding="utf-8")
-    # Review: coordinatorcode-reviewer-c13e4663 Finding 1 (sibling) — same
+    # Same
     # non-UTF-8-content gap as the plural-loop read site; this docstring's
     # own "never raises" contract already promised None here, so this was
     # not yet met either.
@@ -4610,7 +4822,7 @@ def _measure_session_review_scale_inputs(
         return None, None, None, None
     tracked, untracked = split
     if tracked:
-        # Review: code-reviewer — Finding (P1). `_split_tracked` returns
+        # `_split_tracked` returns
         # `tracked` built from the caller's original, unnormalized paths
         # (backslash-containing on Windows) -- normalizing it only for its
         # OWN internal `ls-files` pathspec, not for the caller. Feeding that
@@ -4797,7 +5009,7 @@ def _resolve_session_start_sha(root: Path, session_start_time: Any) -> Optional[
     if shas is None:
         return None
     if not shas:
-        # Review: code-reviewer (P2 #2) — returning the literal "HEAD" here
+        # Returning the literal "HEAD" here
         # propagated into `resolve_mid_chain_review_scope`'s fallback and
         # could emit an empty `HEAD..HEAD` range instead of the caller's
         # byte-identical no-range fallback. `None` makes
@@ -4813,7 +5025,7 @@ def _list_review_trail_paths_for_root(root: Path, sid_short: str = "") -> list[s
     THIS caller's explicit `root` instead of that function's own cwd-or-
     `COORDINATOR_ROOT` resolution.
 
-    Review: code-reviewer (P2 #1) — the prior call site
+    The prior call site
     (`list_review_trail_records.list_paths(date_prefix="")`) has no
     `root`/`repo_root` parameter at all; it resolves the state root purely
     from process cwd (git-root-of-cwd) or the `COORDINATOR_ROOT` env var, so
@@ -4857,7 +5069,7 @@ def _list_review_trail_paths_for_root(root: Path, sid_short: str = "") -> list[s
     (which two directories get combined); it only supplies the one caller-
     known input (`root`) that function has no parameter for.
 
-    Review: code-reviewer (P3) — cross-reference, not just prose: mirrors
+    cross-reference, not just prose: mirrors
     `list_review_trail_records.list_paths()`'s `live_dir`/`archive_dir`
     computation at `coordinator_core/ops/list_review_trail_records.py:275-280`
     verbatim (same two directories, no re-implemented union logic).
@@ -4921,7 +5133,7 @@ def _resolve_review_brightline_floor_kwargs(
     widen the emitted range over commits this session never touched —
     forbidden by the plan's Anti-scope.
 
-    Review: code-reviewer (P2, 2026-08-08, scan cost) — FIXED (C11,
+    (C11,
     docs/plans/2026-08-21-rebuild-the-three-ceremony-assemblers.md): this
     helper used to `json.load` every `*.json` under `state/review-trail/`
     and `archive/review-trail/` unconditionally (2,778 files at ~0.07s when
@@ -5485,14 +5697,26 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # point`'s own pattern, because not every directive is present on
     # every run (e.g. no governing plan resolved).
     if consumed_handoff_completeness_gate.blocks:
+        # C1: the `d-ship-consumed-handoff:*` ids actually present in
+        # `directives` this run — read off the list `build_directives`
+        # already returned rather than recomputed, so this can never drift
+        # from what was actually emitted (the same guarantee the `any(d["id"]
+        # == ...)` check below already relies on for the static four).
+        consumed_handoff_ship_directive_ids = [
+            d["id"] for d in directives if d["id"].startswith("d-ship-consumed-handoff:")
+        ]
         judgment_points.append(
-            build_consumed_handoff_completeness_judgment_point(consumed_handoff_completeness_gate)
+            build_consumed_handoff_completeness_judgment_point(
+                consumed_handoff_completeness_gate,
+                extra_resolve_ids=consumed_handoff_ship_directive_ids,
+            )
         )
         for _gated_directive_id in (
             "d-claim-plan-execution-lock",
             "d-stamp-plan-implemented",
             "d-harvest-deferrals-1",
             "d-complete-entry",
+            *consumed_handoff_ship_directive_ids,
         ):
             if any(d["id"] == _gated_directive_id for d in directives):
                 _append_directive_dependency(directives, _gated_directive_id, "jp-consumed-handoff-completeness")

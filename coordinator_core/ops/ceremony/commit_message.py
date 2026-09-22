@@ -162,7 +162,7 @@ def _split_trailer_tail(text: str) -> Tuple[str, str]:
     `(text, "")` unchanged -- every other `compose_message()` call shape is
     untouched by this function's existence.
 
-    Review: code-reviewer — Finding (P3). When `text` (`prose`) is ENTIRELY
+    When `text` (`prose`) is ENTIRELY
     trailer-shaped lines with no preceding blank line, the trailing non-
     blank run "reaches the start" -- the SAME shape `_ends_with_trailer_
     block`'s reached-start carve-out exists to protect (there, a message's

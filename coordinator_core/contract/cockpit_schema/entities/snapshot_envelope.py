@@ -82,7 +82,6 @@ class MalformedRecords(BaseModel):
 
     Sub-component of SnapshotEnvelope — NOT registered in the entity registry
     (not a top-level entity; no standalone fixture/schema emit required).
-    Review: code-reviewer (F13).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -112,7 +111,6 @@ class BacklogsEnvelope(BaseModel):
     The nested backlogs object, one array per queue type.
     Sub-component of SnapshotEnvelope — NOT registered in the entity registry
     (not a top-level entity; no standalone fixture/schema emit required).
-    Review: code-reviewer (F13).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -151,7 +149,7 @@ class SnapshotEnvelope(BaseModel):
     # Sourced from CONTRACT_VERSION via the emitted bundle .version (the Staff Engineer
     # F1). Must be a semver string matching the exported CONTRACT_VERSION
     # constant.
-    # Review: code-reviewer — semver regex prevents silent version drift;
+    # Semver regex prevents silent version drift;
     # ties schema_version to CONTRACT_VERSION shape.
     schema_version: str = Field(pattern=r"^\d+\.\d+\.\d+$")
     # ISO-8601 UTC wall-clock when the snapshot was assembled.

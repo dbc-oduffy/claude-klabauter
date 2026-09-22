@@ -39,6 +39,30 @@ Negative-spec:
       to reap, under the producer's settings home, and it is swept with the
       rest of session scratch. Adding a SessionEnd deletion hook here is out
       of scope for this module.
+
+`read_usage`'s `transcript_path` fallback (2026-09-19, "tell a cloud EM
+compaction is inbound" C1): a cloud session registers no statusline, so the
+sidecar this module reads is never written there. When no sidecar record
+exists, `read_usage` derives a reading from the transcript JSONL the hook
+payload already carries a path to — never a constructed home-relative path.
+A usable sidecar record still wins unconditionally. The two sources do NOT
+produce the same block shape, though — the sidecar carries `used_percentage`
+and `context_window_size`, the transcript carries `total_input_tokens` and no
+window at all — and that divergence is why the consumer needs a resolution
+step (`postuse_advisory_dispatch._used_tokens_and_display_pct`) instead of one
+path. Converging the shapes here would retire that step; until then, this is
+two readers behind one entry point, not one reader with a branch.
+
+Negative-spec, transcript fallback:
+    - Do NOT sum `usage` across every content-block line of one API response
+      — every block of one response repeats that response's `usage`
+      verbatim, and summing over-counts. Dedupe by `message.id`.
+    - Do NOT trust a streaming-placeholder row: `input_tokens` in {0, 1}
+      with no cache figures is mid-stream, not a settled tally.
+    - Do NOT read the whole file. A bounded 256 KiB binary tail read costs
+      1.6 ms against 6.0 ms for a full-file scan on a 1 MB+ transcript, for
+      an identical result — seek in binary and discard the first (likely
+      partial) line.
 """
 
 from __future__ import annotations
@@ -142,15 +166,34 @@ def write_usage(session_id: str, context_window_block: dict[str, Any], *, now: f
     _last_written[target] = serialised_block
 
 
-def read_usage(session_id: str, *, now: float) -> UsageReading | None:
+_TRANSCRIPT_TAIL_BYTES = 256 * 1024
+
+
+def read_usage(
+    session_id: str, *, now: float, transcript_path: str | None = None
+) -> UsageReading | None:
     """Read the sidecar for ``session_id``, returning ``None`` when the file
-    is absent or unparseable.
+    is absent or unparseable AND no transcript fallback is usable either.
 
     On success, returns a ``UsageReading`` carrying the harness's
     ``context_window`` block verbatim and ``age_seconds`` computed as
     ``now`` minus the ``captured_at`` stamp recorded at write time. ``age_seconds`` is
     reported only — this function applies no staleness policy.
+
+    When no sidecar record exists, falls back to `transcript_path` (the hook
+    payload's own path, never constructed) — see the module docstring's
+    "transcript_path fallback" section. A usable sidecar record always wins;
+    the fallback only runs when the sidecar branch itself returns ``None``.
     """
+    sidecar_reading = _read_sidecar_usage(session_id, now=now)
+    if sidecar_reading is not None:
+        return sidecar_reading
+    if transcript_path:
+        return _read_usage_from_transcript(transcript_path, now=now)
+    return None
+
+
+def _read_sidecar_usage(session_id: str, *, now: float) -> UsageReading | None:
     target = sidecar_path(session_id)
 
     try:
@@ -175,3 +218,94 @@ def read_usage(session_id: str, *, now: float) -> UsageReading | None:
         return None
 
     return UsageReading(context_window=context_window, age_seconds=now - captured_at)
+
+
+def _read_usage_from_transcript(transcript_path: str, *, now: float) -> UsageReading | None:
+    """Derive a `UsageReading` from a session transcript JSONL's own latest
+    assistant-message `usage`, when no sidecar record exists.
+
+    Returns ``None`` on any I/O failure or when no usable usage row is found
+    in the tail — never raises. The resulting `context_window` carries
+    ``total_input_tokens`` and a ``current_usage`` breakdown, but no
+    ``used_percentage``/``context_window_size`` — the transcript alone
+    cannot name the window it is a fraction of; the caller is responsible for
+    resolving that (see `postuse_advisory_dispatch`'s threshold derivation).
+    ``age_seconds`` is 0.0: this is a live read of the file, not a stamped
+    record.
+    """
+    try:
+        with open(transcript_path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            start = max(0, size - _TRANSCRIPT_TAIL_BYTES)
+            fh.seek(start)
+            tail = fh.read()
+    except OSError:
+        return None
+
+    if start > 0:
+        # The seek almost certainly landed mid-line; discard that partial
+        # first line rather than risk parsing a truncated JSON object.
+        _, _, tail = tail.partition(b"\n")
+
+    try:
+        text = tail.decode("utf-8", errors="ignore")
+    except Exception:
+        return None
+
+    last_message_id: Any = None
+    last_usage: dict[str, Any] | None = None
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(obj, dict):
+            continue
+        message = obj.get("message")
+        if not isinstance(message, dict):
+            continue
+        usage = message.get("usage")
+        message_id = message.get("id")
+        if not isinstance(usage, dict) or not message_id:
+            continue
+
+        input_tokens = usage.get("input_tokens")
+        cache_creation = usage.get("cache_creation_input_tokens")
+        cache_read = usage.get("cache_read_input_tokens")
+        if isinstance(input_tokens, bool) or not isinstance(input_tokens, (int, float)):
+            continue
+        if input_tokens in (0, 1) and not cache_creation and not cache_read:
+            # Streaming-placeholder row -- not a settled usage figure.
+            continue
+        if message_id == last_message_id:
+            # Another content block of the same response; already counted.
+            continue
+
+        last_message_id = message_id
+        last_usage = usage
+
+    if last_usage is None:
+        return None
+
+    input_tokens = last_usage.get("input_tokens") or 0
+    cache_creation = last_usage.get("cache_creation_input_tokens") or 0
+    cache_read = last_usage.get("cache_read_input_tokens") or 0
+    try:
+        total_input_tokens = int(input_tokens) + int(cache_creation) + int(cache_read)
+    except (TypeError, ValueError):
+        return None
+
+    context_window = {
+        "total_input_tokens": total_input_tokens,
+        "current_usage": {
+            "input_tokens": int(input_tokens),
+            "cache_creation_input_tokens": int(cache_creation),
+            "cache_read_input_tokens": int(cache_read),
+        },
+    }
+    return UsageReading(context_window=context_window, age_seconds=0.0)

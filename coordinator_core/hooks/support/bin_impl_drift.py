@@ -207,7 +207,7 @@ def _claim_interval(stamp: Path, now: float) -> bool:
     try:
         stamp.parent.mkdir(parents=True, exist_ok=True)
         tmp = stamp.with_name(f"{stamp.name}.{os.getpid()}.tmp")
-        tmp.write_text(f"{now}\n", encoding="utf-8")
+        tmp.write_text(f"{now}\n", encoding="utf-8", newline="\n")
         os.replace(tmp, stamp)
     except OSError:
         return False  # read-only settings home: never block the session

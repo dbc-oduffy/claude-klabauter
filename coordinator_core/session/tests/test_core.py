@@ -350,6 +350,65 @@ def test_init_populates_stable_pid_when_parent_comm_is_claude(tmp_path, monkeypa
     assert meta["stable_pid_start_epoch"] == str(int(fake_create_time))
 
 
+def test_init_writes_resolved_name_from_harness_registry_on_create(tmp_path, monkeypatch):
+    """meta.json previously had no write site for `name` at all, so a reader
+    asking for it got a schemaless, confident null forever. `core.init` must
+    now stamp it from `harness_registry.self_record()`, the same O(1) leg
+    `archive_stamp` already trusts for `claimed_by_name`, whenever that
+    record's own `sessionId` matches the session being initialised.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _make_repo(repo)
+
+    from coordinator_core.session import harness_registry
+
+    sid = "aaaa0000-1111-2222-3333-444455556666"
+
+    def fake_self_record():
+        return sid, harness_registry.RegistryRecord(
+            pid=os.getpid(), start_epoch=time.time(), name="claude-klabauter-57"
+        )
+
+    monkeypatch.setattr(harness_registry, "self_record", fake_self_record)
+
+    assert core.init(sid, cwd=str(repo)) is True
+
+    sdir = Path(core.sessions_dir(cwd=str(repo))) / sid
+    meta = json.loads((sdir / "meta.json").read_text())
+    assert meta["name"] == "claude-klabauter-57"
+
+
+def test_init_leaves_name_empty_when_registry_session_id_mismatches(tmp_path, monkeypatch):
+    """`self_record()` keys on the ambient `CLAUDE_PID` env var, which inside
+    a warm server belongs to whichever session STARTED the server -- not to
+    the session `init()` was asked to create. A record whose own
+    `sessionId` disagrees with the session being initialised must never be
+    trusted (mirrors `archive_stamp._record_claimant_identity_best_effort`'s
+    own trust check for the identical hazard)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _make_repo(repo)
+
+    from coordinator_core.session import harness_registry
+
+    sid = "bbbb0000-1111-2222-3333-444455556666"
+    other_sid = "cccc0000-1111-2222-3333-444455556666"
+
+    def fake_self_record():
+        return other_sid, harness_registry.RegistryRecord(
+            pid=os.getpid(), start_epoch=time.time(), name="uninvolved-peer"
+        )
+
+    monkeypatch.setattr(harness_registry, "self_record", fake_self_record)
+
+    assert core.init(sid, cwd=str(repo)) is True
+
+    sdir = Path(core.sessions_dir(cwd=str(repo))) / sid
+    meta = json.loads((sdir / "meta.json").read_text())
+    assert meta["name"] == ""
+
+
 # ---------------------------------------------------------------------------
 # Clock helpers
 # ---------------------------------------------------------------------------
@@ -546,7 +605,7 @@ class TestStablePidAliveGoldenDiff:
 
     @_ps_oracle_skip
     def test_corrupt_stored_epoch_fails_closed_dead(self):
-        # Review: code-reviewer P1 — a corrupted (non-numeric) stored_start_epoch
+        # A corrupted (non-numeric) stored_start_epoch
         # with a live self process (current lstart parses fine) must return dead
         # (fail-closed), never fall through to the legacy string compare. Rig
         # stored_lstart to STRING-MATCH the current lstart so that, if the code
@@ -1143,7 +1202,7 @@ class TestInit:
     reason="psutil (the Windows liveness mechanism) not installed",
 )
 class TestInitWindowsGuard1:
-    """Review: code-reviewer P2 — init()'s Windows Guard-1 branch
+    """init()'s Windows Guard-1 branch
     (core.py:695-722) previously had zero test coverage, despite being
     mechanically testable without a real Windows box via the same
     `_IS_WINDOWS` monkeypatch technique already used in
@@ -1434,7 +1493,7 @@ class TestFindWindowsClaudeAncestor:
         assert reason == "walk-hit:2+skipped:ZombieProcess:1"
 
     def test_ppid_raises_inside_skip_branch_is_distinct_from_no_parent(self, monkeypatch):
-        # Review: coordinator:code-reviewer P2 — pid 2's name() raises
+        # Pid 2's name() raises
         # AccessDenied (skip-eligible), and its ppid() ALSO raises
         # (AccessDenied). The skip branch's own except-clause must produce
         # the same "walk-miss:rung-unreadable:<exc>:<depth>" shape the main
@@ -1496,7 +1555,7 @@ class TestFindWindowsClaudeAncestor:
         assert reason == "walk-miss:depth-exhausted"
 
     def test_skipped_rungs_preserved_when_hit_rungs_create_time_raises(self, monkeypatch):
-        # Review: coordinator:code-reviewer P3 — a rung was skipped on the
+        # A rung was skipped on the
         # way to the eventual "claude" match, but that match's own
         # create_time() then raises. The accumulated "+skipped:..."
         # annotation must survive onto the resulting walk-miss reason

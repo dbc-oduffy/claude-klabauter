@@ -173,7 +173,7 @@ def _extract_applies_to(schema_file: Path) -> Optional[str]:
         return None
     for line in text.splitlines():
         if line.startswith("applies_to:"):
-            # Review: code-reviewer -- str.partition(": ") splits on the
+            # str.partition(": ") splits on the
             # FIRST occurrence only and keeps everything after it, which
             # diverges from `awk -F': ' '{print $2}'` (splits on EVERY
             # occurrence, keeps only field 2 -- i.e. up to the NEXT ": "

@@ -851,11 +851,22 @@ def _prefilter_qualifies(status_lower: str, deployment_lower: str) -> bool:
     `_classify_branch` may still refuse on an unresolvable `shipped_in`) —
     that refinement needs the full parse, and this function's only
     obligation is superset-safety, not the final answer.
+
+    `status_lower` is accepted but no longer read (C3, docs/reference/
+    handoff-legal-state-table.md § "Ruling: terminality is a
+    deployment_state question, never a status one"): `_classify_branch`'s
+    own Branch A no longer qualifies a claimed/consumed record by
+    `deployment_state != "in_flight"` — that inversion was the census-row-1
+    bug this pre-filter must not resurrect a copy of — so `deployment_state`
+    membership in `_TERMINAL_DEPLOYMENT_STATES` is the whole test, same as
+    Branch B. Kept as a positional parameter so the call site's two-value
+    shape (and this function's signature as the third documented copy of
+    the predicate, per the module-level "THE PRE-FILTER LIVES ENTIRELY
+    HERE" note) stays stable for any external caller/test holding a
+    reference to it.
     """
     if deployment_lower in _TERMINAL_DEPLOYMENT_STATES:
         return True
-    if status_lower in ("claimed", "consumed"):
-        return deployment_lower != "in_flight"
     return False
 
 
@@ -938,7 +949,7 @@ def _prefilter_scan_disqualifies(path: Path) -> Optional[str]:
     if deployment_lower == "in_flight" and status_lower in ("claimed", "consumed"):
         return f"{_SCAN_REASON_NOT_TERMINAL}: deployment_state=in_flight — not terminal (archive-safety)"
     return (
-        f"{_SCAN_REASON_NOT_TERMINAL}: status={status_scalar!r} (not claimed) and "
+        f"{_SCAN_REASON_NOT_TERMINAL}: status={status_scalar!r} and "
         f"deployment_state={deployment_scalar!r} (not terminal)"
     )
 
@@ -989,15 +1000,32 @@ def _classify_branch(meta: dict, shipped_in_resolved: Dict[str, bool]) -> Tuple[
         return True, "", deployment_state, True
 
     # Branch A: status == claimed (dual-tolerant fallback to the
-    # archived-schema grandfather "consumed", per DR-084).
-    if normalized_status in ("claimed", "consumed"):
-        if deployment_state == "in_flight":
-            return False, "deployment_state=in_flight — not terminal (archive-safety)", "", False
+    # archived-schema grandfather "consumed", per DR-084). Reconciled with
+    # archival._is_terminal_or_archived_child (C3, docs/reference/
+    # handoff-legal-state-table.md § "Ruling: terminality is a
+    # deployment_state question, never a status one"): Branch B above
+    # already qualifies every claimed/consumed record whose
+    # deployment_state is terminal, so by the time control reaches here
+    # deployment_state is definitively NOT a member of
+    # _TERMINAL_DEPLOYMENT_STATES. The old test — "terminal unless
+    # deployment_state == in_flight" — silently qualified a reparked baton
+    # (`claimed` + `ready_to_fire`/`awaiting_gate`, a session flipping
+    # deployment_state back without dropping status: claimed) as terminal:
+    # the census-row-1 false positive the table names. `ready_to_fire` and
+    # `awaiting_gate` are exactly as non-terminal as `in_flight` — none of
+    # the three is ever inferred terminal from "not in_flight".
+    #
+    # One exception, preserved on purpose and mirrored from
+    # archival._is_terminal_or_archived_child's own carve-out: a record
+    # with NO deployment_state key at all (absent, pre-DR-084 legacy
+    # shape) never carried the field, so it was never "reparked" — status
+    # alone still decides for it, exactly as it always has.
+    if normalized_status in ("claimed", "consumed") and not deployment_state:
         return True, "", "consumed", False
 
     return (
         False,
-        f"{_SCAN_REASON_NOT_TERMINAL}: status={status!r} (not claimed) and "
+        f"{_SCAN_REASON_NOT_TERMINAL}: status={status!r} and "
         f"deployment_state={deployment_state!r} (not terminal)",
         "",
         False,

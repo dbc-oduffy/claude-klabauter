@@ -269,6 +269,73 @@ def test_stable_sort_order_is_unaffected_by_shebang_widening(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# C1 -- alias-aware `Path` receiver resolution in `_is_path_home_call` (Gap
+# 2 / DoE fixture C: `from pathlib import Path as _Path`, then `... or
+# _Path.home()`, wrongly reported one finding on the pre-C1 engine).
+# Spec: docs/plans/2026-09-11-home-resolution-lint-extractor-gaps.md, `##
+# Tasks` / `- id: C1`.
+# ---------------------------------------------------------------------------
+
+
+def test_bare_or_chain_with_module_scope_aliased_path_home_terminal_is_exempt(tmp_path):
+    """DoE fixture C (module-scope alias): `from pathlib import Path as
+    _Path`, terminal `_Path.home()` -- must be recognised as the same
+    exempting rung a bare `Path.home()` already is."""
+    engine = _engine_for(
+        tmp_path,
+        "import os\n"
+        "from pathlib import Path as _Path\n"
+        "def f():\n"
+        "    return os.environ.get('CLAUDE_HOME') or os.environ.get('HOME') or str(_Path.home())\n",
+    )
+    assert engine.find_bare_home_or_chains() == []
+
+
+def test_bare_or_chain_with_function_local_aliased_path_home_terminal_is_exempt(tmp_path):
+    """The same alias shape, bound inside the function rather than at module
+    scope -- `_is_path_home_call`'s receiver-name collection must walk the
+    whole tree, not just the module body."""
+    engine = _engine_for(
+        tmp_path,
+        "import os\n"
+        "def f():\n"
+        "    from pathlib import Path as _P\n"
+        "    return os.environ.get('CLAUDE_HOME') or os.environ.get('HOME') or str(_P.home())\n",
+    )
+    assert engine.find_bare_home_or_chains() == []
+
+
+def test_bare_or_chain_with_unaliased_path_home_terminal_still_exempt(tmp_path):
+    """DoE fixture D (plain `Path.home()`, no alias) must stay clean after
+    C1 -- the literal `"Path"` name always matches, alias set or not."""
+    engine = _engine_for(
+        tmp_path,
+        "import os\n"
+        "from pathlib import Path\n"
+        "def f():\n"
+        "    return os.environ.get('CLAUDE_HOME') or os.environ.get('HOME') or str(Path.home())\n",
+    )
+    assert engine.find_bare_home_or_chains() == []
+
+
+def test_bare_or_chain_variable_named_like_path_alias_is_not_a_false_exemption(tmp_path):
+    """A receiver named `_Path`, never bound to `pathlib.Path` by any import
+    in this tree, must not start exempting merely by naming coincidence --
+    the alias analogue of
+    `test_bare_or_chain_variable_named_home_is_not_a_false_exemption`. Only a
+    name this tree actually binds to `pathlib.Path` via `from pathlib
+    import Path as X` counts."""
+    engine = _engine_for(
+        tmp_path,
+        "import os\n"
+        "def f(_Path):\n"
+        "    return os.environ.get('CLAUDE_HOME') or os.environ.get('HOME') or str(_Path.home())\n",
+    )
+    findings = engine.find_bare_home_or_chains()
+    assert len(findings) == 1
+
+
+# ---------------------------------------------------------------------------
 # C2 -- structural terminal-rung detection for `find_bare_home_or_chains`.
 # Spec: `docs/plans/2026-08-07-home-resolution-gate-family-reference-rule.md`,
 # `## Tasks` / `- id: C2`.
@@ -538,6 +605,92 @@ def test_dedup_function_reported_once_not_twice(tmp_path):
     (the BoolOp/ternary walk) and once as a function-body guard-ladder. A
     function combining both an `if`/`return` guard AND a trailing bare-or
     chain as its fallback must yield exactly ONE finding, not two."""
+    engine = _engine_for(
+        tmp_path,
+        "import os\n"
+        "def f():\n"
+        "    if os.environ.get('CLAUDE_HOME'):\n"
+        "        return os.environ.get('CLAUDE_HOME')\n"
+        "    return os.environ.get('HOME') or ''\n",
+    )
+    findings = engine.find_bare_home_or_chains()
+    assert len(findings) == 1
+
+
+# ---------------------------------------------------------------------------
+# C2 -- Gap 1: an or-chain's rungs flatten through a call argument only when
+# that argument is itself an `or` BoolOp (recursively). Spec:
+# docs/plans/2026-09-11-home-resolution-lint-extractor-gaps.md task C2 /
+# AC2.
+# ---------------------------------------------------------------------------
+
+
+def test_c2_fixture_a_nested_or_in_join_argument_is_reported(tmp_path):
+    """DoE's fixture A (2026-08-21 DoE memo, `state/cross-repo/archive/`):
+    a ladder nested as a call argument of an outer or-chain --
+    `COORDINATOR_SETTINGS_HOME or os.path.join(CLAUDE_HOME or expanduser('~'),
+    ...)`. Before C2 the inner CLAUDE_HOME rung is swallowed by the join
+    Call staying an opaque leaf, and the outer chain's own operands carry
+    no home key, so the site is invisible. Must yield exactly one
+    `bare_or` finding once the nested `or` is flattened through."""
+    engine = _engine_for(
+        tmp_path,
+        "import os\n"
+        "def f():\n"
+        "    return (\n"
+        "        os.environ.get('COORDINATOR_SETTINGS_HOME')\n"
+        "        or os.path.join(\n"
+        "            os.environ.get('CLAUDE_HOME') or os.path.expanduser('~'),\n"
+        "            '.claude',\n"
+        "        )\n"
+        "    )\n",
+    )
+    findings = engine.find_bare_home_or_chains()
+    assert len(findings) == 1
+
+
+def test_c2_nested_or_userprofile_rung_inside_join_argument_is_exempt(tmp_path):
+    """AC2's exemption side: an outer CLAUDE_HOME ladder whose USERPROFILE
+    rung sits nested inside an `or` BoolOp that itself sits inside a join
+    argument -- this nested-`or` shape is the one that requires C2 (the
+    plain non-nested USERPROFILE-in-a-join-argument shape was already
+    exempt via `_contains_userprofile_rung`'s Call-arg walk and is not by
+    itself falsifying). Must not be reported."""
+    engine = _engine_for(
+        tmp_path,
+        "import os\n"
+        "def f():\n"
+        "    return (\n"
+        "        os.environ.get('CLAUDE_HOME')\n"
+        "        or os.path.join(\n"
+        "            os.environ.get('HOME') or os.environ.get('USERPROFILE'),\n"
+        "            '.claude',\n"
+        "        )\n"
+        "    )\n",
+    )
+    assert engine.find_bare_home_or_chains() == []
+
+
+def test_c2_unrelated_call_with_tilde_default_stays_a_leaf(tmp_path):
+    """C2 must not become `_extract_rungs`'s broader "every Call is
+    transparent" rule: an or-chain operand that is a Call with no `or`
+    BoolOp argument at all (`os.environ.get("XDG_X", "~")`) stays an
+    opaque leaf, so it is never decomposed into a spurious `rung_order`
+    TILDE violation. Zero `rung_order` violations expected."""
+    engine = _engine_for(
+        tmp_path,
+        "import os\n"
+        "def f():\n"
+        "    return os.environ.get('CLAUDE_HOME') or os.environ.get('XDG_X', '~')\n",
+    )
+    assert engine.find_rung_order_violations() == []
+
+
+def test_c2_dedup_test_stays_unedited_and_green(tmp_path):
+    """C2's own stop condition: `test_dedup_function_reported_once_not_twice`
+    (above) must stay green unedited -- the covered-node-id dedup contract
+    holds under the flattening change. Re-run here as a same-file C2
+    witness, not a duplicate spec."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -1168,4 +1321,319 @@ def test_rung_order_cross_branch_ladder_splice_false_positive_known_gap(tmp_path
     )
     # Correct behaviour would be []; this asserts the current false positive.
     findings = engine.find_rung_order_violations()
+    assert len(findings) == 1
+
+
+# ---------------------------------------------------------------------------
+# C3 -- example-game-repo form 2: probe-then-guard functions. Spec:
+# docs/plans/2026-09-11-home-resolution-lint-extractor-gaps.md task C3 /
+# AC3. Reduced (not verbatim -- no live read access to
+# example-game-workbench-repo from this session) reconstruction of example-game-repo's
+# `scripts/_setup_routing.py::_claude_home` per the plan's own C-pre census
+# description (task C3 body, and the "Gap 1 and Gap 2 reproduce" table): a
+# single-level `claude_home = os.environ.get('CLAUDE_HOME', ...)` probe,
+# then `if claude_home:` with a multi-statement body ending in a valued
+# `return`, then a post-guard rung two statements past the guard.
+# ---------------------------------------------------------------------------
+
+
+def test_c3_probe_then_guard_relaxed_body_is_clean_for_bare_or(tmp_path):
+    """The relaxed guard body (more than one statement, ending in a valued
+    `return`) must now be recognised at all -- the `claude_home` probe
+    qualifies the function via `_extract_guard_ladder`'s relaxed predicate,
+    and the post-guard `HOME or USERPROFILE or '~'` ladder carries a
+    structural USERPROFILE rung, so `bare_or` must not fire."""
+    engine = _engine_for(
+        tmp_path,
+        "import os\n"
+        "from pathlib import Path\n"
+        "def _claude_home():\n"
+        "    claude_home = os.environ.get('CLAUDE_HOME', '')\n"
+        "    if claude_home:\n"
+        "        claude_home = claude_home.strip()\n"
+        "        return Path(claude_home)\n"
+        "    home = os.environ.get('HOME') or os.environ.get('USERPROFILE') or '~'\n"
+        "    return Path(home)\n",
+    )
+    assert engine.find_bare_home_or_chains() == []
+
+
+def test_c3_probe_then_guard_tilde_terminal_reports_at_probe_line(tmp_path):
+    """The same fixture's `'~'` terminal IS a genuine `rung_order` TILDE
+    violation (the example-game-repo memo's own noted finding, per this plan's C9
+    section) -- and because the relaxed guard form is what qualified the
+    function, the representative node is the probe `environ.get(...)` Call,
+    not the `FunctionDef`, so the finding reports at the probe line (4), not
+    a line inside the function body."""
+    engine = _engine_for(
+        tmp_path,
+        "import os\n"
+        "from pathlib import Path\n"
+        "def _claude_home():\n"
+        "    claude_home = os.environ.get('CLAUDE_HOME', '')\n"
+        "    if claude_home:\n"
+        "        claude_home = claude_home.strip()\n"
+        "        return Path(claude_home)\n"
+        "    home = os.environ.get('HOME') or os.environ.get('USERPROFILE') or '~'\n"
+        "    return Path(home)\n",
+    )
+    findings = engine.find_rung_order_violations()
+    assert len(findings) == 1
+    assert findings[0].line == 4
+
+
+def test_c3_probe_then_guard_no_post_guard_rung_reports_once_at_probe_line(tmp_path):
+    """The same probe-then-guard shape with the post-guard rung removed
+    entirely (no HOME/USERPROFILE/Path.home() fallback at all) must report
+    exactly once, at the probe line -- the C3 representative-move applies
+    whether the site is clean or a genuine violation."""
+    engine = _engine_for(
+        tmp_path,
+        "import os\n"
+        "from pathlib import Path\n"
+        "def _claude_home():\n"
+        "    claude_home = os.environ.get('CLAUDE_HOME', '')\n"
+        "    if claude_home:\n"
+        "        claude_home = claude_home.strip()\n"
+        "        return Path(claude_home)\n"
+        "    return Path('')\n",
+    )
+    findings = engine.find_bare_home_or_chains()
+    assert len(findings) == 1
+    assert findings[0].line == 4
+
+
+def test_c3_binop_transparent_wrapper_resolves_joined_terminal(tmp_path):
+    """`home = HOME or USERPROFILE` then `return Path(home) / '.claude'` --
+    the `BinOp` path-join in the post-guard return must be a transparent
+    wrapper in `_extract_rungs` so the bound `home` Name resolves through
+    to its HOME/USERPROFILE rungs instead of the whole `BinOp` staying one
+    unclassifiable leaf. Yields zero `rung_order` violations (correct
+    order) and no `bare_or` finding (USERPROFILE rung present)."""
+    engine = _engine_for(
+        tmp_path,
+        "import os\n"
+        "from pathlib import Path\n"
+        "def _claude_home():\n"
+        "    claude_home = os.environ.get('CLAUDE_HOME', '')\n"
+        "    if claude_home:\n"
+        "        claude_home = claude_home.strip()\n"
+        "        return Path(claude_home)\n"
+        "    home = os.environ.get('HOME') or os.environ.get('USERPROFILE')\n"
+        "    return Path(home) / '.claude'\n",
+    )
+    assert engine.find_rung_order_violations() == []
+    assert engine.find_bare_home_or_chains() == []
+
+
+def test_c3_shape_default_arg_ladder_bare_is_reported_stays_unedited(tmp_path):
+    """C3 stop condition, re-run here as a same-file witness (the original
+    lives above, unedited): a bare single-level `environ.get('HOME', '')`
+    with no `if` guard at all must stay visible via the shape-4 pass -- the
+    relaxed guard predicate must not swallow the no-guard case."""
+    engine = _engine_for(
+        tmp_path,
+        "import os\n"
+        "def f():\n"
+        "    return os.environ.get('HOME', '')\n",
+    )
+    findings = engine.find_bare_home_or_chains()
+    assert len(findings) == 1
+
+
+# ---------------------------------------------------------------------------
+# C4 -- example-game-repo form 1: exempt a rung that delegates to a resolution-
+# complete same-module function. Spec:
+# docs/plans/2026-09-11-home-resolution-lint-extractor-gaps.md task C4 /
+# AC4. Reduced (not verbatim -- no live read access to
+# example-game-workbench-repo from this session) reconstruction of example-game-repo's
+# `scripts/lib/resolve_claude_home.py` per the task body: `resolve_home_base`
+# (directly resolution-complete), `resolve_claude_home` (delegates via the
+# `_memoised(key, fn)` form), `_resolve_claude_home_uncached` (a C3
+# probe-then-guard site whose post-guard rung delegates to
+# `resolve_home_base`), `_resolve_claude_json_uncached` (`.parent /
+# ".claude.json"` on `resolve_claude_home()`), and
+# `_resolve_claude_plugins_uncached` (`/ "plugins"` on
+# `resolve_claude_home()`).
+# ---------------------------------------------------------------------------
+
+
+_EXAMPLE_GAME_REPO_RESOLVE_CLAUDE_HOME = (
+    "import os\n"
+    "from pathlib import Path\n"
+    "\n"
+    "\n"
+    "def resolve_home_base():\n"
+    "    return os.environ.get('USERPROFILE') or Path.home()\n"
+    "\n"
+    "\n"
+    "def _memoised(key, fn):\n"
+    "    return fn()\n"
+    "\n"
+    "\n"
+    "def _resolve_claude_home_uncached():\n"
+    "    claude_home = os.environ.get('CLAUDE_HOME', '')\n"
+    "    if claude_home:\n"
+    "        claude_home = claude_home.strip()\n"
+    "        return Path(claude_home)\n"
+    "    return resolve_home_base()\n"
+    "\n"
+    "\n"
+    "def resolve_claude_home():\n"
+    "    return _memoised('claude_home', _resolve_claude_home_uncached)\n"
+    "\n"
+    "\n"
+    "def _resolve_claude_json_uncached():\n"
+    "    return resolve_claude_home().parent / '.claude.json'\n"
+    "\n"
+    "\n"
+    "def _resolve_claude_plugins_uncached():\n"
+    "    return resolve_claude_home() / 'plugins'\n"
+)
+
+
+def test_c4_example_game_repo_resolve_claude_home_fixture_is_clean(tmp_path):
+    """The full reduced `resolve_claude_home.py` fixture is clean:
+    `_resolve_claude_home_uncached`'s post-guard rung
+    (`resolve_home_base()`) delegates to a directly resolution-complete
+    function, so `bare_or` does not fire on it, and the other four
+    functions carry no `CLAUDE_HOME`/`HOME` `environ.get` rung of their own
+    at all, so they were never bare_or candidates in the first place."""
+    engine = _engine_for(tmp_path, _EXAMPLE_GAME_REPO_RESOLVE_CLAUDE_HOME)
+    assert engine.find_bare_home_or_chains() == []
+
+
+def test_c4_delegation_to_non_complete_helper_reports(tmp_path):
+    """A delegation to a same-module helper that returns a bare literal
+    (no `Path.home()`/USERPROFILE rung, and no further delegation) is NOT
+    resolution-complete, so the delegation does not exempt the caller -- it
+    still reports."""
+    engine = _engine_for(
+        tmp_path,
+        "import os\n"
+        "\n"
+        "\n"
+        "def _fallback():\n"
+        "    return ''\n"
+        "\n"
+        "\n"
+        "def _claude_home():\n"
+        "    claude_home = os.environ.get('CLAUDE_HOME', '')\n"
+        "    if claude_home:\n"
+        "        return claude_home\n"
+        "    return _fallback()\n",
+    )
+    findings = engine.find_bare_home_or_chains()
+    assert len(findings) == 1
+
+
+def test_c4_delegation_to_imported_name_reports(tmp_path):
+    """Same-module only: a delegation to a name that resolves to an import
+    (not a top-level `FunctionDef` in THIS module) is never followed, so it
+    can never exempt the caller regardless of what the imported function
+    actually does -- it still reports."""
+    engine = _engine_for(
+        tmp_path,
+        "import os\n"
+        "from otherpkg.helpers import resolve_home_base\n"
+        "\n"
+        "\n"
+        "def _claude_home():\n"
+        "    claude_home = os.environ.get('CLAUDE_HOME', '')\n"
+        "    if claude_home:\n"
+        "        return claude_home\n"
+        "    return resolve_home_base()\n",
+    )
+    findings = engine.find_bare_home_or_chains()
+    assert len(findings) == 1
+
+
+def test_c4_delegation_to_bare_path_home_helper_is_clean(tmp_path):
+    """A delegation to a same-module helper that returns only
+    `Path.home()` -- the staff-eng F3 shape, no ladder or guard of its own
+    at all -- is directly resolution-complete, so the delegating site is
+    exempt."""
+    engine = _engine_for(
+        tmp_path,
+        "import os\n"
+        "from pathlib import Path\n"
+        "\n"
+        "\n"
+        "def _home():\n"
+        "    return str(Path.home())\n"
+        "\n"
+        "\n"
+        "def _claude_home():\n"
+        "    claude_home = os.environ.get('CLAUDE_HOME', '')\n"
+        "    if claude_home:\n"
+        "        return claude_home\n"
+        "    return _home()\n",
+    )
+    assert engine.find_bare_home_or_chains() == []
+
+
+def test_c4_two_function_mutual_recursion_terminates(tmp_path):
+    """A two-function mutual-recursion fixture (`f` delegates to `g`, `g`
+    delegates to `f`, neither independently resolution-complete) must
+    terminate the fixpoint rather than infinite-loop, and -- correctly --
+    neither is resolution-complete, so the bare_or site delegating to `f`
+    still reports."""
+    engine = _engine_for(
+        tmp_path,
+        "import os\n"
+        "\n"
+        "\n"
+        "def f():\n"
+        "    return g()\n"
+        "\n"
+        "\n"
+        "def g():\n"
+        "    return f()\n"
+        "\n"
+        "\n"
+        "def _claude_home():\n"
+        "    claude_home = os.environ.get('CLAUDE_HOME', '')\n"
+        "    if claude_home:\n"
+        "        return claude_home\n"
+        "    return f()\n",
+    )
+    findings = engine.find_bare_home_or_chains()
+    assert len(findings) == 1
+
+
+# ---------------------------------------------------------------------------
+# C5 -- example-game-repo site 8: an env read interpolated only into a print message
+# is not a ladder site.
+# ---------------------------------------------------------------------------
+
+
+def test_env_read_interpolated_only_into_print_message_is_not_reported(tmp_path):
+    """Example-Game-Repo site 8: a reduced copy of `machine_local_reader.py::
+    _warn_legacy_claude_home_shape_once`'s `print(f"...{os.environ.get(
+    'CLAUDE_HOME', '')}...", file=sys.stderr)` shape is not a home-resolution
+    ladder site -- the shape-4 default-arg pass must not score it."""
+    engine = _engine_for(
+        tmp_path,
+        "import os\n"
+        "import sys\n"
+        "def _warn_legacy_claude_home_shape_once():\n"
+        "    print(\n"
+        "        f\"legacy CLAUDE_HOME shape: {os.environ.get('CLAUDE_HOME', '')}\",\n"
+        "        file=sys.stderr,\n"
+        "    )\n",
+    )
+    assert engine.find_bare_home_or_chains() == []
+
+
+def test_env_read_assigned_from_fstring_still_reports(tmp_path):
+    """An assigned or returned `f"{os.environ.get('HOME', '')}/.claude"` is
+    NOT the print-message shape C5 exempts -- it must still report, same as
+    before this rule existed."""
+    engine = _engine_for(
+        tmp_path,
+        "import os\n"
+        "def f():\n"
+        "    return f\"{os.environ.get('HOME', '')}/.claude\"\n",
+    )
+    findings = engine.find_bare_home_or_chains()
     assert len(findings) == 1

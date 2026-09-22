@@ -143,9 +143,9 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
         )
     del reason_kind  # REASON_DIRECT: message below is fixed, not shape-derived.
     return (
-        "[worktree guard] BLOCKED: creates/modifies a worktree-ban override "
-        "file; agents cannot self-grant. Dispatch scoped-parallel edits "
-        "instead; isolation needs EM+PM approval."
+        "BLOCKED: this command would create or modify a "
+        "worktree-ban override file; agents cannot self-grant. Dispatch "
+        "scoped-parallel edits instead; isolation needs EM+PM approval."
     )
 
 

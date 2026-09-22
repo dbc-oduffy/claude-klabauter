@@ -137,6 +137,21 @@ class TestSilent:
         )
         assert result is None
 
+    def test_silent_on_path_outside_repo_that_merely_contains_the_shape(self, tmp_path):
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        outside = tmp_path / "elsewhere" / "state" / "memo-outbox"
+        outside.mkdir(parents=True)
+        target = outside / "some-topic.md"
+        result = guard.check(
+            _payload(
+                "Write",
+                {"file_path": str(target), "content": _OPEN_STATUS_DRAFT},
+                cwd=str(repo),
+            )
+        )
+        assert result is None
+
     def test_silent_on_non_outbox_path(self, tmp_path):
         d = tmp_path / "cross-repo" / "inbox"
         d.mkdir(parents=True)

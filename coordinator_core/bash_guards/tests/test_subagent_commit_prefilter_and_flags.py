@@ -409,6 +409,15 @@ _COMMIT_SINK_CALL_MARKERS = (
     "commit_paths(",
 )
 
+# re-examined 2026-09-11, left as-is (C3, docs/plans/2026-09-11-the-
+# subagent-commit-guard-s-door-coverage-gets-pinned.md): gap 1, the
+# cross-module delegation blind spot named in the STATED LIMIT block above,
+# was RULED OUT per the sizing object's recorded escape hatch rather than
+# fixed. Two derivations were considered and rejected, by name: a
+# cross-module call-graph walk (nothing in this tree does one), and a
+# declared sink registry or decorator in ``coordinator_core/git/`` (changes
+# production code to serve a test).
+
 #: Bare callee names derived from ``_COMMIT_SINK_CALL_MARKERS`` by stripping
 #: the trailing ``(`` -- one source of truth for both the marker strings
 #: (kept for their doc value in the frozenset above) and the AST scan below.
@@ -423,6 +432,17 @@ _COMMIT_SINK_CALL_NAMES = frozenset(
 #: independently finding it would be a real regression in this test's own
 #: coverage, not just a passing test.
 _KNOWN_DELEGATION_ONLY_COMMITTING_OPS = frozenset({"handoff.ship_and_archive"})
+
+# re-examined 2026-09-11, left as-is (C3, docs/plans/2026-09-11-the-
+# subagent-commit-guard-s-door-coverage-gets-pinned.md).
+
+# Keep decision, ceremony.scoped_git_commit (C3(c)): see
+# block_subagent_commit.py's own _COMMITTING_OP_NAMES comment (coordinator:
+# code-reviewer, 2026-08-27, Finding 4) for the rationale -- retained
+# deliberately, a killed op's name nothing can invoke. The one fact that
+# comment doesn't carry: 104 occurrences of this exact string across
+# coordinator_core/bash_guards/ are denial fixtures keyed to it, so removing
+# the entry is a fixture rewrite, not a correctness fix.
 
 
 def _source_calls_a_commit_sink(source: str) -> bool:
@@ -454,34 +474,64 @@ def _source_calls_a_commit_sink(source: str) -> bool:
     return False
 
 
-def test_committing_op_names_covers_registry_sink_scan():
-    """Every op registered in ``OP_MODULE_MAP`` whose handler module's
-    source directly calls a known commit-sink helper must be a member of
-    ``_COMMITTING_OP_NAMES`` -- so a new committing op added anywhere in the
-    ops tree that reaches a sink DIRECTLY fails this test instead of
-    silently reopening the gate Finding 1 closed.
+def _scannable_source_for_op(op_name: str, module_path: str, module_sources: dict) -> str:
+    """The source this scan reads for ``op_name``: its own registered
+    handler's body where that handler resolves, else the whole module.
+
+    Handler-granular, not module-granular, because the assertion below is
+    about an OP reaching a sink, and one module hosts several ops. Reading
+    the module wholesale attributes `memo.send`'s `commit_paths(...)` call
+    to `memo.check_deliveries`, whose own handler reaches no sink and whose
+    presence in ``_COMMITTING_OP_NAMES`` would deny a read-only op to a
+    subagent -- a false deny, not a conservative one.
+
+    The module-wide fallback keeps the scan fail-closed: an op whose handler
+    cannot be resolved (import failure, a handler registered by a
+    non-introspectable path) is still scanned against everything in its
+    module, so an unresolvable op can only over-report, never under-report.
     """
     import importlib
     import inspect
 
+    from coordinator_core import ipc
+
+    try:
+        importlib.import_module(module_path)
+        handler = ipc._REGISTRY.get(op_name)
+        if handler is not None:
+            return inspect.getsource(inspect.unwrap(handler))
+    except Exception:
+        pass
+
+    source = module_sources.get(module_path)
+    if source is None:
+        try:
+            source = inspect.getsource(importlib.import_module(module_path))
+        except Exception:
+            source = ""
+        module_sources[module_path] = source
+    return source
+
+
+def test_committing_op_names_covers_registry_sink_scan():
+    """Every op registered in ``OP_MODULE_MAP`` whose own handler's source
+    directly calls a known commit-sink helper must be a member of
+    ``_COMMITTING_OP_NAMES`` -- so a new committing op added anywhere in the
+    ops tree that reaches a sink DIRECTLY fails this test instead of
+    silently reopening the gate Finding 1 closed.
+    """
     from coordinator_core.ops._registry_map import OP_MODULE_MAP
 
     missing = []
-    seen_modules: dict = {}
+    module_sources: dict = {}
     for op_name, module_path in OP_MODULE_MAP.items():
         if op_name in guard._COMMITTING_OP_NAMES:
             continue
         if op_name in _KNOWN_DELEGATION_ONLY_COMMITTING_OPS:
             continue
-        source = seen_modules.get(module_path)
-        if source is None:
-            try:
-                module = importlib.import_module(module_path)
-                source = inspect.getsource(module)
-            except Exception:
-                source = ""
-            seen_modules[module_path] = source
-        if _source_calls_a_commit_sink(source):
+        if _source_calls_a_commit_sink(
+            _scannable_source_for_op(op_name, module_path, module_sources)
+        ):
             missing.append(op_name)
 
     assert not missing, (

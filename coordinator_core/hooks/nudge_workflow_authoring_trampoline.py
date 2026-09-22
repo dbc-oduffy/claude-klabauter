@@ -49,7 +49,7 @@ import re
 from pathlib import Path
 from typing import Mapping, Optional
 
-from coordinator_core._hook_envelope import allow_advisory, no_advisory
+from coordinator_core._hook_envelope import allow_advisory, no_advisory, payload_of
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.hooks.support.git_common_dir import resolve_git_common_dir
 from coordinator_core.hooks.support.message_envelope import compose, render
@@ -74,25 +74,21 @@ _TARGET_SKILL_NAMES = {"workflow-authoring", "coordinator:workflow-authoring"}
 
 def _compose_skill_offer(env: object = None) -> str:
     prose = (
-        "[workflow-authoring trampoline] if this is plan dispatch, the script "
-        "already exists -- run `emit-dispatch-workflow.py --plan <plan>` and "
-        "fire the emitted path via `coordinator:execute-plan` instead of "
-        "hand-authoring one here. If this is a fan-out the emitter cannot "
-        "produce (review, research), carry on and author it."
+        "workflow-authoring trampoline: for plan dispatch, use instead: "
+        "`emit-dispatch-workflow.py --plan <plan>` then fire it via "
+        "`coordinator:execute-plan`. Fan-out (review/research)? Author it."
     )
-    return render(compose(prose, anchor=_WIKI_ANCHOR), env=env)
+    return render(compose(prose), env=env)
 
 
 def _compose_inline_offer(env: object = None) -> str:
     prose = (
-        "[workflow-authoring trampoline] this inline `script:` is by "
-        "construction hand-authored -- if this is plan dispatch, run "
-        "`emit-dispatch-workflow.py --plan <plan>` and fire the emitted path "
-        "via `coordinator:execute-plan` (`Workflow({scriptPath})`) instead, "
-        "for roughly a quarter of the token cost. If this is a fan-out the "
-        "emitter cannot produce (review, research), carry on."
+        "workflow-authoring trampoline: this inline `script:` is "
+        "hand-authored. For plan dispatch, use instead: "
+        "`emit-dispatch-workflow.py --plan <plan>` then `coordinator:"
+        "execute-plan`. Fan-out (review/research)? Author it."
     )
-    return render(compose(prose, anchor=_WIKI_ANCHOR), env=env)
+    return render(compose(prose), env=env)
 
 
 def _extract_skill_name(tool_input: object) -> Optional[str]:
@@ -123,6 +119,9 @@ async def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Skill, Workflow) op: nudge toward the emitted-and-fired
     path at either of the two hand-authoring entry points, once per session.
     """
+    # Normalize the two params shapes
+    # both engine doors and the cold chain send (see block_worktree_tool).
+    params = payload_of(params)
     tool_name = params.get("tool_name")
     tool_input = params.get("tool_input")
 

@@ -176,9 +176,9 @@ def test_claude_home_cmd_python3_mention_stays_exempt():
         ("  REM python3 foo.py", False),
         (":: python3 foo.py", False),
         ("rem python3 foo.py", False),
-        ("foo :: python3", True),  # Review: coordinatorcode-reviewer-6f9e3ef7 -- mid-line `::` is not a comment marker
-        ("foo REM python3", True),  # Review: coordinatorcode-reviewer-6f9e3ef7 -- mid-line `REM` is not a comment marker
-        ("%python3%", True),  # Review: coordinatorcode-reviewer-6f9e3ef7 -- env-var expansion syntax, non-word chars both sides
+        ("foo :: python3", True),  # mid-line `::` is not a comment marker
+        ("foo REM python3", True),  # mid-line `REM` is not a comment marker
+        ("%python3%", True),  # env-var expansion syntax, non-word chars both sides
     ],
 )
 def test_matcher_positive_and_negative_cases(line: str, expected: bool):

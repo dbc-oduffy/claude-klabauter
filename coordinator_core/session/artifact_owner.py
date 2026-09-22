@@ -299,7 +299,7 @@ def _extract_claim_dir_owners(artifact_path: str, cwd: Optional[str] = None) -> 
         return []
 
     owners: List[OwnerRecord] = []
-    # Review: coordinator:code-reviewer -- `_claim_base`'s `class_` param is
+    # `_claim_base`'s `class_` param is
     # only used inside its baton-repo diagnostic branch, and this call always
     # takes the legacy (baton_repo_root="") path where it's inert; all three
     # classes therefore resolve to the same base, so it is resolved ONCE

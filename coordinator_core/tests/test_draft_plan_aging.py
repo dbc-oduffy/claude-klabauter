@@ -273,7 +273,7 @@ def test_no_completion_entry_match_still_uses_scope_arm(tmp_path, monkeypatch):
 
 
 def test_completion_no_match_falls_through_to_git_log_failure(tmp_path, monkeypatch):
-    # Review: code-reviewer (Finding 3a) — a completion-entry NON-match must
+    # A completion-entry NON-match must
     # not swallow the pre-existing git-log-failure (None, diagnostic) path;
     # the early-return only fires on an actual match.
     scope_dir = tmp_path / "scope-touched"
@@ -296,7 +296,7 @@ def test_completion_no_match_falls_through_to_git_log_failure(tmp_path, monkeypa
 
 
 def test_completion_match_skips_git_log_call_entirely(tmp_path, monkeypatch):
-    # Review: code-reviewer (Finding 3b) — a completion-entry match returns
+    # A completion-entry match returns
     # early and must never invoke `git log` at all; also guards the
     # brightline claim that a completion hit costs zero spawns.
     def _forbidden_run(*args, **kwargs):

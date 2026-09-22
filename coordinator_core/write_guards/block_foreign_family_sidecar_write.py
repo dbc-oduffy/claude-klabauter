@@ -213,7 +213,7 @@ def _split_sidecar_leaf(normalized_path: str) -> Optional[Dict[str, str]]:
     if not match:
         return None
     leaf = match.group("leaf")
-    # Review: coordinator:code-reviewer -- casefold the extension test so
+    # Casefold the extension test so
     # `.MD`/`.Md` on a case-insensitive-but-preserving filesystem (NTFS,
     # default APFS) still resolves to the same leaf-shaped applicability
     # this guard protects, rather than falling through to ALLOW.
@@ -278,7 +278,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
     caller_label = _sanitize_label(caller_subagent_type)
-    # Review: coordinator:code-reviewer -- casefold both the label and
+    # Casefold both the label and
     # agent_id equality checks; a case-insensitive-but-preserving
     # filesystem write (e.g. `CoordinatorExecutor.<sibling>.MD`) lands on
     # the same physical file as the canonical-case leaf, so a

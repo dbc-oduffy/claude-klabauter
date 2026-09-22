@@ -297,7 +297,6 @@ Each sub-module self-registers under the `hooks.<name>` method namespace.
 | `nudge_foreground_agent_dispatch.py` | REROUTE gate — rewrites foreground Agent dispatches to background (updatedInput) |
 | `nudge_unauthorized_handoff.py` | PostToolUse advisory hook |
 | `postuse_advisory_dispatch.py` | PostToolUse advisory dispatcher |
-| `session_heartbeat.py` | Pre+PostToolUse bookkeeping hook |
 | `suggest_sonnet_research.py` | PreToolUse advisory hook |
 | `track_dispatched_agents.py` | PostToolUse Agent bookkeeping op |
 | `track_touched_files.py` | PostToolUse bookkeeping hook |

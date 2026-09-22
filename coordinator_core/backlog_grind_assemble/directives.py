@@ -94,12 +94,17 @@ Negative-spec:
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
 from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
     build_judgment_point,
     build_untrusted_gate_judgment_point,
+)
+from coordinator_core.roadmap_planning_assemble.scaffold_directive import (
+    Flag,
+    build_scaffold_directive,
 )
 
 __all__ = [
@@ -108,6 +113,7 @@ __all__ = [
     "build_tier_u_grant_flow",
     "build_spinoff_handoff_template_emission",
     "build_executor_dispatch_prompt_template_emission",
+    "build_decision_scaffold_directive",
 ]
 
 GRANULARITY_PER_ITEM = "per-item"
@@ -361,3 +367,83 @@ def build_executor_dispatch_prompt_template_emission(
         "fields": dict(fields),
         "depends_on": depends_on,
     }
+
+
+# C6 (docs/plans/2026-09-11-document-scaffolding-is-emitted-not-remembered.md)
+# -- the shared constructor's (C1) per-type required-flag computation for
+# this host's one emitted row (coordinator_core/ops/doctype_hosts.py --
+# keyed (type="decision", ceremony="backlog-grind-assemble"),
+# module=this package). `--dr-prefix` is optional on the real parser (the
+# DR-number namespace defaults when omitted); `--title` is the one value
+# this builder always computes from the caller's own already-resolved
+# ratified-decision state -- never a placeholder, unlike an unauthored
+# `coordinator-doc-new --type decision` invocation, which title-defaults to
+# a placeholder string (main()'s own title-default ladder). `dr_id`
+# allocation (`_allocate_dr_number`) and the resulting `docs/decisions/
+# <dr_id>-<slug>.md` path shape happen inside `coordinator-doc-new` itself,
+# not here -- this builder's own `--out` mirrors ONLY the slug half of that
+# path, using the caller-supplied `dr_prefix` (or the CLI's own default
+# namespace, left unspecified when `dr_prefix` is omitted) as a best-effort
+# `already_satisfied` replay guard; the DR-number collision check itself
+# stays `coordinator-doc-new`'s own job at execution time.
+_DECISION_FLAG_SPEC: tuple[Flag, ...] = (
+    Flag("--title", "title", required=True),
+    Flag("--dr-prefix", "dr_prefix", required=False),
+)
+
+
+def build_decision_scaffold_directive(
+    *,
+    id: str,
+    title: str,
+    dr_prefix: Optional[str] = None,
+) -> dict[str, Any]:
+    """Computes the `decision` scaffold directive through the shared
+    constructor (`coordinator_core.roadmap_planning_assemble.
+    scaffold_directive.build_scaffold_directive`, C1) from a backlog-grind
+    ceremony's own already-ratified decision title -- never a
+    caller-supplied free-text argument threaded straight through this
+    package's `apply.py` dispatch loop (this builder does NOT call
+    `coordinator-doc-new` or any other CLI itself -- a compute-half
+    constructor only, same as every other host in this plan's scope; § Which
+    discriminator this plan uses).
+
+    `id` is the caller's own directive id (this module's other builders
+    all take an explicit `id` keyword rather than minting one -- same
+    convention here, not a hard-coded `d-scaffold-decision` singleton,
+    since a single backlog-grind run may ratify more than one decision).
+    """
+    root = Path.cwd()
+    slug = _decision_slug(title)
+    prefix = dr_prefix or "DR-XXX"
+    out_path = f"docs/decisions/{prefix}-{slug}.md"
+    resolved: dict[str, Any] = {"title": title, "out": out_path}
+    if dr_prefix:
+        resolved["dr_prefix"] = dr_prefix
+    return build_scaffold_directive(
+        id,
+        "decision",
+        resolved,
+        _DECISION_FLAG_SPEC,
+        root=root,
+    )
+
+
+def _decision_slug(text: str) -> str:
+    """Lowercase-dash slug, mirroring `coordinator-doc-new`'s own
+    `_slug_from_title` closely enough for a computed (never free-text)
+    `--out` default -- collapses any run of non-alphanumeric characters to
+    a single dash and strips leading/trailing dashes. `today` is unused in
+    the resulting slug on purpose -- the real `--out` default for `decision`
+    is keyed on the allocated `dr_id`, never a date, per `_default_out_path`.
+    """
+    out = []
+    prev_dash = False
+    for ch in text.lower():
+        if ch.isalnum():
+            out.append(ch)
+            prev_dash = False
+        elif not prev_dash:
+            out.append("-")
+            prev_dash = True
+    return "".join(out).strip("-") or "untitled"

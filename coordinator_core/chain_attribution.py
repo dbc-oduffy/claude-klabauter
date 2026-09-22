@@ -298,7 +298,7 @@ def unattributed_foreign_shas(
     if key in cache:
         return cache[key]
     window = bulk_commit_attribution_map(sha_range, cwd, run)
-    # Review: overengineering-reviewer finding 1 — bulk_grep_attributed_shas
+    # bulk_grep_attributed_shas
     # now returns List[str] in git log order; frozenset ONCE here at the one
     # call site that needs O(1) membership, not a permanent second function.
     grep_attributed = frozenset(bulk_grep_attributed_shas(sha_range, own_session_id, cwd, run))

@@ -200,7 +200,7 @@ def _read_meta_from_staged(worktree_root: Path, plan_rel_path: str) -> dict:
     so that Plan-Id/Deliverable reflect the version actually committed, not a later local
     working-tree edit that was not re-staged.
 
-    Review: code-reviewer — F2: read from staged index, not working tree, so the durable
+    Read from staged index, not working tree, so the durable
     join keys (Plan-Id/Deliverable) match the version that lands in the commit.
 
     Returns {} on any I/O or parse error.
@@ -330,7 +330,7 @@ def _resolve_plan_from_diff(
     plan_rel_path = plan_files[0]
     # Read frontmatter from the STAGED index — guarantees Plan-Id/Deliverable match the
     # version actually committed, not a working-tree edit made after staging.
-    # Review: code-reviewer — F2: use staged blob, not working-tree path.
+    # Use staged blob, not working-tree path.
     fm = _read_meta_from_staged(worktree_root, plan_rel_path)
 
     plan_id: Optional[str] = fm.get("plan_id")
@@ -483,7 +483,7 @@ def _completion_entry_deliverable_id(worktree_root: Path, entry_rel_path: str) -
     (docs/plans/<chain>.md) to recover the deliverable the completion entry
     actually completes.
 
-    Review: code-reviewer — F1: `_has_staged_completion_entry` used to return True
+    `_has_staged_completion_entry` used to return True
     for ANY staged completion entry, so a commit staging plan A's frontmatter
     alongside an unrelated completion entry for plan B stamped `Resolves: dlv-A`
     falsely. This resolves the entry's OWN deliverable so the caller can require
@@ -530,7 +530,7 @@ def _has_staged_completion_entry(
     commit (that merely carries `Deliverable-Id:` from workstream-membership)
     never stages one. Read-only `git diff --cached --name-only` — no write.
 
-    Review: code-reviewer — F1: scoped to the deliverable actually being
+    Scoped to the deliverable actually being
     resolved. A staged completion entry that resolves to a DIFFERENT deliverable
     (or to none at all) no longer satisfies this gate — fail closed rather than
     stamping a false `Resolves:` on an unrelated deliverable.
@@ -598,7 +598,7 @@ def _resolve_anchor(worktree_root: Path, session_id: str) -> Optional[str]:
         return None
 
     try:
-        # Review: code-reviewer — F10: sorted() removed; return is a single-element match
+        # sorted() removed; return is a single-element match
         # or discarded, so ordering is irrelevant and the sort was behaviorally inert.
         candidates = list(handoff_dir.glob("*.md"))
     except OSError:
@@ -617,7 +617,7 @@ def _resolve_anchor(worktree_root: Path, session_id: str) -> Optional[str]:
 
         picked_up_by = fm.get("picked_up_by")
 
-        # Review: code-reviewer — F3: use equality (not substring) so session IDs do not
+        # Use equality (not substring) so session IDs do not
         # false-match on prefix/suffix variants. List form (YAML sequence) uses exact
         # membership — the `in` operator on a list is element equality, not substring.
         session_in_picked = (
@@ -721,7 +721,7 @@ def _handler(
         else:
             # Invalid override token — treat as "chore" (caller supplied a nature,
             # just an unknown one; still better than falling back to subject derivation).
-            # Review: code-reviewer — F11: log the coercion so it's observable in daemon
+            # Log the coercion so it's observable in daemon
             # logs; silent mislabeling would produce a wrong Nature: in permanent git history.
             logger.warning(
                 "commit.anchors: unrecognized nature_override %r; falling back to 'chore'",

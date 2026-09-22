@@ -118,6 +118,10 @@ def test_watchdog_probe_nonzero_exit_does_not_increment_stall_or_bail():
     assert rc == 0
 
 
+@pytest.mark.deliberate_wall_clock(
+    reason="the probe timeout must bound a hanging child, not the full sleep -- a behaviour "
+    "only wall clock can observe"
+)
 def test_watchdog_probe_timeout_does_not_hang_and_does_not_bail():
     """Regression test for the P1 unbounded-hang class (addendum rule 2):
     the bash oracle's probe call has no timeout and can hang the watchdog

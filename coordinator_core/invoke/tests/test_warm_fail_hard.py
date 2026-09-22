@@ -1,19 +1,18 @@
 """coordinator_core.invoke.tests.test_warm_fail_hard
 
-Guard tests for the "fail hard, not fail closed" warm-axis policy
-(state/handoffs/2026-08-21_103635_reaching-the-warm-engine.md; PM ruling
-verbatim: "I'd rather have a fail than a silent slow. Much rather.").
-
-`_dispatch_argv_body` (invoke/__main__.py) must refuse to fall through to
-cold dispatch when warm is enabled but a warm miss occurs, UNLESS the caller
-opted in via `--allow-unstamped-dispatch` / `ipc.allow_unstamped_dispatch()`.
-This retires `warm.client`'s own documented "Backstop 2: the cold path is a
-SUCCESS path" for this one caller -- see that module's own docstring for the
-retirement notice.
+Guard tests for the warm-miss policy of `_dispatch_argv_body`
+(invoke/__main__.py). HISTORY: 2026-08-21 it refused on a miss ("I'd rather
+have a fail than a silent slow"); 2026-09-21 the PM ruled an unreachable
+engine passes loudly, never denies (DoE-claude coordinator/docs/wiki/
+coordinator-tripwires/an-unreachable-engine-passes-loudly-never-denies.md).
+A miss now waits once, bounded, then runs the op cold with a loud stderr
+notice. A delivered-but-unanswered request is never a miss -- it is the
+-32004 indeterminate envelope, surfaced, never re-run. The file name is kept
+for history.
 
 This suite's own `conftest.py::pytest_configure` already calls
 `ipc.allow_unstamped_dispatch()` for the whole session, so every test here
-that wants to see the FAIL-HARD behaviour must flip
+that wants to see the not-opted-in behaviour must flip
 `ipc._unstamped_dispatch_allowed` off itself via `monkeypatch` -- reverts
 automatically at that test's own teardown.
 """
@@ -60,7 +59,7 @@ def _run(
     file, which set this explicitly."""
     monkeypatch.setenv("COORDINATOR_WARM_BOOT_WAIT_SECS", boot_wait_secs)
     monkeypatch.setattr(ipc, "_unstamped_dispatch_allowed", allow_unstamped)
-    # Isolates the fail-hard warm policy under test from the SEPARATE
+    # Isolates the warm-miss policy under test from the SEPARATE
     # dispatch-axis stamp gate (already covered by test_dispatch_message.py's
     # own gate tests) -- this repo's own tree is genuinely unstamped, so a
     # cold-dispatch assertion here would otherwise fail on the wrong check
@@ -71,7 +70,7 @@ def _run(
     )
     monkeypatch.setattr(
         "coordinator_core.warm.client.try_warm_dispatch",
-        warm_dispatch if warm_dispatch is not None else (lambda msg: warm_response),
+        warm_dispatch if warm_dispatch is not None else (lambda msg, **kw: warm_response),
     )
     # The boot-wait instrument appends to the REAL per-clone runtime directory.
     # A test's synthetic wait is not a sample of this box's boot, and letting one
@@ -88,119 +87,81 @@ def _run(
     return _dispatch_argv(argv, str(tmp_path), allow_warm=True)
 
 
-def test_warm_miss_fails_hard_when_enabled_and_not_opted_in(monkeypatch, tmp_path):
-    """THE POLICY ITSELF: warm enabled, warm returned None (a miss), no
-    opt-in -> non-zero exit, no cold dispatch attempted (op never ran)."""
+def test_warm_miss_runs_cold_loudly_when_not_opted_in(monkeypatch, tmp_path):
+    """AN UNREACHABLE ENGINE PASSES LOUDLY, NEVER DENIES (PM ruling 2026-09-21,
+    replacing the 2026-08-21 refusal). A miss is never a delivered mutation, so
+    the op runs cold -- and says so on stderr, because the ruling it replaces
+    was against a SILENT slow, not a slow."""
+    monkeypatch.setattr("coordinator_core.warm.client.last_cold_reason", lambda: None)
+
     stdout, stderr, code = _run(
         monkeypatch, tmp_path, warm_enabled=True, warm_response=None, allow_unstamped=False
     )
 
-    assert code != 0
-    assert stdout == ""  # never reached the cold dispatch print
-    assert "warm dispatch unavailable" in stderr
-    assert "--allow-unstamped-dispatch" in stderr
+    assert code == 0
+    assert '"pong":true' in stdout.lower().replace(" ", "")
+    assert "ENGINE UNREACHABLE" in stderr
+    assert "COLD" in stderr
+    assert "defect" in stderr, "a slow path must still name itself a defect, not a queue"
 
 
-def test_permanent_cold_reason_replaces_the_retry_advice(monkeypatch, tmp_path):
-    """THE CONTRADICTION THIS CLOSES (observed 2026-08-22, every settings-home
-    `bin/` live op): the client says every call from this tree goes cold, then
-    this block says cold fallback is disabled and to retry in a moment --
-    neither half naming a path, and retrying never clearing it. When the
-    client has established a PERMANENT reason, that reason leads, and the
-    retry advice must not appear."""
+def test_a_permanent_reason_runs_cold_at_once_and_names_itself(monkeypatch, tmp_path):
+    """A permanent reason recurs on every poll, so the boot wait is skipped
+    (a 60s bound here would hang the test if it were not), and the notice
+    carries the reason the client established."""
     reason = "warm engine: resolved engine root does not exist: /nowhere/klabauter"
-    monkeypatch.setattr(
-        "coordinator_core.warm.client.last_cold_reason", lambda: reason
-    )
+    monkeypatch.setattr("coordinator_core.warm.client.last_cold_reason", lambda: reason)
 
     stdout, stderr, code = _run(
-        monkeypatch, tmp_path, warm_enabled=True, warm_response=None, allow_unstamped=False
+        monkeypatch,
+        tmp_path,
+        warm_enabled=True,
+        warm_response=None,
+        allow_unstamped=False,
+        boot_wait_secs="60",
     )
 
-    assert code != 0
-    assert stdout == ""
-    assert reason in stderr, "the fatal message must carry the path that failed to resolve"
-    assert "retry in a moment" not in stderr
-    assert "--allow-unstamped-dispatch" in stderr
+    assert code == 0
+    assert '"pong":true' in stdout.lower().replace(" ", "")
+    assert reason in stderr
+    assert "ENGINE UNREACHABLE" in stderr
 
 
-def test_transient_miss_names_the_defect_rather_than_a_wait(monkeypatch, tmp_path):
-    """The other side of the same branch: with no permanent reason recorded the
-    miss IS transient and a respawn is in flight -- but the advice must say how
-    long that actually takes.
-
-    WHY THIS ASSERTION CHANGED TWICE. It first pinned the words "retry in a
-    moment"; four sessions read that as seconds and concluded the fault was
-    permanent. The first correction pinned "MINUTES" instead -- and that was
-    WORSE, for two reasons. It was not a measurement: the +0s/+30s/+4min
-    samples behind it were the intervals a human CHOSE to retry at, so all the
-    +4min point establishes is that the server was up by then. Nobody has ever
-    measured this box's boot time. And stating it as a fact made an
-    over-budget path read as the designed cadence -- the "the box was busy"
-    answer CLAUDE.md forbids.
-
-    Reaching the engine is budgeted in hundreds of milliseconds. A wait long
-    enough to notice is a P0, so the message must name it as a defect and must
-    NOT instruct anyone to wait it out. That is what this now pins."""
+def test_a_bounded_wait_that_expires_runs_cold_and_reports_what_it_waited(monkeypatch, tmp_path):
+    """The duration it ACTUALLY waited is a fact about this call, never an ETA."""
     monkeypatch.setattr("coordinator_core.warm.client.last_cold_reason", lambda: None)
 
     stdout, stderr, code = _run(
-        monkeypatch, tmp_path, warm_enabled=True, warm_response=None, allow_unstamped=False
+        monkeypatch,
+        tmp_path,
+        warm_enabled=True,
+        warm_response=None,
+        allow_unstamped=False,
+        boot_wait_secs="0.3",
     )
 
-    assert code != 0
-    assert "warm dispatch unavailable" in stderr
-    assert "THIS IS A DEFECT" in stderr, "an over-budget path must not read as a queue"
-    # With the wait switched off (this helper's default), the message must say
-    # so rather than claim a wait that never happened.
-    assert "COORDINATOR_WARM_BOOT_WAIT_SECS=0" in stderr
-    # Every phrasing that caused a misdiagnosis, pinned absent so none returns.
-    assert "retry in a moment" not in stderr
-    assert "MINUTES" not in stderr, "unmeasured, and it made a P0 read as cadence"
-    assert "waiting it out" not in stderr
+    assert code == 0
+    assert '"pong":true' in stdout.lower().replace(" ", "")
+    assert "no warm server answered within" in stderr
 
 
-def test_transient_advice_does_not_assert_a_wedged_server_or_name_a_dead_knob(
-    monkeypatch, tmp_path
-):
-    """The message may report what it observed; it may NOT diagnose the server,
-    and it may not name an override the caller cannot reach.
-
-    This process sees exactly one thing: its own dispatch did not land. On
-    2026-09-01 (session 9b6b537a) one caller hit this branch five consecutive
-    times while peers committed successfully through the same route in the
-    same minutes, and while that caller's very next command succeeded -- the
-    server was up throughout, so "the server is wedged or crash-looping" was
-    never an observation. The old wording also named
-    `COORDINATOR_WARM_BOOT_WAIT_SECS` bare; a reader who set it in their own
-    shell got the identical message back (measured 2026-09-01: set to 20,
-    five consecutive failures still reported 0) -- the value is read from the
-    process this door runs in, not the caller's shell."""
-    monkeypatch.setattr("coordinator_core.warm.client.last_cold_reason", lambda: None)
-
+def test_a_delivered_but_unanswered_mutation_is_never_re_run_cold(monkeypatch, tmp_path):
+    """The carve-out the ruling keeps: a delivered request with no answer comes
+    back from the warm client as the -32004 indeterminate envelope, which IS
+    the response. It is surfaced, never re-run -- re-running can write twice."""
+    indeterminate = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {"code": -32004, "message": "warm dispatch indeterminate: may have COMPLETED"},
+    }
     stdout, stderr, code = _run(
-        monkeypatch, tmp_path, warm_enabled=True, warm_response=None, allow_unstamped=False
+        monkeypatch, tmp_path, warm_enabled=True, warm_response=indeterminate, allow_unstamped=False
     )
 
     assert code != 0
-    # 1. Never asserted as this process's conclusion.
-    assert "the server is wedged or crash-looping" not in stderr, (
-        "this process cannot observe the server's state for other callers"
-    )
-    # 2. The discriminator must be named, or the reader has nothing to check.
-    assert "the fault is local to this caller" in stderr
-    # 3. The hatch stays gated and its blast radius stated.
-    assert "warm-engine-stop" in stderr, "the hatch is still reachable when warranted"
-    assert "do NOT restart it" in stderr, "the healthy-server case must be called out"
-    assert "last rung, not the second" in stderr
-    # 4. The boot-wait knob is named as unreachable from the caller's shell.
-    assert "COORDINATOR_WARM_BOOT_WAIT_SECS=0" in stderr
-    assert "will NOT change this" in stderr, (
-        "a reader who sets it in their own shell must be told it has no effect here"
-    )
-    assert "only hook children should" in stderr, (
-        "the message must point at the launcher, not at the server"
-    )
+    assert "-32004" in stdout
+    assert '"pong"' not in stdout, "the op must not have been run cold"
+    assert "ENGINE UNREACHABLE" not in stderr
 
 
 def test_transient_advice_does_not_fabricate_an_eta(monkeypatch, tmp_path):
@@ -231,7 +192,7 @@ def test_warm_miss_falls_through_to_cold_when_opted_in(monkeypatch, tmp_path):
 
 
 def test_warm_hit_never_reaches_the_policy_check(monkeypatch, tmp_path):
-    """A served warm response is used as-is -- the fail-hard check only
+    """A served warm response is used as-is -- the warm-miss policy only
     fires on a MISS (`None`), never on an actual response (including a
     warm-served error envelope, per this module's own existing contract)."""
     served = {"jsonrpc": "2.0", "id": 1, "result": {"pong": "warm"}}
@@ -255,7 +216,7 @@ def test_bounded_wait_returns_a_server_that_comes_up_mid_wait(monkeypatch, tmp_p
     watch it fail."""
     calls = {"n": 0}
 
-    def _late(msg):
+    def _late(msg, **kw):
         calls["n"] += 1
         if calls["n"] < 3:
             return None
@@ -278,50 +239,172 @@ def test_bounded_wait_returns_a_server_that_comes_up_mid_wait(monkeypatch, tmp_p
     assert "waiting up to" in stderr, "a wait must announce itself, never be silent"
 
 
-def test_bounded_wait_still_fails_hard_on_expiry(monkeypatch, tmp_path):
-    """NOT BACKSTOP 2. The wait ends in a refusal, never in a cold spawn: what
-    the PM retired was a SILENT degrade to cold on every miss, and this waits
-    for the WARM server, once, announced, then fails.
-
-    The refusal reports the duration it ACTUALLY waited -- a fact about this
-    call, which is the opposite of the ETA the negative-spec forbids."""
+def _boot_wait_harness(monkeypatch, *, mutating, dispatch):
+    monkeypatch.setenv("COORDINATOR_WARM_BOOT_WAIT_SECS", "0.3")
     monkeypatch.setattr("coordinator_core.warm.client.last_cold_reason", lambda: None)
-
-    stdout, stderr, code = _run(
-        monkeypatch,
-        tmp_path,
-        warm_enabled=True,
-        warm_response=None,
-        allow_unstamped=False,
-        boot_wait_secs="0.3",
+    monkeypatch.setattr("coordinator_core.warm.client._op_may_mutate", lambda m: mutating)
+    monkeypatch.setattr("coordinator_core.warm.client.try_warm_dispatch", dispatch)
+    monkeypatch.setattr(
+        "coordinator_core.warm.telemetry.record_client_boot_wait", lambda **kwargs: None
     )
 
-    assert code != 0
-    assert stdout == "", "expiry must not fall through to cold dispatch"
-    assert "THIS IS A DEFECT" in stderr
-    assert "without the warm server accepting connections" in stderr
-    assert "--allow-unstamped-dispatch" in stderr
+
+def test_boot_wait_cannot_outrun_its_bound_when_an_attempt_blocks(monkeypatch):
+    """(d) of the warm-pool P0: the bound gated only whether a NEW attempt
+    started, so an attempt's own blocking read ran past it -- the 15s wait
+    served at a median 30.11s. Each attempt now gets what is left of the bound
+    as its read deadline. An attempt handed no deadline blocks 30s here, so a
+    regression fails on the elapsed assertion rather than passing slowly."""
+    import time
+
+    from coordinator_core.invoke.__main__ import _wait_for_warm_boot
+
+    deadlines = []
+
+    def _blocks_to_its_deadline(msg, *, read_deadline_secs=None):
+        deadlines.append(read_deadline_secs)
+        time.sleep(30 if read_deadline_secs is None else read_deadline_secs)
+        return None
+
+    _boot_wait_harness(monkeypatch, mutating=False, dispatch=_blocks_to_its_deadline)
+
+    t0 = time.monotonic()
+    response, waited = _wait_for_warm_boot({"jsonrpc": "2.0", "id": 1, "method": "x"})
+    elapsed = time.monotonic() - t0
+
+    assert response is None
+    assert deadlines and all(d is not None and 0 < d <= 0.3 for d in deadlines)
+    assert waited <= 0.3 + 0.1
+    assert elapsed <= 0.3 + 0.1
 
 
-def test_bounded_wait_aborts_early_on_a_permanent_reason(monkeypatch, tmp_path):
-    """A reason established mid-wait recurs identically on every poll, so
-    waiting the bound out would spend it reaching a conclusion already in hand.
-    The permanent reason leads, and the retry advice stays absent."""
-    reason = "warm engine: resolved engine root does not exist: /nowhere/klabauter"
-    monkeypatch.setattr("coordinator_core.warm.client.last_cold_reason", lambda: reason)
+def test_boot_wait_polls_a_mutation_with_ping_and_sends_it_once(monkeypatch):
+    """A delivered mutation's read cannot be cut at the boot bound without
+    minting a false indeterminate, so the mutation is never the poll: a capped
+    `ping` finds the server, then the mutation goes once, uncapped."""
+    from coordinator_core.invoke.__main__ import _wait_for_warm_boot
 
-    stdout, stderr, code = _run(
-        monkeypatch,
-        tmp_path,
-        warm_enabled=True,
-        warm_response=None,
-        allow_unstamped=False,
-        boot_wait_secs="60",  # never reached: the abort fires on the first poll
+    calls = []
+
+    def _dispatch(msg, *, read_deadline_secs=None):
+        calls.append((msg["method"], read_deadline_secs))
+        if msg["method"] == "ping":
+            return None if len(calls) < 2 else {"jsonrpc": "2.0", "id": 1, "result": {}}
+        return {"jsonrpc": "2.0", "id": 1, "result": {"appended": True}}
+
+    _boot_wait_harness(monkeypatch, mutating=True, dispatch=_dispatch)
+
+    response, _ = _wait_for_warm_boot(
+        {"jsonrpc": "2.0", "id": 1, "method": "queue.append", "params": {}}
     )
 
-    assert code != 0
-    assert reason in stderr
-    assert "retrying will not clear this" in stderr
+    assert response == {"jsonrpc": "2.0", "id": 1, "result": {"appended": True}}
+    assert [m for m, _ in calls] == ["ping", "ping", "queue.append"]
+    assert all(d is not None for m, d in calls if m == "ping")
+    assert calls[-1][1] is None
+
+
+def test_boot_wait_never_sends_a_mutation_the_server_did_not_answer_for(monkeypatch):
+    from coordinator_core.invoke.__main__ import _wait_for_warm_boot
+
+    methods = []
+
+    def _dispatch(msg, *, read_deadline_secs=None):
+        methods.append(msg["method"])
+        return None
+
+    _boot_wait_harness(monkeypatch, mutating=True, dispatch=_dispatch)
+
+    response, _ = _wait_for_warm_boot(
+        {"jsonrpc": "2.0", "id": 1, "method": "queue.append", "params": {}}
+    )
+
+    assert response is None
+    assert methods and set(methods) == {"ping"}
+
+
+def _boot_wait_harness(monkeypatch, *, mutating, dispatch):
+    monkeypatch.setenv("COORDINATOR_WARM_BOOT_WAIT_SECS", "0.3")
+    monkeypatch.setattr("coordinator_core.warm.client.last_cold_reason", lambda: None)
+    monkeypatch.setattr("coordinator_core.warm.client._op_may_mutate", lambda m: mutating)
+    monkeypatch.setattr("coordinator_core.warm.client.try_warm_dispatch", dispatch)
+    monkeypatch.setattr(
+        "coordinator_core.warm.telemetry.record_client_boot_wait", lambda **kwargs: None
+    )
+
+
+def test_boot_wait_cannot_outrun_its_bound_when_an_attempt_blocks(monkeypatch):
+    """(d) of the warm-pool P0: the bound gated only whether a NEW attempt
+    started, so an attempt's own blocking read ran past it -- the 15s wait
+    served at a median 30.11s. Each attempt now gets what is left of the bound
+    as its read deadline. An attempt handed no deadline blocks 30s here, so a
+    regression fails on the elapsed assertion rather than passing slowly."""
+    import time
+
+    from coordinator_core.invoke.__main__ import _wait_for_warm_boot
+
+    deadlines = []
+
+    def _blocks_to_its_deadline(msg, *, read_deadline_secs=None):
+        deadlines.append(read_deadline_secs)
+        time.sleep(30 if read_deadline_secs is None else read_deadline_secs)
+        return None
+
+    _boot_wait_harness(monkeypatch, mutating=False, dispatch=_blocks_to_its_deadline)
+
+    t0 = time.monotonic()
+    response, waited = _wait_for_warm_boot({"jsonrpc": "2.0", "id": 1, "method": "x"})
+    elapsed = time.monotonic() - t0
+
+    assert response is None
+    assert deadlines and all(d is not None and 0 < d <= 0.3 for d in deadlines)
+    assert waited <= 0.3 + 0.1
+    assert elapsed <= 0.3 + 0.1
+
+
+def test_boot_wait_polls_a_mutation_with_ping_and_sends_it_once(monkeypatch):
+    """A delivered mutation's read cannot be cut at the boot bound without
+    minting a false indeterminate, so the mutation is never the poll: a capped
+    `ping` finds the server, then the mutation goes once, uncapped."""
+    from coordinator_core.invoke.__main__ import _wait_for_warm_boot
+
+    calls = []
+
+    def _dispatch(msg, *, read_deadline_secs=None):
+        calls.append((msg["method"], read_deadline_secs))
+        if msg["method"] == "ping":
+            return None if len(calls) < 2 else {"jsonrpc": "2.0", "id": 1, "result": {}}
+        return {"jsonrpc": "2.0", "id": 1, "result": {"appended": True}}
+
+    _boot_wait_harness(monkeypatch, mutating=True, dispatch=_dispatch)
+
+    response, _ = _wait_for_warm_boot(
+        {"jsonrpc": "2.0", "id": 1, "method": "queue.append", "params": {}}
+    )
+
+    assert response == {"jsonrpc": "2.0", "id": 1, "result": {"appended": True}}
+    assert [m for m, _ in calls] == ["ping", "ping", "queue.append"]
+    assert all(d is not None for m, d in calls if m == "ping")
+    assert calls[-1][1] is None
+
+
+def test_boot_wait_never_sends_a_mutation_the_server_did_not_answer_for(monkeypatch):
+    from coordinator_core.invoke.__main__ import _wait_for_warm_boot
+
+    methods = []
+
+    def _dispatch(msg, *, read_deadline_secs=None):
+        methods.append(msg["method"])
+        return None
+
+    _boot_wait_harness(monkeypatch, mutating=True, dispatch=_dispatch)
+
+    response, _ = _wait_for_warm_boot(
+        {"jsonrpc": "2.0", "id": 1, "method": "queue.append", "params": {}}
+    )
+
+    assert response is None
+    assert methods and set(methods) == {"ping"}
 
 
 def test_boot_wait_knob_parsing(monkeypatch):
@@ -360,36 +443,3 @@ def test_warm_disabled_still_falls_through_to_cold(monkeypatch, tmp_path):
     assert code == 0
     assert '"pong":true' in stdout.lower().replace(" ", "")
 
-
-def test_wedge_refusal_names_what_to_do_not_only_what_not_to_do(monkeypatch, tmp_path):
-    """example-game-repo-em read this refusal, did exactly what it said (checked for a
-    wedged server, found only the respawn it had just triggered), and was left
-    with nothing to act on -- while the move that worked was the one the
-    message never named: re-issue the call, which then returned in 2.9s.
-
-    A refusal that names a defect and then only forbids ("rather than retrying
-    by hand") is the shape defect 7 of `cross-repo/inbox/2026-09-01-example-game-repo-
-    em-close-ceremony-engine-defects-seven.md` is about. The remedy must be
-    positive and runnable.
-    """
-    monkeypatch.setattr("coordinator_core.warm.client.last_cold_reason", lambda: None)
-
-    stdout, stderr, code = _run(
-        monkeypatch,
-        tmp_path,
-        warm_enabled=True,
-        warm_response=None,
-        allow_unstamped=False,
-        boot_wait_secs="0.3",
-    )
-
-    assert code != 0
-    assert stdout == ""
-    # The first move, which is what actually recovered it in the field.
-    assert "Re-issue this same command once" in stderr
-    # The second move, named as a RUNNABLE per the cold-path rule -- what fires
-    # before a session exists cannot be fixed by a slash command.
-    assert "warm-engine-stop" in stderr
-    assert "/warm-engine-stop" not in stderr, "must be a runnable, never a slash command"
-    # The prohibition survives, but it is no longer the only guidance present.
-    assert "hand-roll" in stderr

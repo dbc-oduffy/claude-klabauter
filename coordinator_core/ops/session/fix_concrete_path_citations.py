@@ -164,11 +164,12 @@ import argparse
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, FrozenSet, List, Optional, Tuple
 
 from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.ops.ceremony.commit_admission import governed_write_refusal
 from coordinator_core.machine_resolver import load_flat_registry_file, registry_dir
 from coordinator_core.win_portability import leaf_spawn_creationflags
 from coordinator_core.ops.session.guard_concrete_path_citations import (
@@ -494,21 +495,43 @@ class Hit:
     marked: bool
 
 
+# Sentence punctuation that can trail a citation in prose -- a closing
+# paren/bracket/brace, or a mark ending/joining a clause. NEVER a path
+# separator or an extension dot: `_TOKEN_RE`'s `[^\s"'`]+` has no notion of
+# "the path ended, the sentence resumed", so it swallows this punctuation
+# into the token whenever it sits flush against the citation (`(...file)`,
+# `...file,`, `...file.`). Left uncut, `_replacement_for` folds a trailing
+# `)`/`,`/`.` into the matched path segment (normalized away by
+# `_normalize_segment`'s alnum-only comparison) and the rewrite then drops
+# it from the line entirely -- the punctuation-eating defect this guards.
+_TRAILING_PUNCTUATION_RE = re.compile(r"[)\]},.;:!?]+$")
+
+
+def _strip_trailing_punctuation(token: str) -> str:
+    """`token` with any trailing sentence punctuation removed -- the text
+    that was actually swallowed is left untouched in the source line, since
+    the caller only ever `.replace()`s the returned (shorter) token."""
+    return _TRAILING_PUNCTUATION_RE.sub("", token)
+
+
 def _raw_hits_in_line(line: str) -> List[Tuple[str, str]]:
     """Return (rule, token) pairs for every non-exempt path-shape match in
     one line -- same four rules, same placeholder/well-known-root exemptions
     as `guard_concrete_path_citations.detect_in_text`, but keeping the whole
     token (not just the matched root) so a caller can compute a trailing
-    subpath."""
+    subpath. Every token is trimmed of trailing sentence punctuation (see
+    `_strip_trailing_punctuation`) before use, so a citation sitting inside
+    parentheses or followed by a comma/period keeps that punctuation intact
+    under `--apply`."""
     out: List[Tuple[str, str]] = []
 
     for m in _POSIX_HOME_RE.finditer(line):
         if _is_placeholder_segment(m.group(1)):
             continue
-        out.append(("posix-home", _extract_token(line, m.start())))
+        out.append(("posix-home", _strip_trailing_punctuation(_extract_token(line, m.start()))))
 
     for m in WIN_DRIVE_RE.finditer(line):
-        token = _extract_token(line, m.start())
+        token = _strip_trailing_punctuation(_extract_token(line, m.start()))
         root_len = m.end() - m.start()
         if _is_win_drive_root_exempt(token, root_len) or _has_ellipsis_segment(token, root_len):
             continue
@@ -518,11 +541,11 @@ def _raw_hits_in_line(line: str) -> List[Tuple[str, str]]:
         host = m.group(0).lstrip("\\").split("\\")[0]
         if _is_placeholder_segment(host):
             continue
-        out.append(("unc", _extract_token(line, m.start())))
+        out.append(("unc", _strip_trailing_punctuation(_extract_token(line, m.start()))))
 
     for rx in _ANCHOR_RES:
         for m in rx.finditer(line):
-            token = _extract_token(line, m.start())
+            token = _strip_trailing_punctuation(_extract_token(line, m.start()))
             if "/" not in token or "\\" not in token:
                 continue
             out.append(("mixed-separators", token))
@@ -703,6 +726,9 @@ class SweepResult:
     findings: List[Finding]
     files_rewritten: List[str]  # apply=True only: files ACTUALLY written to disk
     files_matched: List[str]  # apply=True or False: files with >=1 SUBSTITUTE finding
+    # apply=True only: governed doctrine surfaces left unwritten because the
+    # rewrite fails admission, one "<path>: <refusal>" line each
+    files_refused: List[str] = field(default_factory=list)
 
 
 def sweep(
@@ -726,6 +752,7 @@ def sweep(
     all_findings: List[Finding] = []
     files_rewritten: List[str] = []
     files_matched: List[str] = []
+    files_refused: List[str] = []
 
     for rel in list_files(root):
         text = _read(root, rel)
@@ -782,10 +809,14 @@ def sweep(
             files_matched.append(rel)
             if apply:
                 new_text = "".join(b + e for b, e in new_lines)
+                refusal = governed_write_refusal(root, rel, text, new_text)
+                if refusal is not None:
+                    files_refused.append(refusal)
+                    continue
                 _write_preserving_newlines(root / rel, new_text)
                 files_rewritten.append(rel)
 
-    return SweepResult(all_findings, files_rewritten, files_matched)
+    return SweepResult(all_findings, files_rewritten, files_matched, files_refused)
 
 
 # ---------------------------------------------------------------------------
@@ -813,6 +844,10 @@ def _print_report(
         print(f"  {k}: {counts[k]}")
     print(f"files with >=1 substitute match: {len(result.files_matched)}")
     print(f"files actually rewritten on disk: {len(result.files_rewritten)}")
+    if result.files_refused:
+        print(f"governed doctrine surfaces NOT rewritten (admission refused): {len(result.files_refused)}")
+        for line in result.files_refused:
+            print(f"  {line}")
     if result.findings:
         print("--- detail (first 40) ---")
         for f in result.findings[:40]:
@@ -874,11 +909,13 @@ def _merge_sweep_results(results: List[SweepResult]) -> SweepResult:
     findings: List[Finding] = []
     files_rewritten: List[str] = []
     files_matched: List[str] = []
+    files_refused: List[str] = []
     for r in results:
         findings.extend(r.findings)
         files_rewritten.extend(r.files_rewritten)
         files_matched.extend(r.files_matched)
-    return SweepResult(findings, files_rewritten, files_matched)
+        files_refused.extend(r.files_refused)
+    return SweepResult(findings, files_rewritten, files_matched, files_refused)
 
 
 def _sweep_explicit_paths(

@@ -28,7 +28,7 @@ from typing import Iterable, Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-#: Sub-shape B — the five producers sharing one `apply_base.execute_directives`
+#: Sub-shape B — the producers sharing one `apply_base.execute_directives`
 #: engine and one closed `dict[str, Callable]` dispatch shape. The only shape
 #: this check mode scores against the conformance clauses below.
 SUB_SHAPE_B: tuple[str, ...] = (
@@ -37,6 +37,11 @@ SUB_SHAPE_B: tuple[str, ...] = (
     "backlog_grind_assemble",
     "merge_assemble",
     "consolidate_assemble",
+    # C5 (docs/plans/2026-09-11-the-lessons-pipeline-drains-without-a-ha.md):
+    # `learn_lessons_pipeline/apply.py` dispatches through the same shared
+    # `apply_base.execute_directives` engine against one closed
+    # `_DISPATCH_TABLE` dict literal, matching this bucket's shape exactly.
+    "learn_lessons_pipeline",
 )
 
 #: Sub-shape A — carries an explicit negative-spec against sharing

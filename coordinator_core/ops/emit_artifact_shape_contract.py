@@ -293,6 +293,31 @@ preserved there as the historical record; this port carries only the CURRENT pin
     state/cross-repo/inbox/2026-09-11-doe-claude-em-plan-tasks-2-0-0-and-contract-regen.md.
     That is the DR-127 exception, not its retirement: the standing decline in the 7.0.0 and
     8.0.0 rows above still governs every bump without such assent.
+  9.1.0  (2026-09-12) ProvenanceEnvelope SUB_SHAPES catches up to the cockpit contract's
+    4.7.0: `source_kind` gains `p4_server`/`p4_workspace`, `ref` gains a closed
+    `{stream, change}` arm, and the non-null-ref conditional covers the p4 kinds. MINOR —
+    additive, no `$defs` removed, no enum narrowed. Recorded here late (b7f498b92a moved the
+    constant without a history line).
+  9.2.0  (2026-09-22) `queue-grind-profile` registered: DoE's
+    `coordinator/schemas/queue-grind-profile.schema.json` (DoE-claude 4b7ea5ddc,
+    x-schema-version 1.0.0), picked up by directory discovery. `schema_count` 69 -> 70; its 12
+    local `$defs` hoist to the bundle root (`$defs` 85 -> 98), zero removed. The same body
+    carries DoE's additive `lesson-entry` and `lessons-outbox` 1.0.0 -> 1.1.0: five optional
+    properties and `lesson-entry.status` gaining `discarded`, no `required` added. MINOR per
+    the bump rule below. Plan: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md, C13.
+  10.0.0 (2026-09-22) MAJOR: `queue-grind-profile` gains the optional
+    `hand_back_types` property, and `source` gains an optional `args` object plus
+    `required: [op]`. The required-add is non-additive — a consumer holding 9.2.0
+    accepts `source: {}`, which now fails. `schema_count` 70 and `$defs` 98
+    unchanged. Also closes a 9.2.0 stamp collision (an unpublished 9.3.0 stamp for
+    the `hand_back_types`/wording delta alone is superseded by this one).
+  11.0.0 (2026-09-22) MAJOR: `queue-grind-profile` 3.0.0 -> 4.0.0 narrows
+    `appetite.*.where` from a bare array to DNF AND-clauses of
+    `[field, queue_grind_where_operator, value?]` tuples, and wires or deletes the
+    unreferenced `queue_grind_regenerate_op` and `queue_grind_knob` $defs. A narrowing is
+    non-additive — a consumer holding 10.0.0 accepts a malformed clause, which now fails —
+    so MAJOR, although every shipped profile's clauses already conform. Sequencing:
+    constant-moves-first, like 6.0.0 — DoE regenerates against this stamp.
 Bump rule (unchanged from JS): additive $defs/enum-widen changes stay minor; any
 non-additive change (enum-narrow, field/required removal) bumps MAJOR regardless of
 whether a vendored consumer version-asserts yet — two different bundle bodies must
@@ -357,7 +382,7 @@ from coordinator_core.session.declared_writes import declare_write
 # Constants
 # ---------------------------------------------------------------------------
 
-CONTRACT_VERSION = "9.1.0"
+CONTRACT_VERSION = "11.0.0"
 
 # Generator-provenance: emits artifact-shape-contract/artifact-shape-contract.
 # schema.json under the DoE-claude coordinator/ tree, explicitly NOT claude-klabauter

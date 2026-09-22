@@ -236,7 +236,7 @@ _TIER_B_SINGLE_REVIEWER_OK_STDOUT = (
 
 
 # ---------------------------------------------------------------------------
-# Review: review-integrator — test gap flagged in brightline-discharge
+# Test gap flagged in brightline-discharge
 # round4 (2026-08-06): `chain_owes_no_code_review` is the ONE branch in
 # `cmd_brightline_gate`'s PARTITION-MANDATORY handling that GRANTS a pass
 # with an EMPTY review-trail, and had no test at all before this pin.
@@ -399,7 +399,7 @@ def test_record_membership_skips_integration_scope_kind():
 
 
 # ---------------------------------------------------------------------------
-# Review: review-integrator — test gap flagged in brightline-discharge
+# Test gap flagged in brightline-discharge
 # round4 (2026-08-06): "no test bounds the intersection rule; every
 # membership test asserts the permissive direction. Add tests that fail if
 # intersection credits more than it should."
@@ -407,7 +407,7 @@ def test_record_membership_skips_integration_scope_kind():
 
 
 # ---------------------------------------------------------------------------
-# Review: review-integrator — B2/B3 (2026-08-06, brightline-discharge
+# B2/B3 (2026-08-06, brightline-discharge
 # round4). `_resolve_foreign_session_shas` must treat an untrailered commit,
 # and a merge commit whose own trailer does not attribute it, as foreign —
 # NOT silently creditable to any spanning record — closing the exclusion-

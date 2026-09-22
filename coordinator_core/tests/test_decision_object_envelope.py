@@ -113,7 +113,7 @@ def test_build_judgment_point_requires_recommendation_positional():
 
 
 def test_build_judgment_point_carries_the_given_recommendation():
-    # Review: code-reviewer -- cross-slice correction (AC-13). The canonical
+    # cross-slice correction (AC-13). The canonical
     # `recommendation` shape is an object `{disposition, rationale}` | None,
     # not a bare string -- see `pickup_assemble.__init__`'s
     # `Optional[dict[str, str]]` signature and the DoE schema-of-record.
@@ -220,7 +220,7 @@ def test_decision_object_subpackage_import_does_not_pull_in_forbidden_modules():
     module (`pydantic`, `coordinator_core.contract.cockpit_schema`) ever
     lands in that subprocess's `sys.modules`.
 
-    Review: code-reviewer -- Finding 2. The prior in-process `sys.modules`
+    The prior in-process `sys.modules`
     loop asserted `not A or not B` where A ("name starts with a forbidden
     prefix") and B ("name starts with `coordinator_core.contract.
     decision_object`") describe two disjoint prefixes -- no module's dotted

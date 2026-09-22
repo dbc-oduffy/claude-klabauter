@@ -298,7 +298,7 @@ def _envelope_for_file(rel_path: str, symbols: List[Any]):
     if type_aliases:
         result["type_aliases"] = type_aliases
     if other_symbols:
-        # Review: reviewer dc659900 P1 — any Symbol.kind matching none of the
+        # Any Symbol.kind matching none of the
         # class/function/constant/type_alias buckets (e.g. markdown
         # heading/code_fence, both mapped to SymbolKind.UNKNOWN upstream)
         # lands here instead of vanishing from _count_symbols entirely.

@@ -320,7 +320,7 @@ class CoverageFaultError(ValueError):
     coverage fault (`missing_grammar`/`partial_coverage`) for the requested
     non-Python files.
 
-    Review: code-reviewer (P2, coordinatorcode-reviewer-1624a2c9.md) — the
+    The
     loud raise must stay loud (never softened to a return), but must not
     discard already-computed, unrelated-to-the-fault results. This subclass
     of `ValueError` carries those results so a catching caller can still use
@@ -375,7 +375,6 @@ def _cartography_symbols(params: dict, repo_root: Optional[Path] = None) -> dict
         uncaught, if any entry in `files` resolves outside `target_root`.
         This is a containment violation, not a per-file data condition.
     """
-    # Review: code-reviewer (P2, 2026-07-12-workflow-review-cartography.md) —
     # bare params[...] raised an uncaught, un-annotated KeyError on a missing
     # param, inconsistent with the descriptive-ValueError contract tree/
     # file_index already use in this same op family.
@@ -417,7 +416,6 @@ def _cartography_symbols(params: dict, repo_root: Optional[Path] = None) -> dict
             raise CallerFacingValidationError(
                 f"cartography.symbols: run_id is not a safe path segment: {run_id!r}"
             )
-    # Review: code-reviewer (P2, Finding 2, 2026-07-12-codereview-slicecartography-
     # substrate-b-wave) — guard target_root at the handler boundary, mirroring
     # cartography.tree/file_index, so a malformed root is rejected up front
     # (descriptive PathEscapeError) rather than surfacing incidentally, deep
@@ -504,7 +502,6 @@ def _cartography_symbols(params: dict, repo_root: Optional[Path] = None) -> dict
                     f"language={finding['language']!r}): {finding['detail']}"
                     for finding in loud
                 )
-                # Review: code-reviewer (P2, coordinatorcode-reviewer-1624a2c9.md) —
                 # keep raising loud (never soften to a return), but carry the
                 # already-computed .py/unsupported results so a catching
                 # caller doesn't lose unrelated, independently-computed work.
@@ -529,7 +526,6 @@ def _cartography_symbols(params: dict, repo_root: Optional[Path] = None) -> dict
             for entry in foreign_result["files"]:
                 ext = Path(entry["path"]).suffix
                 if languages.get(ext) is None:
-                    # Review: code-reviewer (Nit, coordinatorcode-reviewer-1624a2c9.md) —
                     # merge rather than overwrite so a pre-existing per-file
                     # "error" diagnostic on this entry survives the
                     # unsupported re-marking instead of being silently

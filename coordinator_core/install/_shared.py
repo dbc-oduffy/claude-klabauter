@@ -29,14 +29,14 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
-from typing import Dict, Iterator, Optional, Tuple, Union
+from typing import Dict, Iterator, Optional, Tuple
 
 from coordinator_core._settings_home import (  # noqa: F401  (settings_home re-exported)
     reject_doubled_claude_home,
     settings_home,
 )
+from coordinator_core.atomic_replace import atomic_write_bytes  # noqa: F401  (re-exported by name; see below)
 from coordinator_core.coordinator_root import _resolve_plugin_root_for_machine_local
 from coordinator_core.machine_resolver import registry_get
 from coordinator_core.win_portability import no_console_creationflags
@@ -367,7 +367,6 @@ def resolve_machine_local_cli(plugin_root: Optional[str]) -> Optional[list]:
             # delivered .cmd sibling; never return the bare shim on Windows.
             # os.access(X_OK) is also meaningless here (it degrades to an
             # existence check), so gate on is_file().
-            # Review: code-reviewer 2026-07-20 Finding 2 (P2).
             shim_cmd = shim.with_suffix(".cmd")
             if shim_cmd.is_file():
                 return [str(shim_cmd)]
@@ -436,57 +435,20 @@ def ml_get(
     return _run_quiet(argv + ["get", key], env=env)
 
 
-def atomic_write_bytes(
-    target: Union[str, Path], data: bytes, *, preserve_mode: bool = True
-) -> None:
-    """Byte-level atomic-write primitive — a doctrine PORT of
-    :func:`coordinator_core.install.gen_settings_hooks._atomic_write_json`'s
-    write mechanics, not a simplified variant (C6, the Staff Engineer F4/D8 "quartet
-    reuse — doctrine, not functions"). Same shape: a same-DIRECTORY
-    ``tempfile.mkstemp`` (guarantees ``os.replace`` lands on the same
-    filesystem, so the replace is atomic), write the full ``data``,
-    re-``chmod`` the tempfile to the destination's PRIOR mode (captured via
-    ``os.stat`` BEFORE the write — ``os.replace`` does not carry mode bits
-    forward from a freshly ``mkstemp``-ed file) when ``preserve_mode`` is
-    True and a destination already exists, then ``os.replace(tmp_name,
-    target)``. On ANY exception the tempfile is removed and the original
-    exception re-raised, leaving ``target`` untouched — no truncated or
-    partially-written destination results from an interrupted write.
-
-    Deliberately does NOT port ``_extract_preserved``/``_merge_env``
-    (JSON-merge helpers with no analogue for an opaque, non-JSON destination
-    — see ``coordinator_core.install.substrate``'s C6 call site for why) or
-    ``_group_is_generated``/``_cmd_path`` (intra-file command-path
-    predicates with no file-level analogue). This function is pure write
-    MECHANICS only — it carries no destination-provenance knowledge, so a
-    caller choosing WHEN to invoke it (e.g. a foreign-tracked-overwrite
-    classification) stays entirely the caller's decision, never this
-    function's."""
-    target = Path(target)
-    out_dir = target.parent if str(target.parent) else Path(".")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    prior_mode = None
-    if preserve_mode and target.is_file():
-        prior_mode = os.stat(target).st_mode
-    fd, tmp_name = tempfile.mkstemp(prefix=".atomic-write.", dir=str(out_dir))
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-        if prior_mode is not None:
-            os.chmod(tmp_name, prior_mode)
-        os.replace(tmp_name, str(target))
-    except Exception:
-        try:
-            os.remove(tmp_name)
-        except OSError:
-            pass  # best-effort cleanup on an already-failing path; original exception re-raises below
-        raise
+# `atomic_write_bytes` relocated verbatim to `coordinator_core.atomic_replace`
+# (C1, docs/plans/2026-09-11-state-writers-claim-through-one-seam.md) — a
+# seam reached from hook/guard processes must not pull this module's
+# module-top imports (subprocess, machine_resolver, _settings_home). Kept
+# importable from here BY NAME (see the import block above) so every
+# existing `from coordinator_core.install._shared import atomic_write_bytes`
+# caller (receipt.py, substrate.py, ops/fleet/capability_index.py, the
+# install tests) keeps working unchanged.
 
 
 def is_pointer(path) -> bool:
     """True if ``path`` is a POSIX symlink OR a Windows directory junction.
 
-    Review: code-reviewer (Finding 2, AC A3/A4) — ``os.path.islink()`` alone
+    ``os.path.islink()`` alone
     only detects the NTFS ``IO_REPARSE_TAG_SYMLINK`` tag; a directory
     junction created by ``mklink /J`` (what ``_install_compat_pointer``'s
     Windows branch actually creates) carries the different

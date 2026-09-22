@@ -408,7 +408,7 @@ def test_dispatch_message_smoke(fixture_repo, monkeypatch):
 # ---------------------------------------------------------------------------
 # render_summary — data-driven cohort names, not hardcoded handoffs/memos
 #
-# Review: review-integrator — render_summary previously hardcoded
+# render_summary previously hardcoded
 # `handoffs=`/`memos=` (defended by `.get(..., 0)`), so a caller supplying a
 # fully custom cohort_specs list with different cohort names got a summary
 # that silently fabricated "handoffs=0 memos=0" and never showed the

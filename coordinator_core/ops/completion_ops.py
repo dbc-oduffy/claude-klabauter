@@ -1269,7 +1269,7 @@ def _day_commit_log(worktree_root: Path, day: str) -> List[Tuple[str, Optional[s
     branch-divergence-scoped: it silently narrows every time ``origin/main``
     advances, which is exactly the blind spot this sweep exists to avoid.
 
-    Review: code-reviewer — F3. Plain ``--since``/``--until`` is NOT used to
+    ``--since``/``--until`` is NOT used to
     bound the walk: git's revision walk assumes roughly-monotonic commit
     dates and can terminate early (or skip) once it believes it has passed
     the ``--since`` threshold, which silently drops commits on a branch with

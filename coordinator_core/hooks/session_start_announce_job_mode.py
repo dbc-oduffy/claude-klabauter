@@ -50,7 +50,7 @@ def _append_durable_line(line: str) -> None:
     durable-write failure never costs the returned envelope its own line."""
     log_path = settings_home() / "state" / _LOG_FILENAME
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(log_path, "a", encoding="utf-8") as fh:
+    with open(log_path, "a", encoding="utf-8", newline="\n") as fh:
         fh.write(line + "\n")
 
 

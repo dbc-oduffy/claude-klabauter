@@ -60,7 +60,7 @@ _SECTIONS_DIR = _TESTS_DIR.parent / "sections"
 _SECTIONS_PKG = "coordinator_core.ops.emit.sections"
 
 # --------------------------------------------------------------------------- normalization
-# Review: code-reviewer (F2) — sentinels, key-sets, and _normalize moved to the production
+# sentinels, key-sets, and _normalize moved to the production
 # normalizers module so both strang-01 and strang-02 test files import from a stable location
 # rather than cross-importing between test leaves (breaks pytest collection isolation).
 # All behavior is identical; only the home has moved.
@@ -125,7 +125,7 @@ def _normalize_section(value):
                 continue
             if key in _SECTION_DERIVED_NULL_KEYS:
                 out[key] = None
-            # Review: code-reviewer — F1: per-type sentinel dispatch (mirrors _normalize).
+            # per-type sentinel dispatch (mirrors _normalize).
             elif key in _VOLATILE_TIME_KEYS:
                 out[key] = _TS_SENTINEL
             elif key in _VOLATILE_SHA_KEYS - frozenset({"shipped_sha"}):
@@ -537,7 +537,7 @@ def assert_full_parity(emission: dict) -> None:
 # instead by a bespoke fixture-commit test (see test_commit_closures_* below).
 # Spec backlink: pln-commit-closure-emission-fact-e-c22b04 § C4.
 #
-# Review: code-reviewer (Finding 5) — nothing enforces that this set stays in sync with each
+# Nothing enforces that this set stays in sync with each
 # module's own "Parity oracle: none" docstring line; a future section could be added here
 # without the matching docstring, or vice versa, and silently diverge. NOT auto-derived from a
 # grep of section docstrings: as of this writing, `sections/roadmap_dag.py` ALSO declares
@@ -801,7 +801,7 @@ def test_commit_closures_no_trailer_yields_no_records(tmp_path: Path) -> None:
 # test_revert_arm_adds_no_second_subprocess_call, both against the ledger-backed collect().
 
 
-# Review: code-reviewer (Finding 3) — AC3 names "malformed rows route to
+# AC3 names "malformed rows route to
 # malformed_records.commit_closures" as an acceptance criterion, but no test reached
 # _extract_closure_commits's SHA-validation quarantine branch: a well-formed `git log` run
 # cannot itself produce a truncated/non-hex SHA (module docstring), so this needs a

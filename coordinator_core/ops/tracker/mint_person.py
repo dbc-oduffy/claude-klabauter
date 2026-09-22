@@ -175,14 +175,14 @@ def _mint_person_core(*, bundle: dict[str, str], repo_root: Path) -> dict:
         return {"minted": False, "reason": "empty_bundle", "person_id": None}
 
     person_id = mint_person_id()
-    # Review: coordinator:code-reviewer P1 — track the (namespace, value) of
+    # Track the (namespace, value) of
     # the alias actually IN FLIGHT when a collision strikes, not a hardcoded
     # "github" retry. A collision on `github_id`/`display`/`email` AFTER this
     # call's own `github` alias already landed uncontested must resolve
     # through the alias that actually collided — resolving `github` in that
     # case finds THIS call's own orphan, not the true pre-existing winner,
     # and silently mislabels a real conflict as resolved.
-    # Review: coordinator:code-reviewer P2 — scope the collision-recoverable
+    # Scope the collision-recoverable
     # `try` to ONLY the alias-emission loop. `emit_person_created` failing is
     # not an alias collision (nothing of this call's own has succeeded yet)
     # and must never attempt an alias-based recovery.

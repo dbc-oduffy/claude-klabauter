@@ -153,7 +153,7 @@ def _enumerate_outbox_candidates(worktree_root: Path) -> list:
 
     Sorted by filename for deterministic, stable output across calls.
 
-    # Review: overengineering-reviewer (Kira) — merge logic moved to the
+    # Merge logic moved to the
     # shared `memo_draft.merged_outbox_drafts` (was duplicated verbatim here
     # and in memo_reconcile_outbox._reconcile).
     """

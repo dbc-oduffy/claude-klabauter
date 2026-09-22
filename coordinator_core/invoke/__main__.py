@@ -43,7 +43,10 @@ Invocation:
     --dump-op-timeouts — Read-only surface: print
                          {"<op>": <float>, ..., "__default__": <live
                          DISPATCH_TIMEOUT_SECS>, "__ceremony_budget__":
-                         <ipc.CEREMONY_BUDGET_SECS>} to stdout and exit 0. No
+                         <ipc.CEREMONY_BUDGET_SECS>,
+                         "__ceremony_mutation_read_deadline__":
+                         <ipc.mutation_read_deadline_for(ceremony op)>} to
+                         stdout and exit 0. No
                          <op> required. Lets an external caller (e.g. DoE's
                          cc_invoke, which applies a flat 10s cap) read
                          claude-klabauter's real per-op dispatch-timeout budgets instead
@@ -226,7 +229,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "Print the op-timeout-budget map as JSON to stdout and exit 0. "
             "No <op> required. Shape: {\"<op>\": <float>, ..., "
             "\"__default__\": <live DISPATCH_TIMEOUT_SECS>, "
-            "\"__ceremony_budget__\": <ipc.CEREMONY_BUDGET_SECS>}, with every "
+            "\"__ceremony_budget__\": <ipc.CEREMONY_BUDGET_SECS>, "
+            "\"__ceremony_mutation_read_deadline__\": <the unclamped transport "
+            "deadline a delivered ceremony mutation is read for>}, with every "
             "ceremony.* op projected explicitly at the ceremony budget. Takes priority "
             "over <op>: if both are passed, <op> is ignored."
         ),
@@ -294,16 +299,53 @@ def _dump_op_timeouts() -> dict:
     ceremony op this table does not list (the budget is prefix-matched in
     `ipc._timeout_for`, so an unlisted `ceremony.*` op is still capped).
 
+    THE ENGINE DOES NOT ABANDON A DELIVERED MUTATION AT THE CEREMONY BUDGET, and
+    a caller that sizes its kill ceiling as if it did kills its own client before
+    the client can report what happened. `warm/client.py` keeps reading the answer
+    to a mutation it has already put on the wire for
+    `ipc.mutation_read_deadline_for(op)` -- the TRANSPORT deadline, which is
+    deliberately NOT ceremony-clamped, because the question there is whether the
+    answer arrives rather than whether the op was fast. Publishing only the
+    performance budget left that wait (30s for a ceremony op) outside a 2+2=4s
+    client ceiling, so the `WARM_DISPATCH_INDETERMINATE` envelope -- the one signal
+    that tells an operator a commit may have landed -- was unreachable on exactly
+    the ops that commit. "__ceremony_mutation_read_deadline__" carries the
+    transport number so the caller can bound BOTH: see
+    `cc_invoke._op_timeout_ceiling`, which takes the max of the two.
+
+    MEMBERSHIP IS PUBLISHED, NOT RE-SPELLED, which is what the per-op
+    "__ceremony__<op>" rows are for. `ipc.is_ceremony_method` is a UNION of three
+    signals -- the `ceremony.` prefix, `_CEREMONY_PACKAGE_ALIASES`, and the owning
+    module -- so `commit.exec_bit_change` and `review.snapshot_diff_and_head` are
+    ceremony ops that do NOT carry the prefix. `cc_invoke::_is_ceremony_op` is a bare
+    prefix test (it may not import `ipc`: that is an asyncio pull on the thin client's
+    cold path), and it claimed the prefix was the contract. It is not, and the two
+    alias ops were the proof: the client called them ordinary, sized their ceilings
+    off a 2s budget, and killed itself at 4s while its own warm client read a
+    delivered mutation for 30s -- the same defect as above, on two more ops, one of
+    which commits. A row here is the engine ASSERTING membership; its value is that
+    op's own transport deadline, so one row answers both questions and neither can
+    drift from the resolver that produced it.
+
+    The scalar remains for the case no per-op row can cover: a `ceremony.*` op this
+    dump does not list at all (the projection is driven by `OP_KEY_SCOPE`, while
+    `_timeout_for` prefix-matches anything). The caller bounds such an op by the
+    prefix it CAN see plus these two reserved rows.
+
     Returns:
-        dict -- {"<op>": <float>, ..., "__default__": <float>,
-        "__ceremony_budget__": <float>}. "__default__" is the reserved key for the
-        global runaway-guard fallback.
+        dict -- {"<op>": <float>, ..., "__ceremony__<op>": <float>, ...,
+        "__default__": <float>, "__ceremony_budget__": <float>,
+        "__ceremony_mutation_read_deadline__": <float>,
+        "__warm_miss_wait__": <float>}. "__default__" is the
+        reserved key for the global runaway-guard fallback; "__ceremony__<op>"
+        asserts `<op>` is a ceremony op and carries its transport read deadline.
     """
     from coordinator_core.ipc import (
         CEREMONY_BUDGET_SECS,
-        DISPATCH_TIMEOUT_SECS,
         OP_TIMEOUT_OVERRIDES,
+        _resolve_dispatch_timeout_secs,
         is_ceremony_method,
+        mutation_read_deadline_for,
     )
     from coordinator_core.op_scopes import OP_KEY_SCOPE
     from coordinator_core import publish_lane
@@ -336,8 +378,35 @@ def _dump_op_timeouts() -> dict:
         if lane_budget is not None:
             payload[op] = lane_budget
 
-    payload["__default__"] = DISPATCH_TIMEOUT_SECS
+    # Emitted over `payload` as built above, so a lane-raised op carries ITS lane
+    # deadline rather than the ordinary one. Computed before the reserved rows are
+    # added so the loop only ever sees op names.
+    ceremony_read_deadlines = {
+        f"__ceremony__{op}": mutation_read_deadline_for(op)
+        for op in payload
+        if is_ceremony_method(op)
+    }
+    payload.update(ceremony_read_deadlines)
+
+    # `_resolve_dispatch_timeout_secs()`, not the `DISPATCH_TIMEOUT_SECS` constant.
+    # The constant is a plain 30.0 that no environment reaches; the resolver is the
+    # sole `os.environ` seam and applies the narrow-only clamp, so it is what
+    # `_timeout_for` and `mutation_read_deadline_for` actually fall back to. Dumping
+    # the constant made this row the ONE number in the payload that ignored a
+    # narrowing override -- `COORDINATOR_DISPATCH_TIMEOUT_SECS=0.5` published 30.0
+    # here while every op resolved to 0.5, a 60x overstatement of the caller's
+    # ceiling, and it contradicted this function's own "re-read live at call time"
+    # docstring. A widening override cannot reach either number: the resolver clamps
+    # it away before this line sees it.
+    payload["__default__"] = _resolve_dispatch_timeout_secs()
     payload["__ceremony_budget__"] = CEREMONY_BUDGET_SECS
+    # Resolved through a real ceremony method rather than stated as a constant, so
+    # this row cannot drift from what `warm/client.py` will actually wait.
+    payload["__ceremony_mutation_read_deadline__"] = mutation_read_deadline_for(
+        "ceremony.commit_v2"
+    )
+    # Same reader, same inherited env as the real child; why it adds: `cc_invoke._op_timeout_ceiling`.
+    payload["__warm_miss_wait__"] = _warm_miss_wait_secs()
     return payload
 
 
@@ -413,75 +482,22 @@ def _fatal_stderr(message: str) -> None:
 
 #: How long `_wait_for_warm_boot` may wait for a just-spawned warm server to
 #: start answering, in seconds. `COORDINATOR_WARM_BOOT_WAIT_SECS` overrides it;
-#: `0` disables the wait entirely, restoring the pre-wait behaviour (miss ->
-#: immediate refusal).
+#: `0` disables the wait entirely (miss -> immediate refusal).
 #:
-#: READ THE RIGHT CLOCK. This is WALL CLOCK at near-zero process time -- a
-#: sleeping poll loop, not work. CLAUDE.md's brightline is measured in process
-#: time and spawn count, "never wall clock", so a bounded wait does not breach
-#: the 500ms or 2s bars however long it sits: nothing on this box is occupied
-#: while it does. An AC or report that charges this number against those bars is
-#: reading the wrong clock (claude-klabauter-22, 2026-08-26, sharpening the
-#: defence from "it beats four minutes of human guessing").
-#:
-#: NOT A BUDGET AND NOT A MEASUREMENT. Reaching the engine is budgeted in
-#: hundreds of milliseconds (CLAUDE.md's brightline), and this number is an
-#: order of magnitude past it by construction: it bounds a FAULT -- the window
-#: in which a box that should already have had a resident server is standing
-#: one up. It is deliberately not fitted to an observed boot, because no boot
-#: on this box has ever been measured: the only intervals on record
-#: (2026-08-25/26: +0s, +30s, +4min) are the intervals four operators happened
-#: to retry at, which bound nothing. `record_client_boot_wait` exists to
-#: replace this guess with the real distribution. Until it has rows, 15s is
-#: chosen to be long enough that a genuine interpreter-plus-election boot is
-#: not cut off mid-flight, and short enough that nobody can mistake it for
-#: normal operation or absorb it as cadence.
-#:
-#: WHAT THE COLD LOG SAYS, AND WHY IT CANNOT SET THIS NUMBER (doe-claude-cb,
-#: 2026-08-26, swept from `client-cold.jsonl`; both readings below
-#: reproduced independently here). 2131 recorded misses, 2026-08-20 ->
-#: 2026-08-26, clustered into 121 outage windows at a >60s gap.
-#:
-#: THE FILE HAS TWO DEFENSIBLE READINGS AND THEY DISAGREE BY 9x. A window is
-#: measured from its first miss to its last, so it is bounded by when callers
-#: happened to call, and 42 of the 121 windows hold a SINGLE miss -- they
-#: measure 0s carrying no duration information at all. Read every window and
-#: the median is 1s with 28% over 15s. Drop the windows that cannot measure
-#: anything and the median is 9s with 43% over 15s (n=79). Neither is the
-#: answer: the first is dragged down by windows that measured nothing, and
-#: the second over-samples long outages, because a long outage collects more
-#: calls and so is likelier to clear the >=2 bar. The honest statement is a
-#: bracket -- median somewhere in 1-9s, over-bound share somewhere in 28-43%
-#: -- and nothing on disk narrows it.
-#:
-#: So the premise is COMPATIBLE with this file, not vindicated by it. A wait
-#: is worth having if misses are usually a server nearly up; that reading
-#: survives, and so does a materially worse one.
-#:
-#: This is worse than censored: it is censored with the bias direction
-#: unknown. Fitting a constant to either reading would be the same defect as
-#: quoting an ETA -- a number that looks measured and is not. What the tail
-#: does establish (p90 56s, max 234s on the all-windows reading) is that no
-#: fixed bound covers it.
-#:
-#: What the tail DOES establish is that no fixed bound covers it, and that
-#: chasing it would be the wrong move: a caller inside the 234s window eats
-#: the full failure either way, and a longer bound only adds sleeping to it.
-#: The long windows are a separate fault to be found, not a duration to be
-#: absorbed. `client-boot-wait.jsonl` is the instrument that can eventually
-#: set this number, because it records actual waits with `served` alongside
-#: elapsed -- uncensored, and able to separate "waited and got there" from
-#: "waited and never did".
+#: SIZED FROM THE MEASURED BOOT, NOT A GUESS. `server-boot.jsonl`, 49 boots to
+#: 2026-09-21: spawn-to-ready median 0.47s, p90 0.78s, max 1.04s. 2s is twice
+#: the worst boot on record. A wait longer than that is not waiting on a boot:
+#: `client-boot-wait.jsonl` showed the retired 15s bound serving 15 of 249 waits
+#: inside 2s and nearly all the rest never or at ~30s -- a server already up
+#: and not answering, which no boot wait can fix and a long one only hides.
+#: If boots slow past this bound, that is the defect to find; do not widen it.
 #:
 #: NEVER REACHABLE FROM A HOOK. This wait is for the op/CLI door, where a
 #: caller is already waiting on a result. A hook path must pass
 #: `COORDINATOR_WARM_BOOT_WAIT_SECS=0` in the child it spawns: hooks fire on
-#: the session and commit hot path where blocking is never acceptable, and
-#: `client-cold.jsonl` carries a burst of 1600 misses in 13 seconds
-#: (2026-08-25T16:33:28Z, ~123/s), which is many short-lived processes each
-#: taking one miss. Whatever produces that burst must never each sleep here.
+#: the session and commit hot path where blocking is never acceptable.
 #: -> state/bug-backlog/2026-08-26-sixteen-hundred-warm-misses-in-thirteen-seconds.yaml
-WARM_BOOT_WAIT_SECS = 15.0
+WARM_BOOT_WAIT_SECS = 2.0
 
 #: First poll interval, and the cap it backs off to. Fast at the start because
 #: the case this exists for is a server that is nearly up; capped at a second
@@ -516,6 +532,20 @@ def _warm_boot_wait_deadline() -> float:
     return value
 
 
+def _warm_miss_wait_secs() -> float:
+    """The most a warm miss spends before the op's own read begins: the missed
+    attempt's liveness read (a zero-byte close or a compute-only probe expiry
+    inside it goes on to the boot wait), then the boot wait. 0 when the wait is
+    off, since a miss then fails at once and the first read was the only one.
+    Connect deadlines (0.25s each) ride the caller's start margin."""
+    boot = _warm_boot_wait_deadline()
+    if boot <= 0:
+        return 0.0
+    from coordinator_core.warm.client import READ_DEADLINE_SECS
+
+    return READ_DEADLINE_SECS + boot
+
+
 def _wait_for_warm_boot(msg: dict) -> Tuple[Optional[dict], float]:
     """Poll `try_warm_dispatch` until a warm server serves `msg` or the bound
     expires. Returns `(response, waited_secs)`; `response` is None when nothing
@@ -533,25 +563,40 @@ def _wait_for_warm_boot(msg: dict) -> Tuple[Optional[dict], float]:
     evening's memo traffic to it, 2026-08-25/26).
 
     WHY THIS IS NOT BACKSTOP 2. What the PM retired (2026-08-21) was a SILENT
-    degrade to a full cold spawn on every miss, forever. This waits for the
-    WARM server, announces itself on stderr before it waits, waits once, and
-    still fails hard when the bound expires -- there is no path from here to a
-    cold dispatch the caller did not ask for with `--allow-unstamped-dispatch`.
+    degrade to a full cold spawn on every miss. This waits for the WARM server,
+    announces itself on stderr before it waits, and waits once; when the bound
+    expires the caller runs cold LOUDLY (2026-09-21 ruling: an unreachable
+    engine passes loudly, never denies).
 
     Aborts early on a PERMANENT reason established mid-wait
     (`last_cold_reason`): those recur identically on every poll, so waiting the
     deadline out would burn the bound to reach a conclusion already in hand.
 
+    THE BOUND COVERS EACH ATTEMPT'S READ, NOT ONLY WHETHER ONE STARTS. Every
+    poll passes what is left of `deadline_secs` down as its read deadline, so
+    the wait cannot outrun its own bound by an attempt's blocking read (a
+    retired shape: the 15s bound served at a median 30.11s, 2026-09-20). A
+    MUTATING op is never the poll: a delivered mutation's read cannot be cut
+    short without minting an indeterminate for an op that may merely be slow
+    (`try_warm_dispatch`'s negative-spec). It polls with compute-only `ping`,
+    and the mutation is dispatched once, after the server answers, on its own
+    transport deadline -- outside this bound and outside `waited`.
+    -> state/bug-backlog/2026-09-20-the-warm-pool-re-enters-the-engine-by-cold-subprocess.yaml (d)
+
     Negative-spec:
         - Does NOT retry a served error envelope. Anything well-formed coming
           back is the server answering, which is the condition this waits for.
-        - Does NOT print an ETA or a countdown. Boot time is load-dependent
-          and, until `record_client_boot_wait` has rows, unknown -- an interval
-          an operator can satisfy is one they will draw a wrong conclusion from.
+        - Does NOT print an ETA or a countdown. Boot time is load-dependent,
+          and an interval an operator can satisfy is one they will draw a wrong
+          conclusion from.
     """
     import time as _time
 
-    from coordinator_core.warm.client import last_cold_reason, try_warm_dispatch
+    from coordinator_core.warm.client import (
+        _op_may_mutate,
+        last_cold_reason,
+        try_warm_dispatch,
+    )
 
     deadline_secs = _warm_boot_wait_deadline()
     if deadline_secs <= 0:
@@ -565,14 +610,20 @@ def _wait_for_warm_boot(msg: dict) -> Tuple[Optional[dict], float]:
     )
     sys.stderr.flush()
 
+    mutating = _op_may_mutate(msg.get("method"))
+    probe = (
+        {"jsonrpc": "2.0", "id": msg.get("id"), "method": "ping", "params": {}}
+        if mutating
+        else msg
+    )
     interval = _BOOT_POLL_MIN_SECS
     response = None
     while True:
+        _time.sleep(max(0.0, min(interval, deadline_secs - (_time.monotonic() - started))))
         remaining = deadline_secs - (_time.monotonic() - started)
         if remaining <= 0:
             break
-        _time.sleep(min(interval, remaining))
-        response = try_warm_dispatch(msg)
+        response = try_warm_dispatch(probe, read_deadline_secs=remaining)
         if response is not None:
             break
         if last_cold_reason():
@@ -590,6 +641,8 @@ def _wait_for_warm_boot(msg: dict) -> Tuple[Optional[dict], float]:
         )
     except Exception:  # noqa: BLE001 -- an instrument may not be why an op fails
         pass
+    if mutating and response is not None:
+        response = try_warm_dispatch(msg)
     return response, waited
 
 
@@ -687,7 +740,12 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     streams.
     """
     parser = _build_arg_parser()
-    args = parser.parse_args(argv)
+    # `op` and `params_json` are both optional positionals, so plain parse_args
+    # stops consuming positionals at the first flag: `<op> --bare <params>` loses
+    # the params to "unrecognized arguments". parse_intermixed_args resolves the
+    # positionals after the flags instead, which every argument here supports --
+    # none uses nargs=REMAINDER or a subparser, the two shapes it refuses.
+    args = parser.parse_intermixed_args(argv)
 
     # --allow-unstamped-dispatch: process-local, per-invocation opt-out of
     # ipc.dispatch_message's stamp gate (state/handoffs/2026-08-21_103635_
@@ -708,7 +766,7 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     #    repo_root resolution, no params parsing. Runs BEFORE the op-required
     #    check below since this is the one flag that makes <op> optional.
     if args.dump_op_timeouts:
-        # Review: code-reviewer (nit) -- match every other pre-dispatch failure
+        # Match every other pre-dispatch failure
         # path's _fatal_stderr contract instead of letting an import/build
         # failure surface as a raw Python traceback.
         try:
@@ -743,7 +801,7 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
         # parses the command. Also ARG_MAX-immune, like the file path form,
         # and needs no temp file to clean up.
         if args.params_file == "-":
-            # Review: code-reviewer (P1) — decode the raw stdin bytes as UTF-8
+            # Decode the raw stdin bytes as UTF-8
             # explicitly, matching the file branch below, instead of
             # sys.stdin.read() (which decodes via locale.getpreferredencoding()).
             # On Windows, a redirected pipe/heredoc stdin resolves that to the
@@ -921,9 +979,9 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     #     dispatch` itself never raises. BACKSTOP 2 IS RETIRED (2026-08-21,
     #     PM ruling, state/handoffs/2026-08-21_103635_reaching-the-warm-
     #     engine.md): "the cold path is a SUCCESS path" is no longer this
-    #     box's rule when warm is enabled -- see the fail-hard block
-    #     immediately below `try_warm_dispatch`'s call, which refuses to
-    #     fall through to cold on a warm miss unless the caller opted in.
+    #     box's rule when warm is enabled: a miss is no longer a quiet
+    #     success. The block immediately below `try_warm_dispatch`'s call
+    #     waits once and then runs cold LOUDLY (2026-09-21 ruling).
     #     Everything below THAT point is the pre-existing cold dispatch
     #     path, unchanged: it only runs when `response` is not already set,
     #     which now means either a served warm hit, warm disabled entirely,
@@ -961,146 +1019,47 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
 
             response = try_warm_dispatch(msg)
 
-            # FAIL HARD, NOT FAIL CLOSED (state/handoffs/2026-08-21_103635_
-            # reaching-the-warm-engine.md; PM ruling verbatim: "I'd rather
-            # have a fail than a silent slow. Much rather."). THIS REVERSES
-            # Backstop 2 -- warm.client's own module docstring names it "the
-            # cold path is a SUCCESS path", the deliberate design this box
-            # ran on until today. See that module's docstring for the
-            # retirement notice; this is the enforcement half of it.
+            # AN UNREACHABLE ENGINE PASSES LOUDLY, NEVER DENIES -- DoE-claude
+            # coordinator/docs/wiki/coordinator-tripwires/an-unreachable-engine-
+            # passes-loudly-never-denies.md.
             #
-            # A warm-enabled box that could not reach a live server for
-            # THIS call (skew-evicted, still booting, busy, wedged) no
-            # longer silently degrades to a slow cold spawn -- it fails,
-            # loudly, on THIS invocation. `try_warm_dispatch` has already
-            # kicked off a fresh spawn attempt on its own way out for every
-            # miss that can trigger one (see its own module docstring's
-            # spawn-trigger table) -- this failure's own remediation is
-            # therefore "retry", not "go fix something": the self-heal is
-            # already in flight by the time this message is printed.
+            # `None` from `try_warm_dispatch` is NEVER a delivered mutation --
+            # a delivered-but-unanswered mutation comes back as the -32004
+            # indeterminate envelope, is returned as the response, and never
+            # reaches the cold path (warm.client's delivered-never-cold
+            # invariant). So running cold here cannot execute an op twice.
             #
-            # Bypassed by the SAME explicit opt-in as the stamp gate
-            # (`ipc.is_unstamped_dispatch_allowed()`) -- one carve-out for
-            # "this is a deliberate manual/test invocation", not two
-            # independently-toggled ones. A manual test against a live
-            # engine build routinely has no warm server for that build at
-            # all; demanding one would make the carve-out unusable for the
-            # exact case it exists to serve.
+            # Wait once, bounded, first: every miss already triggered a
+            # respawn, and a server that comes up inside the bound serves this
+            # call warm. A permanent reason recurs on every poll, so skip the
+            # wait then. `--allow-unstamped-dispatch` goes cold quietly: that
+            # caller asked for exactly this.
             if response is None:
                 from coordinator_core.ipc import is_unstamped_dispatch_allowed
 
                 if not is_unstamped_dispatch_allowed():
-                    # "Retry in a moment" is the right remediation for a
-                    # TRANSIENT miss (server booting, busy, skew-evicted) and
-                    # the wrong one when this process can never reach a warm
-                    # server at all. In that second case the client has
-                    # already established why, and printing the retry advice
-                    # over the top of it produced the contradiction an
-                    # operator hit on every live op (2026-08-22): "every call
-                    # from this tree goes cold", then "cold fallback is
-                    # disabled", with no path in either half. Ask the client
-                    # for its reason and lead with that instead.
                     from coordinator_core.warm.client import last_cold_reason
 
                     reason = last_cold_reason()
-                    if reason:
-                        _fatal_stderr(
-                            f"{reason}\n"
-                            "Cold fallback is disabled (no live ops without warm); "
-                            "retrying will not clear this. For deliberate manual "
-                            "testing, pass --allow-unstamped-dispatch."
-                        )
-                    # WAIT ONCE, BOUNDED, RATHER THAN MAKE A HUMAN GUESS THE
-                    # INTERVAL. Every miss reaching this point has already
-                    # triggered a respawn on its way out (see the block above),
-                    # so the fix for this refusal is in flight while the
-                    # refusal is being printed. Refusing here regardless made
-                    # the retry interval an operator's guess, and the guess is
-                    # unbounded: on 2026-08-25/26 four sessions lost an
-                    # evening's memo traffic re-running `cross-repo-memo send`
-                    # by hand until one happened to land, the last at +4min.
-                    # None of those numbers measured a boot; they measured
-                    # patience. `_wait_for_warm_boot` replaces the guess with a
-                    # bound, and records what it actually waited so the boot
-                    # itself finally gets measured.
-                    response, waited = _wait_for_warm_boot(msg)
-                    if response is None:
-                        # A permanent reason can be established DURING the wait
-                        # (the first `try_warm_dispatch` had none, a later poll
-                        # did). Re-ask before reaching for the transient
-                        # wording, for the same reason the check above exists.
+                    waited = 0.0
+                    if not reason:
+                        response, waited = _wait_for_warm_boot(msg)
                         reason = last_cold_reason()
-                        if reason:
-                            _fatal_stderr(
-                                f"{reason}\n"
-                                "Cold fallback is disabled (no live ops without warm); "
-                                "retrying will not clear this. For deliberate manual "
-                                "testing, pass --allow-unstamped-dispatch."
-                            )
-
-                        # Negative-spec: no ETA, no countdown, no "wait N
-                        # minutes" -- this process observes only what it
-                        # ACTUALLY waited, never an interval to aim at. Reaching
-                        # the engine is budgeted in hundreds of milliseconds;
-                        # a multi-minute wait is a P0, not a cadence to absorb.
-                        #
-                        # `waited == 0` is not a knob the reader can turn: the
-                        # value comes from the process this door runs in, not
-                        # the caller's shell (measured 2026-09-01 -- setting
-                        # COORDINATOR_WARM_BOOT_WAIT_SECS=20 in the calling
-                        # shell left five consecutive failures still reporting
-                        # 0). Only hook-spawned children are supposed to pass 0
-                        # (see `WARM_BOOT_WAIT_SECS`, which must stay
-                        # unchanged -- hooks fire on the commit hot path and
-                        # must never sleep); this is the op/CLI door, so 0
-                        # arriving here is itself what to investigate.
-                        waited_clause = (
-                            f"this call waited {waited:.1f}s without the warm server "
-                            "accepting connections"
+                    if response is None:
+                        why = reason or (
+                            f"no warm server answered within {waited:.1f}s of a respawn"
                             if waited > 0
-                            else "the bounded boot wait is off in this process "
-                            "(COORDINATOR_WARM_BOOT_WAIT_SECS=0), so this call did not "
-                            "wait for the respawn it just triggered -- setting that "
-                            "variable in your own shell will NOT change this, and a "
-                            "CLI door reaching this branch means whatever launched "
-                            "this process set it, which only hook children should"
+                            else "no warm server answered, and the boot wait is off "
+                            "in this process"
                         )
-                        # This process observes only that its own dispatch did
-                        # not land -- never assert the server's state. Measured
-                        # 2026-09-01, session 9b6b537a: five consecutive
-                        # failures of one command while peers committed
-                        # successfully through the same route in the same
-                        # minutes, and that caller's very next command
-                        # succeeded -- the server was serving the whole time.
-                        # `warm-engine-stop` is a RUNNABLE (cold-path rule: what
-                        # fires before a session exists cannot be remediated by
-                        # a slash command); it clears a wedged-but-LISTENING
-                        # server and is gated behind the is-anyone-else-served
-                        # discriminator below, as the last rung, not the second.
-                        _fatal_stderr(
-                            "warm dispatch unavailable and cold fallback is disabled "
-                            f"(no live ops without warm). A respawn was triggered and "
-                            f"{waited_clause}. THIS IS A DEFECT, not a queue: reaching "
-                            "the engine is budgeted in hundreds of milliseconds.\n"
-                            "Re-issue this same command once -- the respawn already in "
-                            "flight normally answers the next call.\n"
-                            "If it fails the same way again, this process still only "
-                            "knows that ITS OWN dispatch did not land -- that is not "
-                            "evidence the server is down. Check whether anything else "
-                            "is reaching it (a peer's commit landing, or a second op "
-                            "from another session). If other callers ARE being served, "
-                            "the server is up and the fault is local to this caller: do "
-                            "NOT restart it. Only if nothing anywhere is being served "
-                            "is it a wedged or crash-looping engine, and then "
-                            "`warm-engine-stop` (the operator hatch for a "
-                            "wedged-but-listening server) from the serving clone is the "
-                            "move -- it evicts a listener every session on this box "
-                            "shares, so it is the last rung, not the second. Do not "
-                            "hand-roll the underlying git or op -- that skips the gates "
-                            "this op carries.\n"
-                            "For deliberate manual testing, pass "
-                            "--allow-unstamped-dispatch."
+                        print(
+                            f"[warm-client] ENGINE UNREACHABLE -- running {msg.get('method')} "
+                            f"COLD: {why}. This is a defect (reaching the engine is "
+                            "budgeted in hundreds of milliseconds), not a queue; the "
+                            "op still runs, slower.",
+                            file=sys.stderr,
                         )
+                        sys.stderr.flush()
 
     # 7. Dispatch in-process via dispatch_message (async, no socket, no auth gate).
     #    Manual loop instead of asyncio.run() to avoid executor drain on the timeout
@@ -1252,7 +1211,7 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
                 pass
 
     # 8. Print result as indented JSON to stdout.
-    #    Review: code-reviewer (nit) — an unguarded json.dumps that raises TypeError/ValueError
+    # An unguarded json.dumps that raises TypeError/ValueError
     #    (e.g. handler returns a Path, datetime, or other non-serializable object) would crash
     #    BEFORE sys.stdout.flush() + SystemExit, bypassing the flush-then-exit contract that the
     #    rest of this function establishes. Wrap in a try/except and route failures through

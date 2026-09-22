@@ -361,10 +361,16 @@ def is_inline_install(config_dir: Path) -> bool:
          2026-08-01 (see `_settings_home_scoped_to` and the "Restore
          rungs" section's 2026-08-01 scope-escape note). When not scoped,
          the migrated rung is treated as absent, not consulted at all.
-      2. `{config_dir}/.doe-root` (legacy) — read only when the migrated
-         rung's file is not present (regardless of the migrated rung's
-         content: an empty/blank migrated pointer FILE still suppresses
-         this rung, it does not fall through).
+      2. `{config_dir}/.doe-root` (legacy) — consulted whenever the
+         migrated rung does not answer live (absent, blank, unreadable, or
+         naming a missing tree).
+
+    Either rung answering live is sufficient. A non-live migrated rung must
+    NOT shadow a live legacy one: the SessionStart pointer writer rewrites
+    the migrated file while sibling sessions boot, so a reader can catch it
+    blank mid-write, and a shadowing read turned that window into a
+    persistent kill-switch arm on a live inline install. Destroyed-clone
+    detection is unaffected — it still needs both rungs dead.
 
     Strips ONLY a trailing CR/LF from whichever rung answers — NOT a
     blanket whitespace strip, which would clobber embedded spaces in a
@@ -388,21 +394,22 @@ def is_inline_install(config_dir: Path) -> bool:
     (`.doe-root` present and live); the caller's job, not this function's,
     is to never read its `False` branch as a health verdict.
     """
-    doeroot_file = config_dir / _DOEROOT_NAME
     try:
         home = settings_home()
     except Exception:
         home = None
     if home is not None and _settings_home_scoped_to(config_dir, home):
-        # Review: coordinator:code-reviewer (P3) — build the migrated candidate
+        # Build the migrated candidate
         # from the already-bound `home` rather than calling machine_local_dir(),
         # which internally re-resolves settings_home() a second time for the
         # same path; on this SessionStart boot path resolution cost is a
         # first-order concern (see module docstring).
-        migrated_candidate = home / "machine-local" / _DOEROOT_NAME
-        if migrated_candidate.is_file():
-            doeroot_file = migrated_candidate
+        if _doe_root_pointer_is_live(home / "machine-local" / _DOEROOT_NAME):
+            return True
+    return _doe_root_pointer_is_live(config_dir / _DOEROOT_NAME)
 
+
+def _doe_root_pointer_is_live(doeroot_file: Path) -> bool:
     if not doeroot_file.is_file():
         return False
     try:
@@ -898,7 +905,7 @@ def _tail_key(token: str) -> Optional[str]:
     taken from the RAW token text BEFORE any `${CLAUDE_PLUGIN_ROOT}`
     substitution or filesystem resolution.
 
-    Review: coordinator:code-reviewer (P3) -- the `scripts/foo.py` example
+    The `scripts/foo.py` example
     above corrects a stale three-segment example (`hooks/scripts/foo.py`)
     that never matched `_TAIL_KEY_RE`'s actual two-segment capture. Doc-only
     fix: the join width (last two segments) did not change.
@@ -1250,7 +1257,7 @@ def format_hook_delivery_banner(report: HookDeliveryReport) -> str:
     remediation rather than merely the condition (dispatch brief
     requirements #2 and #3).
 
-    Review: code-reviewer (Finding 1) -- the settings-only danger section
+    The settings-only danger section
     used to be nested entirely inside the `double_fire`-only early return,
     so it never rendered in the disjoint case it exists to catch: both
     delivery surfaces live, ZERO script overlap, but settings.json still
@@ -1763,7 +1770,7 @@ def _find_known_good_backup(config_dir: Path) -> Optional[Path]:
     try:
         home = settings_home()
     except Exception:
-        # Review: code-reviewer (Finding 2) -- settings_home() reaches
+        # settings_home() reaches
         # Path.home(), which is documented to raise RuntimeError (not
         # ValueError/OSError) when no home directory resolves at all (no
         # HOME/USERPROFILE, no resolvable passwd/user-profile entry -- a
@@ -1789,6 +1796,28 @@ def _find_known_good_backup(config_dir: Path) -> Optional[Path]:
 
 def evaluate_settings_integrity(config_dir: Optional[Path] = None) -> str:
     """Run the guard against `config_dir`; return the additionalContext text.
+
+    Composes two orthogonal lenses: `_evaluate_settings_integrity_own_config`
+    (THIS session's own settings.json — clobber/restore + reconciliation),
+    and `evaluate_guardless_sessions` (a peer `claude.exe` process on this box
+    with no `--plugin-dir` at all — see that function's docstring for why
+    only an already-guarded peer session can ever surface it). Both are
+    silent in the common case, so composing them costs nothing when neither
+    has anything to report; when either fires, both texts reach the same
+    additionalContext channel rather than one silently dropping the other.
+    """
+    own_config_text = _evaluate_settings_integrity_own_config(config_dir)
+    guardless_text = evaluate_guardless_sessions()
+    if not guardless_text:
+        return own_config_text
+    if not own_config_text:
+        return guardless_text
+    return f"{own_config_text}\n\n{guardless_text}"
+
+
+def _evaluate_settings_integrity_own_config(config_dir: Optional[Path] = None) -> str:
+    """Run the clobber/restore + reconciliation lenses against `config_dir`;
+    return the additionalContext text for THIS session's own settings.json.
 
     Parameters
     ----------
@@ -2064,11 +2093,19 @@ def _double_fire_summary(config_dir: Path) -> str:
             "regenerating on top of it without first checking for overlap."
         )
     if report.plugin_present and report.plugin_resolvable:
+        # Says what `gen_settings_hooks.generate` DOES on this same state, not
+        # what an unguarded generator would do: generate() runs this very
+        # detector before any write and returns "skipped (plugin delivery
+        # already live)" on exactly `plugin_present and plugin_resolvable`,
+        # leaving settings.json untouched. A banner that calls this state
+        # unsafe scares operators off the one case the generator provably
+        # refuses itself -- pinned against generate() by
+        # `test_plugin_live_branch_agrees_with_generate_s_own_refusal`.
         return (
             "double-fire status: plugin-side delivery is live and healthy on "
-            "its own -- disarming today would start regenerating settings.json's "
-            "`hooks` block ALONGSIDE it, i.e. cause double-fire, not restore "
-            "normal operation."
+            "its own -- disarming is safe today: generation refuses itself on "
+            "this positive evidence (\"skipped (plugin delivery already "
+            "live)\") and leaves settings.json untouched."
         )
     return "double-fire status: neither delivery surface currently resolves on this machine."
 

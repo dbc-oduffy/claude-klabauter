@@ -24,7 +24,7 @@ hook stopped invoking this module at all once C6/C7 landed, leaving `main()`
 with no production caller. Every surviving function here is called
 in-process.
 
-Review: coordinator:code-reviewer (P1, 2026-08-30) -- this docstring
+This docstring
 previously claimed `warm.push_cadence.sweep_repos` was "the current
 production entry into `run_push_with_retry`". Traced and found false:
 `sweep_repos` -> `push_outstanding` -> `coordinator_core/ops/ceremony/
@@ -212,7 +212,7 @@ _ENV_NO_SLEEP = "COORDINATOR_AUTO_PUSH_NO_SLEEP"
 # wrapper's interpreter rather than the real host interpreter that launched it.
 _ENV_HOST_PYTHON = "COORDINATOR_HOST_PYTHON"
 
-# Review: overengineering-reviewer Finding 5 -- the sole-publisher
+# The sole-publisher
 # suppression axis (this constant, `_ENV_SUPPRESS_FOR_SYNC_PUSH`, plus
 # its only reader, `main()`, deleted per Finding 4) is gravestoned.
 # Verified at HEAD: `git_native.ensure_post_commit_hook` no longer
@@ -229,7 +229,7 @@ GENERATES: list = []
 
 MAX_ATTEMPTS = 3
 # Classes that are safe to retry; see classify_error() for why each is/isn't.
-_RETRYABLE_CLASSES = frozenset({"ref-lock", "network", "gh-transient"})
+_RETRYABLE_CLASSES = frozenset({"ref-lock", "network", "gh-transient", "transient-contention"})
 
 # ref-lock's own attempt budget (DEC-1, docs/plans/2026-08-30-ref-locks-ladder-
 # reaches-past-the-burst.md). MAX_ATTEMPTS stays the default AND the non-FF poll
@@ -369,6 +369,24 @@ _PAT_TIMEOUT = re.compile(r"^fatal: push exceeded \d+s and was killed", re.MULTI
 # leaving it non-retrying preserves "unknown"'s exact prior timing behavior, so
 # this changes only the label an operator sees.
 _PAT_SPAWN_ERROR = re.compile(r"^fatal: git push failed to spawn:", re.MULTILINE)
+# A `.tmp-<pid>-pack-<sha>.pack` under .git/objects/pack vanishing mid-push is
+# a sibling session's concurrent repack/gc cleaning up ITS OWN temp pack on a
+# repo shared by ~20 sessions -- contention, not a broken push. It surfaces as
+# the identical `push_once` spawn-failure prefix _PAT_SPAWN_ERROR matches
+# (subprocess.run raising FileNotFoundError before any git stderr exists), so
+# without this arm ahead of it, a transient race and a genuinely unresolvable
+# git executable are indistinguishable in the log (27 entries in one hour,
+# .git/push-failures.log on work/machine-a/2026-08-18to20, 2026-08-26). Matched
+# on the temp-pack path shape rather than the exception text, which is
+# platform-/locale-dependent -- same discipline _PAT_SPAWN_ERROR's own comment
+# states. IS in _RETRYABLE_CLASSES, unlike spawn-error: a vanished temp pack
+# heals on the next attempt once the sibling's repack finishes, where an
+# unresolvable PATH does not.
+_PAT_TRANSIENT_PACK_CONTENTION = re.compile(
+    r"^fatal: git push failed to spawn: FileNotFoundError:.*"
+    r"objects[/\\]pack[/\\]\.tmp-\d+-pack-",
+    re.MULTILINE,
+)
 
 
 def classify_error(stderr_text: str) -> str:
@@ -403,6 +421,8 @@ def classify_error(stderr_text: str) -> str:
     # (2026-08-30, see that pattern). These two arms are what keep a push
     # timeout from reporting as "auth" and sending the operator to check
     # credentials -- do not reorder them below _PAT_AUTH.
+    if _PAT_TRANSIENT_PACK_CONTENTION.search(stderr_text):
+        return "transient-contention"
     if _PAT_SPAWN_ERROR.search(stderr_text):
         return "spawn-error"
     if _PAT_TIMEOUT.search(stderr_text):
@@ -809,7 +829,7 @@ def branch_gate(branch: str) -> tuple[bool, str | None]:
     non-canonical branch. The create-time denier this originally leaned on
     (`block-off-daily-branch.sh`) was retired 2026-07-05, which makes this
     allowlist the surviving enforcement point, not a redundant second one.
-    Review: the Staff Engineer F12 (auto-push tightening) + c474ee1 follow-up.
+    the Staff Engineer F12 (auto-push tightening) + c474ee1 follow-up.
 
     AC9b (docs/plans/2026-08-25-push-re-homes-onto-the-cadence-surfaces.md):
     named owner per declined class, so a branch this gate skips is never
@@ -1464,7 +1484,7 @@ def _refresh_engine_currency_cache(repo_root: str) -> None:
 # pushes-and-when.md C8)
 # ---------------------------------------------------------------------------
 #
-# Review: coordinator:code-reviewer (P3, 2026-08-30) -- this header used to
+# This header used to
 # describe the os.fork()/Windows subprocess.Popen re-spawn machinery
 # (`_detach_and_run`, `spawn_detached_push`) in the present tense. Both are
 # gravestoned along with the per-commit respawn they implemented; only

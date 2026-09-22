@@ -28,6 +28,9 @@ import io
 import os
 import subprocess
 import sys
+import contextlib as _contextlib
+import shutil as _shutil
+import tempfile as _tempfile
 import unittest.mock
 from pathlib import Path
 
@@ -591,6 +594,45 @@ def test_queue_append_cold_no_file_written(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def _cold_env_patch():
+    """`_make_cold_env` as a context manager, over a self-cleaning tmpdir.
+
+    Defense-in-depth for the native-skip helpers below, which isolate purely
+    by MOCK: they patch `_cc_route` to return `skipped: True` and never touch
+    the environment, so the moment that mock's assumption does not hold the
+    CLI falls through to a real write-root resolution. Measured 2026-09-20:
+    running `test_cross_repo_memo_draft.py` before this file is enough — the
+    two `test_lesson_promote_native_skip_*` tests then exit 0 instead of
+    `_EXIT_DOE_UNRESOLVABLE` and write `cold-path test lesson` rows into the
+    LIVE DoE-claude outbox, two per run, in a repo this one does not own.
+
+    A mock is an assertion about one code path; the env is what every other
+    path resolves from. These helpers need both, exactly as `_run_cold_lesson`
+    already has both.
+
+    KNOWN RESIDUAL, pre-existing and NOT introduced here:
+    `test_lesson_promote_native_skip_warns_doe_root` is still red. Genuinely
+    cold, the CLI reports "engine root unresolvable (repos.claude_klabauter)"
+    and returns before the doe-root branch, so the assertion's `DOE_ROOT`
+    string is unreachable -- the engine root resolves through the same
+    machine-local registry this env blanks, so there is no env value that
+    grants one without re-granting the other. It was red before this change
+    too; what changed is that it no longer WRITES to a live sibling repo
+    while failing. The assertion needs rewriting against the cold-path
+    message the CLI actually emits, which is a behaviour question for that
+    test's owner, not a silent edit here.
+    """
+    tmpdir = _tempfile.mkdtemp(prefix="doe-root-routing-cold-")
+    try:
+        with unittest.mock.patch.dict(os.environ, _make_cold_env(tmpdir), clear=True):
+            yield tmpdir
+    finally:
+        _shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+_cold_env_patch = _contextlib.contextmanager(_cold_env_patch)
+
+
 def _run_native_skip_lesson() -> tuple[int, str]:
     """Invoke lesson-promote main() with coordinator_core returning skipped:true.
 
@@ -603,6 +645,7 @@ def _run_native_skip_lesson() -> tuple[int, str]:
         return {"skipped": True, "reason": "doe root unresolvable"}
 
     with (
+        _cold_env_patch(),
         unittest.mock.patch.object(
             _lesson_cli, "_cc_route", side_effect=fake_route_skip
         ),
@@ -656,6 +699,7 @@ def _run_native_skip_queue() -> str:
         return {"skipped": True, "reason": "doe root unresolvable"}
 
     with (
+        _cold_env_patch(),
         unittest.mock.patch("sys.argv", _CENTRAL_IQ_ARGV),
         unittest.mock.patch.object(
             _queue_cli, "_cc_route", side_effect=fake_route_skip

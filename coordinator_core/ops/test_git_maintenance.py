@@ -351,7 +351,7 @@ def test_stamp_does_not_fire_when_the_prune_leg_fails(tmp_path, monkeypatch):
 
     def failing_prune(args, **kwargs):
         if args and args[0] == "prune":
-            # Review: coordinatorcode-reviewer.aaf79112307317734 -- stub the
+            # Stub the
             # real GitResult shape run_git now returns, not a bare
             # subprocess.CompletedProcess.
             return GitResult(returncode=128, stdout="", stderr="boom", timed_out=False)

@@ -74,7 +74,7 @@ def write_draft(repo_root: Path, fields: dict) -> Path:
     Returns:
         Path to the written draft file.
     """
-    # Review: code-reviewer (F1) — stamp only the field-list VALUES (version_highlights /
+    # Stamp only the field-list VALUES (version_highlights /
     # competitors entries), never the top-level `fields` dict itself; the frozen schema has
     # no top-level `provenance` and is additionalProperties:false at the document root.
     for value in fields.values():

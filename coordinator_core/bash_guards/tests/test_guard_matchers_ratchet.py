@@ -146,7 +146,7 @@ class _Expected:
     reason: Optional[str] = None
 
 
-#: The full tracked population (AC1, AC5, AC8) -- all 52 live `guard_
+#: The full tracked population (AC1, AC5, AC8) -- all 53 live `guard_
 #: roster()` registrations, inline and module-backed alike. Full-universe,
 #: dialect-reading entries carry no `kind`; every Bash-only entry and every
 #: dual-declaring-but-Bash-detecting entry carries a machine-
@@ -348,12 +348,6 @@ EXPECTED: Dict[str, _Expected] = {
     "block-subagent-guard-grant": _Expected(
         ("Bash", "PowerShell"),
     ),
-    "branch-set-precedence": _Expected(
-        ("Bash", "PowerShell"),
-    ),
-    "longlived-branch-naming": _Expected(
-        ("Bash", "PowerShell"),
-    ),
     "destructive-git-revert": _Expected(
         ("Bash", "PowerShell"),
     ),
@@ -362,6 +356,28 @@ EXPECTED: Dict[str, _Expected] = {
     ),
     "git-commit-safe-commit-advise": _Expected(
         ("Bash", "PowerShell"),
+    ),
+    # merged in from origin/main (C2, docs/plans/2026-09-02-a-write-that-
+    # discards-what-you-never-saw.md); live in guard_roster() with
+    # matchers=COMMAND_TOOL_NAMES (full-universe) but unclassified here
+    # until this reconciliation. `check_stale_write`'s own candidate
+    # resolver (`_stale_write_shape_candidates`) tokenizes via the generic
+    # `_command_tokenizer.resolve_command_positions` and looks for a bare
+    # `>` redirect or a bare `tee` invocation -- zero `_dialect`/
+    # `resolve_segments_for_dialect` references anywhere in the check or
+    # its candidate resolver, the same signature the 2026-08-26 recensus
+    # used to name the other nine dual-declaring-but-Bash-detecting
+    # members. Chain-eligible for a PowerShell payload but detects with
+    # Bash-shaped `>`/`tee` argv shapes only -- bucket (3), not bucket (1).
+    "stale-write": _Expected(
+        ("Bash", "PowerShell"),
+        DUAL_DECLARING_BASH_DETECTING,
+        "Registers full-universe (matchers=COMMAND_TOOL_NAMES) but its "
+        "candidate resolver tokenizes via the generic POSIX-shaped "
+        "`_command_tokenizer` and matches only a bare `>` redirect or "
+        "bare `tee` invocation -- no `_dialect`/`resolve_segments_for_"
+        "dialect` call anywhere in the check, so a PowerShell-dialect "
+        "redirect is chain-eligible but not actually detected.",
     ),
 }
 
@@ -442,11 +458,11 @@ def _compare(
 
 def test_discovery_found_the_expected_scope():
     """Guards the guard: pins the module-level-`MATCHERS`-declaring
-    population this module's docstring derives -- 29 modules (27 full +
-    2 Bash-only) -- not the plan's own unverified 19/5 estimate. This is a
-    documentation fact about module declarations, distinct from (and
-    smaller than) the 54-entry population `_actual_matchers()` enforces
-    (see `test_every_registered_guard_is_classified`).
+    population this module's docstring derives -- not the plan's own
+    unverified 19/5 estimate. This is a documentation fact about module
+    declarations, distinct from (and smaller than) the 51-entry population
+    `_actual_matchers()` enforces (see
+    `test_every_registered_guard_is_classified`).
 
     Both counts rose by one on 2026-08-30 with
     `block_fleet_delegation_creation`, which had been live in
@@ -455,9 +471,16 @@ def test_discovery_found_the_expected_scope():
 
     Rose by one again with `p4_verb_fence` (full-universe, dialect-reading;
     docs/reference/guard-tool-name-membership.md § 3), discovered in the
-    roster with no corpus/ratchet classification."""
+    roster with no corpus/ratchet classification -- 28 -> 29.
+
+    Narrowed 29 -> 27 on 2026-09-19 (docs/plans/2026-08-21-the-advisory-
+    band-gets-smaller-cheaper-and-honest.md, C6): `guard_branch_set_
+    precedence.py` and `guard_longlived_branch_naming.py` -- both
+    module-level `MATCHERS`-declaring -- were deleted. Re-measured live
+    against `_scoped_module_stems()` rather than re-derived by arithmetic,
+    per this pin's own charter."""
     stems = _scoped_module_stems()
-    assert len(stems) == 29, sorted(stems)
+    assert len(stems) == 27, sorted(stems)
     assert "block_stash_destruction" in stems
     assert "guard_powershell_via_bash" in stems
     assert "block_dev_repo_sentinel_removal" not in stems
@@ -465,11 +488,20 @@ def test_discovery_found_the_expected_scope():
 
 def test_every_registered_guard_is_classified():
     """AC8's own precondition: if `_actual_matchers` or `EXPECTED` drift
-    out of step with the live 52-entry chain, this fails loudly instead of
+    out of step with the live 53-entry chain, this fails loudly instead of
     every other assertion below passing vacuously by comparing an empty or
-    partial set."""
+    partial set. Narrowed 54 -> 51 (docs/plans/2026-08-21-the-advisory-
+    band-gets-smaller-cheaper-and-honest.md, C6): `branch-set-precedence`
+    and `longlived-branch-naming` deleted. Widened 51 -> 52 by the same
+    process that had already made this docstring's own count disagree with
+    the assertion below it before this reconciliation (the 52nd entry
+    never got its assertion bumped). Widened 52 -> 53 reconciling the
+    2026-09-20 origin/main merge: `stale-write` (C2,
+    docs/plans/2026-09-02-a-write-that-discards-what-you-never-saw.md)
+    arrived live in `guard_roster()` on origin/main only -- absent from
+    this branch's pre-merge tip -- and had no classification here."""
     actual = _actual_matchers()
-    assert len(actual) == 54, sorted(actual)
+    assert len(actual) == 53, sorted(actual)
     assert set(actual) == set(EXPECTED)
 
 
@@ -511,10 +543,12 @@ def test_every_entry_is_in_exactly_one_partition_bucket():
             bucket3 += 1
         else:
             raise AssertionError("%r has an unrecognised kind %r" % (guard_id, exp.kind))
-    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 54
-    assert bucket3 == 0, (
-        "expected 0 dual-declaring-but-Bash-detecting entries -- C8's "
-        "second pass converted all 9 (Finding 7 of the recensus record), "
+    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 53
+    assert bucket3 == 1, (
+        "expected 1 dual-declaring-but-Bash-detecting entry (`stale-write`, "
+        "merged in from origin/main 2026-09-20 -- see EXPECTED's own "
+        "comment) -- C8's second pass converted all 9 recensus-era members "
+        "(Finding 7), leaving the bucket empty until this arrival, "
         "found %d" % bucket3
     )
 
@@ -584,20 +618,28 @@ def test_dual_declaring_bash_detecting_kind_is_pinned():
     rather than being deleted, so a NEW bucket-3 member is visible as a
     change to this assertion, matching `test_held_cohort_kinds_are_
     uniform_and_distinct_from_by_construction`'s own convention for its
-    `not_yet_converted` cohort."""
+    `not_yet_converted` cohort. Narrowed to seven (from nine) 2026-09-19
+    (docs/plans/2026-08-21-the-advisory-band-gets-smaller-cheaper-and-
+    honest.md, C6): `branch-set-precedence` and `longlived-branch-naming`
+    were deleted, not converted -- their rows leave this tuple rather than
+    being replaced. Widened to one member 2026-09-20 reconciling the
+    origin/main merge: `stale-write` arrived live with zero `_dialect`
+    references in its own check, the same signature this bucket's other
+    (now-converted) members carried -- see EXPECTED's own comment on that
+    entry."""
     members = {
         gid
         for gid, exp in EXPECTED.items()
         if exp.kind == DUAL_DECLARING_BASH_DETECTING
     }
-    assert members == set()
+    assert members == {"stale-write"}
+    assert EXPECTED["stale-write"].matchers == ("Bash", "PowerShell")
+    assert EXPECTED["stale-write"].kind == DUAL_DECLARING_BASH_DETECTING
     for gid in (
         "block-noncanonical-branch-creation",
         "block-subagent-commit",
         "block-subagent-grant-acquisition",
         "block-subagent-guard-grant",
-        "branch-set-precedence",
-        "longlived-branch-naming",
         "destructive-git-revert",
         "destructive-git-revert-advisory",
         "git-commit-safe-commit-advise",

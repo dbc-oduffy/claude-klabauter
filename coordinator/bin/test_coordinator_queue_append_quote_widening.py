@@ -104,7 +104,7 @@ _NEWLY_COVERED_CASES: list[tuple[str, str]] = [
     ("leading double-quote", '"already-looks-quoted but is not'),
     ("leading percent", "%CI_VAR% expansion in a title"),
     ("leading at-sign", "@mention-style title"),
-    # Review: staff-eng — `key: ?foo` parses unquoted to the identical
+    # `key: ?foo` parses unquoted to the identical
     # string, so this case can't independently observe a round-trip failure
     # (it passes whether or not `?` is in the quoter's start-char set). `?`
     # is kept in the quoter's start-char set defensively (it IS YAML
@@ -115,7 +115,7 @@ _NEWLY_COVERED_CASES: list[tuple[str, str]] = [
     ("leading comma", ",comma-led value"),
     ("lone colon", ":"),
     ("trailing colon", "a value ending in a colon:"),
-    # Review: staff-eng — reserved-scalar and all-digit values are the exact
+    # reserved-scalar and all-digit values are the exact
     # drift this plan closes; previously pinned only by copy-vs-copy parity
     # (would stay green if the clause were deleted from both copies). These
     # bite the real quoter behavior directly: unquoted `true` parses to the

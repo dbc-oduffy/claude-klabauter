@@ -48,7 +48,7 @@ which already makes no audience-specific claim.
     pointer -- publishing into a mirror is not forbidden, so none of that
     vocabulary belongs here (AC3, AC15).
 
-Review: staff-eng (2026-08-13) -- as of C4d
+As of C4d
 (docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md AC-2,
 see "NO PASTEABLE CLEAR RECIPE ON THIS CHANNEL" on each renderer below), NO
 renderer in this module emits `_write_bump_marker.clear_line()`'s output on

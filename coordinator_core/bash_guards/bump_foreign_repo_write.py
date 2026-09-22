@@ -1085,7 +1085,11 @@ def _cross_repo_memo_executable_path(env: Optional[dict] = None) -> str:
 
 
 def _command_invokes_cross_repo_memo(
-    cmd: str, cwd: Optional[str], env: Optional[dict] = None
+    cmd: str,
+    cwd: Optional[str],
+    env: Optional[dict] = None,
+    *,
+    dialect: Optional[Dialect] = None,
 ) -> bool:
     """True iff any top-level segment of `cmd` invokes the `cross-repo-memo`
     CLI -- the unconditional AC5 carve-out.
@@ -1101,18 +1105,34 @@ def _command_invokes_cross_repo_memo(
     exact hole a bare-basename-only match would open for a same-named
     decoy. Only depth-0 (top-level) segments are inspected -- `-c`-payload
     recursion is explicitly out of scope here (C5's AC4, not this guard's).
+
+    `dialect` (bug-backlog 2026-08-18-powershell-text-reaches-the-posix-
+    tokeni-ea6ff0baddab): `None` (every pre-existing caller, the Bash leg)
+    keeps today's `resolve_command_positions` posix-tokenize path
+    byte-for-byte. `Dialect.POWERSHELL` routes through
+    `resolve_segments_for_dialect` instead -- the PowerShell leg calling
+    this helper must not feed its own raw PowerShell text to the posix
+    tokenizer, the same rule `classify_command`'s `dialect` parameter
+    already enforces elsewhere in this package.
     """
     if not cmd or not cmd.strip():
         return False
-    try:
-        resolved_segments = resolve_command_positions(cmd)
-    except Exception:  # noqa: BLE001 -- fail open, never let a parse crash reach the dispatcher
-        return False
+    heads: List[str] = []
+    if dialect is Dialect.POWERSHELL:
+        segments = resolve_segments_for_dialect(
+            cmd, Dialect.POWERSHELL, guard_name="bump-foreign-repo-write.cross-repo-memo"
+        )
+        if segments is None:
+            return False
+        heads = [tokens[0] for tokens, _pipe_before in segments if tokens]
+    else:
+        try:
+            resolved_segments = resolve_command_positions(cmd)
+        except Exception:  # noqa: BLE001 -- fail open, never let a parse crash reach the dispatcher
+            return False
+        heads = [rc.tokens[0] for rc in resolved_segments if rc.depth == 0 and rc.tokens]
     canonical = _cross_repo_memo_executable_path(env)
-    for rc in resolved_segments:
-        if rc.depth != 0 or not rc.tokens:
-            continue
-        head = rc.tokens[0]
+    for head in heads:
         if not token_matches_binary(head, "cross-repo-memo"):
             continue
         if "/" not in head and "\\" not in head:
@@ -2023,7 +2043,7 @@ def check_bump_foreign_repo_write(
     agent_id = payload.get("agent_id") or "" if isinstance(payload, dict) else ""
 
     for target_dir, write_verb_label, raw_target in candidates:
-        # Review: coordinator:code-reviewer -- keyword args at both call
+        # Keyword args at both call
         # sites give this shared eight-parameter predicate a reorder-safe
         # net across the Bash and PowerShell legs.
         result = _evaluate_foreign_repo_candidate(
@@ -2126,7 +2146,7 @@ def _check_bump_foreign_repo_write_powershell(
 
     # AC5 -- unconditional, checked before applicability/marker/anything
     # else, identically to the Bash body above.
-    if _command_invokes_cross_repo_memo(cmd, cwd, env=env):
+    if _command_invokes_cross_repo_memo(cmd, cwd, env=env, dialect=Dialect.POWERSHELL):
         return None
 
     if not bump_applies(session_id, cwd=cwd, env=env):

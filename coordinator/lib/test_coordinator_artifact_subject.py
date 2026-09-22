@@ -146,7 +146,7 @@ _CLASSIFICATION_CASES = [
         "engine",
         0,
     ),
-    # Review: code-reviewer F1 — coordinator-doctrine mcp-server path must NOT
+    # coordinator-doctrine mcp-server path must NOT
     # misclassify as engine; Phase 2 pre-emption in coordinator_artifact_subject
     # routes coordinator-plugin and docs/wiki mcp-server paths to doctrine
     # before the narrowed engine MCP pattern fires.
@@ -176,7 +176,7 @@ _CLASSIFICATION_CASES = [
         0,
     ),
     # --- Usage error (rc=1 contract) ---
-    # Review: code-reviewer F3 — no-arg / empty-arg usage-error path was
+    # no-arg / empty-arg usage-error path was
     # untested; consumers (W2.3 coordinator_state_root) rely on rc=1 to
     # detect bad calls.
     ("empty arg -> rc=1, empty stdout", "", "", 1),
@@ -225,7 +225,7 @@ def test_cross_cutting_emits_stderr_remediation(path: str) -> None:
 def test_empty_arg_usage_error_names_the_function() -> None:
     """An empty path is a usage error (rc=1) whose stderr names the caller.
 
-    Review: code-reviewer F3 — consumers (W2.3 coordinator_state_root) rely
+    Consumers (W2.3 coordinator_state_root) rely
     on rc=1 to detect bad calls, and on the name to locate the bad call.
     """
     _stdout, stderr, rc = coordinator_artifact_subject("")

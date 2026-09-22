@@ -79,7 +79,7 @@ def test_held_when_live_successor_references_it(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Review: code-reviewer — F2. baton_drift_sweep's `reverse_membership` call
+# baton_drift_sweep's `reverse_membership` call
 # (the HELD test) relies on unpinned/implicit `handoff_dir` inference —
 # unlike the sibling `referenced_by` call in the same loop body, which passes
 # `handoff_dir` explicitly. This currently works only because
@@ -546,7 +546,7 @@ def test_legacy_reaped_tip_with_no_reaped_from_session_stays_tips(
     the actual backfill write path and its own coverage) — it is not itself
     proof that C5's backfill closes the gap; this test only exercises the
     pre/post read-side classification shown here.
-    # Review: coordinator:code-reviewer — narrowed to what this test proves; the prior
+    # Narrowed to what this test proves; the prior
     # wording asserted C5's backfill was justified, which this slice cannot discharge.
     """
     root = tmp_path / "repo"

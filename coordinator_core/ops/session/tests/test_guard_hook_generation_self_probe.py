@@ -224,15 +224,12 @@ def test_migrated_doe_root_pointer_stays_silent(tmp_path: Path, monkeypatch):
     assert not marker.is_file()
 
 
-def test_migrated_doe_root_empty_pointer_does_not_fall_through_to_legacy(
+def test_migrated_doe_root_empty_pointer_falls_through_to_live_legacy(
     tmp_path: Path, monkeypatch
 ):
-    """Empty-migrated-pointer nitpick (Review: staff-eng, finding 9, plan
-    2026-08-07-detector-effective-guard-sets.md, C0): presence of the
-    migrated FILE suppresses the legacy rung regardless of its contents. A
-    migrated pointer that exists but is blank must resolve to False, NOT
-    fall through to a legacy pointer that is present and would otherwise
-    resolve True."""
+    """A blank migrated pointer is what a sibling session's SessionStart sees
+    mid-rewrite. Letting it shadow a live legacy pointer armed the kill switch
+    on a live inline install (2026-08-22), so the live legacy rung answers."""
     home = tmp_path / "home"
     home.mkdir()
     config_dir = home / ".claude"
@@ -251,9 +248,9 @@ def test_migrated_doe_root_empty_pointer_does_not_fall_through_to_legacy(
 
     text = run_self_probe(config_dir)
 
-    assert "RE-ARMED" in text
+    assert text == ""
     marker = kill_switch_marker_path(str(config_dir / "settings.json"))
-    assert marker.is_file()
+    assert not marker.exists()
 
 
 def test_migrated_doe_root_unscoped_config_dir_not_consulted(tmp_path: Path, monkeypatch):
@@ -391,7 +388,7 @@ def test_marketplace_install_with_missing_install_path_still_arms(tmp_path: Path
 def test_marketplace_install_stale_first_record_live_second_record_stays_silent(
     tmp_path: Path, monkeypatch
 ):
-    """Review: code-reviewer (Finding 1) regression. `installed_plugins.json`
+    """
     stores a LIST of records per key (e.g. user-scope + project-scope
     installs under the same key) -- a stale/destroyed FIRST record must not
     shadow a live, healthy SECOND record. Iterating only `plugins[key][0]`

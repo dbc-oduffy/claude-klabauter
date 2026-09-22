@@ -82,7 +82,7 @@ def test_every_ceremony_push_site_sizes_its_ladder_from_elapsed():
     state this pins against, because the flat constant is a legitimate symbol
     that legitimately exists; what was wrong was who used it.
     """
-    # Review: coordinator:code-reviewer (a72f5accd9830c935) P2 -- the prior
+    # The prior
     # regex (`push_with_retry\((.*?)\)`, DOTALL, non-greedy) is paren-depth-
     # unaware: it stops at the FIRST `)` after the open paren, not the call's
     # true close. A call site wrapping the flat constant in any expression

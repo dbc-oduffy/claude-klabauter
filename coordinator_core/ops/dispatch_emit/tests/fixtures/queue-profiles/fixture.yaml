@@ -1,0 +1,83 @@
+# TEST-ONLY FIXTURE — coordinator_core/ops/dispatch_emit/tests/test_grind_profile.py.
+# Bug-shaped so the falsifier can run over the live queue (docs/plans/2026-09-21-
+# bug-blitz-emitter-engine-leg.md Tasks § C3): row-id `@stem`, batch key
+# `[severity]`, priority severity P0..P3. Never loaded by production code.
+
+row_id_key: "@stem"
+batch_key: [severity]
+priority:
+  field: severity
+  order: asc
+verdicts: [confirmed-bug, not-reproduced]
+
+graph:
+  triage:
+    kind: triage
+    edges:
+      confirmed-bug: fix
+      not-reproduced: refute_close
+  refute_close:
+    kind: refute-close
+    edges:
+      confirmed: commit
+      refuted: commit
+  fix:
+    kind: fix
+    edges:
+      done: verify
+      NEEDS_WIDER_SCOPE: widen-exhausted
+      PEER_DIRTY: peer-dirty
+      NOT_REPRODUCED: verify
+      baton: baton
+      needs-judgment: needs-judgment
+  verify:
+    kind: verify
+    verify:
+      default: agent
+      P0: {mode: op, op: lessons.verify_extraction}
+    edges:
+      pass: commit
+      fail: verify-failed
+  commit:
+    kind: commit
+    edges: {}
+
+closure:
+  status_field: status
+  closed_values:
+    fix: closed
+    refute-close: wontfix
+  stamp_fields: [closed_at, closed_by]
+
+archive_path: state/bug-backlog/archive
+schema: coordinator_core/frontmatter/schemas/bug-backlog.schema.json
+
+absent_sentinels:
+  owner: ["none", "N/A"]
+
+triage_policy: |
+  Triage each row against the manifest. A confirmed reproduction of the
+  described defect is `confirmed-bug`; a row that cannot be reproduced from
+  the declared evidence is `not-reproduced`. Size every triage record and
+  record a tradeoff statement whenever the fix is not free of one.
+
+appetite:
+  standard:
+    where: []
+    limit: null
+    concurrency: 4
+    extra_verification: false
+    batch_size: {default: 4}
+    triage_depth: {default: standard}
+    window: 2
+    max_agent_calls: 40
+  sweep:
+    where: []
+    limit: null
+    concurrency: 16
+    extra_verification: true
+    batch_size: {P0: 2, P1: 6, P2: 10, P3: 12}
+    triage_depth: {P0: deep, P1: standard, P2: standard, P3: shallow}
+    window: 4
+    max_agent_calls: 200
+    budget_tokens: 2000000

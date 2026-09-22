@@ -208,7 +208,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     dir, so both dry_run:true and dry_run:false return clean empty-list results
     with exit_code:0.
     """
-    # Review: code-reviewer — fail-closed dry_run validation (slice2 F1). dry_run
+    # fail-closed dry_run validation (slice2 F1). dry_run
     # must be an explicit bool; omission or a wrong type must NOT silently default
     # to False (the destructive ACT/git-rm path), matching the fail-closed shape
     # of the repo_root-None / D3-mismatch setup errors below. Hoisted into

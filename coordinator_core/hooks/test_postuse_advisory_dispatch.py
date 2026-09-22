@@ -112,6 +112,12 @@ def test_throttle_suppresses_second_call_within_window_across_separate_invocatio
     throttled away, so it is given a real sidecar reading in the red band. An
     unmeasured session is silent now, which is indistinguishable from
     throttled — hence the sidecar rather than an absent one.
+   
+    The reading is a percentage of the 1,000,000-token window named in the
+    sidecar block, and the band it lands in is a token runway back from
+    `window - 33,000`. 95% is 950,000 tokens, inside the red bound of 897,000.
+    `CLAUDE_CODE_AUTO_COMPACT_WINDOW` would move that bound, which is why
+    conftest pins it absent suite-wide.
     """
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
     from coordinator_core.session import context_usage_sidecar as sidecar_module
@@ -120,7 +126,7 @@ def test_throttle_suppresses_second_call_within_window_across_separate_invocatio
     session_id = "test-session-throttle-cross-invocation"
     sidecar_module.write_usage(
         session_id,
-        {"used_percentage": 48, "context_window_size": 1_000_000},
+        {"used_percentage": 95, "context_window_size": 1_000_000},
         now=time.time(),
     )
 
@@ -142,7 +148,7 @@ def test_throttle_suppresses_second_call_within_window_across_separate_invocatio
 def test_throttle_governs_the_orange_band_only_and_never_sits_on_red(
     tmp_path, monkeypatch
 ):
-    """The throttle rate-limits the 40 band; the red band answers to
+    """The throttle rate-limits the orange band; the red band answers to
     bark-once instead.
 
     Isolates the throttle guard specifically: pre-seed throttle_last_check to
@@ -153,8 +159,8 @@ def test_throttle_governs_the_orange_band_only_and_never_sits_on_red(
     channel on every tool call. The red band is a hard call with runway to act
     on it, and a rate limiter must not be what swallows it -- a red reading
     arriving 30 seconds after an orange one would otherwise be silent for the
-    rest of the 5-minute window, which is most of the runway the 43 band was
-    moved down to preserve. What bounds the red band's noise is `critical_fired`
+    rest of the 5-minute window, which is most of the runway the red band
+    exists to preserve. What bounds the red band's noise is `critical_fired`
     (bark-once, asserted below), not elapsed time: it says its piece once per
     session and then stops.
 
@@ -180,14 +186,14 @@ def test_throttle_governs_the_orange_band_only_and_never_sits_on_red(
         )
 
     orange_session = "test-session-throttle-isolated-orange"
-    _seed(orange_session, 41)
+    _seed(orange_session, 88)
     assert pad._check_context_pressure_sync(orange_session, str(transcript)) == ""
 
     red_session = "test-session-throttle-isolated-red"
-    _seed(red_session, 50)
+    _seed(red_session, 95)
     red = pad._check_context_pressure_sync(red_session, str(transcript))
     assert "CONTEXT PRESSURE" in red
-    assert "~50% of window used" in red
+    assert "~95% of window used" in red
 
     # ...and having surfaced once, it is bark-once that holds it down, on a
     # call whose throttle window has long expired.
@@ -304,7 +310,7 @@ def test_first_agent_dispatch_sentinel_write_failure_degrades_to_silence(monkeyp
 
 
 def test_first_agent_dispatch_sentinel_partial_write_failure_allows_retry(monkeypatch):
-    """Review: code-reviewer (Finding 3) -- if open() succeeds but write()
+    """If open() succeeds but write()
     raises mid-write (e.g. disk full), the sentinel file already exists on
     disk. Without cleanup, every later call in the session would see the
     partial file and stay silent forever. The failed write must remove the
@@ -374,7 +380,7 @@ def test_handler_first_agent_dispatch_composes_with_existing_advisories():
     assert session_id in context
     assert "\n\n" in context
 
-    # Review: code-reviewer (Finding 4) -- membership alone doesn't pin the
+    # Membership alone doesn't pin the
     # merge order the commit message claims (cp -> rt -> first-agent-dispatch);
     # a future reorder of the join would pass the assertions above unnoticed.
     assert context.index("cp text") < context.index("rt text") < context.index(
@@ -584,7 +590,7 @@ def test_runtime_tripwire_arms_only_on_exactly_one(value, tmp_path, monkeypatch)
 
 
 def test_runtime_tripwire_resolves_repo_root_via_seam_not_a_spawn(monkeypatch):
-    # Review: code-reviewer (P2, W2) -- `_fail_on_spawn` raising AssertionError
+    # `_fail_on_spawn` raising AssertionError
     # is itself an Exception, and every spawn site it could intercept lives
     # inside `_check_runtime_tripwire_sync`'s own `except Exception: return ""`,
     # so a bare `assert result == ""` still passes against the OLD (spawning)
@@ -622,7 +628,7 @@ def test_runtime_tripwire_resolves_repo_root_via_seam_not_a_spawn(monkeypatch):
 def test_runtime_tripwire_happy_path_resolves_through_seam_and_fires(
     tmp_path, monkeypatch
 ):
-    """Review: code-reviewer (P3, W4) -- both existing seam tests stub
+    """Both existing seam tests stub
     show_toplevel to None/raise, so only the earliest early-exit
     (`if not git_root: return ""`) is ever driven. This test resolves a real
     root through the seam and continues into the agents-dir / back-pointer /
@@ -656,7 +662,7 @@ def test_runtime_tripwire_happy_path_resolves_through_seam_and_fires(
         repo_root_seam, "show_toplevel", lambda cwd=None: str(git_root)
     )
 
-    # Review: code-reviewer (F6) -- this test's bark-once sentinel
+    # This test's bark-once sentinel
     # (rt-bark-once-{session_id}) lives under the REAL tempfile.gettempdir(),
     # the same directory this module's autouse _sweep_test_session_state_files
     # globs before/after every test in the file. Under xdist (--dist load

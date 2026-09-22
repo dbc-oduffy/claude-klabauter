@@ -112,11 +112,10 @@ def _noncanonical_branch_hazard_setup(
 ) -> Dict[str, str]:
     """`block-noncanonical-branch-creation` needs only the repo-scoping gate
     patched open (`resolve_git_root`/`_is_hazard_repo`) -- same monkeypatch
-    shape `guard_message_corpus._branch_set_precedence_setup` and
-    `_longlived_branch_naming_hazard_setup` already use for this guard's own
-    siblings, reproduced here rather than imported (both are private helpers
-    scoped to that module's own ADVISORY_REWRITE rows, not exported for
-    reuse)."""
+    shape `guard_message_corpus._noncanonical_branch_creation_hazard_setup`
+    uses for this same guard, reproduced here rather than imported (that is
+    a private helper scoped to that module's own ADVISORY_REWRITE rows, not
+    exported for reuse)."""
     from coordinator_core.bash_guards import block_noncanonical_branch_creation as guard
 
     mp.setattr(guard, "resolve_git_root", lambda cwd=None: "/repo")

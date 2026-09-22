@@ -109,7 +109,7 @@ def _read_shards(central_state_root: Path) -> dict[tuple[str, str], dict]:
     # because BacklogHistory is `extra="forbid"` (frozen cross-repo contract) — there is
     # no room to add a flag without a contract change, so raising is the only channel
     # left to distinguish "no shard data" from "could not check for shard data".
-    # Review: code-reviewer — knowingly-accepted blast-radius trade: this raise aborts
+    # knowingly-accepted blast-radius trade: this raise aborts
     # the WHOLE cockpit-emission.json build (all 21 sections + post-collect enrichment),
     # not just this block, so a transient permission hiccup here now blocks the entire
     # artifact refresh where it previously wouldn't have.

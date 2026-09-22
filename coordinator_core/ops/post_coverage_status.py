@@ -296,7 +296,7 @@ def _token_from_windows_credential_manager(*, platform: str = sys.platform) -> O
                 target, _CRED_TYPE_GENERIC, 0, ctypes.byref(pointer)
             )
         except (OSError, ctypes.ArgumentError):
-            # Review: coordinatorcode-reviewer Finding 2 -- a malformed target
+            # A malformed target
             # or ABI mismatch raises ctypes.ArgumentError, not OSError; catch
             # both so leg 4 matches this module's "fails closed, never raises"
             # docstring claim rather than propagating out of resolve_token().

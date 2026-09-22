@@ -273,7 +273,7 @@ class TestReopenAdoption:
 
 
 class TestNestedShellInterpreterDenied:
-    """Review: coordinator-code-reviewer F1 -- `bash -c`/`sh -c`/
+    """`bash -c`/`sh -c`/
     `pwsh -Command`/`powershell -Command` were not classified at all and
     fell through to allow. Denied now, conservatively, only when the inner
     string plausibly names a surface this fence governs; a non-p4 nested
@@ -309,7 +309,7 @@ class TestNestedShellInterpreterDenied:
 
 
 class TestChangeScoped:
-    """Review: coordinator-code-reviewer F2 -- `p4 change` was allowed
+    """`p4 change` was allowed
     unconditionally; scoped to `-o`/`-i` (the session-changelist forms),
     same pattern as `reopen`/`shelve`."""
 

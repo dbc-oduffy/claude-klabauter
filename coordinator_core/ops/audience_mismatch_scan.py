@@ -48,7 +48,13 @@ Negative-spec:
     answers as a doctrine-shaped gap -- these are the fill guard's OWN
     accepted "nothing to report" shape
     (test_review_integrator_fill_guard.py's FILLED_SIDECAR fixture uses
-    "Nothing notable."), not a signal worth clustering.
+    "Nothing notable."), not a signal worth clustering. Nor does it treat an
+    elaborated null answer ("Nothing significant; brief was
+    self-contained.") as a gap -- `_NULL_LEAD_RE`/`_GAP_INDICATOR_RE` widen
+    the bare-phrase match to a null-marker LEAD clause, suppressed only when
+    the answer also names an actual gap (see
+    state/bug-backlog/2026-09-06-audience-mismatch-scan-clusters-nothing-
+    5535e3ca6a65.yaml).
   - Does NOT read every sidecar ever produced -- filtered to a recency
     window (default 14 days) via the sidecar's `spawned_at` frontmatter
     field (per the Run-Report Sidecar contract,
@@ -106,6 +112,26 @@ _FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 # Answers that mean "nothing to report" -- excluded from clustering entirely.
 _NULL_ANSWER_RE = re.compile(
     r"^(none|n/?a|nothing( notable| in particular)?|no\.?)\.?$", re.IGNORECASE
+)
+
+# state/bug-backlog/2026-09-06-audience-mismatch-scan-clusters-nothing-
+# 5535e3ca6a65.yaml -- the bare-phrase match above misses a null answer that
+# elaborates on WHY there was no gap ("Nothing significant; brief was
+# self-contained."), so three independent agents affirming the brief worked
+# clustered as a false-positive doctrine-shaped gap. This second rail
+# recognises a null-marker LEAD clause and treats the whole answer as
+# gap-absent UNLESS it also contains language that names an actual gap (had
+# to work something out, something was unclear/missing) -- so "Nothing in
+# the brief mentioned X, so I had to grep for it" still clusters normally.
+_NULL_LEAD_RE = re.compile(
+    r"^(none|n/?a|nothing( notable| in particular| significant)?|no)\b",
+    re.IGNORECASE,
+)
+_GAP_INDICATOR_RE = re.compile(
+    r"\b(had to|needed to|have to|worked out|figure(d)? out|wasn'?t clear|"
+    r"unclear|missing|didn'?t (mention|say|cover|explain)|should have|"
+    r"could have (told|said|mentioned)|left (me|us) (to )?guessing)\b",
+    re.IGNORECASE,
 )
 
 _TOKEN_RE = re.compile(r"[a-z0-9]{4,}")
@@ -178,7 +204,11 @@ def _extract_exit_interview_answer(text: str) -> str | None:
 
 def _is_null_answer(answer: str) -> bool:
     stripped = answer.strip().rstrip(".").strip()
-    return bool(_NULL_ANSWER_RE.match(stripped))
+    if _NULL_ANSWER_RE.match(stripped):
+        return True
+    if _NULL_LEAD_RE.match(stripped) and not _GAP_INDICATOR_RE.search(stripped):
+        return True
+    return False
 
 
 def _significant_tokens(answer: str) -> set[str]:

@@ -175,7 +175,7 @@ def _write_backpointer_sync(em_backpointer: str, session_id: str) -> None:
         # create-and-write path below.
         pass
 
-    # Review: code-reviewer — F3 (P2): add thread-id to temp name so concurrent
+    # Add thread-id to temp name so concurrent
     # asyncio.to_thread() invocations sharing this PID get distinct temp paths.
     # Bash source used $$ (per-process PID); in-engine all invocations share the PID.
     tmp = em_backpointer + f".tmp.{os.getpid()}.{threading.get_ident()}"
@@ -199,7 +199,7 @@ def _setup_dirs_sync(
 ) -> None:
     """Create session and agent dirs, then write the back-pointer — one thread-pool dispatch.
 
-    Review: code-reviewer — F5 (nit): collapses 3 sequential asyncio.to_thread() calls
+    Collapses 3 sequential asyncio.to_thread() calls
     for independent pre-write setup into a single dispatch; session_dir and agent_dir
     creation are independent; backpointer write follows agent_dir creation.
     """
@@ -238,7 +238,7 @@ def _fold_agent_type(value: str) -> str:
     need the exact real spelling on disk, so nothing here reaches `cols[2]`;
     every write below stores the caller's own value.
 
-    Review: code-reviewer -- break-class: an unconditional split(":")[-1]
+    break-class: an unconditional split(":")[-1]
     strips ANY namespace prefix, not just `coordinator:`, so two genuinely
     different agent types sharing a bare suffix across different namespaces
     (e.g. `vendor-a:reviewer` vs `vendor-b:reviewer`) would fold to the same
@@ -341,7 +341,7 @@ def _process_dispatched_sync(
     # Ensure file exists — mirrors `touch "$DISPATCHED"`.
     if not os.path.exists(dispatched):
         try:
-            # Review: code-reviewer — F4 (nit): use context manager; bare open().close()
+            # Use context manager; bare open().close()
             # relies on CPython refcount for resource release (ResourceWarning in linters).
             with open(dispatched, "a", encoding="utf-8", newline="\n"):
                 pass
@@ -381,7 +381,7 @@ def _process_dispatched_sync(
         # Atomic rewrite — temp+rename (D6; mirrors the awk > tmp && mv tmp dispatched pattern).
         # Tolerated TOCTOU for external-process concurrent appends; in-engine races
         # are serialized by the asyncio.Lock the caller holds.
-        # Review: code-reviewer — F3 sibling sweep: same PID-uniqueness fix as
+        # Sibling sweep: same PID-uniqueness fix as
         # _write_backpointer_sync; the lock serializes same-file concurrent callers
         # but defence-in-depth and pattern consistency warrant the thread-id suffix.
         tmp = dispatched + f".tmp.{os.getpid()}.{threading.get_ident()}"
@@ -635,7 +635,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     try:
         _sessions_base = git_common_dir(repo_root) / "coordinator-sessions"
     except RuntimeError as exc:
-        # Review: code-reviewer — fallback had ".git" doubled: repo_root IS git_common_dir,
+        # Fallback had ".git" doubled: repo_root IS git_common_dir,
         # so Path(repo_root) / ".git" / "coordinator-sessions" → <repo>/.git/.git/… (never exists).
         # Fix: drop the redundant ".git" join in this fallback branch.
         # Not a drop (the fallback path below still runs) — breadcrumb only so a
@@ -656,7 +656,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
         # --- Init session-dir + agent-dir + atomic back-pointer ---
         # Source tries cs_init via coordinator-session.sh lib; falls back to mkdir -p.
         # In-engine: always repo-keyed, so the lib-resolution dance is unnecessary.
-        # Review: code-reviewer — F5 (nit): collapsed 3 sequential to_thread() round-trips
+        # Collapsed 3 sequential to_thread() round-trips
         # for independent pre-write operations into one _setup_dirs_sync dispatch.
         _checkpoint = "before_setup_dirs"
         await asyncio.to_thread(_setup_dirs_sync, session_dir, agent_dir, em_backpointer, session_id)

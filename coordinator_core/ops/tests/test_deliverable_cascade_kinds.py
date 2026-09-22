@@ -392,7 +392,7 @@ def test_ac3_writeside_floor_is_byte_identical_on_already_terminal_record(tmp_pa
 
 
 def test_ac3_writeside_floor_holds_for_a_quoted_on_disk_status(tmp_path):
-    """Review: staff-eng — Finding 0: the idempotency-floor comparison must
+    """The idempotency-floor comparison must
     read through `read_fm_field_unquoted`, not the raw on-disk bytes — a
     record carrying `status: 'shipped'` (single-quoted) must still be
     recognised as already-terminal and left BYTE-IDENTICAL, not rewritten."""
@@ -418,7 +418,7 @@ def test_ac3_writeside_floor_holds_for_a_quoted_on_disk_status(tmp_path):
 
 
 def test_ac3_writeside_floor_crlf_document_has_no_mixed_line_endings(tmp_path):
-    """Review: staff-eng — Finding 9: every fixture in this suite is
+    """Every fixture in this suite is
     LF-authored and every assertion reads through `Path.read_text`
     (universal newlines) or `yaml.safe_load`, both of which normalize CRLF
     away — so Findings 3/5(a) were structurally unfalsifiable here. This
@@ -539,33 +539,40 @@ def test_ac10_vendored_sizing_schema_version_is_pinned():
         Path(__file__).parent.parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
     )
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    pinned = "1.17.0"
+    pinned = "1.21.0"
     assert schema["x-schema-version"] == pinned, (
         f"sizing-object.schema.json's x-schema-version moved off the pinned "
-        f"{pinned!r} — check DoE-claude@397d0dd32 "
+        f"{pinned!r} — check DoE-claude@937455db6 "
         "(coordinator/schemas/sizing-object.schema.json) for a correspondingly "
         "recorded answer before re-pinning this test."
     )
 
 
-# Review: staff-eng — Finding 11: C0 vendored FOUR schemas, but only
+# C0 vendored FOUR schemas, but only
 # sizing-object carried a version-pin regression above — roadmap/goal/
 # initiative reopened the identical EQUAL_VERSION_SHAPE_DRIFT silent-divergence
 # hazard C0 exists to close, the moment DoE bumps any of the other three.
 # Table-driven so a future vendored schema is one row, not a new function.
 _VENDORED_SCHEMA_VERSION_PINS = (
-    # Re-pinned 1.15.0 -> 1.17.0 on DoE adopting our `peer_notes` (1.16.0) and
-    # adding optional top-level `name` (1.17.0), both at 397d0dd32. The recorded
-    # answer AC1 demands is memo
-    # 2026-08-17-doe-claude-em-sizing-object-1-17-0-name-field-revendor.md.
-    ("sizing-object.schema.json", "1.17.0", "DoE-claude@397d0dd32 (coordinator/schemas/sizing-object.schema.json)"),
+    # Re-pinned 1.17.0 -> 1.21.0, tracking the three DoE bumps the vendored
+    # copy was re-taken across: 1.18.0 `declined_note` (DoE 42cb0db61),
+    # 1.20.0 `blocked_by`/`awaiting_gate` (DoE deaab5a0b), 1.21.0
+    # `prior_ruling` widened to a chain (DoE 937455db6). Vendored here at
+    # 757b5514ec; the recorded answer for the first two is
+    # state/improvement-queue/2026-08-30-re-vendor-sizing-object-schema-1-18-0-to-1-20-0.yaml,
+    # and each bump's own rationale is carried in the vendored file's
+    # `x-bump-note` chain.
+    ("sizing-object.schema.json", "1.21.0", "DoE-claude@937455db6 (coordinator/schemas/sizing-object.schema.json)"),
     # Re-pinned 1.3.0 -> 1.4.0 on DoE widening `applies_to` to
     # `state/roadmap/**/OVERVIEW.md` (MINOR, on the peer-set-entry 1.0.0 -> 1.1.0
     # precedent), vendored byte-for-byte here at c3bbedf36 with the drift watch
     # reporting MATCH. The recorded answer this row demands is
     # cross-repo/inbox/2026-08-21-doe-claude-em-roadmap-glob-widened-and-spine-homing-answered.md.
     ("roadmap.schema.json", "1.4.0", "DoE-claude@1c5f0d849 (coordinator/schemas/roadmap.schema.json)"),
-    ("goal.schema.json", "1.2.0", "DoE-claude coordinator/schemas/goal.schema.json"),
+    # Re-pinned 1.2.0 -> 1.3.0 on DoE adding `superseded` to the goal
+    # `status` enum (enum-value-additive, DoE c89a8d64c), re-vendored here at
+    # 10724f4046 — upstream HEAD and the vendored copy both read 1.3.0.
+    ("goal.schema.json", "1.3.0", "DoE-claude@c89a8d64c (coordinator/schemas/goal.schema.json)"),
     ("initiative.schema.json", "1.1.0", "DoE-claude coordinator/schemas/initiative.schema.json"),
     # Newly vendored at 616874831 (C3b). Added as a row rather than left
     # unpinned: this table exists to catch EQUAL_VERSION_SHAPE_DRIFT the moment
@@ -665,7 +672,7 @@ def test_ac11_already_terminal_sizing_target_is_refused_leg_c(tmp_path):
     )
 
     assert reason is not None
-    # Review: staff-eng — Finding 1 (root cause of the leg-c rewrite): leg
+    # Leg
     # (c) is now a uniform positive `live_values` check for every kind, so
     # the refusal message reads "not consistent with live-and-advanceable"
     # rather than the handoff-only "already terminal" wording this test
@@ -674,7 +681,7 @@ def test_ac11_already_terminal_sizing_target_is_refused_leg_c(tmp_path):
 
 
 def test_ac11_superseded_sizing_target_is_refused_leg_c(tmp_path):
-    """Review: staff-eng — Finding 1's own named regression test: a
+    """'s own named regression test: a
     `superseded` sizing is not terminal (`_SIZING_TERMINAL_STATUS` is
     `{shipped, declined}`, per 2026-08-10's `declined` addition) but is also
     not live — leg (c) must refuse it rather than let it clear through to a
@@ -849,7 +856,7 @@ def test_ac7_coordinator_doc_new_writes_reverse_edge_end_to_end(tmp_path):
     assert sizing_after["status"] == "routed"
     assert sizing_after["plan"] == plan_rel
 
-    # Review: staff-eng — Finding 10: the mutated sizing must still validate
+    # The mutated sizing must still validate
     # against the vendored schema — unlike test_ac2_..., this test previously
     # asserted values only, so a `plan:` value the schema's
     # `^docs/plans/.+\.md$` pattern rejects (e.g. a Windows-separator path
@@ -860,7 +867,7 @@ def test_ac7_coordinator_doc_new_writes_reverse_edge_end_to_end(tmp_path):
 
 @pytest.mark.skipif(not _DOC_NEW_CLI.is_file(), reason="coordinator-doc-new CLI not found at expected path")
 def test_ac7_mutate_sizing_reverse_edge_preserves_crlf():
-    """Review: staff-eng — Finding 9 (doc-new reverse-edge leg): unlike the
+    """Unlike the
     cascade's write side, `_mutate_sizing_reverse_edge` is a PURE text
     function — no `locked_rmw`/universal-newline read in between when called
     directly — so a CRLF-authored document's line endings must survive the
@@ -1384,3 +1391,120 @@ def test_ac8_commit_scoped_failure_surfaces_commit_error_without_flipping_exit_c
     # so HEAD is untouched but the working tree is dirty.
     assert _head_sha(repo) == head_before
     assert _porcelain_status(repo) != ""
+
+
+def test_c3_landed_commit_with_nonempty_stderr_surfaces_commit_notice(
+    tmp_path, monkeypatch
+):
+    """C3/AC7: a follow-up commit that LANDS (ok=True) but carries non-empty
+    `stderr` (the shape `commit_scoped`'s private-index-branch exclusion
+    notice produces on a diverged staged path) surfaces that text as
+    `result["commit_notice"]`, with no `commit_error` key -- the two are
+    mutually exclusive: a failed commit's text lives in `commit_error`, a
+    landed commit's own non-empty stderr lives here (see
+    `_commit_mutated_paths`'s own docstring contract).
+    """
+    session_id = "66666666-6666-6666-6666-666666666666"
+    monkeypatch.setenv("CLAUDE_SESSION_ID", session_id)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    scoped = repo / "feature.txt"
+    scoped.write_text("feature body\n", encoding="utf-8")
+    _git(repo, "add", "feature.txt")
+    _git(
+        repo, "commit", "-m",
+        f"implement the feature this handoff scopes\n\nSession-Id: {session_id}",
+    )
+
+    handoff = repo / "state" / "handoffs" / "20260101-c3-commit-notice.md"
+    handoff.parent.mkdir(parents=True, exist_ok=True)
+    fm = (
+        'title: "Test Handoff 20260101-c3-commit-notice.md"\n'
+        "created: 2026-01-01\n"
+        "branch: work/test/2026-01-01\n"
+        "status: open\n"
+        'predecessor: "none"\n'
+        "deployment_state: ready_to_fire\n"
+        "deliverable_id: dlv-c3-commit-notice-000\n"
+        "scope:\n"
+        "  - feature.txt\n"
+    )
+    handoff.write_text(f"---\n{fm}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
+    _git(repo, "add", str(handoff.relative_to(repo)))
+    _git(repo, "commit", "-m", "add handoff")
+
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    def _fake_commit_scoped(paths, msg_path, worktree_root):
+        return GitResult(
+            returncode=0, stdout="", stderr="worktree edits to feature.txt were NOT included"
+        )
+
+    monkeypatch.setattr(cascade_mod, "commit_scoped", _fake_commit_scoped)
+
+    result = _run(
+        {
+            "deliverable_id": "dlv-c3-commit-notice-000",
+            "source_kind": "plan",
+            "source_path": "docs/plans/dummy.md",
+        },
+        repo_root=repo / ".git",
+    )
+
+    assert result["exit_code"] == 0
+    assert len(result["advanced"]) == 1
+    assert "commit_error" not in result
+    assert result["commit_notice"] == "worktree edits to feature.txt were NOT included"
+
+
+def test_c3_landed_commit_with_empty_stderr_carries_no_commit_notice(tmp_path, monkeypatch):
+    """C3: the ordinary landed-commit path (`commit_scoped`'s own AGREE
+    branch, empty `stderr`) carries no `commit_notice` key -- absence, not a
+    falsy/empty-string presence, matching the pre-existing `commit_error`
+    absence contract this mirrors.
+    """
+    session_id = "55555555-5555-5555-5555-555555555555"
+    monkeypatch.setenv("CLAUDE_SESSION_ID", session_id)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    scoped = repo / "feature.txt"
+    scoped.write_text("feature body\n", encoding="utf-8")
+    _git(repo, "add", "feature.txt")
+    _git(
+        repo, "commit", "-m",
+        f"implement the feature this handoff scopes\n\nSession-Id: {session_id}",
+    )
+
+    handoff = repo / "state" / "handoffs" / "20260101-c3-no-notice.md"
+    handoff.parent.mkdir(parents=True, exist_ok=True)
+    fm = (
+        'title: "Test Handoff 20260101-c3-no-notice.md"\n'
+        "created: 2026-01-01\n"
+        "branch: work/test/2026-01-01\n"
+        "status: open\n"
+        'predecessor: "none"\n'
+        "deployment_state: ready_to_fire\n"
+        "deliverable_id: dlv-c3-no-notice-000\n"
+        "scope:\n"
+        "  - feature.txt\n"
+    )
+    handoff.write_text(f"---\n{fm}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
+    _git(repo, "add", str(handoff.relative_to(repo)))
+    _git(repo, "commit", "-m", "add handoff")
+
+    result = _run(
+        {
+            "deliverable_id": "dlv-c3-no-notice-000",
+            "source_kind": "plan",
+            "source_path": "docs/plans/dummy.md",
+        },
+        repo_root=repo / ".git",
+    )
+
+    assert result["exit_code"] == 0
+    assert len(result["advanced"]) == 1
+    assert "commit_error" not in result
+    assert "commit_notice" not in result

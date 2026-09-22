@@ -263,10 +263,27 @@ def _normalize_and_gate(cand: str, git_root: Optional[str]) -> Optional[str]:
 
 def _resolve_git_common_dir(cwd: Optional[str]) -> Optional[str]:
     """``git rev-parse --git-common-dir``, resolved to an absolute path.
-    Fails open (``None``) on any resolution error — mirrors
-    ``_resolve_git_root``'s fail-open discipline. Used only to locate the
-    memo-claim directory (see ``_has_live_claim``); a failure here degrades
-    to "no claim dir found", never to a deny.
+    Returns ``None`` on any resolution error — mirrors ``_resolve_git_root``'s
+    discipline at THIS layer. Used only to locate the memo-claim directory
+    (see ``_has_live_claim``).
+
+    WHAT ``None`` NOW MEANS TO THE CALLER, corrected 2026-09-20: this
+    docstring used to end "a failure here degrades to 'no claim dir found',
+    never to a deny." That is no longer true and the sentence was left behind
+    when ``_has_live_claim`` was changed to fail toward DENY on an
+    unresolved common-dir (bug-backlog
+    ``2026-08-06-block-memo-status-hand-edit-s-liveness-r-dcd9cece63ff``).
+    ``None`` from here is an INDETERMINATE read, and on this
+    irreversible-harm guard an indeterminate liveness read is resolved
+    conservatively, not permissively — see ``_has_live_claim``'s own
+    docstring for the scope of that carve-out.
+
+    Consequence worth knowing before widening what returns ``None``: every
+    error class this function collapses into ``None`` now reaches a hard
+    deny. It is deliberately NOT a catch-all for that reason. If a new
+    failure mode is added here that is genuinely "not in a repo" rather than
+    "cannot tell", distinguish it at this layer rather than letting
+    ``_has_live_claim`` deny on it.
 
     D4 (docs/plans/2026-08-07-spawn-storm-culprit-taxonomy-and-detectors.md):
     delegates to the shared, non-spawning
@@ -299,15 +316,31 @@ def _has_live_claim(cwd: Optional[str], memo_filename: str) -> bool:
     status-field edit was denied unconditionally, live claim or not, which
     is the over-fire this gate closes.
 
-    Fails open (``False``, i.e. "no live claim") on any resolution/read
-    error — this guard's established fail-open-on-error discipline (module
-    docstring's negative-spec: "Does NOT fail closed on any error"). A
-    crash here degrades check() to the advisory leg, never to a
-    fabricated deny.
+    2026-08-06 fix (this guard's own bug-backlog record,
+    ``2026-08-06-block-memo-status-hand-edit-s-liveness-r-dcd9cece63ff``):
+    the ERROR path is NOT the same as the resolved-not-live path. A
+    cleanly-resolved "no live claim" (git-common-dir resolves and either no
+    claim directory exists, or ``cs_claim_holder_live`` cleanly answers
+    ``False``) keeps the census's advisory degrade — ``False`` here. But an
+    UNRESOLVED git-common-dir, or a ``cs_claim_holder_live`` exception, is
+    an INDETERMINATE read, not a "no claim" answer, and must fail toward
+    DENY (``True``) — matching the conservative direction this module's own
+    anchored-matcher fallback already states (fails toward deny on an
+    ambiguous match). Pre-reshape the guard denied unconditionally with no
+    liveness read at all, so widening the ERROR path to ALLOW (as the
+    reshape originally did) was not an inherited fail-open discipline; it
+    was a newly-introduced window in which an indeterminate read silently
+    downgraded protection on an irreversible-harm guard. The module's
+    broader "does NOT fail closed on any error" negative-spec still holds
+    for every OTHER error in this guard (containment, path resolution,
+    frontmatter anchoring) — this carve-out is scoped to liveness
+    indeterminacy alone, the one signal this guard's hard-deny leg
+    actually depends on.
     """
     common_dir = _resolve_git_common_dir(cwd)
     if not common_dir:
-        return False
+        # Indeterminate, not "no claim" -- fail toward deny.
+        return True
     claim_dir = Path(common_dir) / "coordinator-sessions" / "memo-claims" / memo_filename
     if not claim_dir.is_dir():
         return False
@@ -316,8 +349,9 @@ def _has_live_claim(cwd: Optional[str], memo_filename: str) -> bool:
         return bool(cs_claim_holder_live(str(claim_dir)))
     except Exception as exc:
         print(f"block_memo_status_hand_edit: cs_claim_holder_live raised for "
-              f"{claim_dir} — treating as no live claim: {exc}", file=sys.stderr)
-        return False
+              f"{claim_dir} — treating as indeterminate, failing toward deny: {exc}",
+              file=sys.stderr)
+        return True
 
 
 def _frontmatter_block(text: Optional[str]) -> Optional[str]:

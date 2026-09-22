@@ -308,7 +308,7 @@ def _release_sweep_lock(repo_root: Union[str, Path], *, pid: Optional[int] = Non
     holder's record (a stale-but-foreign record is left for the next
     acquirer's own takeover check, not unlinked here).
 
-    Review: code-reviewer P3, 2026-08-30 -- reading the record and then
+    Reading the record and then
     unlinking BY PATH is check-then-act: if this holder's own hold window
     has already run past `_SWEEP_LOCK_HOLD_SECS` + `_SWEEP_LOCK_STALE_GRACE_SECS`
     (this process overran its own generous budget) a peer can have already
@@ -394,10 +394,10 @@ def _feed_failure_detector(repo_root: Union[str, Path], outcome) -> None:
         pass
 
 
-# Review: overengineering-reviewer Finding 1 -- `per_repo_deadline` existed
+# `per_repo_deadline` existed
 # only to be `del`eted on entry; doctrine forbids a signature carrying a
 # parameter no caller needs and no callee uses.
-# Review: overengineering-reviewer Finding 3 -- no `drain_pending_push` call
+# No `drain_pending_push` call
 # here; see module docstring's DOES NOT DRAIN section for why.
 def _sweep_one(repo_root: Union[str, Path]) -> None:
     """Push exactly one repo -- declining outright if another sweeper

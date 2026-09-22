@@ -1,0 +1,151 @@
+{
+  "absent_sentinels_key": "absent_sentinels",
+  "appetite_presets": [
+    "hunt",
+    "standard",
+    "sweep"
+  ],
+  "closure_block_required_fields": [
+    "closed_values",
+    "stamp_fields",
+    "status_field"
+  ],
+  "closure_closing_branches": [
+    "fix",
+    "refute-close"
+  ],
+  "engine_concurrency_ceiling": 8,
+  "knob_names": [
+    "batch_size",
+    "budget_tokens",
+    "concurrency",
+    "extra_verification",
+    "limit",
+    "max_agent_calls",
+    "triage_depth",
+    "where",
+    "window"
+  ],
+  "ledger_line_fields": [
+    "profile",
+    "row_id",
+    "digest",
+    "stage",
+    "verdict",
+    "outcome",
+    "evidence_file",
+    "run_stamp"
+  ],
+  "op_runner_agent_type": "coordinator:queue-grind-op-runner",
+  "overridable_knobs": [
+    "budget_tokens",
+    "limit",
+    "where"
+  ],
+  "plan_weight_floor": "M",
+  "receipt_queue_keys": [
+    "queue",
+    "profile",
+    "profile_digest",
+    "appetite",
+    "resolved_knobs",
+    "manifest_digest",
+    "source",
+    "reemit"
+  ],
+  "regenerate_ops": [
+    "doctrine.surface_split_regenerate"
+  ],
+  "reserved_keys": [
+    "@stem",
+    "@unkeyed"
+  ],
+  "source_ops": [
+    "lessons.extract"
+  ],
+  "stage_kinds": [
+    "commit",
+    "fix",
+    "refute-close",
+    "triage",
+    "undo",
+    "verify"
+  ],
+  "stage_outcomes": {
+    "commit": [
+      "commit-failed",
+      "committed"
+    ],
+    "fix": [
+      "NEEDS_WIDER_SCOPE",
+      "NOT_REPRODUCED",
+      "PEER_DIRTY",
+      "baton",
+      "done",
+      "needs-judgment"
+    ],
+    "refute-close": [
+      "confirmed",
+      "refuted"
+    ],
+    "triage": [
+      "profile-declared"
+    ],
+    "undo": [
+      "undone"
+    ],
+    "verify": [
+      "fail",
+      "pass"
+    ]
+  },
+  "triage_depths": [
+    "deep",
+    "shallow",
+    "standard"
+  ],
+  "triage_record_fields": [
+    "row",
+    "verdict",
+    "evidence",
+    "tshirt_size",
+    "sizing_evidence",
+    "tradeoff",
+    "declared_files",
+    "fix_plan"
+  ],
+  "tshirt_sizes": [
+    "L",
+    "M",
+    "S",
+    "XL",
+    "XS",
+    "XXL"
+  ],
+  "universal_handback_types": [
+    "baton",
+    "budget-exhausted",
+    "commit-failed",
+    "manifest-stale",
+    "needs-judgment",
+    "peer-dirty",
+    "rejected-after-retry",
+    "stage-dead",
+    "verify-failed",
+    "widen-exhausted"
+  ],
+  "verify_modes": [
+    "agent",
+    "op"
+  ],
+  "verify_ops": [
+    "lessons.verify_extraction"
+  ],
+  "where_operators": [
+    "==",
+    "absent",
+    "contains",
+    "in",
+    "present"
+  ]
+}

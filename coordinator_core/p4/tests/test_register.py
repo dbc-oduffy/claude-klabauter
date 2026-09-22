@@ -242,7 +242,7 @@ class TestRegisterWorkspace:
 
 
 class TestRootContainsCaseHandling:
-    """Review: code-reviewer F2. A `p4 client -o` `Root:`/`AltRoots:` value
+    """code-reviewer F2. A `p4 client -o` `Root:`/`AltRoots:` value
     routinely differs in casing from the OS-reported repo directory on
     Windows (hand-authored client specs vs. tool-cloned repos)."""
 

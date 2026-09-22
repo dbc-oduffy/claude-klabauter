@@ -105,7 +105,7 @@ _KNOWN_FIELDS = (
     "created",
 )
 
-# Review: code-reviewer 49e8b242 P2 — was a locally-hand-typed regex that
+# Was a locally-hand-typed regex that
 # near-missed frontmatter.body_blocks._compile_heading_re's grammar; now the
 # canonical one shared with every detection site (see
 # coordinator_core.session_ledger's module docstring).
@@ -150,12 +150,14 @@ def format_oneline_row(
     comment and ``docgen/templates/handoff.json`` document this shape in
     prose only; this function is the one place that actually builds it.
 
-    *session_id* is truncated to its trailing 6 characters (``sid6``),
-    matching the ``sid[-6:]`` convention ``coordinator_core.ops.
-    coordinator_complete_entry`` already uses for its own sid6-suffixed
-    filenames — NOT the ``tail -c 7 | head -c 6`` variant referenced in
-    ``wsc_resolve.py`` (that variant drops the session id's final
-    character; this keeps it).
+    *session_id* is truncated to its LEADING 6 characters (``sid6``) —
+    a 2026-08-14 measurement across state/handoffs/ plus archive/handoffs/
+    found 207 of 207 matchable corpus rows abbreviate the leading 6 (0
+    trailing), matching how sessions refer to themselves by short id
+    everywhere else in this system. This is NOT the ``sid[-6:]``
+    convention ``coordinator_core.ops.coordinator_complete_entry`` uses
+    for its own sid6-suffixed filenames — that is a separate grammar for
+    a different artifact and is unaffected by this choice.
 
     *created* is truncated to its leading ``YYYY-MM-DD`` — accepts either a
     bare date or a full ISO timestamp.
@@ -168,7 +170,7 @@ def format_oneline_row(
     detect via a round-trip parse, not silently patched over here.
     """
     date = (created or "")[:10]
-    sid6 = (session_id or "")[-6:]
+    sid6 = (session_id or "")[:6]
     return f"{date} | {sid6} | {tshirt} | {agent_dispatches}d / {opus_dispatches}o | {summary}"
 
 
@@ -206,7 +208,7 @@ def resolve_state_root(coordinator_root: Path, cwd: Path) -> Path:
     DoE/claude-klabauter roots via its own resolvers) and is retained only for call-site
     compatibility with existing callers of this function.
 
-    Review: code-reviewer — *cwd* is threaded explicitly to
+    *cwd* is threaded explicitly to
     ``coordinator_state_root(git_root=...)`` rather than left to that seam's
     own ambient-``os.getcwd()`` ``git rev-parse``, so this function is
     provably scoped to the *cwd* argument (not the process's ambient cwd) on
@@ -283,7 +285,7 @@ def resolve_handoff_path(
         return str(in_handoffs)
 
     # 4. Recursive search under archive/handoffs/**/
-    # Review: code-reviewer — return the FIRST match in os.walk traversal
+    # Return the FIRST match in os.walk traversal
     # order (no sort). The bash oracle takes `find ... | head -1`, whose
     # result order is filesystem-traversal order (arbitrary/OS-dependent,
     # NOT lexicographic); sorting here silently re-resolved duplicate
@@ -762,7 +764,7 @@ def aggregate(
     # dirname(terminal_abs), exactly mirroring the bash oracle's `node
     # walk-handoff-dag.js --start <path>` invocation (no --handoff-dir flag).
     # See module docstring negative-spec.
-    # Review: code-reviewer — _EDGE_KINDS is already a set literal;
+    # _EDGE_KINDS is already a set literal;
     # walk_forward only reassigns edge_kinds when None (never mutates a
     # passed-in set), so the set(...) copy here was a no-op.
     walk = walk_forward(terminal_abs, edge_kinds=_EDGE_KINDS)
@@ -889,7 +891,7 @@ def aggregate(
         first_dt = _parse_date_prefix(first_created)
         last_dt = _parse_date_prefix(last_created)
         if first_dt is not None and last_dt is not None:
-            # Review: code-reviewer — match the bash oracle's local-tz
+            # Match the bash oracle's local-tz
             # epoch-second diff (date -d/-j -> epoch, // 86400) rather than
             # a naive calendar-day subtraction. time.mktime() interprets the
             # naive midnight datetime as local time (DST-aware, same as the

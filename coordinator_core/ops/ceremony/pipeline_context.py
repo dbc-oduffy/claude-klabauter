@@ -271,7 +271,7 @@ class PipelineContext:
         Suitable for embedding in a receipt (the nodes list matches
         receipt_schema make_receipt's nodes parameter exactly).
         """
-        # Review: code-reviewer (Slice C1, Finding 1) — emit a CONSISTENT plural
+        # Emit a CONSISTENT plural
         # list even for a scalar-only-constructed context, so from_dict() can
         # switch to presence-based (not truthiness-based) plural-key detection
         # without breaking scalar-only round-trips. The `or` fallback only
@@ -374,7 +374,7 @@ class PipelineContext:
                 f"disposition must be a string; got {type(self.disposition).__name__}"
             )
 
-        # Review: code-reviewer F3 — consumed_handoff/predecessor previously had no
+        # consumed_handoff/predecessor previously had no
         # type check nor the disposition-consistency invariant this class's own
         # docstring documents ("populated ONLY when disposition == chain-terminal").
         if not isinstance(self.consumed_handoff, str):
@@ -440,7 +440,7 @@ class PipelineContext:
         # merely assign it in from_dict — a hand-edited or round-tripped
         # receipt where the scalar and list[0] diverge must fail validation,
         # or an inconsistent context threads silently into phase-2.
-        # Review: code-reviewer (Slice C1, Finding 3) — this check is gated on
+        # This check is gated on
         # isinstance(self.consumed_handoff, str)/isinstance(self.predecessor, str)
         # below, so it is SKIPPED (not unconditional) when the scalar already
         # failed its own type check above; that case surfaces exactly one error
@@ -459,7 +459,7 @@ class PipelineContext:
                 f"got predecessor={self.predecessor!r}, predecessors={self.predecessors!r}"
             )
 
-        # Review: code-reviewer F7 — validate() checked sid's type but not its
+        # validate() checked sid's type but not its
         # non-emptiness, leaving a corrupted/hand-edited receipt with sid=""
         # able to reach phase-2 (wsc_commit) silently. Gated on `disposition`
         # (not `ceremony`) so pre-resolution/test-fixture contexts that

@@ -207,7 +207,7 @@ def test_promote_refuses_on_closed_at_alone(tmp_path, monkeypatch):
 
     result = _promote(session_id="sid-closed2", cwd=str(repo))
 
-    # Review: reviewer (P2 #3) — assert the guard's structural effect
+    # Assert the guard's structural effect
     # (refusal + no scaffold + no stamp), not just message prose.
     assert result["exit_code"] == 1
     assert "an adopted artifact" in result["error"]
@@ -223,7 +223,7 @@ def test_promote_returns_existing_path_when_promoted_then_closed(tmp_path, monke
     artifact cleanly -- no re-scaffold, no refusal -- because no new artifact
     is created and the existing one is unaffected by the later closure.
 
-    Review: reviewer (P3 #1) -- pins the branch-order guarantee the module
+    Pins the branch-order guarantee the module
     docstring/comment claims but this diff left uncovered."""
     repo = _make_repo(tmp_path)
     _ensure_session_dir(repo, "sid-promoted-then-closed")

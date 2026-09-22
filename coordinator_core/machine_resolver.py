@@ -540,7 +540,7 @@ def canonical_repo_key_for_root(root, repo_key_paths: dict) -> Optional[str]:
 
 
 def _identity_repo_aliases() -> dict[str, str]:
-    # Review: coordinator-code-reviewer Finding 3 — sibling reader:
+    # Sibling reader:
     # coordinator/bin/lib/coordinator_registry.py's REPO_ALIASES (eager,
     # import-time). Keep both in sync by hand on any manifest-shape change.
     """`{registryKey: shortname}` from the DoE manifest's `identity.repoAliases` —
@@ -561,7 +561,7 @@ def _identity_repo_aliases() -> dict[str, str]:
 
 
 def _identity_central_canonical_id() -> str:
-    # Review: coordinator-code-reviewer Finding 3 — sibling reader:
+    # Sibling reader:
     # coordinator/bin/lib/coordinator_registry.py's _central_canonical_id().
     # Keep both in sync by hand on any manifest-shape change.
     """The single canonical central-EM identity string — `identity.
@@ -778,7 +778,7 @@ def _git_user_email_uncached(cwd: Optional[str] = None) -> str:
     never calls this one directly, it goes through ``_git_user_email_cached``
     (which is what actually calls this with ``cwd=repo_root``).
 
-    Review: code-reviewer (F4, nit) — by design, this collapses several
+    By design, this collapses several
     operationally-distinct failure modes ("git not installed" vs. "git
     present but repo/config corrupt") to the same "" signal; not a bug.
     """
@@ -821,7 +821,7 @@ def _git_user_email_cached(repo_root: Optional[str]) -> str:
     through as ``cwd=`` to the underlying spawn, so the cached value is
     actually resolved against the directory it is keyed on.
 
-    Review: code-reviewer (F2, P2) — original ``maxsize=1`` was named per
+    Original ``maxsize=1`` was named per
     the reviewer's recommendation on the (since superseded) assumption that
     no caller changes cwd mid-process; the warm engine removed that
     assumption.

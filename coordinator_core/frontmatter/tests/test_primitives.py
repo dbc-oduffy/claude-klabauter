@@ -92,8 +92,8 @@ class TestSplitFrontmatter:
         assert result is not None
 
     def test_open_delimiter_with_trailing_text_ignored(self):
-        # Review: code-reviewer — F8 (docstring fix): test exercises opening delimiter, not close.
-        # Review: code-reviewer — F2 (vacuous assert): now asserts real behaviour after F3 parity fix.
+        # Test exercises opening delimiter, not close.
+        # Now asserts real behaviour after F3 parity fix.
         """--- followed by non-whitespace on the opening line — JS parity: rejected as invalid opener."""
         doc = '---yaml\nk: v\n---\n'
         result = split_frontmatter(doc)
@@ -560,7 +560,7 @@ class TestWriteSidePreservesTrailingComment:
 
 
 class TestGluedHashBeforeRealCommentIsStillFound:
-    """Review: code-reviewer — Finding 1 (P1). `_split_trailing_comment` used
+    """`_split_trailing_comment` used
     to give up entirely on the FIRST `#` it found, even a glued one that is
     plainly data (`abc#def`) rather than a comment opener -- so a LATER,
     genuinely space-preceded `#` starting a real trailing comment was never
@@ -983,7 +983,7 @@ class TestRemoveFmField:
         assert read_fm_field(result, 'picked_up_by_x') == 'extra'
         assert read_fm_field(result, 'picked_up_by') is None
 
-    # Review: code-reviewer — F1: block-scalar guard — remove_fm_field must raise
+    # block-scalar guard — remove_fm_field must raise
     # ValueError on block-scalar values, mirroring replace_fm_field's guard. The
     # regex ``.*$\n?`` removes only the key line, orphaning indented continuation
     # lines and silently corrupting the frontmatter.
@@ -1188,7 +1188,7 @@ class TestExtendedNestedBlockGuard:
         assert read_fm_field_unquoted(result, 'carried_ids') == '[a, b]'
 
     def test_guard_fires_for_unindented_block_sequence(self):
-        """Review: code-reviewer — Finding 4. A legal YAML block sequence
+        """A legal YAML block sequence
         written at the SAME indentation as its parent key (`tags:\\n- a\\n-
         b\\n`, no leading space before `- a`) must be treated as nested —
         the pre-fix guard only checked for a leading space/tab and missed
@@ -1244,7 +1244,7 @@ class TestRebuild:
         assert result == '---\nk: v\n---\n'
 
     def test_preamble_prepended(self):
-        # Review: code-reviewer — F6: call real API (rebuild(split, fm_text)) not wrapper;
+        # Call real API (rebuild(split, fm_text)) not wrapper;
         # assert full output, not just prefix.
         preamble = '<!-- prov -->\n'
         split = FrontmatterSplit(
@@ -2053,7 +2053,7 @@ class TestBlockScalarReadAndAppend:
 
 
 class TestBlockScalarAppendEdgeCases:
-    """Review: coordinator:code-reviewer, 2026-08-20 — six findings against
+    """Six findings against
     the append path, all confirmed against real input before fixing."""
 
     def test_tab_indented_body_is_re_emitted_with_tabs(self):
@@ -2125,7 +2125,7 @@ class TestBlockScalarAppendEdgeCases:
         assert yaml.safe_load(result)['note'] == 'two\nappended\n'
 
     def test_under_indented_continuation_ends_the_block_not_sliced(self):
-        """Review: code-reviewer P2 — a line indented LESS than the pad
+        """A line indented LESS than the pad
         established by the first body line used to be kept (only tested
         `startswith((' ', '\\t'))`) and then sliced by `ln[len(pad):]`,
         silently dropping its leading characters (`'  two'[4:]` == `'o'`).
@@ -2146,7 +2146,7 @@ class TestBlockScalarAppendEdgeCases:
         assert '  two' in result  # untouched, not sliced into 'o' etc.
 
     def test_mixed_tab_and_space_indentation_ends_the_block_not_sliced(self):
-        """Review: code-reviewer P2 — a body mixing space- and tab-indented
+        """A body mixing space- and tab-indented
         lines used to slice the tab-indented line by the space pad's
         character count (`'\\ttwo'[2:]` == `'o'`), dropping real content
         instead of raising or stopping. The pad established by the first
@@ -2164,7 +2164,7 @@ class TestBlockScalarAppendEdgeCases:
         assert '\ttwo' in result
 
     def test_explicit_indicator_over_tab_indented_body_ends_the_block_not_sliced(self):
-        """Review: code-reviewer P2 — the explicit-indent path (`|2`) built
+        """The explicit-indent path (`|2`) built
         `pad = '  '` from the count alone and sliced a tab-indented body by
         that count (`'\\tone'[2:]` == `'ne'`), dropping the first two
         characters of real content. The explicit pad is now matched by
@@ -2183,7 +2183,7 @@ class TestBlockScalarAppendEdgeCases:
         assert result == 'note: |2\n  appended\n\tone\nstatus: open\n'
 
     def test_over_indented_continuation_is_kept_and_deindented_by_pad_only(self):
-        """Review: code-reviewer P3 — three tests above pin the BREAK path (a
+        """Three tests above pin the BREAK path (a
         line that does not carry the established pad ends the block). Nothing
         pinned the KEEP path: a line indented MORE than pad is legitimate
         literal-block content, must be retained, and must be de-indented by

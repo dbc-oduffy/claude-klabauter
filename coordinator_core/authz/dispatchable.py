@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import types
 
-# Review: hand-edited only — mutation raises TypeError rather than silently
+# hand-edited only — mutation raises TypeError rather than silently
 # escalating an assembler's dispatch privilege at runtime. Copies
 # coordinator_core.authz.classification.OP_CLASSIFICATION's MappingProxyType shape
 # rather than inventing a new one. Keyed by assembler module name (e.g.
@@ -158,5 +158,23 @@ ASSEMBLER_DISPATCHABLE: "types.MappingProxyType[str, frozenset[str]]" = types.Ma
     "baton_assemble": frozenset({
         "handoff.stamp_phase",
         "handoff.author_fork",
+    }),
+    # C5 (docs/plans/2026-09-11-the-lessons-pipeline-drains-without-a-ha.md)
+    # — `learn_lessons_pipeline.apply.apply()` dispatches through ONE
+    # `dispatch_table` covering both `cli`/`op` directive shapes
+    # (`execute_directives`), so this entry names the package's full
+    # dispatchable surface: its `CONSUMES_MANIFEST` cli barewords
+    # (`extract-lessons`, `lessons-outbox-drain`, `age-sweep-lessons` — the
+    # three distinct scripts backing the five `cli:` directives `brief()`
+    # emits) plus the single `op:` verb, `stamp-run-complete`, that
+    # `resolve_op` gates through `assert_dispatchable` (§ this module's
+    # docstring; `resolve_cli` itself never consults this mapping, but the
+    # `op` verb absolutely needs the entry present or every dispatch of
+    # `d-stamp-run-complete` raises `UnrecognizedDirective`).
+    "learn_lessons_pipeline": frozenset({
+        "extract-lessons",
+        "lessons-outbox-drain",
+        "age-sweep-lessons",
+        "stamp-run-complete",
     }),
 })

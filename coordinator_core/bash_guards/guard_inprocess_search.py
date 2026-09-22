@@ -401,7 +401,7 @@ def check(
         if os.environ.get(_DISABLE_ENV_VAR, "0") == "1":
             return None
         try:
-            # Review: mirrors the Bash leg's own deferred-import comment
+            # mirrors the Bash leg's own deferred-import comment
             # below -- an import-time failure here must degrade to
             # `return None`, never crash the PreToolUse hook for every
             # PowerShell call in a session.
@@ -426,7 +426,7 @@ def check(
     if os.environ.get(_DISABLE_ENV_VAR, "0") == "1":
         return None
     try:
-        # Review: review-integrator -- Finding 1. Both imports are deferred
+        # Both imports are deferred
         # into this try, not just `search.answer`: an import-time failure in
         # this module breaks `dispatch.py`'s own module-scope import of
         # `guard_inprocess_search.check`, which crashes the PreToolUse(Bash)

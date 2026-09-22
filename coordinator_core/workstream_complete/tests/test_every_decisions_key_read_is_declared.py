@@ -74,7 +74,7 @@ def _directive_modules() -> list[pathlib.Path]:
     return sorted(PKG_DIR.glob("directives_*.py"))
 
 
-# Review: coordinator:code-reviewer (Finding 1, 2026-08-30) -- the guard only
+# The guard only
 # ever scanned `directives_*.py`, so a `decisions[...]` read landing directly
 # in `apply.py` (which holds the close-commit tail this incident actually
 # shipped from) or `__init__.py`'s `brief()` half was invisible to it -- the
@@ -184,7 +184,7 @@ def test_every_decisions_key_read_by_a_directive_module_is_declared(module_path)
     "module_path", _non_directive_scanned_modules(), ids=lambda p: p.name
 )
 def test_every_decisions_key_read_by_apply_or_init_is_declared(module_path):
-    """Review: coordinator:code-reviewer (Finding 1, 2026-08-30) -- the
+    """The
     directive-module-only guard above covers `directives_*.py` but never saw
     `apply.py`/`__init__.py`, which is exactly where the close-commit tail
     lives. This closes the same class of blind spot for those two modules."""

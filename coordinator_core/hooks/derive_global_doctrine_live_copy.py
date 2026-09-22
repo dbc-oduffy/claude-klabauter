@@ -117,6 +117,27 @@ def _live_path() -> Path:
     return Path.home() / ".claude" / "CLAUDE.md"
 
 
+def _display_path(path: Path, repo_root: Optional[Path] = None) -> str:
+    """Render `path` for a note/advisory reader without leaking the
+    operator's absolute home directory or checkout location -- collapses to
+    `~/...` when `path` sits under `Path.home()`, to a repo-relative form
+    when `repo_root` is given and `path` sits under it, native absolute
+    otherwise. Mirrors `hooks/support/message_envelope.py::_render_resolved`'s
+    same home-collapse convention (that helper is private to its own module,
+    so this is a small local equivalent, not a cross-module import)."""
+    try:
+        relative = path.relative_to(Path.home())
+        return f"~/{relative.as_posix()}" if relative.parts else "~"
+    except (ValueError, RuntimeError, OSError):
+        pass
+    if repo_root is not None:
+        try:
+            return path.relative_to(repo_root).as_posix()
+        except (ValueError, RuntimeError, OSError):
+            pass
+    return str(path)
+
+
 def _published_path(repo_root: Path) -> Path:
     return repo_root / "coordinator" / "templates" / "global-doctrine" / "CLAUDE.md"
 
@@ -152,15 +173,16 @@ def _is_dev_repo(repo_root: Optional[Path]) -> bool:
         return False
 
 
-def _derive_live_copy(tracked: Path, live: Path, notes: "list[str]") -> bool:
+def _derive_live_copy(tracked: Path, live: Path, notes: "list[str]", repo_root: Optional[Path] = None) -> bool:
     """Read/compare/write for one mirrored pair. Appends a note to `notes`
     only when a real derivation happened or a failure occurred (matches the
     source's silent-when-synced contract); returns True on any failure
     (fail-loud signal for the caller's overall advisory)."""
+    display = _display_path(live) if repo_root is None else _display_path(live, repo_root)
     try:
         source_bytes = tracked.read_bytes()
     except Exception as exc:
-        notes.append(f"tracked doctrine unreadable, live unchanged: {tracked} ({exc})")
+        notes.append(f"tracked unreadable, live unchanged ({exc})")
         return True
 
     try:
@@ -175,10 +197,10 @@ def _derive_live_copy(tracked: Path, live: Path, notes: "list[str]") -> bool:
         live.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(tracked, live)
     except Exception as exc:
-        notes.append(f"live copy write failed ({len(source_bytes)}B read OK): {live} ({exc})")
+        notes.append(f"write failed ({len(source_bytes)}B read OK): {display} ({exc})")
         return True
 
-    notes.append(f"re-derived {live} ({len(source_bytes)}B)")
+    notes.append(f"OK {display} ({len(source_bytes)}B)")
     return False
 
 
@@ -214,12 +236,12 @@ def evaluate(payload: dict):
         tracked = _tracked_path(repo_root)
         if tracked.is_file():
             _derive_live_copy(tracked, _live_path(), notes)
-            _derive_live_copy(tracked, _published_path(repo_root), notes)
+            _derive_live_copy(tracked, _published_path(repo_root), notes, repo_root)
         for rules_tracked in _tracked_rules_files(repo_root):
             rules_live = _live_rules_dir() / rules_tracked.name
             _derive_live_copy(rules_tracked, rules_live, notes)
             _derive_live_copy(
-                rules_tracked, _published_rules_dir(repo_root) / rules_tracked.name, notes
+                rules_tracked, _published_rules_dir(repo_root) / rules_tracked.name, notes, repo_root
             )
     else:
         if not file_path:
@@ -238,7 +260,7 @@ def evaluate(payload: dict):
 
         if resolved == tracked_resolved:
             _derive_live_copy(tracked, _live_path(), notes)
-            _derive_live_copy(tracked, _published_path(repo_root), notes)
+            _derive_live_copy(tracked, _published_path(repo_root), notes, repo_root)
         else:
             rules_dir = _tracked_rules_dir(repo_root)
             try:
@@ -255,7 +277,7 @@ def evaluate(payload: dict):
             if under_rules_dir and resolved.suffix == ".md" and resolved.is_file():
                 _derive_live_copy(resolved, _live_rules_dir() / resolved.name, notes)
                 _derive_live_copy(
-                    resolved, _published_rules_dir(repo_root) / resolved.name, notes
+                    resolved, _published_rules_dir(repo_root) / resolved.name, notes, repo_root
                 )
             else:
                 return None

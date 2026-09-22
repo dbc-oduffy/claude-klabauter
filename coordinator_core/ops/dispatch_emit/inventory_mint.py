@@ -114,6 +114,12 @@ import yaml
 
 from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
 
+#: Repo root the `os.path.isdir` rung in `_refuse_if_directory_shaped`
+#: resolves a footprint entry against -- never the process cwd (issue
+#: coordinator-klabauter#47 misfiled receipts this way). Same convention,
+#: same directory depth, as `pathspec.py :: _REPO_ROOT`.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
 _CHUNK_TABLE_HEADING_RE = re.compile(r"^## Chunk table\s*$", re.MULTILINE)
 _NEXT_HEADING_RE = re.compile(r"^## \S", re.MULTILINE)
 _BACKTICK_RE = re.compile(r"`([^`]+)`")
@@ -122,15 +128,34 @@ _BACKTICK_RE = re.compile(r"`([^`]+)`")
 #: already-outer-pipe-trimmed text; each resulting cell has `\|` unescaped
 #: back to a literal `|` before it reaches any downstream parsing.
 _UNESCAPED_PIPE_RE = re.compile(r"(?<!\\)\|")
-_LIVE_DISPOSITION_PREFIXES = ("in_progress", "queued")
-#: A closed disposition starting with this text BLOCKS every row that
-#: depends on it -- see `mint_rows`'s dep-resolution docstring (issue
-#: coordinator-klabauter#25 class 5). Every OTHER closed disposition
-#: (`already-fixed`, `landed`, `pending ...`, `dropped ...`) means the
-#: dependency is SATISFIED: the edge is simply dropped, never treated as
-#: blocking -- conflating the two was the exact trap the issue names
-#: ("routing out a chunk whose only deps were already-fixed").
-_BLOCKING_CLOSED_DISPOSITION_PREFIX = "routed out"
+#: The mise-en-place skill's own Phase 1 vocabulary for a LIVE row is
+#: `pending`, `queued`, `in_progress` (issue coordinator-klabauter#45 class
+#: A) -- this list must track that vocabulary, not the other way round, or
+#: a scout writing the skill's documented word gets every row silently
+#: classified CLOSED.
+_LIVE_DISPOSITION_PREFIXES = ("in_progress", "queued", "pending")
+#: A closed disposition starting with either of these texts BLOCKS every
+#: row that depends on it -- see `mint_rows`'s dep-resolution docstring
+#: (issue coordinator-klabauter#25 class 5). Both spellings are accepted
+#: because the skill's own vocabulary is hyphenated (`routed-out`) while
+#: the un-hyphenated `routed out` is what a scout naturally writes (issue
+#: coordinator-klabauter#45 class A) -- a hyphenation drift here silently
+#: flips a blocking edge into a SATISFIED one, which is the dangerous
+#: direction #25 class 5 exists to prevent. Every OTHER closed disposition
+#: (`already-fixed`, `landed`, `dropped ...`) means the dependency is
+#: SATISFIED: the edge is simply dropped, never treated as blocking --
+#: conflating the two was the exact trap the issue names ("routing out a
+#: chunk whose only deps were already-fixed").
+_BLOCKING_CLOSED_DISPOSITION_PREFIXES = ("routed-out", "routed out")
+#: The closed-but-satisfied vocabulary this module recognizes by name (see
+#: module docstring's disposition column and `_resolve_dep_kinds`'s own
+#: docstring for the free-text examples this set is drawn from). A
+#: disposition matching none of LIVE, blocking, or this set is refused by
+#: name at mint time (issue coordinator-klabauter#45 class A) rather than
+#: silently falling through to CLOSED-SATISFIED -- the fallthrough is what
+#: let a typo'd LIVE word (`in-progress`, `In Progress`) vanish a row with
+#: no error.
+_KNOWN_CLOSED_SATISFIED_DISPOSITION_PREFIXES = ("already-fixed", "landed", "dropped")
 #: Glob metacharacters `scoped-git-commit`'s preflight refuses in a
 #: pathspec (issue coordinator-klabauter#25 class 3) -- refused HERE, at
 #: mint time, rather than left to fail after the emitted script's work is
@@ -180,26 +205,56 @@ class GlobFootprintError(InventoryMintError):
 
 
 class DirectoryShapedFootprintError(InventoryMintError):
-    """Raised when a footprint entry is directory-shaped (a trailing `/` or
-    `\\`). `scoped-git-commit` refuses a directory pathspec by design, same
-    rule `dispatch_emit.pathspec.DirectoryShapedWriteError` already
-    enforces at emit time -- refused here instead, at mint time, naming the
-    rule rather than just the entry (issue coordinator-klabauter#25 class 4)."""
+    """Raised when a footprint entry is directory-shaped and is NOT marked
+    `writes_under:` -- in EITHER spelling: a trailing `/`/`\\`, or (no
+    trailing separator) an EXISTING directory on disk at mint time. The
+    smaller note inside coordinator-klabauter#45 class B: the no-trailing-
+    separator spelling (`cross-repo/outbox`) used to pass this rung and only
+    die later, at the workflow's claimability preflight -- both spellings
+    now refuse at the same stage, mint time. `scoped-git-commit` refuses a
+    directory pathspec by design, same rule
+    `dispatch_emit.pathspec.DirectoryShapedWriteError` already enforces at
+    emit time -- refused here instead, at mint time, naming the rule rather
+    than just the entry (issue coordinator-klabauter#25 class 4). A chunk
+    whose deliverable filename is minted at runtime by the tool that
+    produces it (a memo send, a baton mint) has a legal escape from this
+    refusal: mark the entry `writes_under:` (see `_split_footprint`,
+    issue coordinator-klabauter#45 class B) rather than naming the bare
+    directory."""
+
+
+class WritesUnderNotDirectoryError(InventoryMintError):
+    """Raised when a footprint cell's `writes_under:`-marked entry does not
+    end in `/` or `\\` -- `writes_under` is a directory PREFIX by contract
+    (plan-tasks.schema.json's own `writes_under` item pattern), never a
+    concrete file; a concrete file belongs in an ordinary backtick-quoted
+    `writes:` entry instead (issue coordinator-klabauter#45 class B)."""
+
+
+class UnrecognizedDispositionError(InventoryMintError):
+    """Raised when one or more chunk-table rows carry a `disposition` text
+    matching none of the LIVE prefixes, the blocking-closed prefixes, or
+    the known closed-satisfied prefixes (issue coordinator-klabauter#45
+    class A). Refusing by name, at mint time, replaces the prior silent
+    fallthrough to CLOSED-SATISFIED that made a typo'd LIVE word
+    (`in-progress`, `In Progress`) or a genuinely new disposition word
+    vanish a row with no error and no row named -- exactly the
+    "spine derives zero waves, naming no row" failure the issue reports."""
 
 
 def _is_live_disposition(raw: str) -> bool:
-    """LIVE iff the disposition text starts with `in_progress` or `queued`
-    (case-insensitive) -- `pending ...`, `routed out ...`, and any other free
-    text is CLOSED. See module docstring's column-mapping table.
+    """LIVE iff the disposition text starts with `pending`, `queued`, or
+    `in_progress` (case-insensitive) -- the mise-en-place skill's own Phase
+    1 vocabulary (issue coordinator-klabauter#45 class A). `routed out ...`/
+    `routed-out ...` and any other recognized closed-satisfied word is
+    CLOSED. See module docstring's column-mapping table.
 
-    Review: code-reviewer -- this is a silent-drop classifier, not a
-    closed-set validator: a typo'd spelling (`in-progress`, `In Progress`)
-    or a future disposition word this module doesn't know about reads as
-    CLOSED with no error and no warning, dropping the row from the minted
-    spine. Deliberate given `disposition` is a controlled vocabulary from
-    an upstream tool, but a vocabulary drift fails silently rather than
-    loudly, unlike `FootprintUnreadableError`'s refusal on a malformed
-    footprint cell."""
+    An unrecognized disposition -- one matching neither this list, the
+    blocking-closed prefixes, nor the known closed-satisfied prefixes --
+    is no longer silently classified CLOSED: `_raw_disposition_kind`
+    raises `UnrecognizedDispositionError` naming the row and its raw text
+    instead, closing the vocabulary-drift hole this function's docstring
+    used to flag as deliberate."""
     text = raw.strip().lower()
     return any(text.startswith(prefix) for prefix in _LIVE_DISPOSITION_PREFIXES)
 
@@ -229,48 +284,93 @@ def _refuse_if_glob(row_id: str, path: str, raw_cell: str) -> None:
 
 
 def _refuse_if_directory_shaped(row_id: str, path: str, raw_cell: str) -> None:
-    if path.endswith("/") or path.endswith("\\"):
+    """Refuse `path` if it is directory-shaped, in either spelling: a
+    trailing separator, OR (coordinator-klabauter#45's smaller Class B note)
+    no trailing separator but an EXISTING directory on disk at mint time --
+    `cross-repo/outbox` passed this rung, then died at the workflow's
+    claimability preflight instead of here. `os.path.isdir` is resolved
+    against `_REPO_ROOT`, never the process cwd (issue
+    coordinator-klabauter#47), and a path that does not exist yet is never
+    refused by this rung -- only an EXISTING directory is a directory."""
+    if path.endswith("/") or path.endswith("\\") or (_REPO_ROOT / path).is_dir():
         raise DirectoryShapedFootprintError(
             f"chunk table row {row_id!r}: footprint entry {path!r} is "
-            "directory-shaped (trailing separator); scoped-git-commit "
-            "refuses a directory pathspec by design -- name a concrete "
-            f"file instead (raw cell: {raw_cell!r})"
+            "directory-shaped (trailing separator, or an existing "
+            "directory on disk); scoped-git-commit refuses a directory "
+            "pathspec by design -- name a concrete file instead, or mark "
+            "the entry `writes_under:` if the row's filenames are chosen "
+            f"at run time (a memo send, a baton mint) (raw cell: {raw_cell!r})"
         )
 
 
-def _split_footprint(row_id: str, cell: str) -> List[str]:
-    """Comma-split a `footprint`-shaped cell into backtick-quoted paths.
+#: Marks a footprint entry as a `writes_under:` directory PREFIX rather than
+#: a concrete `writes:` file (issue coordinator-klabauter#45 class B) -- a
+#: chunk whose deliverable filename is minted at runtime by the tool that
+#: produces it (a `cross-repo-memo` send landing under `cross-repo/outbox/`,
+#: a spin-off baton mint under `state/handoffs/`) has no legal `writes:`
+#: value: it cannot name a file (the tool chooses the name) and `writes:`
+#: refuses a directory. `writes_under:` is the schema's own escape
+#: (plan-tasks.schema.json's `writes_under` property) -- this marker is how
+#: a Chunk-table footprint cell reaches it.
+_WRITES_UNDER_MARKER_RE = re.compile(r"writes_under\s*:\s*`([^`]+)`", re.IGNORECASE)
 
-    `—`/`-`/empty means an empty `writes` list (a row this module never
-    lets reach the minted spine live -- see `FootprintUnreadableError`
-    below and the module docstring's `surface` note).
 
-    Each backtick-quoted path is extracted directly out of the raw cell
-    (`_BACKTICK_RE.findall`) rather than by a strict comma-split-then-
-    fullmatch -- a comma-split breaks on trailing prose that itself
-    contains a comma (`` `a/b.py` (verify only, no edit) ``), and this
-    module's job is to keep the path and discard the prose, not parse it
-    (issue coordinator-klabauter#25 class 2). A cell with no backtick-quoted
-    path at all still refuses (`FootprintUnreadableError`), naming that the
-    cell must hold backtick-quoted paths.
+def _split_footprint(row_id: str, cell: str) -> Tuple[List[str], List[str]]:
+    """Comma-split a `footprint`-shaped cell into `(writes, writes_under)`.
+
+    `—`/`-`/empty means both lists are empty (a row this module never lets
+    reach the minted spine live -- see `FootprintUnreadableError` below and
+    the module docstring's `surface` note).
+
+    A `writes_under:` `` `dir/` `` -marked entry (issue
+    coordinator-klabauter#45 class B) is extracted first and separately --
+    its path MUST be directory-shaped (`WritesUnderNotDirectoryError`
+    otherwise) and is never subject to the plain-`writes:` directory-shape
+    refusal, since a directory prefix is exactly what it is FOR. Every
+    remaining backtick-quoted path is extracted directly out of what is
+    left of the raw cell (`_BACKTICK_RE.findall`) rather than by a strict
+    comma-split-then-fullmatch -- a comma-split breaks on trailing prose
+    that itself contains a comma (`` `a/b.py` (verify only, no edit) ``),
+    and this module's job is to keep the path and discard the prose, not
+    parse it (issue coordinator-klabauter#25 class 2). A cell with no
+    backtick-quoted path and no `writes_under:` marker at all still refuses
+    (`FootprintUnreadableError`), naming that the cell must hold
+    backtick-quoted paths.
     """
     cell = cell.strip()
     if cell in ("", "—", "-"):
-        return []
-    matches = _BACKTICK_RE.findall(cell)
+        return [], []
+
+    writes_under: List[str] = []
+    for prefix in _WRITES_UNDER_MARKER_RE.findall(cell):
+        if not (prefix.endswith("/") or prefix.endswith("\\")):
+            raise WritesUnderNotDirectoryError(
+                f"chunk table row {row_id!r}: writes_under entry {prefix!r} "
+                "is not directory-shaped (no trailing separator) -- "
+                "writes_under names a directory PREFIX, never a concrete "
+                f"file (raw cell: {cell!r})"
+            )
+        writes_under.append(prefix)
+    remaining = _WRITES_UNDER_MARKER_RE.sub("", cell).strip()
+
+    matches = _BACKTICK_RE.findall(remaining)
     if not matches:
+        if writes_under:
+            return [], writes_under
         raise FootprintUnreadableError(
             f"chunk table row {row_id!r}: footprint cell holds no "
             f"backtick-quoted path (raw cell: {cell!r}) -- every footprint "
-            "entry must be a backtick-quoted path; trailing prose after "
-            "the closing backtick is fine and is discarded"
+            "entry must be a backtick-quoted path, or marked "
+            "`writes_under:` `` `dir/` `` for a runtime-minted deliverable; "
+            "trailing prose after the closing backtick is fine and is "
+            "discarded"
         )
     paths: List[str] = []
     for path in matches:
         _refuse_if_glob(row_id, path, cell)
         _refuse_if_directory_shaped(row_id, path, cell)
         paths.append(path)
-    return paths
+    return paths, writes_under
 
 
 def _parse_pipe_row(line: str) -> List[str]:
@@ -360,12 +460,29 @@ _DEP_KIND_CLOSED_SATISFIED = "closed-satisfied"
 _DEP_KIND_ROUTED_OUT = "routed-out"
 
 
-def _raw_disposition_kind(raw: str) -> str:
+def _raw_disposition_kind(row_id: str, raw: str) -> str:
+    """`raw` (a Chunk-table row's `disposition` cell) -> one of
+    `_DEP_KIND_LIVE` / `_DEP_KIND_ROUTED_OUT` / `_DEP_KIND_CLOSED_SATISFIED`.
+
+    Raises `UnrecognizedDispositionError`, naming `row_id` and `raw`
+    verbatim, when the text matches none of the LIVE prefixes, the
+    blocking-closed prefixes, or the known closed-satisfied prefixes (issue
+    coordinator-klabauter#45 class A) -- replacing the prior silent
+    fallthrough to CLOSED-SATISFIED for anything unrecognized."""
+    text = raw.strip().lower()
     if _is_live_disposition(raw):
         return _DEP_KIND_LIVE
-    if raw.strip().lower().startswith(_BLOCKING_CLOSED_DISPOSITION_PREFIX):
+    if text.startswith(_BLOCKING_CLOSED_DISPOSITION_PREFIXES):
         return _DEP_KIND_ROUTED_OUT
-    return _DEP_KIND_CLOSED_SATISFIED
+    if text.startswith(_KNOWN_CLOSED_SATISFIED_DISPOSITION_PREFIXES):
+        return _DEP_KIND_CLOSED_SATISFIED
+    raise UnrecognizedDispositionError(
+        f"chunk table row {row_id!r}: disposition {raw!r} matches none of "
+        "the LIVE vocabulary (pending/queued/in_progress), the blocking-"
+        "closed vocabulary (routed-out/routed out), or the known "
+        "closed-satisfied vocabulary (already-fixed/landed/dropped) -- "
+        "refusing rather than silently classifying it CLOSED"
+    )
 
 
 def _resolve_dep_kinds(chunk_rows: List[Dict[str, str]]) -> Dict[str, str]:
@@ -385,7 +502,7 @@ def _resolve_dep_kinds(chunk_rows: List[Dict[str, str]]) -> Dict[str, str]:
     kinds: Dict[str, str] = {}
     for row in chunk_rows:
         row_id = _strip_backtick(row["id"])
-        kinds[row_id] = _raw_disposition_kind(row["disposition"])
+        kinds[row_id] = _raw_disposition_kind(row_id, row["disposition"])
 
     rows_by_id = {_strip_backtick(row["id"]): row for row in chunk_rows}
     resolved: Dict[str, str] = {}
@@ -435,7 +552,7 @@ def mint_rows(chunk_rows: List[Dict[str, str]]) -> List[dict]:
         row_id = _strip_backtick(row["id"])
         if dep_kinds[row_id] != _DEP_KIND_LIVE:
             continue
-        writes = _split_footprint(row_id, row["footprint"])
+        writes, _writes_under = _split_footprint(row_id, row["footprint"])
         if not writes:
             raise FootprintUnreadableError(
                 f"chunk table row {row_id!r} is LIVE ({row['disposition']!r}) "

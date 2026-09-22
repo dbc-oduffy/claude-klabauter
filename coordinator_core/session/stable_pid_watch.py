@@ -2,17 +2,14 @@
 coordinator_core.session.stable_pid_watch — cadence watch over whether ANY
 session's ``stable_pid`` capture is missing.
 
-Purpose: K-006 (``state/kill-ledger.md``) deregistered
-``hooks.session_heartbeat`` — the sole discharge of the F0 hazard (a session
-whose ``stable_pid`` capture misses, running only ``Bash``/``PowerShell`` for
-30 minutes, reads DEAD on the Layer-2 recency path in
-``coordinator_core/session/liveness.py::session_live`` and becomes
-reap-eligible while alive). Deregistration was ruled safe ONLY because
-``stable_pid`` capture currently never misses (10/10 live + 354/354 archived
-sessions since 2026-08-10). That 0% is load-bearing and was, before this
-module, completely unwatched — the ledger's own risk paragraph was unenforced
-prose. This module is the artifact that discharges it (CLAUDE.md § north
-star: name the artifact, "the operator remembers" is not one).
+Purpose: the heartbeat (``hooks.session_heartbeat``) was removed (K-006,
+``state/kill-ledger.md``), and this module guards the premise of that
+removal — that ``stable_pid`` capture currently never misses (10/10 live +
+354/354 archived sessions since 2026-08-10). That 0% is load-bearing and was,
+before this module, completely unwatched — the ledger's own risk paragraph
+was unenforced prose. This module is the artifact that discharges it
+(CLAUDE.md § north star: name the artifact, "the operator remembers" is not
+one).
 
 Threshold — ANY single miss alerts, deliberately NOT a rate/percentage. The
 newest known miss is 2026-08-08 (64%, 32/50); the population of interest is

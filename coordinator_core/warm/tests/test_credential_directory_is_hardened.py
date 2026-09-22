@@ -55,8 +55,13 @@ def runtime_base(monkeypatch):
     red on macOS for months because pytest's `tmp_path` is deep enough that the
     derived socket path blows the `sun_path` budget; nothing in this file binds
     a socket, but inheriting the habit costs nothing and the next test added
-    beside these might."""
-    base = Path(tempfile.mkdtemp(prefix="cred-", dir="/tmp"))
+    beside these might.
+
+    `/tmp` does not exist as a drive-relative root on Windows, so
+    `os.name == "nt"` falls back to the platform default temp root there
+    -- every caller of this fixture is `posix_only` today, but a future
+    one should not have to rediscover the guard."""
+    base = Path(tempfile.mkdtemp(prefix="cred-", dir=None if os.name == "nt" else "/tmp"))
     monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(base))
     yield base
 

@@ -1264,7 +1264,7 @@ def main_install_all(argv: List[str]) -> int:
     return rc_pre or rc_post
 
 
-# Review: coordinator:code-reviewer — relocated out of the import block
+# Relocated out of the import block
 # (previously split two contiguous import statements) to sit beside
 # WRITE_SURFACE, which reads it.
 _SENDING_HOOK_FILENAME = "pre-commit"

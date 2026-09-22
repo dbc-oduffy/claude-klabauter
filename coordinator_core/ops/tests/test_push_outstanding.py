@@ -607,6 +607,39 @@ def test_cockpit_publish_uses_outcome_pushed_range_not_precall_shas(monkeypatch,
     )
 
 
+def test_cockpit_publish_fires_on_first_push_with_no_upstream_range(monkeypatch, tmp_path):
+    """A branch's genuine first push has no upstream tip to range from, so
+    `push_with_retry` reports `pushed_range=None` even though the push
+    landed (`acted == ["push"]`, `landed_sha` set) -- the publish must still
+    fire, using `landed_sha` and an explicit `old_sha=None` (which
+    `_schema_touched` diffs against the empty tree). Regression for the
+    no-upstream-caveat gap: gating on `pushed_range is not None` silently
+    skipped the publish for every schema change first-pushed on a fresh
+    branch."""
+    repo = _make_repo_with_remote(tmp_path)
+    _seed_schema_file(repo)
+    landed_sha = _git_stdout(["rev-parse", "HEAD"], repo).strip()
+    _patch_cockpit_script_present(monkeypatch, repo)
+    calls = _record_invoke(monkeypatch)
+
+    def _fake_push_with_retry(root, **kwargs):
+        return PushOutcome(
+            exit_code=0,
+            acted=["push"],
+            pushed_range=None,
+            pushed_count=None,
+            landed_sha=landed_sha,
+        )
+
+    monkeypatch.setattr(push_outstanding_mod, "push_with_retry", _fake_push_with_retry)
+
+    outcome = push_outstanding(repo)
+
+    assert outcome.exit_code == 0
+    assert len(calls) == 1
+    assert calls[0]["repo_root"] == str(repo)
+
+
 # ---------------------------------------------------------------------------
 # decide_only -- exercising the decision without publishing
 # ---------------------------------------------------------------------------

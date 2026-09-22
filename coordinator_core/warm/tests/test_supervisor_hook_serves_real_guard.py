@@ -224,15 +224,17 @@ def _echoing_dispatch(msg, *, caller=None, isolated=False):
 
 def test_the_url_chooses_the_op_end_to_end(tmp_path: Path):
     """Two registrations on the SAME event must reach two different ops. This is the
-    property `hooks.json` forces: three SessionStart entries, one event name."""
+    property `hooks.json` forces: three SessionStart entries, one event name.
+    Uses hooks.track_touched_files (substitute for the retired
+    hooks.session_heartbeat example, same hooks.* routing)."""
     httpd, port = _bind_handler(tmp_path, dispatch=_echoing_dispatch)
     try:
         _, boot = _post(port, {"hook_event_name": "SessionStart", "source": "startup"}, path="/hook/session.boot_sweep")
-        _, track = _post(port, {"hook_event_name": "SessionStart", "source": "startup"}, path="/hook/hooks.session_heartbeat")
+        _, track = _post(port, {"hook_event_name": "SessionStart", "source": "startup"}, path="/hook/hooks.track_touched_files")
     finally:
         httpd.shutdown()
     assert boot["hookSpecificOutput"]["additionalContext"] == "routed to session.boot_sweep"
-    assert track["hookSpecificOutput"]["additionalContext"] == "routed to hooks.session_heartbeat"
+    assert track["hookSpecificOutput"]["additionalContext"] == "routed to hooks.track_touched_files"
 
 
 def test_an_injecting_hook_injects_over_the_transport(tmp_path: Path):
@@ -292,7 +294,7 @@ def test_a_bare_hook_post_still_reaches_the_guard_op(tmp_path: Path):
 
 
 def test_explicit_guard_op_path_still_refuses_an_event_it_has_no_route_for(tmp_path: Path):
-    """Review: coordinator:code-reviewer Finding 1 (P1). Naming `warm_guard.evaluate`
+    """
     explicitly via `/hook/warm_guard.evaluate` resolves to the SAME `op_name` as the
     bare `/hook` path, so it must get the same event-eligibility gate -- a SessionStart
     (no `tool_name`/`tool_input`) posted to the explicit alias must still come back as
@@ -318,3 +320,30 @@ def test_explicit_guard_op_path_still_refuses_an_event_it_has_no_route_for(tmp_p
     assert "permissionDecision" not in hso
     assert "did not run" in hso["additionalContext"]
     assert seen == []
+
+
+def test_an_engine_skew_answer_is_a_409_so_the_forwarder_runs_the_guard_cold(tmp_path):
+    """ENGINE_SKEW is provably-not-run AND runnable cold. Wrapped as a 200 "guard did
+    not run" body it passed every Bash guard unchecked for the length of every publish;
+    as a 409 -- `_refuse_stale_caller`'s own status -- it sends the forwarder down its
+    non-2xx ladder to `hook_http.evaluate_cold`, which runs the guard."""
+    import urllib.error
+
+    import pytest
+
+    def _skew_dispatch(msg, *, caller=None, isolated=False):
+        return {
+            "jsonrpc": "2.0",
+            "id": msg.get("id"),
+            "error": {"code": skew.ENGINE_SKEW, "message": "engine generation changed"},
+        }
+
+    httpd, port = _bind_handler(tmp_path, dispatch=_skew_dispatch)
+    try:
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            _post(port, {"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                         "tool_input": {"command": "echo hi"}})
+        assert exc.value.code == 409
+        assert json.loads(exc.value.read())["error"]["code"] == skew.ENGINE_SKEW
+    finally:
+        httpd.shutdown()

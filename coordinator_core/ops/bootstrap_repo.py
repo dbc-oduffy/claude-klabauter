@@ -23,7 +23,8 @@ Contract (trust guarantees):
 
 Exit codes (must match `main()`'s actual returns byte-for-byte — do not drift):
   0  Bootstrap complete (or dry-run completed without error).
-  1  Usage error, missing prerequisite, or git not available.
+  1  Usage error, missing prerequisite, git not available, or a target root
+     that resolves to Claude Home.
   2  User declined git-init offer (repo is not a git repo; nothing done).
   3  Dirty working tree detected; bootstrap refused without user acknowledgement.
      (Under --non-interactive, exits 3 on a dirty tree — never silently proceeds.)
@@ -37,7 +38,7 @@ Exit codes (must match `main()`'s actual returns byte-for-byte — do not drift)
      error / git not available" must not conflate that with "the claude-klabauter link
      is down and nothing ran at all." Matches the dedicated-transport-code
      convention already used by sibling ports.
-     Review: code-reviewer F1 — reusing rc=1 for transport failure violated
+     Reusing rc=1 for transport failure violated
      the porter addendum's A3/A3b exit-code-collision rule.
 
 Sibling-script resolution: this op is claude-klabauter-resident but depends on one
@@ -176,7 +177,8 @@ Flags:
 
 Exit codes:
   0  Bootstrap complete (or dry-run completed without error).
-  1  Usage error, missing prerequisite, or git not available.
+  1  Usage error, missing prerequisite, git not available, or a target root
+     that resolves to Claude Home.
   2  User declined git-init offer (repo is not a git repo; nothing done).
   3  Dirty working tree detected; bootstrap refused without user acknowledgement.
      (Under --non-interactive, exits 3 on a dirty tree — never silently proceeds.)
@@ -571,6 +573,23 @@ def main(argv: List[str]) -> int:
         _print(f"bootstrap-repo.sh: target root does not exist: {root_path}", file=sys.stderr)
         return 1
 
+    # Claude Home is not a working tree. `guard_repo_setup_claude_home_refusal`
+    # denies this for a Bash-invoked repo-setup, but this op runs in-process
+    # (bootstrap_orchestrate imports it directly), so that guard never sees it.
+    # Refused before stage 1: every stage below writes into `root_path`.
+    from coordinator_core.bash_guards.guard_repo_setup_claude_home_refusal import (
+        resolves_to_claude_home,
+    )
+
+    if resolves_to_claude_home(root_path, dict(os.environ)):
+        _print(
+            f"bootstrap-repo: refusing -- target root ({root_path}) resolves to Claude Home "
+            "(~/.claude), which is not a working tree. Run repo-setup against the project "
+            "clone you mean to set up: /repo-setup --root <path-to-that-clone>.",
+            file=sys.stderr,
+        )
+        return 1
+
     # ---- dry-run header --------------------------------------------------
     if dry_run:
         _print(f"[bootstrap-repo dry-run] target: {root_path}")
@@ -826,9 +845,19 @@ def main(argv: List[str]) -> int:
                 file=sys.stderr,
             )
 
+    # AMBIENT-REPO fix (bug-backlog 2026-08-28-two-bootstrap-ops-bare-commit-
+    # into-an-operator-selected-repo): `git diff --cached --name-only` reports
+    # EVERY staged path, including one an operator (or a peer) staged into
+    # this ambient repo before bootstrap ever ran -- it is not scoped to what
+    # THIS run added. `stage_targets` (this run's own untracked+modified list,
+    # captured before staging) is the honest scope; intersecting it against
+    # what actually landed in the index (`staged_files`) drops any path this
+    # run's own `git add` batch failed to stage.
     staged_files = _git_lines(["diff", "--cached", "--name-only"], root_path)
+    staged_set = set(staged_files)
+    scoped_commit_paths = [p for p in stage_targets if p in staged_set]
 
-    if not staged_files:
+    if not scoped_commit_paths:
         _print("bootstrap-repo: nothing to commit (scaffold was already up to date).")
         _print("  status: bootstrap already current — no commit made.")
         return 0
@@ -844,7 +873,16 @@ def main(argv: List[str]) -> int:
 
     try:
         proc = subprocess.run(
-            ["git", "-C", root_path, "commit", "-m", "chore(coordinator): bootstrap"],
+            [
+                "git",
+                "-C",
+                root_path,
+                "commit",
+                "-m",
+                "chore(coordinator): bootstrap",
+                "--",
+                *scoped_commit_paths,
+            ],
             env=env,
             timeout=_COMMIT_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,

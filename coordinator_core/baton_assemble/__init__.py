@@ -521,7 +521,7 @@ def _compute_fresh_output_path(
     predecessor for handoff; origin_handoff_id/origin_session/etc. for
     spinoff). Nothing in this module's contract requires d1 to write BACK to
     that same path, and `coordinator-doc-new`'s `--out` write is an
-    unconditional overwrite (`open(out_path, "w", ...)`, no existence check)
+    unconditional overwrite (opens out_path for writing, no existence check)
     -- echoing an existing input into `--out` silently destroys it the
     moment d1 fires.
 
@@ -1276,7 +1276,7 @@ def _adopt_prior_attempt_scaffold_path(
     be the ONLY live child currently naming this predecessor satisfied every
     other condition below and was adopted as if it were this run's own
     residue -- and adoption is not idle: `coordinator-doc-new`'s `--out` is
-    an unconditional `open(out_path, "w")` (no existence check), so
+    an unconditional overwrite of out_path (no existence check), so
     misfiring here silently truncates a live peer's in-progress handoff back
     to a pristine scaffold for the entire span between that peer's d1 and
     d6. The harm is that overwrite, not merely an orphaned file.
@@ -2724,7 +2724,6 @@ def resolve_lineage(
                     if not predecessor_path.is_absolute():
                         predecessor_path = root / predecessor
                     if not predecessor_path.is_file():
-                        # Review: coordinatorcode-reviewer-c2d43fc7 Finding 1 --
                         # the ledger's returned basename may already have moved to
                         # `archive/handoffs/` (`_resolve_held_handoff_for_session`'s
                         # own reason for existing); route it through the same
@@ -3786,7 +3785,7 @@ def _build_directives(
     decisions: Optional[dict[str, Any]] = None,
     predecessor_canonical_kind: Optional[str] = None,
 ) -> list[dict[str, Any]]:
-    # Review: coordinatorcode-reviewer-c2d43fc7 Finding 5 -- `predecessor_
+    # `predecessor_
     # canonical_kind`, when supplied, is `brief()`'s own already-computed
     # `_resolved_predecessor_canonical_kind(lineage["predecessor"], root)`
     # result, reused here instead of re-reading/re-parsing the predecessor's
@@ -4017,7 +4016,7 @@ def _build_directives(
         # surfaces this string in `report["replayed"]` and on stderr -- but it
         # is only non-silent if the string SAYS SO, which is what this branch is
         # for. Naming the exact legs makes the manual fix a copy-paste.
-        # Review: coordinator:code-reviewer (0d090196) -- renamed from
+        # Renamed from
         # `_replay_extras`/`_replay_rel` to match this function's other
         # additional-predecessor locals (`_extra`, `_extra_path`,
         # `_ledger_extra_paths`) rather than a one-off pairing.
@@ -4951,7 +4950,7 @@ def _resolve_held_handoff_for_session(
             try:
                 stage_raw = stage_file.read_text(encoding="utf-8").strip()
             except (OSError, UnicodeDecodeError):
-                # Review: coordinatorstaff-eng-f4ecb2da Finding 0 -- a
+                # A
                 # non-UTF-8 stage file must degrade ordering, never crash
                 # brief()'s unguarded call site.
                 stage_raw = None
@@ -4994,7 +4993,7 @@ def _resolve_held_handoff_for_session(
             try:
                 claimed_at = claimed_at_file.read_text(encoding="utf-8").strip() or None
             except (OSError, UnicodeDecodeError):
-                # Review: coordinatorstaff-eng-f4ecb2da Finding 0 -- same
+                # Same
                 # corrupt-metadata edge as the stage read above.
                 claimed_at = None
             if claimed_at:
@@ -5587,7 +5586,7 @@ def brief(
     # top-level `artifact.path` so it never desyncs from what d1/d2/d3/d5
     # actually received.
     normalized_artifact_path = lineage.get("artifact_path") or artifact_path
-    # Review: coordinatorcode-reviewer-c2d43fc7 Finding 5 -- computed ONCE
+    # Computed ONCE
     # here (rather than once in `_build_directives`'s d6 gate and again
     # below for the judgment-point check) and threaded through both call
     # sites, since neither reads/writes `lineage` between them.

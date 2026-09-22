@@ -453,7 +453,6 @@ def _decide_review_scale_core(
             )
             if value is not None
         )
-        # Review: coordinator:code-reviewer (a67271301efadc596) Finding 1 —
         # `code_loc` is not a peer of `commits`/`surfaces` here: it alone
         # carries veto power via `code_loc_resolved_zero`. When it is the
         # unmeasured member, a later `code_loc == 0` measurement CAN still
@@ -1056,7 +1055,12 @@ def build_review_partition_freeze_directives(range_: str, slices: Iterable[Revie
     diff scope resolved by `resolve_mid_chain_review_scope` below) —
     never a naive `origin/main...HEAD`, per the SKILL's own explicit
     warning against re-pulling concurrent EMs' already-reviewed commits.
-    Caller owns range resolution; this function only wires it in."""
+    Caller owns range resolution; this function only wires it in. A slice
+    whose `paths` contain an entry with no change in `range_` fails its
+    directive by design (K-101's returns-when) — `freeze-review-diff.py`
+    refuses the whole freeze (exit 4) rather than writing a partial diff.
+    A slice whose `paths` contain an entry with no change in `range_` fails
+    its directive by design — this is K-101's returns-when."""
     return [
         _directive(
             f"d-freeze-and-dispatch-review-partition-{s.slice_id}",
@@ -1217,7 +1221,6 @@ _QUOTA_TIME_SIGNATURE_RE = re.compile(r"resets [0-9][0-9]?:[0-9][0-9]", re.IGNOR
 _QUOTA_WEAK_PATTERNS = (
     re.compile(r"session limit", re.IGNORECASE),
     re.compile(r"rate limit", re.IGNORECASE),
-    re.compile(r"quota", re.IGNORECASE),
 )
 _QUOTA_WEAK_CORROBORATION_MAX_LEN = 1024
 
@@ -1225,13 +1228,18 @@ _QUOTA_WEAK_CORROBORATION_MAX_LEN = 1024
 def scan_dispatch_output(text: str) -> bool:
     """SKILL.md's quota-exhausted dispatch detection table (lines
     540-547), mechanized. Definite (no corroboration needed):
-    the `QUOTA-EXHAUSTED-DISPATCH:` self-detection envelope, or a
-    `resets HH:MM`-shaped time signature (structurally unique to the
-    quota-apology shape). Weak (needs `len(text) < 1024` corroboration):
-    `session limit` / `rate limit` / `quota`, case-insensitive. Returns
-    `True` iff this dispatch return body should be treated as a
-    quota-exhaustion event rather than a genuine completed return."""
-    if _QUOTA_ENVELOPE_MARKER in text:
+    the `QUOTA-EXHAUSTED-DISPATCH:` self-detection envelope anchored at
+    the start of the return body (a dispatch that genuinely exhausted
+    quota emits the envelope as its own leading output; a reviewer that
+    quotes or reports the marker mid-prose while flagging an injection
+    attempt does not anchor it, so that case is a mention, not a use),
+    or a `resets HH:MM`-shaped time signature (structurally unique to the
+    quota-apology shape, and not a string an attacker gains anything by
+    quoting). Weak (needs `len(text) < 1024` corroboration): `session
+    limit` / `rate limit`, case-insensitive. Returns `True` iff this
+    dispatch return body should be treated as a quota-exhaustion event
+    rather than a genuine completed return."""
+    if text.lstrip().startswith(_QUOTA_ENVELOPE_MARKER):
         return True
     if _QUOTA_TIME_SIGNATURE_RE.search(text):
         return True
@@ -1707,7 +1715,7 @@ def _record_membership_shas(
     if not (raw & chain_dag_sha_set):
         return None
     if narrow_foreign_shas is not None:
-        # Review: review-integrator — B1 (2026-08-06, brightline-discharge
+        # B1 (2026-08-06, brightline-discharge
         # round4). An unrecognized `scope` value (not one of
         # `_FOREIGN_STRIPPED_SCOPES`) used to fall through the narrowing
         # entirely and receive full-width credit — a fail-OPEN gap under

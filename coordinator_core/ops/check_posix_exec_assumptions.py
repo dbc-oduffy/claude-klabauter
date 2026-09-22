@@ -1159,6 +1159,80 @@ _REASON_CHMOD_RELATIVE_INVARIANT = (
 # grepping for that phrase still finds this strike, not merely the module
 # docstring's abstract definition of it.
 
+_REASON_PYTEST_SKIPIF_DECORATOR_GAP = (
+    "Admission test: the path_separator/posix_mode_bits two-way "
+    "fix-vs-carve-out discriminator (docs/reference/posix-portability-fix-"
+    "vs-carveout.md)'s 'Known residual' shape -- a genuine structural "
+    "Windows guard (`pytest.mark.skipif(sys.platform == \"win32\", ...)` / "
+    "`os.name == \"nt\"`, either as a per-test decorator or a file-level "
+    "`pytestmark` list) in a form `_is_windows_guarded()` cannot see (it "
+    "walks enclosing `If`/`and`-chain/bare-early-return AST nodes only, "
+    "per its own docstring, never a decorator on the enclosing FunctionDef "
+    "or a module-level `pytestmark` assignment). The whole test this "
+    "construct sits in is skipped outright on Windows, so the flagged "
+    "posix-mode-bit call never executes there -- a real, structural guard "
+    "at the pytest-collection level, not workaroundable debt and not a "
+    "cosmetic route-around to satisfy the detector."
+)
+
+_REASON_POSIX_ONLY_MODULE_CROSS_FUNCTION_GAP = (
+    "Admission test: the path_separator/posix_mode_bits two-way "
+    "fix-vs-carve-out discriminator (docs/reference/posix-portability-fix-"
+    "vs-carveout.md)'s 'Known residual' shape -- a genuine structural "
+    "Windows guard expressed across the module's own function boundary "
+    "(this function is POSIX-only by its own hard dependencies), not a "
+    "hypothetical or a route-around. Satisfied because the enclosing "
+    "function itself cannot run on Windows at all: it calls `os.getuid()` "
+    "(absent on Windows -- AttributeError) and/or imports `fcntl` (absent "
+    "on Windows -- ImportError) unconditionally, so any Windows caller "
+    "fails before reaching the flagged mode-bit construct regardless of "
+    "chmod semantics. This module's Windows arm is a separate function "
+    "family (`elect`/`pipe_name`, the named-pipe path) that never calls "
+    "into this POSIX-only family; the split is a module-level dispatch "
+    "`_is_windows_guarded()`'s single-function AST walk structurally "
+    "cannot see. Restructuring the chmod call to satisfy the detector "
+    "would not change what actually runs on either platform."
+)
+
+_REASON_HASATTR_FCHMOD_FEATURE_GUARD = (
+    "Admission test: the path_separator/posix_mode_bits two-way "
+    "fix-vs-carve-out discriminator (docs/reference/posix-portability-fix-"
+    "vs-carveout.md)'s 'Known residual' shape -- a genuine, functioning "
+    "cross-platform guard in a form `_is_windows_guarded()` cannot see "
+    "(feature-detection via `hasattr(os, \"fchmod\")`, not an `os.name`/"
+    "`sys.platform` comparison, the only test forms that recognizer "
+    "walks). `os.fchmod` does not exist on Windows, so the `hasattr` "
+    "check already routes Windows to the documented `os.chmod`-by-path "
+    "fallback (own inline comment: 'Windows' own os.chmod only ever "
+    "toggles the read-only attribute anyway, so the umask-parity concern "
+    "this whole block exists for does not meaningfully apply there'). "
+    "This is a real, working guard, not a POSIX assumption -- it is "
+    "simply expressed as capability detection rather than a platform-name "
+    "comparison, which is exactly the discriminator's residual-gap shape "
+    "for a construct that already ports correctly."
+)
+
+_REASON_ACCESS_XOK_TEST_ASSERTION_DEGRADES = (
+    "Admission test: the path_separator/posix_mode_bits two-way "
+    "fix-vs-carve-out discriminator (docs/reference/posix-portability-fix-"
+    "vs-carveout.md), CARVE-OUT side ('a permission-bit construct whose "
+    "Windows behavior is a platform semantic gap no code change can "
+    "close') -- satisfied because `os.access(path, os.X_OK)` on Windows "
+    "returns True for any readable file regardless of actual "
+    "executability, so this assertion degrades to a vacuous pass there "
+    "rather than a wrong decision. `os.access(slot, os.X_OK)` here is a "
+    "TEST ASSERTION verifying a property `_write_agent_forwarder` "
+    "establishes, not a production decision input the code branches on -- "
+    "nothing reads this value back to choose behaviour. On Windows the "
+    "assertion is trivially true and the test still passes; it verifies "
+    "less there, which is a known, named limitation (same discipline as "
+    "`_REASON_CHMOD_DIR_GAP`'s directory-chmod gap), not silently-passing "
+    "debt or a defect this call could fix by porting -- there is no "
+    "Windows-native equivalent 'is this file executable' primitive this "
+    "stdlib call could be swapped for that would make the assertion "
+    "meaningful there."
+)
+
 #: Fleet repo keys these exemptions are granted FOR. Values are the
 #: `repos.<key>` machine-local registry vocabulary (== `repo_key_for_root`
 #: of that repo's canonical clone directory), named here so a typo in a
@@ -1206,7 +1280,6 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
         # for the false-positive measurement that drove the arm removal, and this
         # module's own docstring (L106) for the decision to retain the class name
         # as an empty BLOCKING slot rather than delete it outright.
-        # Review: coordinator:code-reviewer (2026-08-14, wfc-S1 finding 2) --
         # the two REPO_DOE_CLAUDE entries formerly here
         # (coordinator/bin/stable-suite-run.py,
         # coordinator/tests/test_cc_root_source_guard.py) exempted a class
@@ -1255,11 +1328,45 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             # os.chmod only to assert atomic_write preserves it -- a
             # before/after relative invariant, not an absolute POSIX octal.
             "coordinator_core/hooks/test_platform_localize.py": _REASON_CHMOD_RELATIVE_INVARIANT,
-            # C7-rest-b2 (2026-08-13): twelve os.chmod(script, 0o755) sites
-            # setting the exec bit on a generated #!/usr/bin/env bash
-            # drop-in script that install_health_run.main() invokes via
-            # resolve_by_shebang + subprocess.call -- POSIX-only invocation.
-            "coordinator_core/tests/test_install_health_run.py": _REASON_CHMOD_EXEC_FOR_SH,
+            # C4 (2026-09-11, docs/plans/2026-09-11-install-health-legs-
+            # declare-how-they-launch.md): the row formerly here
+            # (`coordinator_core/tests/test_install_health_run.py`,
+            # `_REASON_CHMOD_EXEC_FOR_SH`) exempted twelve `os.chmod(script,
+            # 0o755)` sites setting the exec bit on a generated
+            # `#!/usr/bin/env bash` drop-in that `install_health_run.main()`
+            # invoked via `resolve_by_shebang` + `subprocess.call`. That
+            # dispatch is deleted outright -- a leg is now a `_NATIVE_LEGS`
+            # row (`DeclaredLaunch` argv, always `sys.executable`, never a
+            # shebang-sniffed interpreter) -- and the file's own remaining
+            # `os.chmod` calls no longer set an exec bit
+            # (`test_declared_launch_no_exec_bit_still_launches_via_stated_
+            # interpreter`'s `0o644` pins the opposite: launch does NOT
+            # depend on the exec bit at all). Struck rather than re-reasoned;
+            # `test_real_tree_no_stale_exemptions` decides.
+            # C7 (2026-08-19 re-measurement, hand-triage per file against
+            # docs/reference/posix-portability-fix-vs-carveout.md; the one
+            # real FIX in this batch, `_settings_home.py`'s
+            # `resolve_machine_local_cli`, was ported in this same change
+            # rather than exempted -- see its `os.name != "nt"` guard.
+            "coordinator_core/bash_guards/tests/test_advisory_session_dedupe.py": _REASON_PYTEST_SKIPIF_DECORATOR_GAP,
+            "coordinator_core/install/tests/test_bin_family_refresh.py": _REASON_PYTEST_SKIPIF_DECORATOR_GAP,
+            "coordinator_core/warm/tests/test_credential_directory_is_hardened.py": _REASON_PYTEST_SKIPIF_DECORATOR_GAP,
+            "coordinator_core/warm/tests/test_door_credential.py": _REASON_PYTEST_SKIPIF_DECORATOR_GAP,
+            "coordinator_core/warm/tests/test_door_read_deadline_posix.py": _REASON_PYTEST_SKIPIF_DECORATOR_GAP,
+            "coordinator_core/warm/tests/test_election_posix.py": _REASON_PYTEST_SKIPIF_DECORATOR_GAP,
+            # `_write_claude_doe_argv_stub`'s only caller is guarded by an
+            # enclosing `if os.name == "nt": skip ... elif ...:` at the
+            # call site, not inside this function's own body -- a
+            # cross-function guard `_is_windows_guarded()`'s single-
+            # function AST walk cannot see. The stub it writes is a
+            # `#!/bin/sh` script sourced by a bash cold-shell probe,
+            # exec-bit-dependent, POSIX-only end to end, same shape as
+            # `_REASON_CHMOD_EXEC_FOR_SH`'s sites elsewhere in this dict.
+            "coordinator_core/install/sandbox_check.py": _REASON_CHMOD_EXEC_FOR_SH,
+            "coordinator_core/install/tests/test_forwarder_write_never_writes_through_a_hardlink.py": _REASON_ACCESS_XOK_TEST_ASSERTION_DEGRADES,
+            "coordinator_core/orientation/regenerate_cache.py": _REASON_HASATTR_FCHMOD_FEATURE_GUARD,
+            "coordinator_core/orientation/test_regenerate_cache.py": _REASON_CHMOD_RELATIVE_INVARIANT,
+            "coordinator_core/warm/election.py": _REASON_POSIX_ONLY_MODULE_CROSS_FUNCTION_GAP,
         },
     },
     "unresolved_cross_path": {},
@@ -2926,7 +3033,7 @@ def main(argv: List[str]) -> int:
 
     stale_markers_ok, stale_markers_msg = check_no_stale_fixture_markers(root)
 
-    # Review: coordinator:code-reviewer (2026-08-14, wfc-S1) -- AC13's
+    # AC13's
     # check_no_stale_exemptions was defined and unit-tested but never
     # wired into main(), so the gate binary could never fail on a stale
     # EXEMPTIONS entry in production; only pytest running this module's

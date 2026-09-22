@@ -333,7 +333,7 @@ def test_the_windows_arm_reads_the_suffix_on_every_host(monkeypatch, tmp_path):
     The skip-unless-win32 pattern still earns its place on the arms that touch
     real filesystem semantics -- `named_forwarder_path` spelling, case folding.
     """
-    # Review: overengineering-reviewer (Kira, pass 2, finding N1) -- the native
+    # The native
     # skip-gated twin asserting this same proposition over this same fixture was
     # deleted; simulation is a total substitute for a suffix comparison.
     settings_home_bin = tmp_path / "settings-home" / "bin"

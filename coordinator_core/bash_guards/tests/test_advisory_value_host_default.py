@@ -32,20 +32,15 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import subprocess
 import tempfile
 
 import pytest
 
 from coordinator_core.bash_guards import _platform_verdict, dispatch
-from coordinator_core.bash_guards import guard_branch_set_precedence, guard_longlived_branch_naming
 from coordinator_core.bash_guards._advisory_value import AdvisoryValue, suppress_advisory
 from coordinator_core.bash_guards.dispatch import GuardBand, GuardEntry
-from coordinator_core.daily_day import local_day
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
-
-_NO_WINDOW = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
 def _payload(cmd, session_id="h6-probe", cwd="/tmp"):
@@ -68,12 +63,7 @@ def _entry_for(name, cmd, session_id, host_is_windows, cwd="/tmp"):
     closures capture `host_is_windows` from `_build_guard_chain`'s own
     call -- not re-read at `fn()` call time -- so the chain must be built
     with the SAME `host_is_windows` this test will later pass to
-    `evaluate_payload_json`.
-
-    `cwd` (docs/plans/2026-08-01-branch-creation-seam-guards.md, chunk C2):
-    `branch-set-precedence`/`longlived-branch-naming` are hazard-repo-scoped
-    (see `_cwd_for` below) -- every other row keeps the original hardcoded
-    `"/tmp"` default."""
+    `evaluate_payload_json`."""
     payload = _payload(cmd, session_id=session_id, cwd=cwd)
     chain = dispatch._build_guard_chain(
         cmd, session_id, cwd, payload, None, host_is_windows, None
@@ -90,64 +80,15 @@ def _run_isolated(name, cmd, host_is_windows, session_id, monkeypatch, cwd="/tmp
     return dispatch.evaluate_payload_json(json.dumps(payload), host_is_windows=host_is_windows)
 
 
-def _git(argv, cwd):
-    subprocess.run(["git"] + argv, cwd=cwd, check=True, capture_output=True, timeout=10, **_NO_WINDOW)
-
-
-#: `branch-set-precedence`'s own advisory candidate branch, dated TODAY so
-#: AC16's `should_prompt_rename` leg short-circuits False on "span already
-#: covers today" (see `_alternative_liveness._trigger_guard_branch_set_
-#: precedence`'s own docstring for the full age-vs-span-date reasoning this
-#: mirrors).
-_H6_TODAY = local_day()
-_H6_BRANCH_SET_CANDIDATE = "work/h6-other/%s" % _H6_TODAY
-_H6_BRANCH_SET_TARGET = "work/h6-machine/%s" % _H6_TODAY
-
-
-def _setup_branch_set_repo(tmp_path):
-    """A real scratch git repo (never this package's own working tree) with
-    a real commit on `_H6_BRANCH_SET_CANDIDATE`, ahead of a real `main` --
-    `branch-set-precedence`'s own `ahead_of_main` leg is a live `git
-    rev-list` call, not injectable through this test's plain command-string
-    `_TRIGGERS` shape. `refs/remotes/origin/main` is written explicitly for
-    the same `_branch_set._main_ref()` cwd-blind-resolution reason
-    documented on `_alternative_liveness._trigger_guard_branch_set_
-    precedence`."""
-    repo = tmp_path / "h6-branch-set-repo"
-    repo.mkdir()
-    cwd = str(repo)
-    _git(["init", "-q", "-b", "main"], cwd)
-    _git(["config", "user.email", "h6-probe@example.com"], cwd)
-    _git(["config", "user.name", "h6-probe"], cwd)
-    (repo / "f.txt").write_text("hello\n", encoding="utf-8")
-    _git(["add", "."], cwd)
-    _git(["commit", "-q", "-m", "init"], cwd)
-    _git(["update-ref", "refs/remotes/origin/main", "HEAD"], cwd)
-    _git(["checkout", "-q", "-b", _H6_BRANCH_SET_CANDIDATE], cwd)
-    (repo / "f.txt").write_text("hello\ncandidate commit\n", encoding="utf-8")
-    _git(["commit", "-q", "-am", "candidate commit"], cwd)
-    _git(["checkout", "-q", "main"], cwd)
-    return cwd
-
-
 def _cwd_for(name, tmp_path, monkeypatch):
-    """Per-guard `cwd` for the matrix tests below -- every row not named
-    here keeps the shared `"/tmp"` default. `branch-set-precedence` and
-    `longlived-branch-naming` (docs/plans/2026-08-01-branch-creation-seam-
-    guards.md, chunk C2) are hazard-repo-scoped, so a bare `"/tmp"` cwd
-    makes them silently no-op (`_is_hazard_repo` returns False before any
-    name predicate runs) rather than fire. `_is_hazard_repo` is swapped on
-    each guard's OWN module attribute for the duration of one test, then
-    restored by `monkeypatch` on teardown -- mirrors this package's own
-    injection convention (`tests/test_guard_branch_set_precedence.py`'s
-    `monkeypatch.setattr(guard, "_is_hazard_repo", lambda git_root: True)`)
-    rather than depending on this dev machine's real fleet registry."""
-    if name == "branch-set-precedence":
-        monkeypatch.setattr(guard_branch_set_precedence, "_is_hazard_repo", lambda git_root: True)
-        return _setup_branch_set_repo(tmp_path)
-    if name == "longlived-branch-naming":
-        monkeypatch.setattr(guard_longlived_branch_naming, "_is_hazard_repo", lambda git_root: True)
-        return str(tmp_path)
+    """Per-guard `cwd` for the matrix tests below. `branch-set-precedence`
+    and `longlived-branch-naming` (docs/plans/2026-08-01-branch-creation-
+    seam-guards.md, chunk C2) were the only hazard-repo-scoped rows this
+    seam existed for; both were deleted (docs/plans/2026-08-21-the-
+    advisory-band-gets-smaller-cheaper-and-honest.md, C6). Every remaining
+    row keeps the shared `"/tmp"` default -- kept as a function (not
+    inlined) so a future hazard-repo-scoped guard has a seam to extend
+    rather than reintroducing one."""
     return "/tmp"
 
 
@@ -201,13 +142,6 @@ _TRIGGERS = {
             }
         )
     ),
-    # docs/plans/2026-08-01-branch-creation-seam-guards.md, chunk C2. Both
-    # never deny (advisory-only), never Windows-cost-argued -- see
-    # `_EXPECTED_VALUE` below. `cwd` for both is supplied per-test via
-    # `_cwd_for` (hazard-repo-scoped; the shared "/tmp" default is a no-op
-    # for either).
-    "branch-set-precedence": "git checkout -b %s" % _H6_BRANCH_SET_TARGET,
-    "longlived-branch-naming": "git checkout -b migration/h6-longlived-probe",
 }
 
 _EXPECTED_VALUE = {
@@ -226,8 +160,6 @@ _EXPECTED_VALUE = {
     "validate-commit": AdvisoryValue.NOT_COST_ARGUED,
     "git-commit-safe-commit-advise": AdvisoryValue.NOT_COST_ARGUED,
     "offer-invoke-params-stdin": AdvisoryValue.NOT_COST_ARGUED,
-    "branch-set-precedence": AdvisoryValue.NOT_COST_ARGUED,
-    "longlived-branch-naming": AdvisoryValue.NOT_COST_ARGUED,
 }
 
 
@@ -395,7 +327,7 @@ _PAIRED_SYS_PLATFORM = {"nt": "win32", "posix": "linux"}
 
 @pytest.mark.parametrize("os_name,expect_suppressed", [("nt", False), ("posix", True)])
 def test_none_path_resolves_to_real_host_not_falsy(os_name, expect_suppressed, monkeypatch, capsys):
-    # Review: EM-found defect (2026-08-07) -- `_resolve_host_is_windows` resolves
+    # EM-found defect (2026-08-07) -- `_resolve_host_is_windows` resolves
     # in THREE steps: (1) the `host_is_windows` kwarg (omitted here, the point of
     # this test), (2) a declared value in the machine-local registry
     # (`_declared_host_is_windows`, `_REGISTRY_KEY = "coordinator.host_is_windows"`),

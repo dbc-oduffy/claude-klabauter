@@ -81,7 +81,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
         target.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), prefix=target.name + ".")
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(root + "\n")
             os.replace(tmp_name, target)
         except Exception:

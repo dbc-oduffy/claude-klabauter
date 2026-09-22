@@ -250,6 +250,45 @@ def test_cs_supersede_archive_handoff_inherits_the_fix(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_repair_live_deployment_state_handler_refuses_continued_target(tmp_path):
+    """The LIVE door (`handoff.repair_deployment_state`, registered
+    2026-08-31 — postdates this plan's original AC1 characterization of
+    writer 4 as "the registered op handoff.stamp", and postdates this file's
+    own now-stale claim two tests below that the writer-4 site is safe
+    purely because it is unregistered) shares `_repair_deployment_state_impl`
+    with the archived door via `_mutate` — the SAME AST-scanned site as
+    `_KNOWN_CONTINUED_WRITER_SITES`' writer-4 entry. That closure has no
+    git-mv path at all, so it must REFUSE a `continued` target outright
+    rather than ever leave a record resident in state/handoffs/ with a
+    terminal, un-archived deployment_state (AC1). This is the genuinely
+    live, reachable half of writer 4 the earlier comment below missed."""
+    import asyncio as _asyncio
+
+    from coordinator_core.ops.handoff_stamp import _repair_live_deployment_state_handler
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    hp = _seed_handoff(repo, "live-door-continued.md", "open", "in_flight")
+    original = hp.read_text(encoding="utf-8")
+    common_dir = _common_dir(repo)
+
+    result = _asyncio.run(_repair_live_deployment_state_handler(
+        {
+            "handoff_path": "state/handoffs/live-door-continued.md",
+            "reason": "test: live door must refuse a continued target",
+            "deployment_state": "continued",
+            "continued_into": "some-successor.md",
+            "continued_into_override": True,
+        },
+        common_dir,
+    ))
+
+    assert result.get("exit_code") == 1, result
+    assert "continued" in (result.get("error") or "").lower(), result
+    assert hp.exists(), "refusal must leave the file exactly where it was"
+    assert hp.read_text(encoding="utf-8") == original, "refusal must not mutate the file"
+
+
 def test_repair_archived_deployment_state_handler_rejects_live_handoffs_path(tmp_path):
     """`_repair_archived_deployment_state_handler`'s containment allowlist is
     archive/handoffs/ ONLY — a state/handoffs/ target must be refused, which
@@ -396,17 +435,22 @@ _KNOWN_CONTINUED_WRITER_SITES: Set[Tuple[str, str]] = {
     # test_writer_two_now_discharges_via_delegation and
     # test_writer_two_still_retains_for_live_forked_from_child above.
     ("coordinator_core/ops/handoff_archive_transition.py", "mutate"),
-    # writer 4 (as literally named by the plan's AC1 enumeration) —
-    # `_repair_archived_deployment_state_handler`'s own `_mutate` closure
-    # (handoff_stamp.py). VERIFIED SAFE BY CONSTRUCTION, not merely trusted:
-    # its containment allowlist is `worktree / "archive" / "handoffs"`
-    # ONLY (see that handler's own path-resolution code) — it can never
-    # write to a record resident in state/handoffs/, and it is NOT
-    # `@register_op`-registered (confirmed: the module's sole
-    # `@register_op("handoff.stamp")` decorates a *different* function that
-    # stamps shipped_in, not deployment_state) — the plan's "reachable by
-    # any skill, CLI, or sibling repo" characterization of this site does
-    # not hold against the current source. No code change needed.
+    # writer 4 (as literally named by the plan's AC1 enumeration) — the
+    # SHARED `_mutate` closure inside `_repair_deployment_state_impl`
+    # (handoff_stamp.py), reused by BOTH `_repair_archived_deployment_state_
+    # handler` (archive/handoffs/-only, safe by construction: nothing left to
+    # move) AND `_repair_live_deployment_state_handler` (state/handoffs/-only
+    # — registered 2026-08-31 as "handoff.repair_deployment_state", reachable
+    # by any skill/CLI/sibling repo, exactly the plan's "reachable" concern,
+    # just under a different op name than the plan's stale citation). The
+    # LIVE door has no git-mv path at all, so this chunk adds an explicit
+    # refusal (`_DeploymentStateRepairPolicy.refuses_continued_target`) that
+    # rejects a `continued` target on the live door outright, before any
+    # write — FIXED this chunk. Covered by
+    # test_repair_live_deployment_state_handler_refuses_continued_target
+    # above; the archived door's own unchanged `continued` handling is
+    # covered by test_repair_archived_deployment_state_handler_rejects_
+    # live_handoffs_path below.
     ("coordinator_core/ops/handoff_stamp.py", "_mutate"),
     # A FIFTH WRITER, not named by the plan's AC1 enumeration — found by
     # THIS mechanical scan, exactly the "writer enumeration wrong a fourth

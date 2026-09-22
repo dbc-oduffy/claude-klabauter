@@ -104,6 +104,12 @@ _RESOLVER_CLOSURE_KEY = "closure_key"
 
 _REASON_NO_CLOSURE_KEY = "no-closure-key"
 _REASON_AWAITING_DISCHARGE = "awaiting-discharge"
+# klabauter#43: a row's `external_gate` malformed in either of the two
+# common authoring shapes below used to contribute NO verdict entry at all
+# (a bare `continue`) rather than one flagging the shape as unresolved --
+# silence a caller reasonably reads as "no gate here", which is the exact
+# fail-open this reason exists to close off.
+_REASON_MALFORMED_GATE = "malformed-external-gate"
 
 
 def _memo_thread_ids_match(a: str, b: str) -> bool:
@@ -291,6 +297,15 @@ def resolve_gate_liveness(plan_paths: list, repo_root: Path) -> list:
     absent or malformed contributes no entries (tolerant read — matches
     `load_rows`'s own tolerant-read posture; this module is not the
     schema-enforcement surface).
+
+    A row's `external_gate` malformed in either of the two common authoring
+    shapes -- present but not a list, or a list carrying a non-dict entry
+    (klabauter#43) -- contributes a `verdict: undetermined`,
+    `reason: "malformed-external-gate"` entry (`owner_repo: None`) instead
+    of no entry at all: this module's earlier `continue`-and-drop behaviour
+    was itself fail-open, since a caller reading an empty result set for a
+    row that declared a gate has no way to tell "no gate" from "a gate this
+    reader could not parse."
     """
     records = _scan_discharge_records(repo_root)
     results: list = []
@@ -305,13 +320,55 @@ def resolve_gate_liveness(plan_paths: list, repo_root: Path) -> list:
                 continue
             row_id = raw_row.get("id")
             external_gate = raw_row.get("external_gate")
+            if external_gate is None:
+                continue
             if not isinstance(external_gate, list):
+                # klabauter#43, shape 1: a single gate object authored
+                # directly instead of wrapped in a one-item list. Report it
+                # as unresolved rather than silently contributing nothing --
+                # a caller must not read the row's silence as "no gate".
+                results.append(
+                    {
+                        "plan": str(plan_path),
+                        "row_id": row_id,
+                        "owner_repo": None,
+                        "verdict": VERDICT_UNDETERMINED,
+                        "resolver": None,
+                        "evidence": None,
+                        "reason": _REASON_MALFORMED_GATE,
+                    }
+                )
                 continue
             for entry in external_gate:
                 if not isinstance(entry, dict):
+                    # klabauter#43, shape 2: a bare-scalar entry (e.g. a
+                    # string gate note) inside an otherwise well-formed
+                    # list. Same reporting rule as shape 1 above.
+                    results.append(
+                        {
+                            "plan": str(plan_path),
+                            "row_id": row_id,
+                            "owner_repo": None,
+                            "verdict": VERDICT_UNDETERMINED,
+                            "resolver": None,
+                            "evidence": None,
+                            "reason": _REASON_MALFORMED_GATE,
+                        }
+                    )
                     continue
                 owner_repo = entry.get("owner_repo")
                 if not isinstance(owner_repo, str) or not owner_repo.strip():
+                    results.append(
+                        {
+                            "plan": str(plan_path),
+                            "row_id": row_id,
+                            "owner_repo": None,
+                            "verdict": VERDICT_UNDETERMINED,
+                            "resolver": None,
+                            "evidence": None,
+                            "reason": _REASON_MALFORMED_GATE,
+                        }
+                    )
                     continue
                 closure_key = entry.get("closure_key")
                 verdict, resolver, evidence, reason = _resolve_closure_key(

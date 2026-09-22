@@ -108,7 +108,7 @@ def _xfail_reason(fixture_name: str) -> str | None:
 def _make_param(entry: dict) -> pytest.param:
     fixture_name = entry["fixture"]
     reason = _xfail_reason(fixture_name)
-    # Review: code-reviewer — narrowed to `match=r'unknown schema'` so this
+    # Narrowed to `match=r'unknown schema'` so this
     # xfail only absorbs the specific, currently-known unported-schema gap.
     # Matching on `raises=ValueError` alone (the prior form) would also
     # silently swallow a differently-shaped ValueError raised post-vendoring

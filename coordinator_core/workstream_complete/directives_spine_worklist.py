@@ -130,7 +130,7 @@ class OpenSpineRowGate(NamedTuple):
         applies the identical `not row.waived` filter via its own local
         (`compute_open_spine_row_gate`'s `unwaived`), not through this
         method — the two stay logically identical, not textually unified."""
-        # Review: coordinator:code-reviewer aed16e2e — docstring previously
+        # Docstring previously
         # claimed warn_text reads this method; it applies the same filter
         # via a parallel comprehension instead.
         return tuple(row.id for row in self.rows if not row.waived)

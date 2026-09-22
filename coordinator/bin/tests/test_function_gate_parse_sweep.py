@@ -498,12 +498,12 @@ class TestEntrypointGateDataLists:
                 # all -- see `_USAGE_NONZERO_ENTRYPOINTS`'s own comment.
                 "coordinator/bin/orient-assemble.py",
                 # four-coordinator-bin-entrypoints sweep (state/bug-backlog,
-                # filed the day this fix landed): both reach their own
-                # parser and print a recognizable own-parser usage complaint,
-                # not a root-resolution/import failure -- re-pinned here,
-                # entrant not code drift.
+                # filed the day this fix landed): reaches its own parser and
+                # prints a recognizable own-parser usage complaint, not a
+                # root-resolution/import failure -- re-pinned here, entrant
+                # not code drift. Its sibling `with-suite-mutex` drained
+                # 2026-09-22 once its `--help` exited 0.
                 "coordinator/bin/chunk-commits",
-                "coordinator/bin/with-suite-mutex",
                 # coordinator-claude mirror gate, 2026-08-16 (12/13 -> 13/13):
                 # newly reaching the mirror via the multi-source `bin` entry.
                 # Verified in-tree, not taken on the reporting sibling's word:
@@ -545,7 +545,7 @@ class TestEntrypointGateDataLists:
         # cc_invoke env/registry rungs the gate's hermetic env strips.
         # Re-pinned here, entrants not code drift.
         #
-        # Five as authored, one now. `coordinator/bin/coordinator-ensure-
+        # Five as authored, none now. `coordinator/bin/coordinator-ensure-
         # hooks-fleet` drained 2026-08-16 -- it started CLEAN against a
         # published payload and the gate fails closed on a waiver that no
         # longer fires, so the entry itself blocked the round (doe-claude-em,
@@ -556,13 +556,10 @@ class TestEntrypointGateDataLists:
         # `coordinator/bin` siblings these three resolve through were never in
         # the published payload. Shipping the full set let them start cleanly.
         # Same self-draining rule as the removals noted above, not a
-        # regression. `with-suite-mutex` alone remains, and it is inert (see
-        # its note in the constant).
-        measured_2026_08_14 = {
-            "coordinator/bin/with-suite-mutex",
-        }
+        # regression. `with-suite-mutex`, the last, drained 2026-09-22 once
+        # its `--help` answered rc=0 ahead of the engine bootstrap.
         assert set(pct_engine._ENTRYPOINT_GATE_WAIVERS) == (
-            sourced_f3 | measured_2026_08_10 | measured_2026_08_14
+            sourced_f3 | measured_2026_08_10
         )
         for name, reason in pct_engine._ENTRYPOINT_GATE_WAIVERS.items():
             assert isinstance(reason, str) and len(reason.split()) >= 5, (

@@ -339,7 +339,7 @@ class TestGitLockTarget:
         assert _denied(f"rm -rf {git_dir}")
 
     def test_lock_suffixed_directory_still_denied(self, repo_outside_any_repo):
-        """Review: code-reviewer (dispatch d6708a9c, finding 2) -- the lock
+        """The lock
         leg's allow is scoped to a lock FILE; a `.lock`-suffixed directory
         under the git store carries no rename-onto-index safety argument and
         must fall through to the general git-store deny."""
@@ -353,6 +353,47 @@ class TestGitLockTarget:
             fh.write("")
         monkeypatch.setenv("COORDINATOR_ALLOW_RM", "1")
         assert not _denied(f"rm -f {lock}")
+
+
+class TestWriteBumpMarkerTarget:
+    """Bug row: state/bug-backlog/2026-09-02-git-store-rm-guard-blocks-
+    removing-the-w-d2194cff6d30.yaml -- the write-confinement bump's own
+    clear marker (`allow-xrepo-write-<session-id>`, `_write_bump_marker.py`)
+    is a zero-byte sentinel directly under the gitdir, not objects/refs/
+    logs. Denying its removal left a session that cleared the bump for one
+    deliberate operation with no way to re-arm it for the rest of its own
+    life. Same shape as the `.lock` allow above: scoped to a FILE whose
+    basename matches, so the general git-store deny still applies to
+    everything else.
+    """
+
+    def test_marker_file_allowed(self, repo_outside_any_repo):
+        marker = os.path.join(
+            repo_outside_any_repo, ".git", "allow-xrepo-write-2fc859e3-abcd"
+        )
+        with open(marker, "w", encoding="utf-8") as fh:
+            fh.write("")
+        assert not _denied(f"rm -f {marker}")
+
+    def test_similarly_named_directory_still_denied(self, repo_outside_any_repo):
+        """The allow is scoped to a FILE -- a directory merely sharing the
+        prefix carries no sentinel-removal argument and must still deny."""
+        marker_dir = os.path.join(
+            repo_outside_any_repo, ".git", "allow-xrepo-write-2fc859e3-abcd"
+        )
+        os.makedirs(marker_dir, exist_ok=True)
+        assert _denied(f"rm -rf {marker_dir}")
+
+    def test_non_marker_store_target_keeps_original_irreversibility_message(
+        self, repo_outside_any_repo
+    ):
+        """Regression that matters most: an unrelated store target must
+        still get the full irreversibility wording, unweakened by this leg
+        sitting ahead of it."""
+        head = os.path.join(repo_outside_any_repo, ".git", "HEAD")
+        reason = _reason(f"rm -f {head}")
+        assert "irreversibly" in reason
+        assert "reflog" in reason
 
 
 class TestIsSameDir:

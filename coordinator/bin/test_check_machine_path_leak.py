@@ -4,7 +4,7 @@ Converted from a hand-rolled `.test.py` runner (print-based PASS/FAIL, its own
 main()/sys.exit) into collectable top-level test_* functions; assertion intent
 preserved 1:1.
 
-Review: code-reviewer — F5 (P2): check-machine-path-leak.py landed with ~340 lines of
+check-machine-path-leak.py landed with ~340 lines of
 non-trivial JSON/YAML structural tree-walk logic backing a HARD commit-block gate and
 zero automated test coverage. This suite closes that gap: hard-block on a machine-path
 leaf in settings.json, no-op on a clean file, --staged vs explicit-file-arg modes, the

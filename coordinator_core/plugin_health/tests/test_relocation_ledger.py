@@ -86,7 +86,7 @@ def test_load_relocation_ledger_skips_entry_missing_required_key(tmp_path: Path)
     assert entries[0].old_path == good["old_path"]
 
 
-# Review: code-reviewer (Finding 2, P2) -- direct coverage for the
+# Direct coverage for the
 # `retired`-disposition load path and `RelocationEntry.describe()`, neither
 # of which had a direct test in this file before (both were exercised only
 # transitively, if at all, via `bin_inventory_gate.py`'s disposed-stem
@@ -161,7 +161,7 @@ def test_describe_retired_entry_with_successor() -> None:
     )
 
 
-# Review: code-reviewer (Finding 3, nit) -- the skip-on-invalid-disposition
+# The skip-on-invalid-disposition
 # branch had no test confirming an unrecognized `disposition` value is
 # silently dropped rather than raised or mis-typed as `"moved"`.
 def test_load_relocation_ledger_skips_entry_with_unknown_disposition(tmp_path: Path) -> None:

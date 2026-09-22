@@ -1504,7 +1504,7 @@ class TestResolutionModel:
         assert _read_status(executing_plan) == "landed"
 
     def test_stamp_plan_landed_write_path_holds_the_cross_process_lock(self, tmp_path):
-        """Review: code-reviewer (P2 #1) -- C1 (`plan_tasks_mutate.resolve`)
+        """C1 (`plan_tasks_mutate.resolve`)
         newly reaches `_stamp_plan_landed` from a hot path, on a machine
         whose own doctrine names 50-70 concurrent LLM sessions as average
         load (repo CLAUDE.md § Load norm). A second writer holding the
@@ -1544,6 +1544,90 @@ class TestResolutionModel:
         # timeout above was purely lock contention, not a genuine failure.
         assert coas._stamp_plan_landed(str(plan)) == 0
         assert _read_status(plan) == "landed"
+
+    def test_stamp_plan_landed_refuses_a_plan_carrying_superseded_by(
+        self, tmp_path
+    ):
+        """C8: `_stamp_plan_landed` must not land a plan that has itself
+        been superseded, even while its `status:` still sits at a
+        flippable value (`superseded_by` is set by C9's own verb ahead of
+        the `status:` flip to `superseded` landing separately) -- see
+        this module's own C8 spec row. The refusal fires between the
+        frozen/already-landed no-ops and the flip itself, names the
+        `archive-stamp-cli stamp-plan-superseded` verb C9 exposes, and
+        leaves the file byte-unchanged."""
+        root = tmp_path
+        _init_repo(root)
+        text = _PLAN_TEMPLATE.format(status="approved", rows=(
+            "- id: C1\n"
+            "  title: Ship the widget\n"
+            "  change_kind: script-edit\n"
+            "  surface: coordinator/bin/widget.py\n"
+            "  deferred: false\n"
+            "  body: |\n"
+            "    Ship the widget end to end.\n"
+        ))
+        text = text.replace(
+            'status: approved\n', 'status: approved\nsuperseded_by: "pln-successor-000002"\n'
+        )
+        dest = root / "superseded-by-plan.md"
+        dest.write_text(text, encoding="utf-8")
+        _run_git(["add", dest.name], root)
+        _run_git(["commit", "-q", "-m", "seed"], root)
+        before = dest.read_text(encoding="utf-8")
+
+        assert coas._stamp_plan_landed(str(dest)) == 1
+        assert dest.read_text(encoding="utf-8") == before
+        assert _read_status(dest) == "approved"
+
+    def test_stamp_plan_landed_without_superseded_by_still_flips(self, tmp_path):
+        """Same plan as the refusal case above, minus `superseded_by` --
+        unchanged behaviour: the flip to `landed` still fires."""
+        root = tmp_path
+        _init_repo(root)
+        rows_yaml = (
+            "- id: C1\n"
+            "  title: Ship the widget\n"
+            "  change_kind: script-edit\n"
+            "  surface: coordinator/bin/widget.py\n"
+            "  deferred: false\n"
+            "  body: |\n"
+            "    Ship the widget end to end.\n"
+        )
+        plan = _seed_disposition_plan(
+            root, rows_yaml, status="approved", dest_name="no-superseded-by-plan.md"
+        )
+        assert coas._stamp_plan_landed(str(plan)) == 0
+        assert _read_status(plan) == "landed"
+
+    def test_stamp_plan_landed_already_superseded_still_no_ops(self, tmp_path):
+        """An already-`superseded` plan still no-ops with rc 0 -- the
+        pre-existing `_FROZEN_STATUSES` no-op branch fires before this
+        row's own `superseded_by` refusal is ever reached, and stays
+        unchanged with this refusal added alongside it."""
+        root = tmp_path
+        _init_repo(root)
+        text = _PLAN_TEMPLATE.format(status="superseded", rows=(
+            "- id: C1\n"
+            "  title: Ship the widget\n"
+            "  change_kind: script-edit\n"
+            "  surface: coordinator/bin/widget.py\n"
+            "  deferred: false\n"
+            "  body: |\n"
+            "    Ship the widget end to end.\n"
+        ))
+        text = text.replace(
+            'status: superseded\n', 'status: superseded\nsuperseded_by: "pln-successor-000002"\n'
+        )
+        dest = root / "already-superseded-plan.md"
+        dest.write_text(text, encoding="utf-8")
+        _run_git(["add", dest.name], root)
+        _run_git(["commit", "-q", "-m", "seed"], root)
+        before = dest.read_text(encoding="utf-8")
+
+        assert coas._stamp_plan_landed(str(dest)) == 0
+        assert dest.read_text(encoding="utf-8") == before
+        assert _read_status(dest) == "superseded"
 
     def test_stamp_preserves_comments_and_block_scalars_verbatim(
         self, tmp_path, monkeypatch
@@ -1725,7 +1809,7 @@ class TestResolutionModel:
         assert "refusing" in fidelity_error.lower()
 
     def test_stamp_lands_at_a_non_default_child_key_indent(self, tmp_path):
-        """Review: code-reviewer -- F4: `_stamp_rows_in_body` previously
+        """`_stamp_rows_in_body` previously
         hardcoded `content_indent = dash_indent + 2` (`yaml.safe_dump`'s
         own default list-of-dicts formatting), which this fix exists to
         stop imposing on the file. A row whose child keys sit at a
@@ -1844,7 +1928,7 @@ class TestResolutionModel:
         assert "  disposition_ref: 7876a31d\n" in new_body.splitlines(keepends=True)
 
     def test_fidelity_gate_refuses_a_mis_indented_stamp(self, monkeypatch):
-        """Review: code-reviewer -- F3: proves the fidelity gate now
+        """Proves the fidelity gate now
         REFUSES a stamp landed at the wrong indent, rather than passing it
         vacuously. Forces exactly that shape by monkeypatching
         `_stamp_rows_in_body` to emit its `disposition:`/`disposition_ref:`
@@ -2177,6 +2261,176 @@ class TestVerifyDispositionRef:
         assert reason == coas.DISPOSITION_REF_NOT_ANCESTOR
 
 
+class TestVerifyBaselineRef:
+    """`_verify_baseline_ref` is a strict superset of `_verify_disposition_
+    ref`: a bare hex sha delegates unchanged (same four rejection reasons,
+    same ancestor check), and a `<repo>:<sha>` qualifier resolves against a
+    named sibling repo instead of refusing `unresolvable` against this one
+    (state/bug-backlog/2026-08-29-close-out-s-baseline-ref-must-resolve-
+    in-a818162857ae)."""
+
+    def test_bare_sha_delegates_to_verify_disposition_ref(self, tmp_path):
+        root = tmp_path
+        _init_repo(root)
+        (root / "seed.txt").write_text("seed")
+        _run_git(["add", "seed.txt"], root)
+        _run_git(["commit", "-q", "-m", "seed"], root)
+        real_sha = _head_sha(root)
+
+        sha, reason = coas._verify_baseline_ref(root, real_sha)
+
+        assert sha == real_sha
+        assert reason is None
+
+    def test_non_ancestor_bare_sha_still_rejected(self, tmp_path):
+        root = tmp_path
+        _init_repo(root)
+        (root / "seed.txt").write_text("seed")
+        _run_git(["add", "seed.txt"], root)
+        _run_git(["commit", "-q", "-m", "seed"], root)
+        non_ancestor_sha = _make_non_ancestor_commit(root)
+
+        sha, reason = coas._verify_baseline_ref(root, non_ancestor_sha)
+
+        assert sha is None
+        assert reason == coas.DISPOSITION_REF_NOT_ANCESTOR
+
+    def test_cross_repo_ref_resolves_against_the_named_sibling(self, tmp_path, monkeypatch):
+        root = tmp_path / "main"
+        root.mkdir()
+        _init_repo(root)
+        (root / "seed.txt").write_text("seed")
+        _run_git(["add", "seed.txt"], root)
+        _run_git(["commit", "-q", "-m", "seed"], root)
+
+        sibling = tmp_path / "sibling"
+        sibling.mkdir()
+        _init_repo(sibling)
+        (sibling / "mirrored.py").write_text("v1", encoding="utf-8")
+        _run_git(["add", "mirrored.py"], sibling)
+        _run_git(["commit", "-q", "-m", "mirror-side baseline"], sibling)
+        sibling_sha = _head_sha(sibling)
+
+        monkeypatch.setattr(
+            coas,
+            "registry_get",
+            lambda key: str(sibling) if key == "repos.klabauter" else None,
+        )
+
+        sha, reason = coas._verify_baseline_ref(root, f"klabauter:{sibling_sha}")
+
+        assert sha == sibling_sha
+        assert reason is None
+
+    def test_cross_repo_ref_never_ancestor_checks_against_this_repos_head(
+        self, tmp_path, monkeypatch
+    ):
+        """A sibling-repo commit is never `HEAD`-reachable in THIS repo --
+        proves the cross-repo form does not fall through to the same-repo
+        ancestor check (which would always, wrongly, reject it): `root`
+        never even commits the sibling's tree, so a same-repo ancestor
+        check against `root`'s `HEAD` could not possibly pass it."""
+        root = tmp_path / "main"
+        root.mkdir()
+        _init_repo(root)
+        (root / "seed.txt").write_text("seed")
+        _run_git(["add", "seed.txt"], root)
+        _run_git(["commit", "-q", "-m", "seed"], root)
+
+        sibling = tmp_path / "sibling"
+        sibling.mkdir()
+        _init_repo(sibling)
+        (sibling / "mirrored.py").write_text("v1", encoding="utf-8")
+        _run_git(["add", "mirrored.py"], sibling)
+        _run_git(["commit", "-q", "-m", "mirror-side baseline"], sibling)
+        sibling_sha = _head_sha(sibling)
+
+        monkeypatch.setattr(
+            coas,
+            "registry_get",
+            lambda key: str(sibling) if key == "repos.klabauter" else None,
+        )
+
+        sha, reason = coas._verify_baseline_ref(root, f"klabauter:{sibling_sha}")
+
+        assert sha == sibling_sha
+        assert reason is None
+
+    def test_unregistered_repo_key_is_unresolvable(self, tmp_path, monkeypatch):
+        root = tmp_path
+        _init_repo(root)
+        (root / "seed.txt").write_text("seed")
+        _run_git(["add", "seed.txt"], root)
+        _run_git(["commit", "-q", "-m", "seed"], root)
+        monkeypatch.setattr(coas, "registry_get", lambda key: None)
+
+        sha, reason = coas._verify_baseline_ref(root, "klabauter:eb6be84a")
+
+        assert sha is None
+        assert reason == coas.DISPOSITION_REF_UNRESOLVABLE
+
+    def test_registered_repo_missing_on_disk_is_unresolvable(self, tmp_path, monkeypatch):
+        root = tmp_path
+        _init_repo(root)
+        (root / "seed.txt").write_text("seed")
+        _run_git(["add", "seed.txt"], root)
+        _run_git(["commit", "-q", "-m", "seed"], root)
+        monkeypatch.setattr(
+            coas, "registry_get", lambda key: str(tmp_path / "does-not-exist")
+        )
+
+        sha, reason = coas._verify_baseline_ref(root, "klabauter:eb6be84a")
+
+        assert sha is None
+        assert reason == coas.DISPOSITION_REF_UNRESOLVABLE
+
+    def test_sibling_repo_cannot_resolve_the_sha_is_unresolvable(self, tmp_path, monkeypatch):
+        root = tmp_path / "main"
+        root.mkdir()
+        _init_repo(root)
+        (root / "seed.txt").write_text("seed")
+        _run_git(["add", "seed.txt"], root)
+        _run_git(["commit", "-q", "-m", "seed"], root)
+
+        sibling = tmp_path / "sibling"
+        sibling.mkdir()
+        _init_repo(sibling)
+        (sibling / "seed.txt").write_text("seed")
+        _run_git(["add", "seed.txt"], sibling)
+        _run_git(["commit", "-q", "-m", "seed"], sibling)
+
+        monkeypatch.setattr(
+            coas,
+            "registry_get",
+            lambda key: str(sibling) if key == "repos.klabauter" else None,
+        )
+
+        sha, reason = coas._verify_baseline_ref(
+            root, "klabauter:deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        )
+
+        assert sha is None
+        assert reason == coas.DISPOSITION_REF_UNRESOLVABLE
+
+    def test_disposition_ref_never_accepts_the_cross_repo_form(self, tmp_path, monkeypatch):
+        """The row's own proposed_action scopes the same-repo check as
+        unchanged for `disposition_ref` -- `_verify_disposition_ref` must
+        still reject a `<repo>:<sha>` token outright (malformed, not
+        resolved against any sibling), even when a matching registry entry
+        exists."""
+        root = tmp_path
+        _init_repo(root)
+        (root / "seed.txt").write_text("seed")
+        _run_git(["add", "seed.txt"], root)
+        _run_git(["commit", "-q", "-m", "seed"], root)
+        monkeypatch.setattr(coas, "registry_get", lambda key: str(root))
+
+        sha, reason = coas._verify_disposition_ref(root, "klabauter:eb6be84a")
+
+        assert sha is None
+        assert reason == coas.DISPOSITION_REF_MALFORMED
+
+
 class TestDispositionRefEvidenceInDetermineShipped:
     def test_disposition_ref_to_valid_ancestor_counts_as_shipped(self, tmp_path):
         """The motivating case: a chunk's commit subject names the
@@ -2471,6 +2725,54 @@ class TestCloseOutAndStampDispositionRefRejections:
         assert "disposition_ref did not count as evidence" in result["message"]
         assert "C5 (non-ancestor)" in result["message"]
 
+    def test_verified_disposition_ref_on_uncleared_execution_gate_row_is_not_shipped(
+        self, tmp_path, monkeypatch
+    ):
+        """The bug-backlog defect this pins (state/bug-backlog/2026-08-20-
+        close-out-and-stamp-discharges-chunks-th-3d8b1bda44c2.yaml, defect
+        2): a `coded` row's `disposition_ref` resolving to a real ancestor
+        commit must NOT count as shipped evidence when the same row carries
+        an uncleared `external_gate` that `blocks: execution` -- the exact
+        predicate `/execute-plan` Phase 1.5 already refuses to schedule on.
+        Without the fix, this row would stamp `shipped: true` purely on the
+        disposition_ref's own sha-ancestry check, silently disagreeing with
+        the scheduler about the same field."""
+        root = tmp_path
+        _init_repo(root)
+        (root / "widget.py").write_text("v1")
+        _run_git(["add", "widget.py"], root)
+        _run_git(["commit", "-q", "-m", "C14: unrelated earlier commit"], root)
+        landing_sha = _head_sha(root)
+
+        rows_yaml = (
+            "- id: C14\n"
+            "  title: Retire the dual-read fallback\n"
+            "  change_kind: refactor\n"
+            "  surface: coordinator_core/percolate/store.py\n"
+            "  deferred: false\n"
+            "  disposition: coded\n"
+            f"  disposition_ref: {landing_sha}\n"
+            "  disposition_detail: 'gated on an external repo, not actually shipped'\n"
+            "  external_gate:\n"
+            "    - owner_repo: doe_claude\n"
+            "      condition: doe_claude must clear its own half first\n"
+            "      cleared: false\n"
+            "      blocks: execution\n"
+            "  body: |\n"
+            "    Gated behind an uncleared cross-repo external_gate.\n"
+        )
+        plan_file = _seed_disposition_plan(root, rows_yaml)
+
+        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
+
+        assert exit_code == coas.EXIT_OK, result
+        assert result["shipped"] is False
+        assert result["missing_chunk_ids"] == ["C14"]
+        assert result["disposition_ref_rejections"] == {
+            "C14": coas.DISPOSITION_REF_GATED
+        }
+        assert _read_status(plan_file) != "implemented"
+
 
 # ===========================================================================
 # docs/project-tracker.md `N of M` reconciliation (AC7, C8)
@@ -2644,7 +2946,7 @@ class TestTrackerReconciliation:
         # edits, the surrounding narrative stays byte-identical, and the
         # file's mtime is left untouched (never rewritten when
         # reconcile_tracker_shipped_counts finds nothing to change).
-        # Review: coordinator:code-reviewer — prior assertions were
+        # Prior assertions were
         # tautological (x == x) and couldn't fail on a real rewrite;
         # capture mtime immediately before the no-op call and assert
         # equality immediately after.
@@ -3075,7 +3377,7 @@ class TestCertifiedShipClearsPartialMarker:
     def test_stamp_failure_after_clear_restores_the_marker_on_disk(
         self, tmp_path, monkeypatch
     ):
-        """Review: code-reviewer -- P2 finding, 2026-08-08. Reproduces the
+        """2026-08-08. Reproduces the
         reachable hazard traced against `plan_status_transition._stamp_
         implemented`: that function can flip `status:` to `implemented` on
         disk via its own locked_rmw and STILL return a failure rc (its own

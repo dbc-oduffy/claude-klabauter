@@ -441,7 +441,7 @@ async def _run_promotions(handoffs_dir: Path, repo_root_path: Path) -> _Promotio
             result.norc_count += 1
             continue
         elif token == "unknown-error":
-            # Review: code-reviewer Finding 2 — "could not determine" is a
+            # "could not determine" is a
             # distinct epistemic state from norc_count's "nothing to do";
             # never fold it into the same bare continue rollup_derive's own
             # docstring says must never happen (unknown-error != not-shipped).
@@ -460,7 +460,7 @@ async def _run_promotions(handoffs_dir: Path, repo_root_path: Path) -> _Promotio
         best_sha = _select_best_sha(shas)
         sha8 = best_sha[:8]
         if not sha8:
-            # Review: code-reviewer — discriminate "zero candidates from
+            # Discriminate "zero candidates from
             # rollup-derive" (upstream join gave nothing) from "candidates
             # present but every one unresolvable" (this module's own P4
             # regression class) so a future recurrence is triageable from
@@ -571,7 +571,7 @@ def main(argv: List[str], *, repo_root: Optional[str] = None) -> int:
         repo_root_path = Path(repo_root)
 
     handoffs_dir = repo_root_path / "state" / "handoffs"
-    # Review: code-reviewer F3 — git common dir is resolved lazily inside
+    # Git common dir is resolved lazily inside
     # _run_promotions via the shared coordinator_core.lifecycle.git_common_dir
     # resolver (first-use, memoized per scan) rather than eagerly here, so a
     # non-git repo_root (e.g. a scan that never actually promotes a stub)
@@ -587,7 +587,7 @@ def main(argv: List[str], *, repo_root: Optional[str] = None) -> int:
     touched_roadmaps: List[str] = []
 
     if handoffs_dir.is_dir():
-        # Review: code-reviewer F6 — single asyncio.run() driving the whole
+        # Single asyncio.run() driving the whole
         # scan (instead of up to 2N event-loop create/destroy cycles for N
         # matched stubs) via _run_promotions' awaited _stamp/_ship calls.
         result = asyncio.run(_run_promotions(handoffs_dir, repo_root_path))

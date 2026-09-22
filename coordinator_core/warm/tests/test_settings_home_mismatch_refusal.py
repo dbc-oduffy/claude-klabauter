@@ -58,7 +58,7 @@ from coordinator_core.warm.tests.test_server_loop import _FakeIO, _FakeVersionSt
 def _short_warm_runtime_base(monkeypatch: pytest.MonkeyPatch):
     """Overrides the suite-wide HOME quarantine's `warm-runtime-base`
     (`coordinator_core/conftest.py::_quarantine_real_home`) with a short,
-    real on-disk root under `/tmp`.
+    real on-disk root under `/tmp` on POSIX.
 
     Only `_sent_request`'s two tests below drive the real
     `client.try_warm_dispatch` preamble (`election.socket_path`), but the
@@ -70,10 +70,15 @@ def _short_warm_runtime_base(monkeypatch: pytest.MonkeyPatch):
     short_runtime_base` (committed b4e300c8f1); duplicated here rather
     than lifted into a shared `conftest.py` because this dispatch's scope
     is this file only.
+
+    `/tmp` does not exist as a drive-relative root on Windows and there
+    is no `sun_path` budget to protect there, so `os.name == "nt"` falls
+    back to the platform default temp root instead, same guard as
+    `conftest.py::_quarantine_real_home` uses for the suite-wide base.
     """
     from coordinator_core.warm import breadcrumb
 
-    base = Path(tempfile.mkdtemp(prefix="wrb-", dir="/tmp"))
+    base = Path(tempfile.mkdtemp(prefix="wrb-", dir=None if os.name == "nt" else "/tmp"))
     try:
         monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(base))
         yield base
@@ -440,7 +445,7 @@ def test_a_no_claim_request_never_resolves_this_servers_home(monkeypatch):
     """
     from coordinator_core import ipc
 
-    async def _ok(msg, *, caller=None):
+    async def _ok(msg, *, caller=None, corr_id=None):
         return {"jsonrpc": "2.0", "id": msg["id"], "result": "ok"}
 
     monkeypatch.setattr(ipc, "dispatch_message", _ok)

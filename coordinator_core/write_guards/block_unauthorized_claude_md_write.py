@@ -256,7 +256,6 @@ def _grant_cli_invocation() -> str:
     ``subprocess``/``shutil`` chain off the import path of every hook dispatch that
     never renders a deny.
 
-    Review: code-reviewer P2 (2026-07-30, ACCEPTED, no code change) --
     ``coordinator_engine_root()`` can reach Rung 2 (the ``machine-local``
     subprocess ladder, bounded at 2s) on this deny-render path, the opposite
     choice from ``bash_guards._helpers._resolve_override_keys_doc_display()``,

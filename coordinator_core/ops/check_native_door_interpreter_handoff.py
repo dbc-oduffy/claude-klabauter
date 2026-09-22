@@ -563,11 +563,11 @@ def _param_names_for(node: ast.AST, slots: Set[str]) -> Set[str]:
 def _is_header_sniff(node: ast.AST) -> bool:
     """The gate reads the candidate's own first bytes and decides from them
     -- ``shebang.startswith("#!")``, or a delegation to
-    ``launchable.resolve_by_shebang``. A native image has no ``#!`` line, so
+    ``launchable.resolve_launchable``. A native image has no ``#!`` line, so
     a scope gated on one never hands an image to an interpreter."""
     if isinstance(node, ast.Call):
         dotted = _dotted(node.func)
-        if dotted.endswith("resolve_by_shebang") or dotted.endswith("resolve_launchable"):
+        if dotted.endswith("resolve_launchable"):
             return True
         if dotted.endswith("startswith"):
             if any((_const_str(a) or "").startswith("#!") for a in node.args):

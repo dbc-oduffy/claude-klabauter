@@ -139,17 +139,26 @@ def _doe_root_pointer_paths() -> "list[Path]":
 def _write_doe_root_pointer(root_str: str) -> None:
     """Write-when-absent-or-different (unlike `repos.doe_claude`, which is
     write-when-absent-only — see `_maybe_seed_repos_doe_claude`). Fail open
-    per leg: one unwritable location never stops the other."""
+    per leg: one unwritable location never stops the other.
+
+    Atomic (tmp + replace): sibling sessions read these pointers at the same
+    SessionStart, and a truncate-then-write exposes a blank file to them."""
     for pointer in _doe_root_pointer_paths():
         try:
             if pointer.is_file() and pointer.read_text(encoding="utf-8").strip() == root_str:
                 continue
         except Exception:
             pass
+        tmp = pointer.with_name(f"{pointer.name}.{os.getpid()}.tmp")
         try:
             pointer.parent.mkdir(parents=True, exist_ok=True)
-            pointer.write_text(root_str + "\n", encoding="utf-8")
+            tmp.write_text(root_str + "\n", encoding="utf-8", newline="\n")
+            os.replace(tmp, pointer)
         except Exception:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
             continue
 
 

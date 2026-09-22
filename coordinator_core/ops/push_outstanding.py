@@ -282,7 +282,7 @@ def _p4_leg_precheck(root: Path, session_id: Optional[str]) -> Optional[dict]:
 
     from coordinator_core.p4 import workspace
 
-    # Review: coordinator-code-reviewer F1 -- `is None` alone left the
+    # `is None` alone left the
     # function's own no-op contract resting on the op handler's `"" -> None`
     # normalization rather than holding on its own; `session_dir` raises on
     # a falsy-but-not-None id, so a direct `push_outstanding()` caller
@@ -337,7 +337,7 @@ def _p4_leg_execute(
         return
 
     t_start = time.time()
-    # Review: overengineering-reviewer F1 (integrator-applied) -- the
+    # The
     # package's re-export facade that used to shadow this submodule under
     # `from coordinator_core.p4 import session_change` is gone; a plain
     # submodule import is unambiguous now.
@@ -372,7 +372,6 @@ def _p4_leg_execute(
     try:
         from coordinator_core.telemetry.op_latency import record_op_latency
 
-        # Review: overengineering-reviewer F4 (integrator-applied) --
         # `restored`/`adopted`/`remint` were built on `ShelveOutcome`
         # explicitly for this call's own telemetry arm; this is that arm.
         record_op_latency(
@@ -668,10 +667,15 @@ def push_outstanding(
     # from the OUTCOME, never the pre-call sha pair (see module/brief note:
     # `push_with_retry` fetches+rebases on reject, so a pre-call
     # `upstream_sha`/`current_sha` pair can name a base/tip this call never
-    # actually landed). `outcome.pushed_range` is computed precisely to
-    # answer "what did THIS call land" and is `None` on every non-landed
-    # outcome, so it doubles as the landed-push predicate here.
-    if outcome.exit_code == 0 and outcome.pushed_range is not None:
+    # actually landed). `"push" in outcome.acted` is the landed-push
+    # predicate (see `PushOutcome.acted`'s own docstring) -- NOT
+    # `outcome.pushed_range is not None`: a branch's first push has no
+    # upstream tip to range from, so `pushed_range` reads `None` on that
+    # landed push too (the explicit-unknown sentinel, not a "didn't land"
+    # signal -- see `PushOutcome.pushed_range`'s docstring), and gating on it
+    # silently skipped the publish for every schema change whose branch was
+    # pushed for the first time.
+    if outcome.exit_code == 0 and "push" in outcome.acted:
         cockpit_script = _cockpit_publish_script(str(root))
         publish_budget = _remaining_or_none(publish_deadline)
         # Negative spec: a non-positive remainder means the ladder consumed the
@@ -684,17 +688,26 @@ def push_outstanding(
         # interactive 12.0s ladder ever did.
         if cockpit_script is not None and publish_budget is not None and publish_budget > 0:
             # `_resolve_pushed_range` (ops/ceremony/push.py) never returns a
-            # half-populated range -- both halves or `None, None` -- so this
-            # partition always yields two non-empty shas; a future change to
-            # that resolver's failure arm would need to update this call site.
-            old_sha, _, new_sha = outcome.pushed_range.partition("..")
-            _maybe_publish_cockpit_contract(
-                str(root),
-                cockpit_script,
-                old_sha,
-                new_sha,
-                timeout_secs=publish_budget,
-            )
+            # half-populated range -- both halves or `None, None` -- so a
+            # non-`None` `pushed_range` always partitions into two non-empty
+            # shas. When it IS `None` (first push, no upstream tip to range
+            # from), `outcome.landed_sha` still carries the post-push HEAD
+            # unconditionally on every landed push -- pass `old_sha=None`
+            # through to `_maybe_publish_cockpit_contract`, whose
+            # `_schema_touched` already falls back to diffing against the
+            # empty tree in that case (see that function's own docstring).
+            if outcome.pushed_range is not None:
+                old_sha, _, new_sha = outcome.pushed_range.partition("..")
+            else:
+                old_sha, new_sha = None, outcome.landed_sha
+            if new_sha:
+                _maybe_publish_cockpit_contract(
+                    str(root),
+                    cockpit_script,
+                    old_sha,
+                    new_sha,
+                    timeout_secs=publish_budget,
+                )
 
     _record_arm_latency(_ARM_NETWORK, arm_t_start, root)
     return outcome

@@ -301,7 +301,7 @@ def test_render_document_does_not_mutate_input_mapping():
 
 
 def test_duplicate_doc_type_raises_render_error(tmp_path):
-    # Review: code-reviewer — _template_index used to silently last-wins on a
+    # _template_index used to silently last-wins on a
     # duplicate doc_type across two template files; now fails loud.
     import json
 

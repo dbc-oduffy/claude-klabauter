@@ -47,6 +47,7 @@ import json
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 from coordinator_core.warm.caller_context import resolve_caller_context
+from coordinator_core.warm.env_forwarding import CALLER_PREFIXES, is_caller_prefixed
 
 #: `hook_event_name` values whose verdict can BLOCK the operation. A missing guard on one of
 #: these is a safety regression; a missing guard on any other event is a lost advisory. The
@@ -224,7 +225,9 @@ def _with_context(body: Dict[str, Any], context: Optional[str]) -> Dict[str, Any
 #: deletes the override boundary. Forwarding the prefixes the guards read is the narrow
 #: middle, and it is a prefix match rather than a fixed list because guards add override
 #: keys without telling this module.
-FORWARDED_ENV_PREFIXES = ("COORDINATOR_ALLOW_", "COORDINATOR_OVERRIDE_", "COORDINATOR_PROBE_", "COORDINATOR_SCOPE_")
+#: One tuple with the compiled door's prefix rule (`env_forwarding.CALLER_PREFIXES`), so
+#: an override the http leg carries can never be one the door leg drops.
+FORWARDED_ENV_PREFIXES = CALLER_PREFIXES
 
 #: Exact names the HEADER channel carries in addition to the prefixes above -- the env diet
 #: of the ops that actually run over this transport, enumerated rather than pattern-matched.
@@ -252,9 +255,7 @@ FORWARDED_ENV_NAMES = frozenset(
 
 
 def _is_forwardable_name(name: str) -> bool:
-    return name in FORWARDED_ENV_NAMES or any(
-        name.startswith(p) for p in FORWARDED_ENV_PREFIXES
-    )
+    return name in FORWARDED_ENV_NAMES or is_caller_prefixed(name)
 
 
 OVERRIDE_CHANNEL_HEADER = "X-Coordinator-Env-Channel"
@@ -382,7 +383,7 @@ def env_from_headers(
             "(see FORWARDED_ENV_PREFIXES / FORWARDED_ENV_NAMES) -- the registration asked "
             "for a value the op would never have seen" % ", ".join(refused)
         )
-    # Review: overengineering-reviewer -- `refused` empty already proves every key in
+    # `refused` empty already proves every key in
     # `candidates` is forwardable; re-filtering the return line re-derives that proof.
     return dict(candidates), None
 
@@ -408,11 +409,7 @@ def forwardable_env(environ: Mapping[str, str]) -> Dict[str, str]:
     session's `HOME` off any caller that passed its own environ, which is the invisible-
     disarm case one layer up. They are reachable only by explicit header.
     """
-    return {
-        k: v
-        for k, v in environ.items()
-        if any(k.startswith(p) for p in FORWARDED_ENV_PREFIXES)
-    }
+    return {k: v for k, v in environ.items() if is_caller_prefixed(k)}
 
 
 def payload_from_event(event: Mapping[str, Any]) -> Dict[str, Any]:
@@ -435,13 +432,29 @@ def payload_from_event(event: Mapping[str, Any]) -> Dict[str, Any]:
     `plugin_root` RIDES THIS BODY AS A COMPUTED FIELD, never a forwarded env var. Measured
     (staff-eng finding 2, C1 dispatch brief): the harness's own posted event body carries no
     `plugin_root` under any spelling, so `payload_from_event`'s verbatim copy has nothing to
-    forward for it. This function therefore COMPUTES it once, HERE, at forward time, via
+    forward for it. This function therefore COMPUTES it once, HERE, via
     `warm.caller_context.resolve_caller_context` -- the shared accessor `bash_guards/
     dispatch.py` reads on the other end of this seam -- rather than leaving every downstream
     reader (`provision_report.assemble_contract_blocks_for_payload` today, the guard chain
     once C6/C7 wire it) to call `provision_report.resolve_plugin_root()`'s ambient probe
-    independently. One computed value on the wire, not N independent re-resolutions that
-    could in principle disagree.
+    independently a second time. One computed value on the wire, not N independent
+    re-resolutions that could in principle disagree.
+
+    NOT CALLER-SIDE, AND THE RESIDUAL IS NAMED (2026-08-29 bug-backlog row, C1's own
+    finding): `payload_from_event` runs wherever `build_request` runs, which is
+    `warm/supervisor.py`'s HTTP handler -- the RESIDENT SERVER receiving the harness's POST
+    -- not the harness/caller process. `resolve_caller_context(payload)` therefore falls
+    through to its ambient probe (`CLAUDE_PLUGIN_ROOT` env, then machine-global config-dir
+    and `.doe-root` rungs) READ IN THIS SERVER PROCESS, caller-independent: a foreign `cwd`
+    on the event does not change the answer (measured). Benign today only because no wire
+    carries a caller's real `plugin_root` for this function to prefer instead --
+    `FORWARDED_ENV_PREFIXES` deliberately excludes `CLAUDE_PLUGIN_ROOT` (rehome plan
+    anti-scope) -- so every caller shares one resident server's ambient answer, which is
+    invisible on a one-plugin box and wrong the moment a session sets a real, different
+    `CLAUDE_PLUGIN_ROOT`. Closing this needs a caller-side wire field this module does not
+    yet have a channel for (cross-repo, DoE forwarder), same latent shape as the C11
+    `agent_id` finding this docstring used to compare itself to without naming it as a
+    residual.
     """
     raw_env = event.get("env")
     payload = {k: v for k, v in event.items() if k != "env"}

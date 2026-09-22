@@ -109,7 +109,7 @@ class TestFindArchivedTwinByHandoffId:
         assert find_archived_twin_by_handoff_id("hnd-body-only-999", tmp_path) is None
 
     def test_malformed_no_closing_fence_still_resolves(self, tmp_path):
-        """Review: code-reviewer (slice 1, P2) — the malformed-fence fallback
+        """The malformed-fence fallback
         (no closing '---' found before EOF) falls through to returning
         whatever was read so far, matching the pre-narrowing full-file read.
         Pin that a handoff_id living in an unterminated frontmatter block

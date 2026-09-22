@@ -19,11 +19,40 @@ use (``coordinator_core.ops._path_guard.contained_path`` with an explicit
 ``allowed_roots`` list), not the read-only ``cartography._guard`` shape.
 
 Wire params:
-    plan_path (str, required)     — plan file to read the task spine from
-                                     (passed straight to ``emit.emit_script``).
+    plan_path (str, required unless the queue route is used) — plan file to
+                                     read the task spine from (passed straight
+                                     to ``emit.emit_script``). Mutually
+                                     exclusive with ``queue``/``profile``
+                                     (``QueuePlanConflictError``).
+    queue (list[str], required for the queue route) — one or more queue
+                                     directories, forwarded to
+                                     ``queue_emit.emit_queue_script``. Present
+                                     (with ``profile``) selects the queue
+                                     route instead of the plan route; queue
+                                     input never falls back to the wave path.
+    profile (str, required for the queue route) — the queue-grind profile
+                                     name, forwarded to
+                                     ``queue_emit.emit_queue_script``.
+    profile_dir (str, required for the queue route) — directory
+                                     ``<profile>.yaml`` lives under.
+                                     Deliberately NOT containment-guarded
+                                     against ``repo_root``/``target_root``:
+                                     unlike ``queue`` (row content), a DoE
+                                     profile is an operator-trusted input
+                                     that routinely lives in a different
+                                     repo (DoE-claude) than the one whose
+                                     rows are being closed. Guarding it here
+                                     would refuse a legitimate cross-repo
+                                     profile_dir in production.
+    appetite (str, optional, default "standard") — forwarded to
+                                     ``queue_emit.emit_queue_script``.
+    overrides (dict, optional)    — knob overrides, keys ⊆ {"where", "limit",
+                                     "budget_tokens"}, forwarded verbatim.
     output_path (str, required)   — path to write the emitted ``.mjs`` script
                                      to. Path-guarded under ``target_root``
-                                     BEFORE the file is written.
+                                     BEFORE the file is written. On the queue
+                                     route, its guarded parent is passed to
+                                     ``emit_queue_script`` as ``run_dir``.
     target_root (str, optional)   — explicit containment root. If omitted,
                                      the containment root defaults to
                                      ``repo_root`` (the per-request resolved
@@ -38,11 +67,6 @@ Wire params:
                                      default-derivation shape
                                      ``workflow.validate`` uses for its
                                      READ-only guard.
-                                     (Review: code-reviewer 8479038e, Finding
-                                     1 — the parent-of-output default made
-                                     containment a near no-op for a write op;
-                                     ``target_root`` now prefers the wider,
-                                     actually-constraining ``repo_root``.)
     name (str, optional)          — forwarded to ``emit.emit_script``.
     description (str, optional)   — forwarded to ``emit.emit_script``.
 
@@ -102,8 +126,13 @@ The receipt is a property of emitting, not of one repo's wrapper:
 
 Negative-spec:
   - Does NOT derive waves, pathspecs, or script text itself — delegates
-    entirely to ``emit.emit_script``. This module's only original code is
-    the path guard, the foreign-emission refusal, and the disk write.
+    entirely to ``emit.emit_script`` (plan route) or
+    ``queue_emit.emit_queue_script`` (queue route). This module's only
+    original code is the path guard, the route dispatch, the foreign-emission
+    refusal, and the disk write.
+  - Does NOT accept ``plan_path``/``inventory_path`` together with
+    ``queue``/``profile`` — ``QueuePlanConflictError`` refuses the
+    combination before either route runs.
   - Does NOT enumerate the tree, glob, or shell out. Exactly TWO filesystem
     targets, both fixed by the caller's one already-guarded ``output_path``
     and neither discovered by survey: (1) the guarded ``output_path`` itself —
@@ -138,6 +167,7 @@ from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.emit import emit_script, resolve_agent_type_host
 from coordinator_core.ops.dispatch_emit.inventory_mint import mint_spine
+from coordinator_core.ops.dispatch_emit.queue_emit import QueuePathEscapeError, emit_queue_script
 from coordinator_core.session.core import resolve_session_id
 from coordinator_core.ops._param_alias import aliased_param, spellings
 
@@ -160,6 +190,31 @@ class InventoryPathConflictError(ValueError):
     (``inventory_mint.mint_spine``), then emits. Accepting both would leave
     one of the two silently ignored -- see
     ``docs/plans/2026-09-18-doe-holds-no-scripts.md`` § S1-C4.
+    """
+
+
+class QueueRootMissingError(ValueError):
+    """Raised on the queue route when neither the request's ``repo_root``
+    nor an explicit ``target_root`` param is given.
+
+    The queue route resolves relative ``queue`` directories against
+    ``target_root`` (S5) -- with neither supplied, ``target_root`` would
+    silently default to ``output_path``'s own parent (the plan route's
+    fallback), anchoring queue-dir resolution and containment to wherever
+    the caller happened to name ``output_path``, not the repo the queue
+    rows actually live in. Refused rather than defaulted."""
+
+
+class QueuePlanConflictError(ValueError):
+    """Raised when a caller passes ``queue``/``profile`` together with
+    ``plan_path``/``inventory_path``.
+
+    Mutually exclusive: the queue route (``queue_emit.emit_queue_script``)
+    composes a script from a profile and a frozen row manifest; the plan
+    route (``emit.emit_script``) composes one from a hand-authored task
+    spine. Accepting both would leave one silently ignored, same reasoning as
+    ``InventoryPathConflictError`` -- queue input never falls back to the
+    wave path (§ Design § Entrypoint).
     """
 
 
@@ -319,7 +374,10 @@ def _receipt_session_id(params: dict) -> str:
 
 
 def _write_emission_receipt(
-    guarded_script_path: Path, plan_path: str, params: dict
+    guarded_script_path: Path,
+    plan_path: Optional[str],
+    params: dict,
+    extras: Optional[dict] = None,
 ) -> Optional[str]:
     """Write the provenance sidecar. Best-effort: never fails the emit.
 
@@ -331,6 +389,11 @@ def _write_emission_receipt(
     surfaced as a ``None`` ``receipt`` key in the reply, so it is visible rather
     than silent.
 
+    ``plan_path`` is ``None`` on the queue route -- ``"plan"`` is then written
+    as ``null``, and ``extras`` (``queue_emit.QueueEmission.receipt_extras``)
+    is merged in under the same serialisation, never a forked one (module
+    docstring § The receipt is a property of emitting).
+
     Returns the receipt path as a string, or ``None`` if it could not be
     written.
 
@@ -340,6 +403,11 @@ def _write_emission_receipt(
       - Does NOT mutate or re-read the script. On a ``force`` overwrite the
         sidecar is rewritten whole, so its ``sha256`` names the bytes now on
         disk rather than a superseded emission's.
+      - Does NOT let ``extras`` shadow the receipt's own core keys
+        (``sha256``/``session_id``/``emitted_at``/``plan``) -- those are set
+        first and ``extras`` is merged in after, but ``queue_emit`` never
+        emits those key names in its own extras dict, so no collision occurs
+        in practice.
     """
     receipt_path = emission_receipt_path(guarded_script_path)
     try:
@@ -347,8 +415,10 @@ def _write_emission_receipt(
             "sha256": _script_sha256(guarded_script_path),
             "session_id": _receipt_session_id(params),
             "emitted_at": datetime.now().isoformat(timespec="seconds"),
-            "plan": Path(plan_path).name,
+            "plan": Path(plan_path).name if plan_path else None,
         }
+        if extras:
+            receipt.update(extras)
         receipt_path.write_text(
             json.dumps(receipt, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
@@ -385,7 +455,7 @@ class NoReceiptToRestampError(ValueError):
 class RestampScriptNotFoundError(NoReceiptToRestampError):
     """Raised when ``restamp``'s ``script_path`` itself does not exist.
 
-    Review: code-reviewer -- distinct from the base class's "script exists
+    Distinct from the base class's "script exists
     but has no receipt beside it" case (typo'd path vs. a genuinely
     un-emitted script); a subclass so an existing ``except
     NoReceiptToRestampError`` still catches this, while a caller that cares
@@ -469,18 +539,33 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
     Args (via params):
         plan_path (str): plan file to read the task spine from. Mutually
             exclusive with ``inventory_path`` (see
-            ``InventoryPathConflictError``).
+            ``InventoryPathConflictError``) and with ``queue``/``profile``
+            (see ``QueuePlanConflictError``).
         inventory_path (str, optional): a mise-inventory record to mint a
             spine FROM first (``inventory_mint.mint_spine``), written to
             ``<run-id>.spine.md`` beside the record, then emitted exactly
             as a hand-authored ``plan_path`` would be. Mutually exclusive
             with ``plan_path``.
+        queue (list[str], optional): one or more queue directories -- the
+            QUEUE route. Present together with ``profile`` instead of
+            ``plan_path``/``inventory_path``; mutually exclusive with them
+            (``QueuePlanConflictError``). Forwarded to
+            ``queue_emit.emit_queue_script``.
+        profile (str, optional): the queue-grind profile name -- required
+            alongside ``queue`` for the queue route.
+        profile_dir (str, optional): directory ``<profile>.yaml`` lives
+            under -- required alongside ``queue``/``profile``.
+        appetite (str, optional, default "standard"): forwarded to
+            ``queue_emit.emit_queue_script``.
+        overrides (dict, optional): knob overrides, keys ⊆ {"where", "limit",
+            "budget_tokens"}, forwarded verbatim.
         output_path (str): path to write the emitted ``.mjs`` script to.
         target_root (str, optional): explicit containment root; defaults to
             ``repo_root`` when the request carries one, else to
             ``output_path``'s parent directory (see module docstring).
-        name (str, optional): forwarded to ``emit.emit_script``.
-        description (str, optional): forwarded to ``emit.emit_script``.
+        name (str, optional): forwarded to ``emit.emit_script`` (plan route).
+        description (str, optional): forwarded to ``emit.emit_script`` (plan
+            route).
         force (bool, optional, default False): overwrite an ``output_path``
             that already holds a different session's emission. Off by
             default -- see ``ForeignEmissionError``.
@@ -497,23 +582,40 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         not be written -- that failure never changes the verdict.
 
     Raises:
-        ValueError — if ``plan_path`` or ``output_path`` is missing
-        (descriptive message naming the required param), matching the
-        cartography.symbols/tree and ``workflow.validate`` error contract.
-        Also raised (as ``emit.NoWavesError`` / ``pathspec.
+        ValueError — if ``plan_path``/``output_path`` (plan route) or
+        ``queue``/``profile``/``profile_dir``/``output_path`` (queue route)
+        is missing (descriptive message naming the required param), matching
+        the cartography.symbols/tree and ``workflow.validate`` error
+        contract. Also raised (as ``emit.NoWavesError`` / ``pathspec.
         NoWritesDeclaredError``, propagated uncaught) if the spine
         under-declares — see ``emit.py`` module docstring.
         ``pathspec.NoTestTargetError`` does NOT reach here: ``emit_script``
         -> ``compose_script`` catches it and degrades the terminal phase
         instead (see ``emit.py`` module docstring § The terminal phase
         degrades, it never vetoes).
+        QueuePlanConflictError — if ``queue``/``profile`` is passed together
+        with ``plan_path``/``inventory_path``.
         PathEscapeError — if ``output_path`` resolves outside
         ``target_root``.
+        QueuePathEscapeError (queue route) — if ``run_dir`` (the guarded
+        ``output_path``'s parent) or a ``queue`` directory resolves outside
+        ``repo_root``.
         ForeignEmissionError — if ``output_path`` already holds a different
         emission and ``force`` is not set.
     """
     plan_path = aliased_param(params, "plan_path", "plan")
     inventory_path = params.get("inventory_path")
+    queue = params.get("queue")
+    profile_name = params.get("profile")
+    is_queue_route = bool(queue) or bool(profile_name)
+
+    if is_queue_route and (plan_path or inventory_path):
+        raise QueuePlanConflictError(
+            "dispatch.emit accepts either queue/profile or plan_path/"
+            f"inventory_path, not both (got queue={queue!r}, "
+            f"profile={profile_name!r}, plan_path={plan_path!r}, "
+            f"inventory_path={inventory_path!r})"
+        )
 
     if plan_path and inventory_path:
         raise InventoryPathConflictError(
@@ -521,25 +623,34 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             f"(got plan_path={plan_path!r}, inventory_path={inventory_path!r})"
         )
 
-    if inventory_path:
-        spine_text, spine_path = mint_spine(inventory_path)
-        guarded_spine_path = contained_path(
-            spine_path, [Path(inventory_path).resolve().parent]
-        )
-        if guarded_spine_path is None:
-            raise PathEscapeError(
-                f"minted spine path escapes its inventory record's directory: "
-                f"{spine_path!r} not under {Path(inventory_path).resolve().parent!r}"
+    if not is_queue_route:
+        if inventory_path:
+            spine_text, spine_path = mint_spine(inventory_path)
+            guarded_spine_path = contained_path(
+                spine_path, [Path(inventory_path).resolve().parent]
             )
-        guarded_spine_path.write_text(spine_text, encoding="utf-8")
-        plan_path = str(guarded_spine_path)
+            if guarded_spine_path is None:
+                raise PathEscapeError(
+                    f"minted spine path escapes its inventory record's directory: "
+                    f"{spine_path!r} not under {Path(inventory_path).resolve().parent!r}"
+                )
+            guarded_spine_path.write_text(spine_text, encoding="utf-8", newline="\n")
+            plan_path = str(guarded_spine_path)
 
-    if not plan_path:
-        raise ValueError(f"dispatch.emit requires param: {spellings('plan_path', 'plan')}")
+        if not plan_path:
+            raise ValueError(f"dispatch.emit requires param: {spellings('plan_path', 'plan')}")
 
     output_path = aliased_param(params, "output_path", "out_path")
     if not output_path:
         raise ValueError(f"dispatch.emit requires param: {spellings('output_path', 'out_path')}")
+
+    if is_queue_route and not params.get("target_root") and repo_root is None:
+        raise QueueRootMissingError(
+            "dispatch.emit queue route requires either the request's "
+            "repo_root or an explicit target_root param -- neither was "
+            "given, and the queue route never defaults to output_path's "
+            "own parent directory"
+        )
 
     target_root = (
         params.get("target_root")
@@ -572,14 +683,45 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         claude_plugin_root=os.environ.get("CLAUDE_PLUGIN_ROOT"),
     )
 
-    script = emit_script(
-        plan_path,
-        name=params.get("name"),
-        description=params.get("description"),
-        repo_root=repo_root or _repo_root_for_plan(plan_path),
-        session_id=emitting_session_id,
-        agent_type_host=agent_type_host,
-    )
+    receipt_extras: Optional[dict] = None
+    receipt_plan_path: Optional[str] = plan_path
+
+    if is_queue_route:
+        if not queue:
+            raise ValueError("dispatch.emit queue route requires param: queue")
+        if not profile_name:
+            raise ValueError("dispatch.emit queue route requires param: profile")
+        profile_dir = params.get("profile_dir")
+        if not profile_dir:
+            raise ValueError("dispatch.emit queue route requires param: profile_dir")
+
+        target_root_path = Path(target_root)
+        emission = emit_queue_script(
+            profile_name,
+            params.get("appetite") or "standard",
+            params.get("overrides"),
+            queue=[
+                q_path if (q_path := Path(q)).is_absolute() else target_root_path / q_path
+                for q in queue
+            ],
+            profile_dir=Path(profile_dir),
+            repo_root=Path(target_root),
+            run_dir=guarded_path.parent,
+            session_id=emitting_session_id,
+            agent_type_host=agent_type_host,
+        )
+        script = emission.script
+        receipt_extras = emission.receipt_extras
+        receipt_plan_path = None
+    else:
+        script = emit_script(
+            plan_path,
+            name=params.get("name"),
+            description=params.get("description"),
+            repo_root=repo_root or _repo_root_for_plan(plan_path),
+            session_id=emitting_session_id,
+            agent_type_host=agent_type_host,
+        )
 
     findings = run_checks(script)
     error_count = sum(1 for f in findings if f.severity is Severity.ERROR)
@@ -595,7 +737,9 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     guarded_path.write_text(script, encoding="utf-8", newline="")
 
-    receipt = _write_emission_receipt(guarded_path, plan_path, params)
+    receipt = _write_emission_receipt(
+        guarded_path, receipt_plan_path, params, extras=receipt_extras
+    )
 
     return {
         "path": str(guarded_path),

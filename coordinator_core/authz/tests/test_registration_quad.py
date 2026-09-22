@@ -50,7 +50,7 @@ class TestGateDetectsPlantedViolation:
         assert len(violations) == 1
         violation = violations[0]
         assert violation.op_key == "planted.op"
-        # Review: code-reviewer — pin the exact surfaces_missing shape, not just
+        # Pin the exact surfaces_missing shape, not just
         # membership, so a regression that also spuriously reports _OP_KEY_SCOPE or
         # OP_MODULE_MAP missing for planted.op (both of which the fixture supplies)
         # would fail this test instead of passing it.
@@ -209,7 +209,7 @@ class TestUnclassifiedBaselineNeverGrows:
         )
 
 
-# Review: code-reviewer (Finding 1) -- a separate test function, deliberately NOT
+# A separate test function, deliberately NOT
 # folded into TestUnclassifiedBaselineNeverGrows.test_unclassified_baseline_never_grows
 # above (which is currently RED on HEAD for an unrelated, pre-existing reason: three
 # ops missing OP_CLASSIFICATION and absent from the frozen baseline). This assertion

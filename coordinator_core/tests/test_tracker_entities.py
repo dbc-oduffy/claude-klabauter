@@ -193,7 +193,7 @@ def test_mint_item_id_slug_truncated_to_32_chars():
 
 
 def test_mint_item_id_slug_truncation_does_not_produce_a_doubled_hyphen():
-    # Review: code-reviewer c2a5a195 Finding 1 — a title whose
+    # A title whose
     # _slug_from_title output places a '-' at/near index 32 was truncated a
     # SECOND time (to 32) without re-stripping, silently emitting a doubled
     # hyphen that the [a-z0-9-] charset check never caught.
@@ -391,7 +391,7 @@ def test_ac13_emission_order_beats_digest_order_within_one_second(repo_root, mon
 
 
 def test_stamp_applied_at_produces_distinct_back_to_back_stamps():
-    # Review: code-reviewer c2a5a195 Finding 8 — the AC13 test above
+    # The AC13 test above
     # monkeypatches _stamp_applied_at entirely, so it never verifies the
     # REAL function's microsecond-precision behavior, which is AC13's whole
     # premise (DEC-19).

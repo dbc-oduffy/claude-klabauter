@@ -32,6 +32,7 @@ from coordinator_core.ops.fleet._memo_resolver import (
     read_publish_mirrors,
     read_registry_repos,
     receiver_em_to_repo_key,
+    reroute_owner,
     resolve_receiver_inbox,
     resolve_self_em_id,
     same_repo_path,
@@ -666,3 +667,75 @@ class TestDoeIdentityContentLayouts:
         with caplog.at_level("WARNING"):
             assert read_doe_identity() == {}
         assert str(tmp_path / "bare") in caplog.text
+
+
+def _add_mirrors(claude_home: Path, mirrors: dict[str, dict[str, str]]) -> None:
+    machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
+    lines = ["schema = 1"]
+    for key, fields in mirrors.items():
+        lines.append(f"\n[publish.mirrors.{key}]")
+        for field, value in fields.items():
+            toml_val = value.replace("\\", "\\\\").replace('"', '\\"')
+            lines.append(f'{field} = "{toml_val}"')
+    (machine_local / "registry.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+class TestPublishMirrorReroute:
+    """A publish mirror or a redirect alias is not a receiver: a memo addressed
+    to one is delivered to its owner, never into the mirror's own inbox."""
+
+    def test_mirror_registered_in_repos_routes_to_its_owner(self, tmp_path, monkeypatch):
+        mirror = tmp_path / "claude-klabauter"
+        owner_repo = tmp_path / "claude-klabauter"
+        claude_home = _make_claude_home(
+            tmp_path, {"claude_klabauter": mirror, "claude_klabauter": owner_repo},
+        )
+        _add_mirrors(claude_home, {"claude_klabauter": {"owner": "claude-klabauter-em", "path": str(mirror)}})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        assert reroute_owner("claude-klabauter-em") == "claude-klabauter-em"
+        _inbox, repo, _all = resolve_receiver_inbox("claude-klabauter-em")
+        assert same_repo_path(repo, owner_repo)
+
+    def test_mirror_alias_not_in_repos_routes_to_its_owner(self, tmp_path, monkeypatch):
+        owner_repo = tmp_path / "example-retrieval-repo"
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": owner_repo})
+        _add_mirrors(claude_home, {"deep_research_claude": {"owner": "example-retrieval-repo-em", "path": str(tmp_path / "drc")}})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        _inbox, repo, _all = resolve_receiver_inbox("deep-research-claude-em")
+        assert same_repo_path(repo, owner_repo)
+
+    def test_ownerless_mirror_path_is_never_a_receiver(self, tmp_path, monkeypatch):
+        mirror = tmp_path / "claude-klabauter"
+        claude_home = _make_claude_home(tmp_path, {"claude_klabauter": mirror})
+        _add_mirrors(claude_home, {"claude_klabauter": {"path": str(mirror)}})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        assert reroute_owner("claude-klabauter-em") is None
+        inbox, repo, _all = resolve_receiver_inbox("claude-klabauter-em")
+        assert inbox is None and repo is None
+
+    def test_redirect_alias_routes_to_the_central_receiver(self, tmp_path, monkeypatch):
+        doe = tmp_path / "doe-claude-repo"
+        claude_home = _make_claude_home(tmp_path, {"doe_claude": doe})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _install_doe_manifest(claude_home, doe, {"identity": {
+            "repoAliases": [],
+            "centralReceiverIds": ["claude-central-em", "doe-claude-em"],
+            "redirectAliases": ["coordinator-claude-em", "claude-home"],
+        }})
+
+        for alias in ("coordinator-claude-em", "claude-home"):
+            assert reroute_owner(alias) == "doe-claude-em", alias
+            _inbox, repo, _all = resolve_receiver_inbox(alias)
+            assert same_repo_path(repo, doe), alias
+
+    def test_an_ordinary_receiver_is_not_rerouted(self, tmp_path, monkeypatch):
+        repo_path = tmp_path / "example-retrieval-repo"
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": repo_path})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        assert reroute_owner("example-retrieval-repo-em") is None
+        _inbox, repo, _all = resolve_receiver_inbox("example-retrieval-repo-em")
+        assert same_repo_path(repo, repo_path)

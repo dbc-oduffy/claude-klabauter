@@ -532,7 +532,7 @@ _SYS_PATH_LOCK = threading.Lock()
 _SYS_PATH_REFCOUNTS: dict = {}
 
 
-# Review: coordinator:code-reviewer 9b8765ad finding 1 — tracks, per
+# tracks, per
 # dir_path, whether THIS module's own `_sys_path_push` was the call that
 # actually inserted the entry, separately from the borrow count. Without
 # this, a `dir_path` already present in `sys.path` for a reason outside this

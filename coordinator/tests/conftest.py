@@ -29,18 +29,19 @@ import pytest
 
 from coordinator_core.testing.registry_sandbox import fail_on_live_registry_write_fixture
 
-# `RealIdentityCheckMixin` (shared fake-`ClaudeKlabauterPercolate` `run_identity_check`
-# stand-in) deliberately does NOT live here: this file is named `conftest.py`,
-# and `coordinator/bin/` carries its own same-named `conftest.py` -- a plain
-# `from conftest import X` resolves through `sys.modules["conftest"]`, which a
-# combined pytest run spanning both directories has already bound to whichever
-# of the two pytest auto-imported first (collection order, not import-site
-# proximity). Verified live: `pytest coordinator/tests/test_percolate_driver_
-# gates.py coordinator/bin/tests/test_percolate_identity_check_gate.py`
-# resolved `from conftest import RealIdentityCheckMixin` against
-# `coordinator/bin/conftest.py` and raised `ImportError`. See
-# `_fake_claude_klabauter_identity.py` (uniquely named, same directory, same import
-# idiom as `_repo_paths.py` already used by these test files) instead.
+# A shared cross-directory fixture deliberately does NOT live here: this file
+# is named `conftest.py`, and `coordinator/bin/` carries its own same-named
+# `conftest.py` -- a plain `from conftest import X` resolves through
+# `sys.modules["conftest"]`, which a combined pytest run spanning both
+# directories has already bound to whichever of the two pytest auto-imported
+# first (collection order, not import-site proximity). Verified live: `pytest
+# coordinator/tests/test_percolate_driver_gates.py coordinator/bin/tests/
+# test_percolate_identity_check_gate.py` resolved `from conftest import
+# RealIdentityCheckMixin` against `coordinator/bin/conftest.py` and raised
+# `ImportError`. The idiom that sidesteps this: give the shared module a
+# tree-unique name, same directory as its importers, and import it by that
+# unique name instead of through `conftest`. See `_repo_paths.py` for the
+# precedent this idiom follows.
 
 # Autouse across this whole tree, and deliberately DETECTION rather than
 # redirection. The obvious prevention — arming ``MACHINE_LOCAL_REGISTRY_DIR``
@@ -55,6 +56,31 @@ from coordinator_core.testing.registry_sandbox import fail_on_live_registry_writ
 # (Review: code-reviewer, Finding 3, 2026-07-28 — was a byte-identical copy
 # duplicated with ``coordinator/bin/conftest.py``; factored into one place).
 _fail_on_live_registry_write = pytest.fixture(autouse=True)(fail_on_live_registry_write_fixture)
+
+
+# 2026-09-22 addition: several tests in this tree invoke a CLI's own main()
+# in-process (importlib-loaded, sys.argv patched) rather than as a real
+# subprocess, but that main() still reaches `cc_invoke.route()` for its
+# schema ops, and State-2 there spawns an actual `coordinator_core.invoke`
+# child carrying `{**os.environ}` (`_build_subprocess_env`) -- the identical
+# ambient-inheritance shape `coordinator/bin/conftest.py`'s
+# `_pin_warm_disabled_for_subprocess_clis` exists to close for its own tree,
+# just reached one call deeper (through an in-process main(), not a spawned
+# CLI subprocess) rather than through a direct child. On a box that opted
+# into warmth via the machine-local registry rung (unset `COORDINATOR_WARM`
+# env, `warm/settings.py`'s rung 2), that inheritance silently routes this
+# tree's CLI-driving tests onto the box-shared warm server: a miss there has
+# no cold fallback (DR-215) and blocks on a bounded warm-boot wait before
+# failing loud, well past this suite's expected per-test budget.
+# `COORDINATOR_WARM=0` always wins over the registry rung (`warm/settings.py`
+# precedence), so pinning it here forces every such call onto the cold route
+# regardless of the box, matching `coordinator/bin/conftest.py`'s existing
+# pin for its own tree.
+@pytest.fixture(autouse=True)
+def _pin_warm_disabled_for_cli_driving_tests(monkeypatch):
+    """Force every CLI invocation exercised from this tree onto the cold route."""
+    monkeypatch.setenv("COORDINATOR_WARM", "0")
+
 
 # NEGATIVE SPEC: this conftest holds no process-spawning helper, and must not
 # regain one. A conftest cannot carry `@pytest.mark.cadence` — a marker only

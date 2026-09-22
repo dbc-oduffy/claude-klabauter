@@ -60,6 +60,10 @@ def _dead_pid() -> int:
     return proc.pid
 
 
+@pytest.mark.deliberate_wall_clock(
+    reason="the orphan case: the watchdog must return near-instantly for an already-dead "
+    "parent, not block -- a behaviour only wall clock can observe"
+)
 def test_wait_for_parent_exit_returns_immediately_for_a_dead_parent() -> None:
     """The orphan case: the parent is ALREADY gone when the worker looks.
 

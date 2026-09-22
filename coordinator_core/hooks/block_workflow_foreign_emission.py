@@ -55,7 +55,7 @@ import json
 from pathlib import Path
 from typing import Mapping
 
-from coordinator_core._hook_envelope import deny, no_advisory
+from coordinator_core._hook_envelope import deny, no_advisory, payload_of
 from coordinator_core._settings_home import settings_home
 from coordinator_core.ipc import register_op
 
@@ -88,26 +88,13 @@ def _sha_mismatch_reason(
 ) -> str:
     launcher = _emitter_launcher_invocation()
     return (
-        f"{script.name} changed after it was emitted -- refusing to fire.\n\n"
-        f"Its receipt ({receipt_path.name}) records sha256 {recorded_sha[:12]}; "
-        f"the file on disk is {actual_sha[:12]}. Something wrote this script "
-        "outside the emitter, so the wave map about to run is not the one that "
-        "was derived from the plan.\n\n"
-        "If YOU edited it -- the documented recovery from a halted run is to "
-        "edit the halting phase's agent step, and an unedited resume replays "
-        "the cached refusal -- re-stamp the receipt over your own edit:\n"
+        f"{script.name} changed after emission (sha {recorded_sha[:12]}; disk "
+        f"{actual_sha[:12]}) -- refusing to fire.\n\n"
+        "Use instead: edited it, re-stamp --\n"
         f"  {launcher} --restamp "
         f'"{script}"\n'
-        "It prints the phase spine it is authorizing, and refuses unless the "
-        "receipt names this session, so a peer's emission cannot be laundered "
-        "through it.\n\n"
-        "If you did NOT edit it, re-emit before firing --\n"
-        f"  {launcher} --plan <plan-path>\n"
-        "then read the wave map it produces. Rows that changed may carry "
-        "dispositions this run was never authorized for. A re-emit against a "
-        "plan whose early chunks have landed narrows the script silently "
-        "(A-SECOND-EMIT-AFTER-A-PARTIAL-RUN-NARROWS-SILENTLY), so it is the "
-        "wrong move for a deliberate edit."
+        "Use instead: didn't edit it, re-emit --\n"
+        f"  {launcher} --plan <plan-path>"
     )
 
 
@@ -131,6 +118,9 @@ def _session_mismatch_reason(script: Path, session: str, recorded_session: str) 
 async def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Workflow) op: refuse to fire a script this session did not
     emit."""
+    # Normalize the two params shapes
+    # both engine doors and the cold chain send (see block_worktree_tool).
+    params = payload_of(params)
     if params.get("tool_name") != "Workflow":
         return no_advisory()
 

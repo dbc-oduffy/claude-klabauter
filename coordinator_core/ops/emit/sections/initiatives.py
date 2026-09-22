@@ -89,7 +89,7 @@ def _parse_goal_ids(raw_val: str, lines: list[str], line_idx: int) -> list[str]:
     # block-sequence-under-mapping-key rule). Stops the scan on a dedent to <= that
     # column rather than merely on regex-fail, so a sibling block-list array field
     # (should one ever be added after a bare `goals:` key) is never slurped in.
-    # Review: code-reviewer (Finding 1) — indentation boundary was previously unchecked.
+    # Indentation boundary was previously unchecked.
     goals_indent = len(lines[line_idx]) - len(lines[line_idx].lstrip())
     ids: list[str] = []
     for later in lines[line_idx + 1 :]:
@@ -196,7 +196,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
         records.append(
             {
                 "repo": ctx.repo_name,
-                # Review: code-reviewer (Finding 4) — hardcoded to "." on the current
+                # Hardcoded to "." on the current
                 # single-coordinator-root invariant (unlike goals.py, which reads this
                 # field from disk per-record). The `_stamp_initiative_goals` join in
                 # resolvers.py scopes on (repo, coordinator_root_path) match; a future

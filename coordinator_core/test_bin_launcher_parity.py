@@ -654,7 +654,7 @@ LAUNCHER_PARITY_EXEMPTIONS: dict[str, str] = {
     # site resolves the settings-home copies instead. `test_no_parity_exemption_is_stale`
     # is what caught the row outliving its file -- the same staleness discipline
     # AC13 generalises to the POSIX-exec register.
-    # Review: code-reviewer (wfc-S2-launchers, Finding 2) flagged an apparent
+    # code-reviewer (wfc-S2-launchers, Finding 2) flagged an apparent
     # contradiction between this "not on PATH" claim and the deleted forwarders'
     # own docstrings ("harness-injected plugin bin ... resolves on tool shells
     # where ~/.claude/bin is NOT on PATH"). Both are true, about different
@@ -1019,7 +1019,7 @@ def test_raw_cmdline_block_bodies_match_between_generators():
     only compares the ALLOWLIST SETS, never the rendered text, so a hand-edit
     to one function's block that forgot the other would go undetected.
 
-    Review: staff-eng (Finding 4). Renders both for a shared target name and
+    staff-eng (Finding 4). Renders both for a shared target name and
     asserts byte equality, so the claim the docstrings make is actually
     enforced rather than merely stated.
 

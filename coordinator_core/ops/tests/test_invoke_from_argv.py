@@ -237,10 +237,14 @@ def test_served_dispatch_never_checks_warm_enabled():
 # ---------------------------------------------------------------------------
 
 def test_worktree_scoped_op_resolves_repo_root_from_cwd_param_not_process_cwd():
-    """A worktree-scoped op (handoff.has_live_children — same vehicle
-    test_invoke_main.py uses) dispatched with `cwd` pointed at a directory
-    OUTSIDE any git repo, and no --repo, must fail with a repo-unresolvable
-    error — exactly what the real CLI does run from that same directory.
+    """A worktree-scoped op (handoff.blocked_by_dependents — handoff.has_live_children's
+    sibling in the same module and same `candidate`-param shape, swapped in because
+    has_live_children was killed under DR-344 2026-08-30 and dropped out of
+    WORKTREE_SCOPED_OPS entirely, which broke this test's premise: neither the served
+    nor the CLI leg reached repo_root resolution any more, they hit the op-suspension/
+    build-stamp checks instead) dispatched with `cwd` pointed at a directory OUTSIDE any
+    git repo, and no --repo, must fail with a repo-unresolvable error — exactly what the
+    real CLI does run from that same directory.
 
     This test's own process cwd is inside the claude-klabauter git repo (pytest is
     invoked from the repo), so if the handler's repo_root resolution silently
@@ -259,10 +263,10 @@ def test_worktree_scoped_op_resolves_repo_root_from_cwd_param_not_process_cwd():
         )
 
         served = _invoke_from_argv({
-            "argv": ["handoff.has_live_children", '{"candidate": "x"}'],
+            "argv": ["handoff.blocked_by_dependents", '{"candidate": "x"}'],
             "cwd": tmp_dir,
         })
-        cli = _run_cli("handoff.has_live_children", '{"candidate": "x"}', cwd=tmp_dir)
+        cli = _run_cli("handoff.blocked_by_dependents", '{"candidate": "x"}', cwd=tmp_dir)
 
         assert served["exit_code"] == cli.returncode == 1
         assert served["stdout"] == cli.stdout == ""

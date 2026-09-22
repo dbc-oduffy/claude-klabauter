@@ -199,7 +199,7 @@ def test_unknown_not_fresh_when_git_log_fails_for_real(tmp_path):
 
 
 def test_unknown_not_fresh_when_measured_paths_is_a_string(tmp_path):
-    """Review: coordinator:code-reviewer (F1) — a truthiness-only check on
+    """A truthiness-only check on
     measured_paths passes a bare string (a plausible hand-edit slip in
     place of a one-element list). git log then unpacks the string into one
     pathspec per character, which can silently report FRESH regardless of

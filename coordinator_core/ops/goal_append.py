@@ -65,6 +65,7 @@ from typing import Optional
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.emit.resolvers import resolve_context
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.session.claimed_write import append_claimed_line
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -383,7 +384,7 @@ def append_goal(
     # included in the goal_id content key above; they are metadata, not identity).
     if isinstance(key_results_status, list) and key_results_status:
         row["key_results_status"] = key_results_status
-    # Review: code-reviewer (Finding 3) — mirror the key_results_status list guard so a
+    # Mirror the key_results_status list guard so a
     # malformed weekly_perceptible (e.g. the string "true" instead of the bool True) is
     # quarantined (omitted) rather than written to disk and passed through to the wire.
     if isinstance(weekly_perceptible, bool):
@@ -396,8 +397,8 @@ def append_goal(
     log_file = Path(central_state_root) / _LOG_NAME_TEMPLATE.format(machine=machine)
     Path(central_state_root).mkdir(parents=True, exist_ok=True)
 
-    with log_file.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(row, separators=(",", ":"), sort_keys=True) + "\n")
+    encoded_row = (json.dumps(row, separators=(",", ":"), sort_keys=True) + "\n").encode("utf-8")
+    append_claimed_line(log_file, encoded_row)
 
     return {
         "log_file": str(log_file),

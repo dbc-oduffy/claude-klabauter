@@ -121,7 +121,7 @@ _LOG = logging.getLogger(__name__)
 
 # Sentinel: _normalize_one returns this when a file has no valid YAML frontmatter.
 # Distinct from None (which means "already clean — no changes needed").
-# Review: code-reviewer (F7) — distinguish no-frontmatter from already-clean so the
+# Distinguish no-frontmatter from already-clean so the
 # handler can surface skipped files in the errors list rather than silently dropping them.
 _NO_FRONTMATTER = object()
 
@@ -282,7 +282,7 @@ _SUMMARY_MAX_CHARS = 140
 # `_BLOCK_SCALAR_INDICATOR_RE` (same shape, different module — no shared
 # import to avoid an ops-module-to-ops-module dependency), widened here to
 # also match a legal trailing `# comment` on the indicator line itself.
-# Review: code-reviewer (P3) — `read_fm_field` returns the indicator line
+# `read_fm_field` returns the indicator line
 # verbatim (only outer whitespace trimmed, comment NOT stripped), so
 # `summary: |-  # comment` used to fail this anchored-to-end-of-string match,
 # fall through to the plain-scalar `else` branch, and be measured/truncated
@@ -348,7 +348,7 @@ def _replace_block_scalar_span(fm_text: str, key: str, new_line: str) -> Optiona
     """
     text = fm_text if fm_text.endswith('\n') else fm_text + '\n'
     pattern = re.compile(
-        # Review: code-reviewer (P3) — the indicator line may carry a legal
+        # The indicator line may carry a legal
         # trailing `# comment` (e.g. `summary: |-  # note`); the optional
         # `(?:#.*)?` tail mirrors the widened `_BLOCK_SCALAR_INDICATOR_RE`
         # match above so a comment-bearing indicator line is still located
@@ -459,7 +459,7 @@ def normalize_present_summary(
             return fm_text, None
         return new_fm_text, 'summary: (block scalar) truncated to fit 140-char cap'
 
-    # Review: code-reviewer (P1, break-class) — measure the SAME decoded value
+    # Measure the SAME decoded value
     # `schema_validate._cf_summary_length_cap` measures (`len(str(summary))` on
     # the `yaml.safe_load`-decoded value), not the raw on-disk text.
     # `unquote_yaml_scalar(read_fm_field(...))` diverges from that decoded value
@@ -579,7 +579,7 @@ def _normalize_one_text(
     """
     split = split_frontmatter(content)
     if split is None:
-        # Review: code-reviewer (F7) — return sentinel instead of None so the handler can
+        # Return sentinel instead of None so the handler can
         # surface this file in errors (IPC envelope has structured errors; silent drop is
         # the wrong observability contract unlike the JS CLI which prints to stdout).
         return _NO_FRONTMATTER
@@ -871,7 +871,7 @@ async def _handler(
     changed: List[dict] = []
     errors: List[dict] = []
 
-    # Review: code-reviewer (F1) — resolved ONCE per invocation, not per file: the
+    # Resolved ONCE per invocation, not per file: the
     # claimed plan (and its deliverable_id) is invariant for the whole batch, so
     # re-resolving it inside the per-file loop was a real (if bounded) I/O cost
     # across a ~141-file corpus.  Threaded straight into every call site below.
@@ -939,7 +939,7 @@ async def _handler(
 
         else:
             # Dry-run path: read-only, no lock needed.
-            # Review: code-reviewer (F1) — asyncio.to_thread wraps _normalize_one (which
+            # asyncio.to_thread wraps _normalize_one (which
             # calls read_text) to satisfy DR-212 D3 async-loop mandate; prevents event-loop
             # stall under the batch-normalize path which may read N files in one call.
             try:
@@ -951,7 +951,7 @@ async def _handler(
                 errors.append({"file": rel, "error": str(exc)})
                 continue
 
-            # Review: code-reviewer (F7) — surface no-frontmatter files in errors rather
+            # Surface no-frontmatter files in errors rather
             # than dropping them silently.
             if result is _NO_FRONTMATTER:
                 _LOG.warning("handoff.normalize: no valid YAML frontmatter in %s — skipped", rel)

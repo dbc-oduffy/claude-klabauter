@@ -179,7 +179,7 @@ def test_post_tool_use_suppresses_on_agent_id() -> None:
     assert _handler({"payload": payload}) == {}
 
 
-# Review: coordinator:code-reviewer Finding 3 -- the sizing-route resolution
+# The sizing-route resolution
 # path (`_newest_touched_sizing_path` / `_sizing_route_and_exemption` /
 # `_extract_scalar` / `_extract_detents`, exercised from `_handle_post_tool_use`'s
 # coordinator:sizing/coordinator:plan branch) had zero coverage; add one test
@@ -305,7 +305,7 @@ def test_plan_skill_plan_route_opens_plan_review(tmp_path) -> None:
     assert record["next_action"] == "Skill(coordinator:review)"
 
 
-# Review: coordinator:code-reviewer Finding 4 -- `_drain_intake`'s fold-and-
+# `_drain_intake`'s fold-and-
 # delete behavior (the module's cross-plane consumption contract with
 # `coordinator_core.group_em.obligations`'s producer) had zero coverage.
 

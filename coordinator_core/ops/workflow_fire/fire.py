@@ -119,8 +119,21 @@ GENERATES = []
 DEFAULT_MODEL = "haiku"
 
 #: Low turn cap -- near-free insurance against a wedged child burning
-#: tokens invisibly for work that is structurally one tool call.
+#: tokens invisibly for work that is structurally one tool call. This is
+#: the FLOOR only: ``fire_workflow`` scales the effective cap up with the
+#: script's own declared phase count (see ``_scaled_max_turns``) when the
+#: caller does not pass ``max_turns`` explicitly -- a fixed cap that never
+#: grew with the workflow it bounds silently truncated a many-phase run at
+#: the same 3 turns as a one-phase one (klabauter#41).
 DEFAULT_MAX_TURNS = 3
+
+#: Extra turn budget granted per declared ``phase(...)`` call found in the
+#: emitted script, on top of ``DEFAULT_MAX_TURNS`` -- a background Workflow
+#: run's own step budget tracks against the driver's turn cap, so a script
+#: with more phases needs more turns than one with a single wave, and a cap
+#: that scales with nothing silently starves the extra phases rather than
+#: failing loud.
+_TURNS_PER_PHASE = 1
 
 #: EM-set default, not a measured value (see this chunk's brief) -- trivial
 #: to move, deliberately a named constant rather than inlined at call sites.
@@ -190,14 +203,41 @@ _BG_WAIT_CEILING_ENV = "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"
 
 def build_fire_env(base: Optional[dict] = None) -> dict:
     """Child environment for a fired driver: inherited, plus an uncapped
-    background-task wait.
+    background-task wait, plus the settings-home ``bin/`` directory on PATH.
 
     Negative spec: never narrows the inherited environment -- the child
     needs the operator's PATH, plugin roster, and coordinator settings
     root. An explicit operator-set ceiling is respected, not overridden.
+
+    ``<settings-home>/bin`` is PREPENDED to PATH, not appended
+    (claude-klabauter#45 class D): every ``agent()`` subagent the fired
+    workflow spawns inherits this same session environment, and an emitted
+    executor's row body invokes launchers there by bare name (e.g.
+    ``cross-repo-memo``) -- the launcher exists on disk
+    (``$COORDINATOR_SETTINGS_HOME/bin/cross-repo-memo``) but was simply
+    absent from the fired child's PATH, so every memo-sending row blocked on
+    "command not found" (exit 127). Resolved via
+    ``coordinator_core._settings_home.settings_home()`` -- the one resolver
+    for this path, per ``snippets/resolve-coordinator-bin.md`` rung 2 --
+    never a hand-rolled probe (klabauter#38 was exactly that mistake).
+    Prepending, not appending, makes behaviour predictable across boxes: the
+    settings-home launcher is always the one an emitted row's bare command
+    name resolves to, rather than depending on whichever same-named binary a
+    given box happens to already have earlier on PATH. No subprocess is
+    spawned to resolve this (brightline) -- ``settings_home()`` is a pure
+    env/home read.
     """
     env = dict(os.environ if base is None else base)
     env.setdefault(_BG_WAIT_CEILING_ENV, "0")
+
+    from coordinator_core._settings_home import settings_home
+
+    settings_bin = str(settings_home() / "bin")
+    existing_path = env.get("PATH") or ""
+    path_entries = existing_path.split(os.pathsep) if existing_path else []
+    if settings_bin not in path_entries:
+        env["PATH"] = os.pathsep.join([settings_bin, *path_entries]) if path_entries else settings_bin
+
     return env
 
 
@@ -215,6 +255,14 @@ class ScriptNotFoundError(ValueError):
     """Raised when ``script_path`` does not exist on disk at fire time."""
 
 
+class ScriptOutsideRepoRootError(ValueError):
+    """Raised when ``script_path`` does not live under the resolved repo
+    root (claude-klabauter#41): a fire aimed at the wrong tree cannot read
+    its own script, and used to exit ``subtype: success`` regardless --
+    refusing here at fire time turns that clean-looking corpse into a
+    refusal instead."""
+
+
 class ConcurrencyCapExceededError(RuntimeError):
     """Raised when the registry's live-fire count is already at the cap."""
 
@@ -222,6 +270,95 @@ class ConcurrencyCapExceededError(RuntimeError):
 class ChildSpawnFailedError(RuntimeError):
     """Raised when the spawned child cannot be confirmed live (immediate
     non-zero exit, or the binary/flag was refused at spawn)."""
+
+
+class RepoRootUnresolvableError(RuntimeError):
+    """Raised when the target tree for this fire cannot be established
+    unambiguously.
+
+    Fail-loud by design (klabauter#37): before this, an absent ``--repo``
+    fell through to whatever tree the cold-spawned engine PROCESS happened
+    to have as its own cwd at invocation time -- unrelated to either the
+    caller's intended repo or the emitted ``script_path``'s own tree -- and
+    the fire still proceeded, reporting success while the child ran
+    detached in that wrong tree. This is refused instead of silently
+    resolved from ambient process state.
+    """
+
+
+def _count_phases(script_text: str) -> int:
+    """Count declared ``phase(`` calls in an emitted workflow script.
+
+    A cheap textual count, not a JS parse -- the emitted grammar is
+    generated by this engine's own scaffold/compose modules and always
+    spells a phase boundary as a literal ``phase(`` call
+    (``workflow_scaffold.py``, ``review_mint/compose.py``); this is not a
+    general-purpose script analyzer.
+    """
+    return script_text.count("phase(")
+
+
+def _scaled_max_turns(script_text: str) -> int:
+    """Turn cap scaled with the script's own declared phase count.
+
+    ``DEFAULT_MAX_TURNS`` alone is a fixed floor that does not grow with
+    the workflow it bounds (klabauter#41) -- a script with more phases
+    needs more turns than a single-wave one. Never below the floor: a
+    script with zero detected phases (or an unreadable one) still gets
+    ``DEFAULT_MAX_TURNS``.
+    """
+    phase_count = _count_phases(script_text)
+    return max(DEFAULT_MAX_TURNS, phase_count * _TURNS_PER_PHASE + DEFAULT_MAX_TURNS)
+
+
+def _resolve_target_repo(script_path: Path, cwd: Optional[str]) -> str:
+    """Resolve the single tree this fire targets, refusing rather than
+    guessing.
+
+    ``cwd``, when the caller supplies one (an explicit ``--repo``), is
+    authoritative and used as-is -- unambiguous by construction. When
+    ``cwd`` is absent, this does NOT fall back to the firing process's own
+    ambient cwd (which need not have anything to do with either the
+    caller's intent or ``script_path``'s own tree, see
+    ``RepoRootUnresolvableError``); instead it resolves from
+    ``script_path`` itself, since the emitted script necessarily lives
+    inside the tree it targets. Raises ``RepoRootUnresolvableError`` when
+    neither yields a real git tree.
+    """
+    if cwd:
+        return cwd
+    resolved = show_toplevel(str(script_path.parent))
+    if not resolved:
+        raise RepoRootUnresolvableError(
+            "workflow.fire: no --repo was given and the target tree cannot be "
+            f"resolved unambiguously from script_path {str(script_path)!r} "
+            "(not inside a git repository) -- refusing rather than falling "
+            "back to the engine process's own ambient working directory"
+        )
+    return resolved
+
+
+def _assert_script_under_repo_root(script_path: Path, resolved_cwd: str) -> None:
+    """Refuse a fire whose ``script_path`` does not live under the tree this
+    fire resolved as its target (klabauter#41).
+
+    A ``--repo`` (or an ambient-cwd fallback further up the call chain, in
+    ``coordinator_core.invoke``) can name a tree unrelated to
+    ``script_path``'s own repo -- the measured failure was exactly this: a
+    fire resolved against the engine root while ``script_path`` lived in a
+    sibling repo, spawned a child that could never read its own script, and
+    still reported ``subtype: success``. This check is cheap and purely
+    local (two ``os.path.realpath`` calls, no subprocess), and would have
+    turned each of the three measured failures into a refusal at fire time.
+    """
+    root = os.path.realpath(resolved_cwd)
+    target = os.path.realpath(str(script_path))
+    if target != root and not target.startswith(root + os.sep):
+        raise ScriptOutsideRepoRootError(
+            f"workflow.fire: script_path {str(script_path)!r} does not live "
+            f"under the resolved repo root {resolved_cwd!r} -- refusing "
+            "rather than firing a child rooted in the wrong tree"
+        )
 
 
 def _native_plugin_dir() -> Optional[str]:
@@ -564,7 +701,7 @@ _LOG_SCAN_WINDOW_BYTES = 64 * 1024
 #: and re-stamped -- which is how a record settled by an earlier version
 #: picks up a field that version never wrote, without a migration pass and
 #: without re-reading its log on every subsequent sweep.
-_ANNOTATION_VERSION = 2
+_ANNOTATION_VERSION = 3
 
 _STALENESS_NOTE = (
     "`state`, `exit_code` and `outcome` are only valid as of `status_checked_at` -- "
@@ -646,8 +783,9 @@ def _terminal_envelope(text: str) -> Optional[dict]:
 
 
 def _classify_outcome(record: dict) -> tuple:
-    """Classify a fire as ``clean`` / ``truncated`` / ``unknown`` from the
-    child's own log, returning ``(outcome, basis)``.
+    """Classify a fire as ``clean`` / ``failed`` / ``truncated`` / ``unknown``
+    from the child's own log, returning ``(outcome, basis, driver_session_id,
+    failure_subtype)``.
 
     This answers the question the exit code cannot answer here: the spawn is
     detached (``DETACHED_PROCESS`` / ``start_new_session``) and no ``Popen``
@@ -657,18 +795,25 @@ def _classify_outcome(record: dict) -> tuple:
     child itself writes: the harness's background-work truncation banner,
     and the driver's terminal result envelope.
 
-    Returns ``(outcome, basis, driver_session_id)``. ``clean`` means the
-    DRIVER finished, never that the workflow's phases did
-    work -- a fully-refused run exits 0 with a clean envelope too (see
-    ``fire_status``'s docstring for that separate, still-live hazard).
+    ``failed`` is the terminal envelope's own report of a recorded error --
+    ``is_error: true`` or a ``subtype`` other than ``"success"`` (e.g.
+    ``error_max_turns``, claude-klabauter#37). ``failure_subtype`` carries
+    that ``subtype`` verbatim so ``error_max_turns`` is distinguishable from
+    any other recorded failure, rather than everything collapsing to a bare
+    ``outcome: unknown`` the caller has to open the log to explain. ``clean``
+    means the DRIVER finished without a recorded error, never that the
+    workflow's phases did work -- a fully-refused run can still exit 0 with
+    a clean envelope (see ``fire_status``'s docstring for that separate,
+    still-live hazard).
 
-    The session id is ``None`` whenever no envelope was recovered.
+    The session id and failure subtype are ``None`` whenever no envelope was
+    recovered (or, for the subtype, when the envelope reported no error).
     """
     if record.get("state") != "exited":
-        return "unknown", "the run has not been observed to end", None
+        return "unknown", "the run has not been observed to end", None, None
     text = _read_log_window(record.get("log_path", ""))
     if text is None:
-        return "unknown", "the child's log could not be read", None
+        return "unknown", "the child's log could not be read", None, None
     envelope = _terminal_envelope(text)
     session_id = (envelope or {}).get("session_id")
     if _has_truncation_banner(text):
@@ -676,10 +821,23 @@ def _classify_outcome(record: dict) -> tuple:
             "truncated",
             "the driver terminated still-running background work at its wait ceiling",
             session_id,
+            None,
         )
     if envelope is not None:
-        return "clean", "the driver wrote its own terminal result envelope", session_id
-    return "truncated", "the child is dead and never wrote a terminal result envelope", None
+        subtype = envelope.get("subtype")
+        if envelope.get("is_error") or (subtype is not None and subtype != "success"):
+            basis = f"the driver's terminal envelope recorded subtype={subtype!r}"
+            errors = envelope.get("errors")
+            if errors:
+                basis += f", errors={errors!r}"
+            return "failed", basis, session_id, subtype
+        return "clean", "the driver wrote its own terminal result envelope", session_id, None
+    return (
+        "truncated",
+        "the child is dead and never wrote a terminal result envelope",
+        None,
+        None,
+    )
 
 
 def _annotate_record(record: dict) -> dict:
@@ -707,20 +865,24 @@ def _annotate_record(record: dict) -> dict:
     # the child is reaped and its log will never become readable, so
     # re-attempting the open on every sweep buys nothing and is paid by
     # every future fire (``count_live_fires`` walks the whole registry).
-    # Review: coordinator:code-reviewer. An ``unknown`` on a record that has
+    # coordinator:code-reviewer. An ``unknown`` on a record that has
     # not yet been observed to end stays unsettled, which is the case that
     # must keep re-checking.
     outcome_now = annotated.get("outcome")
-    settled = outcome_now in ("clean", "truncated") or (
+    settled = outcome_now in ("clean", "failed", "truncated") or (
         outcome_now == "unknown" and annotated.get("state") == "exited"
     )
     current = annotated.get("_annotation_version") == _ANNOTATION_VERSION
     if not (settled and current):
-        outcome, basis, driver_session_id = _classify_outcome(annotated)
+        outcome, basis, driver_session_id, failure_subtype = _classify_outcome(annotated)
         annotated["outcome"] = outcome
         annotated["outcome_basis"] = basis
         if driver_session_id:
             annotated["driver_session_id"] = driver_session_id
+        if failure_subtype:
+            annotated["failure_subtype"] = failure_subtype
+        else:
+            annotated.pop("failure_subtype", None)
     annotated["_annotation_version"] = _ANNOTATION_VERSION
     if annotated.get("state") == "exited" and annotated.get("exit_code") is None:
         annotated["exit_code_note"] = _EXIT_CODE_NOTE
@@ -790,7 +952,7 @@ def fire_workflow(
     cwd: Optional[str] = None,
     claude_bin: str = "claude",
     model: str = DEFAULT_MODEL,
-    max_turns: int = DEFAULT_MAX_TURNS,
+    max_turns: Optional[int] = None,
     concurrency_cap: int = DEFAULT_CONCURRENCY_CAP,
 ) -> dict:
     """Fire one detached ``claude -p`` child for ``script_path``.
@@ -804,6 +966,23 @@ def fire_workflow(
     -- the spawned child inherits the FIRING process's cwd, so firing with
     ``cwd=<sibling repo>`` still starts a child sitting in the caller's own
     repo.
+
+    When ``cwd`` is omitted (no ``--repo``), this does NOT quietly resolve
+    bookkeeping against whatever the firing process's own ambient cwd
+    happens to be -- that cwd need not have anything to do with either the
+    caller's intent or ``script_path``'s own tree, and proceeding on it was
+    exactly how an absent ``--repo`` silently recorded (and reported
+    success for) a fire against the wrong tree (klabauter#37). Instead,
+    ``_resolve_target_repo`` derives the tree from ``script_path`` itself
+    (the emitted script necessarily lives inside the tree it targets) and
+    raises ``RepoRootUnresolvableError`` when even that fails.
+
+    ``max_turns``, when omitted, is not a bare constant either: it is
+    scaled with the script's own declared phase count via
+    ``_scaled_max_turns`` (klabauter#41) -- a fixed cap that never grew
+    with the workflow it bounds silently truncated a many-phase run at the
+    same turn budget as a one-phase one. An explicit ``max_turns`` from the
+    caller is always honored as-is.
 
     Negative-spec: do not "fix" this by threading ``cwd`` into
     ``subprocess.Popen``. A tool the child runs would then resolve its repo
@@ -819,7 +998,9 @@ def fire_workflow(
     doe-claude-e8, independently). It is documented rather than renamed
     because it is a published engine seam; a rename is a breaking change to
     every caller and belongs in its own plan.
-    Raises ``ScriptNotFoundError``, ``PluginDirResolutionError``,
+    Raises ``ScriptNotFoundError``, ``RepoRootUnresolvableError``,
+    ``ScriptOutsideRepoRootError`` (klabauter#41 -- ``script_path`` does not
+    live under the resolved repo root), ``PluginDirResolutionError``,
     ``ConcurrencyCapExceededError``, or ``ChildSpawnFailedError`` before
     ever returning a handle for a child that cannot be confirmed live.
 
@@ -845,13 +1026,22 @@ def fire_workflow(
     if not script.is_file():
         raise ScriptNotFoundError(f"workflow.fire: script_path does not exist: {script_path!r}")
 
-    registry_dir = _registry_dir(cwd)
+    resolved_cwd = _resolve_target_repo(script, cwd)
+    _assert_script_under_repo_root(script, resolved_cwd)
+
+    if max_turns is None:
+        try:
+            max_turns = _scaled_max_turns(script.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            max_turns = DEFAULT_MAX_TURNS
+
+    registry_dir = _registry_dir(resolved_cwd)
     fire_id = uuid.uuid4().hex
     record_path = _record_path(registry_dir, fire_id)
 
     lock_path = _acquire_cap_lock(registry_dir)
     try:
-        live = count_live_fires(cwd)
+        live = count_live_fires(resolved_cwd)
         if live >= concurrency_cap:
             raise ConcurrencyCapExceededError(
                 f"workflow.fire: {live} fire(s) already in flight, at or above cap {concurrency_cap}"
@@ -917,11 +1107,12 @@ def fire_workflow(
         )
 
     state = "running" if exit_code is None else "exited"
-    publish_lag_message = _publish_lag_message(cwd)
+    publish_lag_message = _publish_lag_message(resolved_cwd)
     record = {
         "fire_id": fire_id,
         "pid": process.pid,
         "script_path": str(script),
+        "repo_root": resolved_cwd,
         "plugin_dir": plugin_dir,
         "claude_bin": claude_bin,
         "model": model,

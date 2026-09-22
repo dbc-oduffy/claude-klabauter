@@ -268,6 +268,34 @@ def test_additional_predecessors_non_empty_fails_condition_three(tmp_path: Path)
     assert result["route"] == "/workstream-complete"
 
 
+def test_additional_predecessors_scalar_shape_fails_condition_three(tmp_path: Path):
+    """A nonconformant `additional_predecessors:` spelling (an inline scalar
+    rather than the `  - <path>` block list `_extract_scope_paths` parses)
+    must not read back as an empty list and pass a chain-root artifact that
+    actually carries an ancestor — the same close-the-gap requirement as the
+    real-path and forked_from cases above, for a shape those don't cover."""
+    artifact = tmp_path / "state" / "handoffs" / "b.md"
+    _write(
+        artifact,
+        "---\npredecessor: none\nadditional_predecessors: state/handoffs/a.md\n---\nbody\n",
+    )
+
+    result = qwa._entry_test(
+        {
+            "consumed_predecessor": True,
+            "classification": "handoff",
+            "artifact_path": "state/handoffs/b.md",
+            "basename": "b.md",
+        },
+        {"present": False},
+        _diff(),
+        tmp_path,
+    )
+
+    assert result["computed_failures"] == ["c3"]
+    assert result["route"] == "/workstream-complete"
+
+
 def test_forked_from_set_fails_condition_three(tmp_path: Path):
     artifact = tmp_path / "state" / "handoffs" / "b.md"
     _write(artifact, "---\npredecessor: none\nforked_from: state/handoffs/a.md\n---\nbody\n")
@@ -518,6 +546,50 @@ def test_close_gate_emits_every_named_field(repo: Path, monkeypatch):
     assert "entry_test" in envelope["gates"]
 
 
+def test_brief_mints_one_invocation_id_and_threads_it_to_every_fact(repo: Path, monkeypatch):
+    """Regression test for
+    `state/bug-backlog/2026-08-27-fact-span-rows-cannot-yield-a-per-ceremo-d9be470c2039.yaml`:
+    `sid` is the SESSION id and is stable across every `brief()` call a session makes,
+    so grouping the `fact_span` rows the five facts below emit by `sid` alone collapses
+    N ceremony invocations into one. `brief()` must mint a fresh `invocation_id` per
+    call and pass the SAME one to every fact it reads, so
+    `fact_layer_hot_path.compute_timing_distributions` can group by it instead and
+    recover a real per-ceremony aggregate."""
+    _stub_facts_all_computed(monkeypatch, repo)
+
+    received: dict[str, Any] = {}
+    for name in (
+        "session_pickup_kind",
+        "session_governing_plan",
+        "session_diff_brightline",
+        "session_terminal_sizings",
+        "session_fold_sidecars",
+    ):
+        original = getattr(qwa.session_facts, name)
+
+        def _wrap(*args, invocation_id=None, _name=name, _orig=original, **kwargs):
+            received[_name] = invocation_id
+            return _orig(*args, **kwargs)
+
+        monkeypatch.setattr(qwa.session_facts, name, _wrap)
+
+    qwa.brief()
+
+    assert set(received) == {
+        "session_pickup_kind",
+        "session_governing_plan",
+        "session_diff_brightline",
+        "session_terminal_sizings",
+        "session_fold_sidecars",
+    }
+    assert None not in received.values(), f"a fact was called with no invocation_id: {received}"
+    ids = set(received.values())
+    assert len(ids) == 1, f"every fact must share one invocation_id per brief() call: {received}"
+    (the_id,) = ids
+    assert isinstance(the_id, str) and the_id
+    assert the_id != _SID
+
+
 def test_safe_commit_offer_is_a_directive_not_a_judgment_point(repo: Path, monkeypatch):
     """C5 (docs/plans/2026-08-20-the-close-ceremony-commits-what-the-session-wrote.md
     § C5): being asked whether to commit was itself the defect, by explicit PM ruling —
@@ -546,7 +618,7 @@ def test_safe_commit_offer_is_a_directive_not_a_judgment_point(repo: Path, monke
 
     monkeypatch.setattr(qwa, "commit_session_offer_async", _fake_auto_commit)
 
-    envelope = qwa.brief()
+    envelope = qwa.brief(commit=True)
 
     # No framing argument: `invoker` was deleted 2026-08-27 (no producer could
     # substantiate the attended/unattended claim it selected). This stub's
@@ -556,6 +628,30 @@ def test_safe_commit_offer_is_a_directive_not_a_judgment_point(repo: Path, monke
     assert "safe-commit-offer" not in [d["cli"] for d in envelope["directives"]]
     assert not any("commit" in p["question"].lower() for p in envelope["judgment_points"])
     assert envelope["gates"]["commit_outcome"]["status"] == "empty"
+    assert envelope["gates"]["commit_outcome"]["residue"] == {}
+
+
+def test_brief_defaults_to_read_only_and_never_calls_the_commit_op(repo: Path, monkeypatch):
+    """Regression test for state/bug-backlog/2026-09-06-quick-wrap-assemble-brief-
+    commits-while-every-sibling-brief-only-reads.yaml: `brief()` called bare — the
+    shape every sibling assembler's `brief()` has (`pickup-assemble brief`,
+    `plan-assemble brief`, `sizing-assemble`, `merge_assemble.brief()`) — must not
+    call C5's commit carve-out at all. Only `main()`'s explicit `brief(commit=True)`
+    (the real `quick-wrap-assemble brief` CLI path) opts in."""
+    _stub_facts_all_computed(monkeypatch, repo)
+
+    calls: list[tuple[str, str, object]] = []
+
+    async def _fake_auto_commit(session_id, cwd=None, groups=None):
+        calls.append((session_id, cwd, groups))
+        raise AssertionError("brief() must not call commit_session_offer_async by default")
+
+    monkeypatch.setattr(qwa, "commit_session_offer_async", _fake_auto_commit)
+
+    envelope = qwa.brief()
+
+    assert not calls, "a bare brief() call committed the working tree"
+    assert envelope["gates"]["commit_outcome"]["status"] == "skipped"
     assert envelope["gates"]["commit_outcome"]["residue"] == {}
 
 
@@ -569,7 +665,7 @@ def test_auto_commit_failure_does_not_block_the_ceremony(repo: Path, monkeypatch
 
     monkeypatch.setattr(qwa, "commit_session_offer_async", _boom)
 
-    envelope = qwa.brief()
+    envelope = qwa.brief(commit=True)
 
     assert envelope["gates"]["commit_outcome"]["status"] == "error"
     assert "simulated auto-commit failure" in envelope["gates"]["commit_outcome"]["detail"]

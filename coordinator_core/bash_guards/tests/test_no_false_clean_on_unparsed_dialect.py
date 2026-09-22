@@ -166,20 +166,8 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
     ),
     "check_raw_pid_liveness": lambda mod: "Get-Process -Id 12345",
     "check_test_suite_invocation": lambda mod: "pytest tests/",
-    # `git checkout -b <canonical-daily-name>` -- content matches this
-    # guard's own `TestDeterministicFiring` fixture shape; the hazard-repo
-    # gate and the branch-set/ahead-of-main seams that gate detection
-    # BEHIND that content match are supplied via `_MONKEYPATCH_FOR` below
-    # (this guard's own test file monkeypatches the identical seams).
-    "guard_branch_set_precedence": (
-        lambda mod: "git checkout -b work/machine-b/2026-08-07"
-    ),
     "guard_grep_via_bash": lambda mod: "Select-String -Pattern foo -Path bar.py",
     "guard_inprocess_search": lambda mod: "Select-String -Pattern foo -Path bar.py",
-    # `git checkout -b <longlived-shaped-name>` -- content matches this
-    # guard's own fixtures; hazard-repo gate supplied via
-    # `_MONKEYPATCH_FOR` below (same seam its own test file patches).
-    "guard_longlived_branch_naming": lambda mod: "git checkout -b feature/x",
     "guard_multiprobe_banner": (
         # abs-path-ok: synthetic PowerShell fixture text, never resolved.
         lambda mod: "Get-Process; Get-Service; Get-ChildItem C:\\"
@@ -315,26 +303,6 @@ def _hazard_repo_monkeypatch(mod: Any, mp: pytest.MonkeyPatch) -> None:
     mp.setattr(mod, "_is_hazard_repo", lambda git_root: True)
 
 
-def _branch_set_precedence_monkeypatch(
-    mod: Any, mp: pytest.MonkeyPatch
-) -> Dict[str, Any]:
-    """`guard_branch_set_precedence` additionally needs a real candidate
-    behind its own `branch_set_provider` seam and a positive `_ahead_of_
-    main` count to reach its advisory -- both monkeypatched exactly as
-    `TestDeterministicFiring.test_advisory_fires_with_real_branch_and_count`
-    (this guard's own test file) does it. Returns the `branch_set_provider`
-    kwarg `_call_guard` should thread through (that parameter is not one of
-    the generic names `_call_guard` already knows how to fill)."""
-    _hazard_repo_monkeypatch(mod, mp)
-    mp.setattr(mod, "_now", lambda: 1722700000.0)
-    mp.setattr(mod, "_today", lambda: "2026-08-03")
-    mp.setattr(mod, "_ahead_of_main", lambda branch, cwd=None: 12)
-    mp.setattr(mod, "should_prompt_rename", lambda *a, **k: False)
-    recent_epoch = 1722700000.0 - 3600
-    provider = lambda: [("work/machine-b/2026-07-31", recent_epoch)]
-    return {"branch_set_provider": provider}
-
-
 #: Per-guard monkeypatch preparation, applied to the live module (via the
 #: same seam each guard's own test file patches) immediately before the
 #: guard is called. Returns extra kwargs `_call_guard` should merge in
@@ -345,17 +313,16 @@ def _branch_set_precedence_monkeypatch(
 #: the dialect/SILENT question at all, so this test drives them open the
 #: same way each guard's own author already does.
 _MONKEYPATCH_FOR: Dict[str, Callable[[Any, pytest.MonkeyPatch], Dict[str, Any]]] = {
-    "guard_longlived_branch_naming": lambda mod, mp: (
-        _hazard_repo_monkeypatch(mod, mp) or {}
-    ),
-    "guard_branch_set_precedence": _branch_set_precedence_monkeypatch,
-    # Third guard behind the SAME `_is_hazard_repo` applicability gate as
-    # the two above -- entered this test's population on 2026-08-19 when
-    # the subagent-boundary MATCHERS parity widened its `MATCHERS` from
-    # `("Bash",)` to `COMMAND_TOOL_NAMES`. Its `check()` returns early at
-    # "REPO SCOPING" for any non-hazard repo, so without this seam the
-    # fixture command never reaches `_classify_segment` under EITHER
-    # dialect and the clean it returns says nothing about PowerShell.
+    # This guard is behind the SAME `_is_hazard_repo` applicability gate
+    # `guard_branch_set_precedence`/`guard_longlived_branch_naming` used to
+    # share here before both were deleted (docs/plans/2026-08-21-the-
+    # advisory-band-gets-smaller-cheaper-and-honest.md, C6) -- entered this
+    # test's population on 2026-08-19 when the subagent-boundary MATCHERS
+    # parity widened its `MATCHERS` from `("Bash",)` to `COMMAND_TOOL_
+    # NAMES`. Its `check()` returns early at "REPO SCOPING" for any
+    # non-hazard repo, so without this seam the fixture command never
+    # reaches `_classify_segment` under EITHER dialect and the clean it
+    # returns says nothing about PowerShell.
     "block_noncanonical_branch_creation": lambda mod, mp: (
         _hazard_repo_monkeypatch(mod, mp) or {}
     ),

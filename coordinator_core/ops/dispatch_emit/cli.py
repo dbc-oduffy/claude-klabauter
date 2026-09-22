@@ -36,7 +36,11 @@ Negative-spec:
     a bare `Path(...)` does — `--repo-root` feeds ONLY the op's
     `target_root`/prompt-anchoring `repo_root` parameter, a narrower and
     deliberately separate use (`op.py :: _repo_root_for_plan`,
-    `contained_path`).
+    `contained_path`). On the plan route `--repo-root` is pure prompt
+    anchoring and genuinely optional; on the queue route it is load-bearing
+    for `--queue`/`--profile-dir` containment (`op.py ::
+    QueueRootMissingError` fires without it) — treat the two routes'
+    requirement on this flag as different, not one shared "optional" claim.
   - Does NOT invent a second session-identity resolution. `--restamp`
     resolves via `coordinator_core.session.core.resolve_session_id`, the
     same fleet-canonical ladder `op.py :: _receipt_session_id` reads —
@@ -59,9 +63,11 @@ from coordinator_core.ops.dispatch_emit.op import (
     InventoryPathConflictError,
     NoReceiptToRestampError,
     PathEscapeError,
+    QueuePlanConflictError,
     _dispatch_emit,
     restamp,
 )
+from coordinator_core.ops.dispatch_emit.queue_emit import QueuePathEscapeError
 from coordinator_core.session.core import resolve_session_id
 
 #: Exit codes. 0 emission/restamp/fire succeeded; 1 a data/refusal error
@@ -74,9 +80,18 @@ EXIT_USAGE = 2
 
 # Exceptions `_dispatch_emit` and `restamp` raise as data/refusal errors —
 # mapped to EXIT_DATA_ERROR, never re-derived here.
+# A bare `ValueError` for a missing required param
+# (e.g. `_dispatch_emit`'s `plan_path`/`output_path`/`profile_dir` checks)
+# lands here as EXIT_DATA_ERROR even though this module's own pre-checks
+# above return EXIT_USAGE for the identical logical error. Not reachable
+# today (every required-param case is pre-checked before `_dispatch_emit`
+# ever raises), but a future required param added on only one side would
+# fire this latent taxonomy mismatch.
 _DATA_ERRORS = (
     InventoryPathConflictError,
+    QueuePlanConflictError,
     PathEscapeError,
+    QueuePathEscapeError,
     ForeignEmissionError,
     NoReceiptToRestampError,
     ForeignSessionRestampError,
@@ -106,6 +121,36 @@ def _build_parser() -> argparse.ArgumentParser:
         help="re-stamp an emission receipt's sha256 over SCRIPT after a deliberate edit",
     )
     parser.add_argument("--out", dest="out_path", default=None, help="path to write the emitted .mjs script to")
+    parser.add_argument(
+        "--queue",
+        action="append",
+        default=None,
+        help="a queue directory (repeatable) -- the queue route, exclusive of --plan/--inventory",
+    )
+    parser.add_argument("--profile", default=None, help="queue-grind profile name (queue route)")
+    parser.add_argument(
+        "--profile-dir", default=None, help="directory <profile>.yaml lives under (queue route)"
+    )
+    parser.add_argument(
+        "--appetite", default="standard", help="queue-grind appetite preset (queue route)"
+    )
+    parser.add_argument(
+        "--where", default=None, metavar="JSON", help="where override, JSON DNF (queue route)"
+    )
+    parser.add_argument(
+        "--where-file",
+        default=None,
+        metavar="PATH",
+        help="where override, read as JSON DNF from PATH (queue route, exclusive of --where)",
+    )
+    parser.add_argument("--limit", default=None, type=int, help="limit override (queue route)")
+    parser.add_argument(
+        "--budget-tokens",
+        dest="budget_tokens",
+        default=None,
+        type=int,
+        help="budget_tokens override (queue route)",
+    )
     parser.add_argument(
         "--force",
         action="store_true",
@@ -149,10 +194,43 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             return EXIT_USAGE
         return _do_restamp(args.restamp)
 
-    if not args.plan and not args.inventory:
+    is_queue_route = bool(args.queue) or bool(args.profile)
+
+    if is_queue_route and (args.plan or args.inventory):
+        print(
+            "emit-dispatch-workflow: ERROR — --queue/--profile is exclusive of "
+            "--plan/--inventory",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    if not is_queue_route and not args.plan and not args.inventory:
         print(
             "emit-dispatch-workflow: ERROR — one of --plan, --inventory, or "
             "--restamp is required",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    if args.where and args.where_file:
+        print(
+            "emit-dispatch-workflow: ERROR — --where is exclusive of --where-file",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    if (args.where or args.where_file) and not is_queue_route:
+        print(
+            "emit-dispatch-workflow: ERROR — --where/--where-file requires "
+            "--queue/--profile (the queue route)",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    if is_queue_route and (not args.queue or not args.profile or not args.profile_dir):
+        print(
+            "emit-dispatch-workflow: ERROR — the queue route requires --queue, "
+            "--profile, and --profile-dir",
             file=sys.stderr,
         )
         return EXIT_USAGE
@@ -168,6 +246,36 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         params["plan_path"] = args.plan
     if args.inventory:
         params["inventory_path"] = args.inventory
+
+    if is_queue_route:
+        params["queue"] = args.queue
+        params["profile"] = args.profile
+        params["profile_dir"] = args.profile_dir
+        params["appetite"] = args.appetite
+
+        where = None
+        try:
+            if args.where:
+                where = json.loads(args.where)
+            elif args.where_file:
+                where = json.loads(Path(args.where_file).read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            print(
+                f"emit-dispatch-workflow: ERROR — --where/--where-file is not "
+                f"valid JSON: {exc}",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+
+        overrides: dict = {}
+        if where is not None:
+            overrides["where"] = where
+        if args.limit is not None:
+            overrides["limit"] = args.limit
+        if args.budget_tokens is not None:
+            overrides["budget_tokens"] = args.budget_tokens
+        if overrides:
+            params["overrides"] = overrides
 
     try:
         result = _dispatch_emit(params, repo_root=repo_root)

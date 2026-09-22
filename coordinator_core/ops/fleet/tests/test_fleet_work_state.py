@@ -228,7 +228,7 @@ class TestZeroSpawnOverNonGitFixture:
 
 
 class TestRootNormalization:
-    """Review: staff-eng, Finding 0 — `build_fleet_work_state` previously
+    """`build_fleet_work_state` previously
     handed the registry path to `build_work_state` with NO root
     normalization, unlike `session.work_state`'s `main_worktree_root` fix.
     The walk-only pre-check WALKS UP, so a registered path that is a
@@ -276,7 +276,7 @@ class TestRootNormalization:
 
 
 def test_registration_quad_clean_for_fleet_work_state():
-    """Review: staff-eng (Finding 15) -- unpinned invariant: `session.
+    """Unpinned invariant: `session.
     work_state` (its sibling C3 op) carries this same one-line assertion;
     `fleet.work_state` did not, though its own module docstring makes the
     five-surface claim explicitly."""

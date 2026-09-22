@@ -37,13 +37,44 @@ def test_footprint_constraint_template_pinned_bytes():
     assert FOOTPRINT_CONSTRAINT_TEMPLATE == (
         "You MUST NOT create or modify any file outside this footprint: "
         "[list]. If you discover you need to, STOP and report back via the "
-        "DONE summary with status BLOCKED."
+        "DONE summary with status BLOCKED. Create and edit each of those files "
+        "with Write/Edit, never with a Bash heredoc, sed, tee or redirection: "
+        "only the write tools record a session write claim, and a file produced "
+        "through Bash reaches the committer as an orphan it must refuse. Bash "
+        "stays correct for reading, searching and running tests. If a Bash write "
+        "already happened, name those paths in your report."
     )
+
+
+def test_footprint_constraint_names_the_write_tools_and_forbids_bash_writes():
+    """A Bash write records no session claim, so the wave's committer sees a
+    determinate orphan and refuses it. Measured 2026-09-19 across four
+    concurrent emitted runs in two repos: every one of them halted at its
+    commit phase on orphan paths its executor had produced through Bash, and
+    each cost a manual EM adoption plus a restamp-and-resume round trip."""
+    text = FOOTPRINT_CONSTRAINT_TEMPLATE
+    assert "Write/Edit" in text
+    assert "never with a Bash heredoc, sed, tee or redirection" in text
+    assert "record a session write claim" in text
+    assert "reaches the committer as an orphan it must refuse" in text
+    assert "Bash stays correct for reading, searching and running tests" in text
 
 
 def test_self_verify_constraint_reproduces_mise_hand_dispatch_bytes():
     rendered = self_verify_constraint(commit_authority="the EM")
     assert rendered == _MISE_SELF_VERIFY
+
+
+def test_self_verify_constraint_step_four_does_not_ban_the_step_two_git_read():
+    """Step (2) mandates a `git status --porcelain` read; step (4) must
+    forbid only mutating git state, not reading it -- an absolute ban
+    contradicts step (2) and an executor resolving that conflict in favour
+    of (4) silently skips the footprint computation step (2) exists to
+    deliver."""
+    rendered = self_verify_constraint(commit_authority="the EM")
+    assert "you do not invoke git under any circumstance" not in rendered
+    assert "git status --porcelain -- <footprint paths>" in rendered
+    assert "Only the EM commits, once per wave" in rendered
 
 
 def test_self_verify_constraint_emitted_path_names_named_authority():

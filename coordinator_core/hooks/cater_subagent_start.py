@@ -819,10 +819,26 @@ def _write_miss_sentinel(
         # --show-toplevel`; the race arm never reached `_provision`, so it
         # carried NO spawn before this leg existed, and reintroducing one
         # here would break the plan's own zero-added-spawn criterion on the
-        # SubagentStart hot path. A wrong answer here only means "this
-        # lookup missed" -- the leg fails open to the no-path marker, never
-        # to a wrong verdict -- which is exactly `resolve_git_root_cheap`'s
-        # stated rule for who may use the cheap read.
+        # SubagentStart hot path.
+        #
+        # UNLIKE its read-only siblings, this leg WRITES a receipt-bearing
+        # sentinel (the frontmatter splice below) -- "a wrong answer here
+        # only means a lookup miss, never a wrong verdict" is true for
+        # `compose_catering`'s backpointer read and for
+        # `assemble_contract_blocks_for_payload`'s snippet lookup, both of
+        # which only ever fail open to absence, but it is FALSE here: a
+        # falsy `cwd` handed to `_show_toplevel_no_spawn` walks from this
+        # PROCESS's own ambient cwd instead of refusing, which for a
+        # multi-repo plan-blitz dispatch is a REAL repo that is simply not
+        # this dispatch's target -- exactly how klabauter#47's "durable
+        # wrong record" gets written: `_guard_kira_verdict_routed`
+        # (DoE-claude `hooks/stop_dispatch.py`) then reads a sentinel filed
+        # under the wrong repo's `state/subagent-share/` and reports a
+        # false owed-route or a false in-flight verdict off it. So this leg
+        # refuses BEFORE the walk when the caller gave it no target at all,
+        # rather than letting an ambient guess stand in for one.
+        if not cwd:
+            return ""
         git_root = _show_toplevel_no_spawn(cwd)
         if not git_root:
             return ""

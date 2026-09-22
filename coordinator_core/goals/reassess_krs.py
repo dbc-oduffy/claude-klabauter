@@ -679,7 +679,7 @@ def _render_kr_suggestion(kr_id: str, suggestion: Dict[str, Any], live_status: s
 def _write_goal_file_atomic(goal_file: Path, new_text: str) -> None:
     """Write *new_text* to *goal_file* atomically (mkstemp + os.replace).
 
-    Review: code-reviewer P0 — the prior plain ``goal_file.write_text(...)``
+    The prior plain ``goal_file.write_text(...)``
     truncate-write left a state/goals/*.yaml artifact vulnerable to
     truncation/corruption if the process is killed mid-write (e.g. by
     cc_invoke's outer client-side subprocess kill ceiling). Atomicity is the

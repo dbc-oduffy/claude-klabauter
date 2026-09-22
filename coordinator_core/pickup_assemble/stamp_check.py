@@ -70,7 +70,8 @@ def stamp_check(
         return EXIT_BUSINESS_FAIL, {"error": f"{artifact_path}: no parseable frontmatter"}
 
     fm = _parse_fm_dict(split.fm_text)
-    hit = compute_execution_stamp_match(root, fm, artifact_path)
+    rel_path = live_path.relative_to(root).as_posix()
+    hit = compute_execution_stamp_match(root, fm, rel_path)
     if hit is None:
         return EXIT_BUSINESS_FAIL, {
             "error": (

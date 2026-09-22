@@ -1,7 +1,7 @@
 """test_promote-shipped-in-flight-stubs.py — pytest suite for
 promote-shipped-in-flight-stubs.py's exit-code propagation.
 
-Review: code-reviewer Finding 5 — the trampoline's docstring changed from a
+The trampoline's docstring changed from a
 hardcoded "Exit codes: 0 always" contract to "propagated verbatim ... see
 that module's own docstring for the AC14 split" (a real behavior change at
 this layer; DoE's `/workday-start` reads this process's exit code), but the

@@ -213,7 +213,7 @@ def _stamp_terminal_locked(journal_path: str, task_id: str, record: TerminalReco
             "source": _STAMP_SOURCE,
         }
     )
-    with open(journal_path, "a", encoding="utf-8") as handle:
+    with open(journal_path, "a", encoding="utf-8", newline="\n") as handle:
         handle.write(line + "\n")
     return True
 

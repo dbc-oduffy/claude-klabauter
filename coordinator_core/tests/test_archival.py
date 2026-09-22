@@ -132,7 +132,7 @@ def _write_handoff_additional_predecessors(
     return path
 
 
-# Review: code-reviewer F4 — flattened from single-method `class Test...:`
+# Flattened from single-method `class Test...:`
 # wrappers to top-level functions, matching the flatter style of the sibling
 # test_archive_handoffs.py.
 
@@ -180,7 +180,7 @@ def test_live_child_retained(tmp_path: Path) -> None:
 
     result = reverse_membership(str(parent), [str(parent), str(child)])
 
-    # Review: code-reviewer F3 — dropped the `or len(result) > 0` clause, which
+    # Dropped the `or len(result) > 0` clause, which
     # made the membership check vestigial (a bug returning the wrong path but
     # right count would have slipped through). Assert membership directly.
     assert str(Path(child).resolve()) in {str(Path(c).resolve()) for c in result}, (
@@ -207,7 +207,7 @@ def test_indeterminate_child_retained_fail_closed(tmp_path: Path) -> None:
 
 
 def test_terminal_child_excluded_via_additional_predecessors(tmp_path: Path) -> None:
-    """Review: code-reviewer F5 — the terminal/archived exclusion must compose with
+    """The terminal/archived exclusion must compose with
     the multi-valued additional_predecessors edge kind, not just the scalar
     predecessor field. A consumed child whose ONLY edge to the parent is
     additional_predecessors: [<parent>] (list form) must still be excluded.
@@ -409,6 +409,54 @@ def test_unrecognized_deployment_state_still_retained_fail_closed(tmp_path: Path
     assert str(Path(child).resolve()) in {str(Path(c).resolve()) for c in result}, (
         f"status:open + unrecognized deployment_state child must be RETAINED "
         f"(fail-closed), not excluded; got {result}"
+    )
+    assert len(result) == 1, f"expected exactly one live child; got {result}"
+
+
+def test_claimed_reparked_ready_to_fire_child_retained_as_live(tmp_path: Path) -> None:
+    """Census-row-1 shape (docs/reference/handoff-legal-state-table.md § the
+    Ruling and C3's own body): a reparked baton — a session flips
+    deployment_state back to `ready_to_fire` without dropping `status:
+    claimed` — is NOT terminal. The old carve-out here tested
+    `deployment_state == "in_flight"` as the only non-terminal case, which
+    silently excluded (treated as archive-safe-dead) exactly this shape.
+    `ready_to_fire` is just as non-terminal as `in_flight`.
+    """
+    state_dir = tmp_path / "state" / "handoffs"
+    parent = _write_parent(state_dir / "parent.md")
+    child = _write_handoff(
+        state_dir / "child.md",
+        status="claimed",
+        deployment_state="ready_to_fire",
+        predecessor=str(parent),
+    )
+
+    result = reverse_membership(str(parent), [str(parent), str(child)])
+
+    assert str(Path(child).resolve()) in {str(Path(c).resolve()) for c in result}, (
+        f"claimed+ready_to_fire (reparked) child is NOT terminal and must be "
+        f"retained (counted as live), not excluded; got {result}"
+    )
+    assert len(result) == 1, f"expected exactly one live child; got {result}"
+
+
+def test_claimed_reparked_awaiting_gate_child_retained_as_live(tmp_path: Path) -> None:
+    """Same census-row-1 shape, reparked-and-blocked (gate-recheck on a
+    still-claimed baton) rather than reparked-and-unblocked."""
+    state_dir = tmp_path / "state" / "handoffs"
+    parent = _write_parent(state_dir / "parent.md")
+    child = _write_handoff(
+        state_dir / "child.md",
+        status="claimed",
+        deployment_state="awaiting_gate",
+        predecessor=str(parent),
+    )
+
+    result = reverse_membership(str(parent), [str(parent), str(child)])
+
+    assert str(Path(child).resolve()) in {str(Path(c).resolve()) for c in result}, (
+        f"claimed+awaiting_gate (reparked, blocked) child is NOT terminal and "
+        f"must be retained (counted as live), not excluded; got {result}"
     )
     assert len(result) == 1, f"expected exactly one live child; got {result}"
 

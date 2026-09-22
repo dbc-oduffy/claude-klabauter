@@ -226,7 +226,7 @@ def test_reads_and_depends_on_default_to_empty_list(tmp_path):
 
 
 def test_duplicate_id_raises_invalid_row_id_error(tmp_path):
-    # Review: coordinator:code-reviewer (wsc-A, ecb99d36) P1 — a duplicate
+    # A duplicate
     # id silently collapsed wave_map._predecessors' dict-keyed-by-id graph
     # instead of raising; the fix is to fail loud here, once, for every
     # downstream consumer.
@@ -270,7 +270,7 @@ def test_non_string_id_raises_invalid_row_id_error(tmp_path):
 
 
 def test_falsy_scalar_reads_raises_instead_of_silently_coercing(tmp_path):
-    # Review: coordinator:code-reviewer (wsc-A, ecb99d36) P2 — `reads:` used
+    # `reads:` used
     # `raw.get("reads") or []`, which silently coerced a falsy-but-invalid
     # declared value (e.g. `reads: 0`) to `[]` instead of raising, an
     # asymmetry with `writes:`'s explicit `is None` check.
@@ -682,7 +682,15 @@ def test_external_gate_two_entries_one_cleared_one_uncleared_excludes_row(tmp_pa
     assert ids == set()
 
 
-def test_malformed_external_gate_scalar_does_not_raise(tmp_path):
+def test_malformed_external_gate_scalar_gates_without_raising(tmp_path):
+    """klabauter#43: a present-but-unparseable `external_gate` GATES the row.
+
+    This shape -- the field declared as a bare scalar instead of a list --
+    used to read as "no gate" and dispatch a row the plan had gated, which is
+    fail-open on a gate. It still must not raise (a malformed plan is not a
+    crash), so the no-raise half of this case is unchanged; what changed is
+    that the row no longer comes back dispatchable.
+    """
     body = """\
 - id: C1
   title: external_gate declared as a bare string
@@ -692,10 +700,15 @@ def test_malformed_external_gate_scalar_does_not_raise(tmp_path):
     plan_path = _write_plan(tmp_path, body)
     ids = {row.id for row in read_spine(plan_path)}
 
-    assert ids == {"C1"}
+    assert ids == set()
 
 
-def test_malformed_external_gate_entry_bare_string_does_not_raise(tmp_path):
+def test_malformed_external_gate_entry_bare_string_gates_without_raising(tmp_path):
+    """klabauter#43, second shape: a non-mapping list ENTRY gates the row too.
+
+    Same fail-open class as the bare-scalar case above, and the same
+    resolution: no raise, but the row is not dispatchable.
+    """
     body = """\
 - id: C1
   title: external_gate entry is a bare string, not a mapping
@@ -706,7 +719,7 @@ def test_malformed_external_gate_entry_bare_string_does_not_raise(tmp_path):
     plan_path = _write_plan(tmp_path, body)
     ids = {row.id for row in read_spine(plan_path)}
 
-    assert ids == {"C1"}
+    assert ids == set()
 
 
 def test_bare_string_depends_on_entry_raises_malformed_dependency_edge_error(tmp_path):
@@ -958,7 +971,9 @@ def test_operator_blocks_like_a_gate_not_like_a_deferral():
 
     src = inspect.getsource(spine_read.read_spine)
     # The operator predicate sits on the gate arm, beside the gate check.
-    assert "_has_uncleared_execution_gate(raw) or _is_operator_row(raw)" in src
+    import re
+
+    assert re.search(r"_has_uncleared_execution_gate\(raw\b[^\n]*\)\s*or _is_operator_row\(raw\)", src)
 
 
 def test_an_excluded_row_is_reported_not_silently_dropped():

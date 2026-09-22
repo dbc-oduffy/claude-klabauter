@@ -685,7 +685,7 @@ def _query_roadmap_baton_records(
     each to ``[]`` on exception (continue-with-what-we-have) while tracking
     whether each one raised.
 
-    Review: staff-eng F3 — a query raising is NOT the same fact as a query
+    A query raising is NOT the same fact as a query
     returning zero rows. Both queries degrading to [] on any exception (kept
     below, for continue-with-what-we-have on a single-corpus failure) used to
     be indistinguishable from a genuinely empty, successfully-queried corpus.
@@ -765,7 +765,7 @@ def run_check_mode(run_id: str) -> int:
     build the stubs array, and call ``check_dependency_order``. Returns the
     process exit code (0 pass / nothing-to-check, 1 violations found).
     """
-    # Review: code-reviewer — F3, resolve_root()'s RuntimeError previously
+    # resolve_root()'s RuntimeError previously
     # propagated uncaught as a raw traceback instead of the clean
     # ERROR:-message + explicit-exit-code contract every other failure path
     # in this module follows.
@@ -814,7 +814,7 @@ def run_check_mode(run_id: str) -> int:
             }
         )
 
-    # Review: code-reviewer — Finding 2. This check's whole purpose after this
+    # This check's whole purpose after this
     # diff is that it loses the ability to pass vacuously; reconciling
     # edges.txt against a stub_id set built from a partial corpus and then
     # printing OK would be that same vacuous pass wearing a different hat, so

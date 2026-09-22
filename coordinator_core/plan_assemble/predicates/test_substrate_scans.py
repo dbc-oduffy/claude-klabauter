@@ -267,7 +267,7 @@ def test_citations_verified_undetermined_without_plan_body(tmp_path: Path):
 
 
 def test_citations_verified_true_for_doc_relative_citation(tmp_path: Path):
-    # Review: code-reviewer — Finding (P2). `verify_doc` must be called with
+    # `verify_doc` must be called with
     # `doc_relative_checker`, not `repo_exists` alone — a citation that only
     # resolves relative to the CITING plan's own directory (not repo-root)
     # must not read as `absent`/uncited. `sibling.py` exists ONLY under
@@ -301,7 +301,7 @@ def _init_git_repo(root: Path) -> None:
 
 
 def test_git_grep_count_finds_untracked_file(tmp_path: Path):
-    # Review: code-reviewer — Finding (P2). `git grep` alone only searches
+    # `git grep` alone only searches
     # tracked/staged content; a token that exists only in a freshly-created,
     # not-yet-`git add`ed file must still be found by the fast path — it
     # must agree with the pure-Python fallback, not silently under-report.

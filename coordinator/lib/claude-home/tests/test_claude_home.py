@@ -59,7 +59,7 @@ import claude_home_shim  # noqa: E402
 @contextmanager
 def _isolated_env(**overrides):
     """Drop CLAUDE_HOME/HOME/USERPROFILE, then apply *overrides*; restore on exit."""
-    # Review: code-reviewer (F3) — add COORDINATOR_SETTINGS_HOME so _isolated_env-based
+    # Add COORDINATOR_SETTINGS_HOME so _isolated_env-based
     # test classes are fully environment-isolated; host/CI shells with this var set would
     # otherwise cause settings_home() to return the wrong path.
     saved = {k: os.environ.get(k) for k in ("CLAUDE_HOME", "HOME", "USERPROFILE", "COORDINATOR_SETTINGS_HOME")}
@@ -146,7 +146,7 @@ class TestHomeResolution(unittest.TestCase):
             self.assertIn("absolute", str(cm.exception))
 
     def test_empty_claude_home_fails_loud(self):
-        # Review: code-reviewer — an empty string set in the environment is unambiguously
+        # An empty string set in the environment is unambiguously
         # malformed; the docstring contract on CLAUDE_HOME is fail-loud, not silent
         # fallthrough. Common when CI clears a variable with `CLAUDE_HOME=`
         # instead of `unset CLAUDE_HOME`.
@@ -433,7 +433,7 @@ class TestCli(unittest.TestCase):
     def test_each_subcommand(self):
         # machine-local: neither new (<settings-home>/machine-local) nor legacy
         # (.claude/machine-local) exist in this sandbox, so the canonical new path is returned.
-        # Review: code-reviewer (F5) — added settings-home case (previously untested subcommand).
+        # Added settings-home case (previously untested subcommand).
         cases = [
             ("home", str(self.tmp_path)),
             ("path", str(self.tmp_path / ".claude.json")),
@@ -445,7 +445,7 @@ class TestCli(unittest.TestCase):
         with _isolated_env(CLAUDE_HOME=str(self.tmp_path)):
             for sub, expected in cases:
                 with self.subTest(subcommand=sub):
-                    # Review: code-reviewer (F2) — reset both once-guards (split from single flag)
+                    # Reset both once-guards (split from single flag)
                     _claude_home._legacy_machine_local_divergence_warned = False  # reset one-time guard
                     _claude_home._legacy_machine_local_deprecated_warned = False  # reset one-time guard
                     rc, out, err = self._run_cli(sub)
@@ -468,7 +468,7 @@ class TestCli(unittest.TestCase):
     def test_machine_local_cli_legacy_only(self):
         """Legacy-only sandbox: rc=0, stdout=legacy path, stderr contains DEPRECATED.
 
-        Review: code-reviewer (F4) — end-to-end CLI wire-path test for the case where
+        end-to-end CLI wire-path test for the case where
         only the legacy ~/.claude/machine-local home exists. _check_machine_local_divergence()
         returns silently (new absent) and machine_local_dir() falls back to legacy with a
         DEPRECATED warning.
@@ -486,7 +486,7 @@ class TestCli(unittest.TestCase):
     def test_machine_local_cli_divergent(self):
         """Divergent-both sandbox: rc=0, stdout=new path, stderr contains DIVERGENT.
 
-        Review: code-reviewer (F4) — end-to-end CLI wire-path test for the case where
+        end-to-end CLI wire-path test for the case where
         both homes exist with distinct realpaths. _check_machine_local_divergence() emits
         a DIVERGENT warning; machine_local_dir() then returns the new (settings-home) path.
         """
@@ -528,7 +528,7 @@ class TestMachineLocalDivergence(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.tmp_path = Path(self.tmp.name)
-        # Review: code-reviewer (F2) — reset both once-guards (split from single flag)
+        # Reset both once-guards (split from single flag)
         _claude_home._legacy_machine_local_divergence_warned = False
         _claude_home._legacy_machine_local_deprecated_warned = False
 
@@ -617,7 +617,7 @@ class TestMachineLocalDir(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.tmp_path = Path(self.tmp.name)
-        # Review: code-reviewer (F2) — reset both once-guards (split from single flag)
+        # Reset both once-guards (split from single flag)
         _claude_home._legacy_machine_local_divergence_warned = False
         _claude_home._legacy_machine_local_deprecated_warned = False
 

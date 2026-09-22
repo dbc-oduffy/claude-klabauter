@@ -207,7 +207,7 @@ _REROUTE_NOTICE = (
 
 def _foreground_ok_path(git_root: str, session_id: str) -> Path:
     """Return the .foreground-ok escape-hatch sentinel path for a resolved session."""
-    # Review: code-reviewer — W3 substituted ctx.repo_root (worktree path) with repo_root
+    # W3 substituted ctx.repo_root (worktree path) with repo_root
     # (git_common_dir path), making the extra ".git" join double-nest the dir:
     # <repo>/.git/.git/coordinator-sessions/<sid> — a path that never exists.
     # Fix: git_root IS already the .git common dir, so drop the redundant ".git" join.
@@ -270,7 +270,7 @@ def _resolve_git_root() -> str:
     from the handler. The subprocess spawn it previously contained is removed (A-F1).
     Returns "" unconditionally.
     """
-    return ""  # Review: code-reviewer — A-F1: subprocess removed; stub kept for test compat
+    return ""  # Subprocess removed; stub kept for test compat
 
 
 @register_op("hooks.nudge_foreground_agent_dispatch")
@@ -320,7 +320,7 @@ def _handler(params: dict, repo_root=None) -> dict:
 
     # Calibrate in-memory: key present (either value) proves this build exposes the param.
     # Record session_id so a future absent-key dispatch on the same session is denied.
-    # Review: code-reviewer — A-F1: calibration before escape-hatch check and bg_true
+    # Calibration before escape-hatch check and bg_true
     # early-exit; the escape hatch is only relevant when about to deny.
     if has_bg and session_id:
         _BG_CAPABLE_SESSIONS.add(session_id)
@@ -338,7 +338,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     # carry it to the next dispatch (D7b), and only presence proves the build exposes the
     # param — restricting this to bg_true left present-and-false dispatches uncalibrated,
     # silently defeating a later same-session absent-key call (review Finding 1, 2026-07-31).
-    # Review: code-reviewer — Finding 1: move off the bg_true-only leg onto has_bg.
+    # Move off the bg_true-only leg onto has_bg.
     if has_bg and session_id:
         _mark_bg_capable(git_root, session_id)
 
@@ -383,7 +383,7 @@ def _handler(params: dict, repo_root=None) -> dict:
 
     # present-and-false, or calibrated absent → rewrite the call into a backgrounded one.
     # tool_input is read raw: field() stringifies, and this value is a dict.
-    # Review: code-reviewer — Finding 1: non-emptiness alone doesn't prove tool_input is a
+    # non-emptiness alone doesn't prove tool_input is a
     # complete, safe rewrite target. `prompt` is the load-bearing key the harness Agent tool
     # schema requires; a tool_input missing it would rewrite into a promptless dispatch —
     # silently, which is worse than the deny it replaces. subagent_type is NOT required here:

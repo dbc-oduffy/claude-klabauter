@@ -41,7 +41,7 @@ def test_unroutable_paths_are_refused_rather_than_dispatched():
     """A registration is a string in a config file a plugin update can rewrite. Out-of-
     namespace, traversal, and nested paths must resolve to no op at all."""
     for path in ("/hook/ceremony.scoped_git_commit", "/hook/../etc", "/hook/hooks.a/b", "/hooks", "/hook/"[:5] + "x"):
-        # Review: coordinator:code-reviewer -- the prior `or path.rstrip("/") == "/hook"`
+        # The prior `or path.rstrip("/") == "/hook"`
         # disjunct was always False for this fixture list, making the assertion silently
         # equivalent to `is None`; asserted directly so a future fixture that legitimately
         # resolves to bare `/hook` fails loudly instead of being masked.

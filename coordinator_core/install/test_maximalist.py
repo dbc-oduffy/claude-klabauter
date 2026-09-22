@@ -491,7 +491,7 @@ def test_ensure_venv_skipped_by_default_without_allow_venv_fallback(stub_env):
 
 
 def test_step7_scaffold_raw_oserror_is_advisory_not_fatal(stub_env, monkeypatch):
-    # Review: code-reviewer -- Finding 1 (P1, AC D3): scaffold_structure's raw
+    # AC D3): scaffold_structure's raw
     # filesystem writes (mkdir/touch/write_text/copyfile) can raise an
     # unwrapped OSError/PermissionError, not just ScaffoldError. Step 7 must
     # degrade this to the same WARN...continuing (advisory, not fatal) path,
@@ -1192,7 +1192,7 @@ def test_c13_platform_localize_failure_is_fatal_not_advisory(stub_env, monkeypat
 
 
 # ---------------------------------------------------------------------------
-# Review: code-reviewer (Lane B install F3) -- direct coverage for
+# Direct coverage for
 # `_resolve_coordinator_live_path` and the `claude-home` Windows-argv helper.
 # Every `test_c13_*` test above monkeypatches `_resolve_coordinator_live_path`
 # itself, leaving its own internals -- the Tier-1 (native call)/Tier-2
@@ -1868,7 +1868,7 @@ def test_failing_receipt_persist_does_not_fail_the_install(stub_env, monkeypatch
 
 
 def test_writer_discovery_failure_is_loud_and_recorded_unreported(stub_env, monkeypatch, capsys):
-    """Review: code-reviewer (P2) -- a module that fails to import during
+    """A module that fails to import during
     writer discovery must WARN loudly and be folded into
     `unreported_writer_ids`, never vanish from receipt coverage silently."""
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)

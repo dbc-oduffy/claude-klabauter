@@ -529,7 +529,7 @@ def test_op_probe_skill_frontmatter_valid_handler(tmp_path):
     with mock.patch(
         "coordinator_core.ops.coordinator_doe_root.coordinator_doe_root", return_value=str(tmp_path)
     ):
-        # Review: code-reviewer — Finding 4. Handler is a plain sync `def`
+        # Handler is a plain sync `def`
         # (engine auto-offloads via asyncio.to_thread), called directly.
         result = pp._probe_skill_frontmatter_valid_op({})
     assert result == {"ok": True, "error": None}
@@ -612,7 +612,7 @@ def test_probe_windows_terminal_presence_inconclusive_when_winget_unavailable():
 
 def test_op_probe_windows_terminal_presence_handler():
     with mock.patch.object(pp.sys, "platform", "win32"), mock.patch("shutil.which", return_value="wt.exe"):
-        # Review: code-reviewer — Finding 1. Handler is a plain sync `def`
+        # Handler is a plain sync `def`
         # (engine auto-offloads via asyncio.to_thread), called directly.
         result = pp._probe_windows_terminal_presence_op({})
     assert result == {"present": True, "method": "path"}

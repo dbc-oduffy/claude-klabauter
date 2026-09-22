@@ -237,7 +237,7 @@ def test_a_non_sha_token_fails_loud(bad: str) -> None:
 
 
 def test_a_repeated_commits_flag_is_refused_not_merged() -> None:
-    """Review: coordinatorcode-reviewer.a2ea175d92501b498 -- the
+    """The
     `--claim-shas-from` removal also dropped the only guard against a second
     `--commits` occurrence. A second `--commits` must be refused, not
     silently merged (which would fail to de-dup across invocations and

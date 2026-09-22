@@ -16,6 +16,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import List, Optional
 
 import pytest
@@ -199,6 +200,8 @@ def _run_push(
     gh_pr_create_stdout: str = "",
     gh_pr_merge_returncode: int = 0,
     gh_pr_merge_stderr: str = "",
+    reconcile_ok: bool = True,
+    reconcile_reason: str = "",
 ):
     dest = str(tmp_path / "dest")
     spy = _SubprocessSpy(
@@ -225,6 +228,17 @@ def _run_push(
         gh_pr_merge_stderr=gh_pr_merge_stderr,
     )
     monkeypatch.setattr(_mod.subprocess, "run", spy)
+    # `reconcile_dest_before_push` is real `git` work against the dest
+    # (`coordinator_core.git.run` spawns via `Popen`, outside this file's
+    # `subprocess.run` stub) -- stubbed at the seam `_bootstrap_engine`
+    # binds it to, same as every other bootstrapped name this file
+    # monkeypatches. Defaults to "nothing to reconcile", matching every
+    # test written before this seam existed.
+    monkeypatch.setattr(
+        _mod,
+        "_reconcile_dest_before_push",
+        lambda repo_root, *, out, err: SimpleNamespace(ok=reconcile_ok, reason=reconcile_reason),
+    )
     monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
 
     argv = ["alpha"]
@@ -258,6 +272,25 @@ def test_clean_dest_with_commits_pushes(tmp_path, monkeypatch):
     push_calls = [c for c in spy.calls if c[:1] == ["git"] and "push" in c]
     assert len(push_calls) == 1
     assert push_calls[0] == ["git", "-C", dest, "push"]
+
+
+def test_reconcile_refusal_blocks_push_rather_than_racing_a_peer(tmp_path, monkeypatch, capsys):
+    """A peer landing on the dest's upstream between the round and this push
+    must never be raced by a `git push` that has not accounted for it --
+    `reconcile_dest_before_push`'s refusal has to stop the push, not just
+    get computed and ignored."""
+    rc, spy, dest = _run_push(
+        tmp_path,
+        monkeypatch,
+        status_stdout=_STATUS_CLEAN_AHEAD_1,
+        reconcile_ok=False,
+        reconcile_reason="could not be merged; the merge was aborted and nothing was pushed",
+    )
+    assert rc == _mod._EXIT_FAIL
+    err = capsys.readouterr().err
+    assert "could not be merged" in err
+    push_calls = [c for c in spy.calls if c[:1] == ["git"] and "push" in c]
+    assert push_calls == []
 
 
 def test_dirty_dest_refuses(tmp_path, monkeypatch, capsys):
@@ -413,6 +446,10 @@ def test_marker_present_but_unparseable_refuses(tmp_path, monkeypatch, capsys):
 # otherwise produce first.
 # ---------------------------------------------------------------------------
 
+@pytest.mark.deliberate_wall_clock(
+    reason="deny-at-once: the lock-busy path must return immediately rather than poll or block, "
+    "a behaviour only wall clock can observe"
+)
 def test_held_dest_denies_at_once_naming_holder_not_dirty_tree_usage(tmp_path, monkeypatch, capsys):
     """Fixture shape matches what the field actually produces: another round
     holds the real advisory lock on `dest` AND has left the dest dirty

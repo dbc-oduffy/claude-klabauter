@@ -192,6 +192,7 @@ Negative-spec:
 from __future__ import annotations
 
 import os
+import subprocess
 from typing import Optional, Sequence, Tuple
 
 from coordinator_core.ipc import register_op
@@ -199,6 +200,52 @@ from coordinator_core.ops.session.safe_commit_offer import compute_offer
 from coordinator_core.session import claim_index
 from coordinator_core.session import core
 from coordinator_core.session.liveness import live_session_ids
+from coordinator_core.win_portability import no_console_creationflags
+
+#: Bound on the orphan-adoption dirtiness probe (state/bug-backlog/
+#: 2026-08-29-orphan-adoption-admits-a-clean-path.yaml). A single `git
+#: status --porcelain` call over the small, caller-supplied set of
+#: OWNERSHIP_UNCLAIMED candidates -- never a tree enumeration -- so a slow
+#: or wedged git cannot stall the commit hot path past the brightline.
+_ORPHAN_DIRTY_PROBE_TIMEOUT_SECONDS = 2.0
+
+
+def _dirty_unclaimed_paths(cwd: Optional[str], candidates: Sequence[str]) -> Optional[set]:
+    """Return the subset of `candidates` that `git status --porcelain` shows dirty.
+
+    None (never an empty set) on any probe failure -- git missing, a
+    non-zero exit, or a timeout -- so a caller that cannot get an answer
+    fails CLOSED (treats every candidate as not-yet-proven-dirty) rather
+    than silently reading "no output" as "nothing is dirty". Called ONLY
+    over the OWNERSHIP_UNCLAIMED candidates already selected by the caller,
+    never the whole tree -- see this module's `assert_paths_in_session_scope`
+    for the gate that keeps this bounded.
+    """
+    if not candidates:
+        return set()
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "--", *candidates],
+            cwd=cwd or os.getcwd(),
+            capture_output=True,
+            text=True,
+            timeout=_ORPHAN_DIRTY_PROBE_TIMEOUT_SECONDS,
+            **no_console_creationflags(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    dirty: set = set()
+    for line in result.stdout.splitlines():
+        # Porcelain v1: two status chars, one space, then the path (or
+        # "old -> new" for a rename, where the NEW path is what a caller's
+        # pathspec would name).
+        path = line[3:]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        dirty.add(path)
+    return dirty
 
 #: Orphan ADOPTION is enabled — orphan *diagnosis* has shipped since
 #: 2026-08-03, and staff-eng R1 (2026-08-03, re-review pass 2) is now closed:
@@ -278,7 +325,7 @@ def assert_paths_in_session_scope(
     the resolution is to narrow the arm to the dirty set, NOT to widen the
     definition (see that row for the reasoning and the cost).
 
-    Review: staff-eng F2/F3 (2026-08-03) — `allow_orphans` additionally
+    `allow_orphans` additionally
     requires POSITIVE EVIDENCE that `session_id` names a session directory
     that exists on disk AND contains a `meta.json` (written by
     `coordinator_core.session.core.init`, which every real touch-tracked
@@ -287,7 +334,7 @@ def assert_paths_in_session_scope(
     call falls back to the strict allow-list exactly as if `allow_orphans`
     were `False`.
 
-    Review: staff-eng R2/R3 re-review (2026-08-03, pass 2) — softened from an
+    Softened from an
     earlier draft of this paragraph that claimed this check "closes two
     same-shaped holes" against the AC18 obfuscated-payload threat model. It
     does not hold against that model: every caller of this function already
@@ -405,7 +452,7 @@ def assert_paths_in_session_scope(
     except Exception as exc:  # noqa: BLE001 - fail-closed on ANY error beneath
         return False, "claim_index.classify_paths raised: %s" % (exc,)
 
-    # Review: staff-eng F2/F3 - `allow_orphans` takes effect only given
+    # staff-eng F2/F3 - `allow_orphans` takes effect only given
     # positive evidence `session_id` names a real, previously-initialized
     # session (see this function's own docstring paragraph). A fabricated
     # id, or a bare directory some non-tracked writer created with no
@@ -417,7 +464,7 @@ def assert_paths_in_session_scope(
         and _session_has_positive_evidence(session_id, cwd)
     )
 
-    # Review: staff-eng R3 - an `allow_orphans` request this call did not
+    # staff-eng R3 - an `allow_orphans` request this call did not
     # honor (because `_session_has_positive_evidence` failed) must not read
     # the same as "you never asked". Threaded through so
     # `_classify_denied_path` can name it distinctly.
@@ -435,6 +482,31 @@ def assert_paths_in_session_scope(
     # allow-list membership test below exactly like any other path.
     already_clean_set = set(already_clean) if already_clean else set()
 
+    # state/bug-backlog/2026-08-29-orphan-adoption-admits-a-clean-path.yaml:
+    # doctrine defines an orphan as dirty AND claimed by nobody;
+    # OWNERSHIP_UNCLAIMED is a pure claim-ledger verdict with no dirtiness
+    # component. A bounded `git status --porcelain` over ONLY the
+    # OWNERSHIP_UNCLAIMED candidates -- never the whole tree, and only when
+    # the arm is actually in play -- narrows adoption back to that
+    # definition. A probe failure fails CLOSED (empty dirty set), never
+    # open, matching the allow-list polarity the rest of this gate holds.
+    unclaimed_candidates = (
+        [
+            p
+            for p in paths
+            if isinstance(p, str)
+            and answer.by_path.get(p) is not None
+            and answer.by_path[p].verdict == claim_index.OWNERSHIP_UNCLAIMED
+        ]
+        if verified_caller
+        else []
+    )
+    dirty_unclaimed = (
+        _dirty_unclaimed_paths(cwd, unclaimed_candidates) or set()
+        if unclaimed_candidates
+        else set()
+    )
+
     denied_paths: list = []
     allowed: list = []
     for p in paths:
@@ -443,7 +515,11 @@ def assert_paths_in_session_scope(
         if verdict == claim_index.OWNERSHIP_MINE:
             allowed.append(p)
             continue
-        if verdict == claim_index.OWNERSHIP_UNCLAIMED and verified_caller:
+        if (
+            verdict == claim_index.OWNERSHIP_UNCLAIMED
+            and verified_caller
+            and p in dirty_unclaimed
+        ):
             allowed.append(p)
             continue
         denied_paths.append(p)
@@ -565,7 +641,7 @@ def _session_has_positive_evidence(session_id: str, cwd: Optional[str]) -> bool:
     `allow_orphans` is gated on; see `assert_paths_in_session_scope`'s own
     docstring for why a bare directory (or none at all) is not enough.
 
-    Review: staff-eng R3 (2026-08-03, pass 2) — this is a MISTAKE guard, not
+    This is a MISTAKE guard, not
     an authentication check: it requires evidence a session was initialized
     through the tracked hot path, which raises the cost of a fabricated
     identity from "invent a string" to "create a directory and a file" for a
@@ -824,7 +900,7 @@ def _classify_denied_path(
     caller's deny reason names the classification rather than a bare "outside
     scope" (see :func:`assert_paths_in_session_scope`'s docstring).
 
-    Review: staff-eng F6 — this does not take the ORIGINAL `allow_orphans`
+    This does not take the ORIGINAL `allow_orphans`
     parameter back: that branch was unreachable (with `allow_orphans` True
     and `orphans` a list, a path in `orphan_set` already `continue`d in the
     caller's loop before reaching here), and stays unreachable. The new
@@ -838,7 +914,7 @@ def _classify_denied_path(
     defect-A comment, for why a real session dir with no `meta.json` is a
     documented shape, not a hypothetical).
 
-    Review: staff-eng P3 (2026-08-03, pass 3) — `call_indeterminate` (mirrors
+    `call_indeterminate` (mirrors
     `offer["indeterminate"]`, i.e. `ScopeResult.indeterminate`) is a THIRD,
     independent signal, checked ahead of the `all_orphans` membership test
     rather than inside it: when R1's whole-call withhold zeroed

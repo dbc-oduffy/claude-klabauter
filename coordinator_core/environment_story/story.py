@@ -158,7 +158,7 @@ class CoreOmissionError(Exception):
     rule the story dropped."""
 
 
-# Review: overengineering-reviewer -- RegistryUnreadableError and
+# RegistryUnreadableError and
 # SentinelMissingError each had exactly one raise-site and one catch-site
 # (the resolver's own bare `except Exception`), which discriminated on
 # nothing; collapsed to one internal signal. `ProbeTimeoutError` stays
@@ -338,7 +338,7 @@ def resolve_environment_story(
         return STRICTEST_STORY
 
 
-# Review: overengineering-reviewer -- the prior version relayed a probe's
+# The prior version relayed a probe's
 # own exception across the thread boundary and distinguished "no value"
 # from "timed out" as a third failure branch. The resolver's own
 # `except Exception` around this call discards both distinctions on

@@ -93,12 +93,23 @@ def _released_paths(repo: Path, sid: str) -> set:
     Kept reading the file directly rather than through a higher-level offer helper,
     per this module's own docstring — the point is to assert on what actually
     landed on disk.
+
+    `parse_touch_event` parses the OLD `'<verb> <ts> <path>'` dialect, not a raw
+    `touch-record.jsonl` line (a JSON object) — feeding it JSON lines directly
+    makes every parse fall into its own fail-safe ('T', None, <line>) branch, so
+    a real `R` event reads back as an unparsed `T`-shaped line and never lands
+    in `released`. `_read_touch_record_as_legacy_lines` is this module's own
+    read adapter (C0) that decodes the jsonl family and re-renders each event
+    into that legacy dialect — the same seam every real in-module reader goes
+    through — so this helper is routed through it too instead of parsing the
+    jsonl bytes itself.
     """
     record = _sdir(repo, sid) / session_scope._TOUCH_RECORD_FILENAME
     if not record.exists():
         return set()
+    legacy_lines, _truncated = session_scope._read_touch_record_as_legacy_lines(record)
     released = set()
-    for line in record.read_text(encoding="utf-8").splitlines():
+    for line in legacy_lines:
         verb, _ts, path = session_scope.parse_touch_event(line)
         if verb == "R":
             released.add(path)

@@ -377,7 +377,7 @@ def _main_impl() -> int:
     child_pid = _spawn_detached(watch_argv)
     if child_pid is not None:
         try:
-            lock.write_text(str(child_pid), encoding="utf-8")
+            lock.write_text(str(child_pid), encoding="utf-8", newline="\n")
         except Exception:
             pass
     # else: launch failed -- fail-open, leave any prior (already-checked-stale)

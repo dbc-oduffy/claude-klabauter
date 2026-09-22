@@ -259,7 +259,7 @@ def classify_entry_disposition(
             disposition=DISPOSITION_DELIBERATE,
             reason=reason,
         )
-    # Review: code-reviewer (Finding 3, P2) — the prior bare `else` silently
+    # The prior bare `else` silently
     # classified any non-bool, non-None `attempted_ok` as a deliberate
     # policy decision, misreporting a caller bug as policy. Fail loud
     # instead — an out-of-domain value must not degrade into a wrong claim.
@@ -329,7 +329,7 @@ def render_disposition_report(report: UninstallDispositionReport, *, dry_run: bo
     lines.append(header)
 
     def _entry_label(entry: WriteSurfaceEntry) -> str:
-        # Review: code-reviewer (Finding 5, P3) — the prior fallback
+        # The prior fallback
         # dropped `begin_marker` even when the entry carried one, printing
         # an unidentifiable `<kind entry>` line for a marker-delimited
         # entry whose `key`/`path` are both unset.
@@ -567,7 +567,7 @@ def render_uninstall_dry_run_report(receipt: "InstallReceipt | None") -> str:
     below), so a dry-run preview still surfaces the structurally
     unreversible entries as such.
 
-    # Review: code-reviewer (Finding 1, P1) — this previously passed
+    # This previously passed
     # ``attempted_ok=None`` for every ordinary entry, which
     # ``classify_entry_disposition`` maps to ``deliberately-not-reversed``:
     # every entry a real run WOULD reverse was mislabeled identically to an
@@ -618,7 +618,7 @@ def render_uninstall_dry_run_report(receipt: "InstallReceipt | None") -> str:
         placeholder = WriteSurfaceEntry(
             kind="file-path",
             path=f"<writer:{writer_id}>",
-            # Review: code-reviewer (Finding 3, P3) -- structural signal
+            # Structural signal
             # (not just reason-text convention) that this record is a
             # synthesized stand-in, not a genuine declared surface.
             synthetic=True,
@@ -975,7 +975,7 @@ def uninstall_remove_shim() -> bool:
     # single-file resolver (never CLAUDE_HOME-aware, by the writer's own
     # design -- see shell_rc_guard.py's module docstring).
     for sentinel_id, candidate_files in (
-        # Review: code-reviewer (Finding 3, P2) — CLAUDE_KLABAUTER_CLONE deliberately
+        # CLAUDE_KLABAUTER_CLONE deliberately
         # stays keyed on literal `$HOME` (`_resolve_rc_path()`, never
         # `CLAUDE_HOME`-aware) here, matching the writer's own legacy
         # single-file resolver, while the other two legs below resolve
@@ -984,7 +984,7 @@ def uninstall_remove_shim() -> bool:
         # above), inlined here so an editor changing HOME derivation for
         # the other two legs doesn't reflexively "fix" this one to match
         # and silently change behavior.
-        # Review: code-reviewer — `_resolve_rc_path()` is called here with no
+        # `_resolve_rc_path()` is called here with no
         # `os.name == "nt"` guard, asymmetric with the writer
         # (`write_shell_rc_guard_block`, shell_rc_guard.py) which early-returns
         # on native Windows before ever calling it. What makes this harmless
@@ -1329,7 +1329,7 @@ def _uninstall_remove_setup_dir(claude_home: str, errors: List[str]) -> None:
         pass
 
 
-# Review: code-reviewer (Finding 1) — C6's careful-write backups
+# C6's careful-write backups
 # (`substrate.py::_careful_write_backup_path`) are disposable-by-design and
 # sit OUTSIDE the git-tracked `setup/` tree, but nothing ever cleaned them
 # up: every re-install of a foreign-tracked destination added one more

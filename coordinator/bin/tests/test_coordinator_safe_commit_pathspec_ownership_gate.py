@@ -19,7 +19,12 @@ describing neither and, for one of them, without its regression tests.
 
 FAILURE DIRECTION, pinned: this runs ahead of every explicit-pathspec commit the
 fleet makes, so an unresolvable identity or an unreadable sink must ALLOW. A
-refusal has to rest on a claim that was actually read.
+refusal has to rest on a claim that was actually read. Also pinned: allowing on
+a read failure must not stay SILENT -- when `contested_by_live_peers` returns
+its `None` "could not establish contest" sentinel, this gate says so on
+stderr before permitting, so the trace is distinguishable from a pathspec
+nobody was touching (state/bug-backlog/2026-08-31-the-commit-route-s-peer-
+contest-read-fai-2651bbf2bd59.yaml).
 
 Loaded by file path (`importlib.machinery.SourceFileLoader`), matching this
 directory's existing hyphenated-module idiom.
@@ -129,6 +134,32 @@ class TestFailsOpen:
 
         assert mod._refuse_contested_pathspec(["pkg/mod.py"], "/repo") is None
 
+    def test_cannot_establish_contest_allows_but_warns(self, monkeypatch, capsys):
+        """`contested_by_live_peers`'s `None` sentinel ("could not establish
+        contest") must still allow the commit -- fail-open is unchanged --
+        but must no longer be silent, unlike a genuine `{}` result."""
+        mod = _load_cli_module()
+        cs_core = types.SimpleNamespace(resolve_session_id=lambda: "mine")
+        cs_scope = types.SimpleNamespace(
+            contested_by_live_peers=lambda paths, sid, cwd=None: None
+        )
+        monkeypatch.setattr(
+            mod, "_import_session", lambda: (cs_core, object(), cs_scope, object())
+        )
+
+        assert mod._refuse_contested_pathspec(["pkg/mod.py"], "/repo") is None
+        err = capsys.readouterr().err
+        assert "could not complete" in err, err
+
+    def test_uncontested_result_allows_silently(self, monkeypatch, capsys):
+        """A genuine `{}` result (distinct from the `None` sentinel above)
+        stays silent -- nothing was contested, so nothing to warn about."""
+        mod = _load_cli_module()
+        _stub_session(mod, monkeypatch, contested={})
+
+        assert mod._refuse_contested_pathspec(["pkg/mod.py"], "/repo") is None
+        assert capsys.readouterr().err == ""
+
 
 def test_do_pathspec_calls_the_gate_before_dispatching():
     """The gate is worthless if it runs after `ceremony.commit_v2`. Asserts
@@ -232,7 +263,7 @@ class TestCleanPathNarrowing:
     @pytest.mark.spawns_process
     @pytest.mark.cadence
     def test_a_backslash_path_dirty_content_still_refuses(self, tmp_path, monkeypatch, capsys):
-        """Review: coordinator:code-reviewer af0c0865daafdd73a, Finding P1 --
+        """
         the subprocess argv used to receive the RAW `paths` argument while
         everything it was compared against was normalized (backslash ->
         forward-slash). A backslash-bearing contested path could then fail

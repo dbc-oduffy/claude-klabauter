@@ -57,6 +57,10 @@ OP_MODULE_MAP: Dict[str, str] = {
     "peer_notice.send":                       "coordinator_core.ops.peer_notice_send",
     "peer_notice.check":                      "coordinator_core.ops.peer_notice_check",
     "op_census.breaches":                     "coordinator_core.ops.op_budget_breaches",
+    # freshness.commit_delta — workday-start doc/test/bug-sweep commit-delta
+    # producer (docs/plans/2026-09-10-cartography-churn-producer-and-staleness-
+    # registrations.md § C3).
+    "freshness.commit_delta":                 "coordinator_core.ops.freshness_commit_delta",
     # coordinator_core.hooks registers all 16 hooks.* ops (6 advisory + 8 bookkeeping
     # + 1 pull/poll arrival-check + 1 subagent-fabrication check) in a single module
     # import. This package-level
@@ -73,7 +77,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.nudge_named_agent_report_delivery": "coordinator_core.hooks",
     "hooks.nudge_em_code_dispatch":           "coordinator_core.hooks",
     "hooks.track_touched_files":              "coordinator_core.hooks",
-    "hooks.session_heartbeat":                "coordinator_core.hooks",
     "hooks.agent_completion_log":             "coordinator_core.hooks",
     "hooks.track_dispatched_agents":          "coordinator_core.hooks",
     "hooks.agent_postuse_dispatch":           "coordinator_core.hooks",
@@ -96,7 +99,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.plan_persistence_check":           "coordinator_core.hooks",
     "hooks.runtime_tripwire_em_check":        "coordinator_core.hooks",
     # hooks.stop_dispatch (C3, docs/plans/2026-08-31-six-hook-scripts-become-engine-ops.md).
-    # Review: overengineering-reviewer (Kira) — the four sibling residue/
+    # The four sibling residue/
     # wrapper keys this module also defined (guard_kira_verdict_routed,
     # stop_em_report_altitude, nudge_harness_directive_dispatch,
     # nudge_unrouted_sizing) had no consumer anywhere in claude-klabauter or
@@ -235,6 +238,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     # writes-and-one-commit-th.md § C2) after the 2026-08-23 kill (K-050).
     # NOT a resurrection of the killed module — three-write shape only.
     "memo.send":                              "coordinator_core.ops.fleet.memo_send",
+    "memo.check_deliveries":                  "coordinator_core.ops.fleet.memo_send",
     # memo.heal_inbox — C5, docs/plans/2026-09-11-memo-deliveries-survive-the-
     # receiver-s-o.md: receiver-side self-heal over `refs/coordinator/inbox/*`
     # anchors (C3). Separate module from memo_send.py by design — see
@@ -306,6 +310,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "cartography.symbols":                    "coordinator_core.ops.cartography_symbols",
     "cartography.edges":                      "coordinator_core.ops.cartography_edges",
     "cartography.op_edges":                   "coordinator_core.ops.cartography_op_edges",
+    "docindex.emit":                          "coordinator_core.ops.docindex_emit",
     "memo.triage":                            "coordinator_core.ops.memo_triage",
     "distill.scope":                          "coordinator_core.ops.distill_scope",
     "distill.workflow_input":                 "coordinator_core.ops.distill_workflow_input",
@@ -446,6 +451,18 @@ OP_MODULE_MAP: Dict[str, str] = {
     # modules, not a shared-value pair like the hooks.* block above.
     "p4.register_workspace":                   "coordinator_core.p4.register",
     "p4.session_state":                        "coordinator_core.p4.session_state",
+    # C5 (docs/plans/2026-09-11-the-lessons-pipeline-drains-without-a-ha.md):
+    # value is the `<package>.ops` module path, mirroring
+    # `merge_assemble.apply` above — not `__init__`/`apply` directly.
+    "learn_lessons_pipeline.brief":             "coordinator_core.learn_lessons_pipeline.ops",
+    "learn_lessons_pipeline.apply":             "coordinator_core.learn_lessons_pipeline.ops",
+    # C9 (docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md): the closed
+    # queue-grind op list the vocabulary's SOURCE_OPS/VERIFY_OPS/REGENERATE_OPS
+    # (C1) resolve to — one shared owning module, same many-keys-one-value
+    # shape as the learn_lessons_pipeline.* pair above.
+    "lessons.extract":                          "coordinator_core.ops.grind_ops",
+    "lessons.verify_extraction":                "coordinator_core.ops.grind_ops",
+    "doctrine.surface_split_regenerate":        "coordinator_core.ops.grind_ops",
 }
 
 

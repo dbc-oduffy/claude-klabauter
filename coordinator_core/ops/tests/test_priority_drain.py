@@ -198,7 +198,7 @@ def test_drain_twice_yields_one_entry_one_stamp(_isolated_central_root):
 
 
 def test_embedded_newline_in_note_cannot_forge_source_stamp(_isolated_central_root, monkeypatch):
-    """Review: code-reviewer — a `note` containing an embedded newline that
+    """A `note` containing an embedded newline that
     LOOKS like a second `source:` line must not survive to forge the
     provenance stamp. Before priority_set._render_entry routed through
     yaml.safe_dump, this newline injected a second `source:` key and PyYAML's
@@ -473,7 +473,7 @@ def test_registered_op_handler_round_trips(_isolated_central_root):
 
 
 def test_move_vanished_source_returns_none_not_raise(_isolated_central_root):
-    """Review: code-reviewer — simulates the losing side of a concurrent-drain
+    """Simulates the losing side of a concurrent-drain
     rename race directly (no real concurrency needed): the source file is
     gone by the time `_move` tries to rename it, exactly as it would be if a
     peer drain already archived it first. Must return None, never raise.

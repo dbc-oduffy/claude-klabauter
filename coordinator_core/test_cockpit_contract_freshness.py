@@ -431,7 +431,7 @@ def test_brief_carries_the_gate_and_never_raises(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Review: code-reviewer (F3) — real-git coverage of the four low-level
+# real-git coverage of the four low-level
 # helpers. Every test above monkeypatches `_peel_to_commit`, `_candidate_sha`,
 # `_contract_version_at`, and `_is_ancestor` as whole-function stubs, so the
 # actual subprocess/git-command syntax and output parsing of those helpers

@@ -52,6 +52,7 @@ from typing import IO, Dict, Mapping, Optional, Tuple, Union
 from coordinator_core.git.git_dir import resolve_git_dir
 from coordinator_core.git.git_objects import _replace_with_retry
 from coordinator_core.git.tree_spine import _ABSENT
+from coordinator_core.lock_preflight import preflight_reap_stale_lock
 
 _SIGNATURE = b"DIRC"
 _ENTRY_FIXED_LEN = 62
@@ -224,6 +225,17 @@ def splice_index(
     index_path = gitdir / "index"
     lock_path = gitdir / "index.lock"
     root = Path(repo)
+
+    # Every splice caller (`commit_paths`, `stage_paths_in_process`,
+    # `refresh_stat_in_process`) writes `.git/index` without spawning git, so
+    # none of them get the orphaned-`index.lock` self-heal a raw `git`
+    # command line gets from `guard_reap_stale_git_lock`'s PreToolUse guard --
+    # that guard only recognizes a bare `git` in command position, and this
+    # is an in-process write, never a `git` argv at all
+    # (state/bug-backlog/2026-08-12-scoped-git-commit-is-not-a-raw-git-invoc-
+    # f4fff3a626fa.yaml's divergence). Best-effort and fail-open: see
+    # `lock_preflight.preflight_reap_stale_lock`'s own negative-spec.
+    preflight_reap_stale_lock(str(root))
 
     try:
         fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)

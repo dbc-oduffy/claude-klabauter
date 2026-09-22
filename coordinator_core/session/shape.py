@@ -333,7 +333,7 @@ def _try_claim_lock(lock_dir: str, sid: str) -> bool:
     except OSError:
         return False  # other mkdir failure (e.g. permission) — also report not-claimed
     try:
-        # Review: code-reviewer (Finding 2) — trailing "\n" to match bash
+        # Trailing "\n" to match bash
         # echo redirection and claims.py::_write_claim_meta byte-parity.
         (Path(lock_dir) / "pid").write_text(f"{os.getpid()}\n", encoding="utf-8", newline="\n")
         (Path(lock_dir) / "session_id").write_text(f"{sid}\n", encoding="utf-8", newline="\n")
@@ -365,7 +365,7 @@ def session_shape_read(sid: str, cwd: Optional[str] = None) -> str:
     if not sid:
         raise ValueError("session_id required")
 
-    # Review: code-reviewer (Finding 3) — trailing "\n" so this branch is
+    # Trailing "\n" so this branch is
     # byte-consistent with the existing-file branch below (which carries the
     # newline session_shape_set wrote) and with the bash printf oracle.
     skeleton = (
@@ -700,6 +700,6 @@ def session_shape_magnitude(sid: str, cwd: Optional[str] = None) -> str:
     lines, _touch_degraded = _scope._read_touch_record_as_legacy_lines(touch_record_path)
     touched = len(set(lines))
 
-    # Review: code-reviewer (Finding 3) — trailing "\n" to match the bash
+    # Trailing "\n" to match the bash
     # printf '...\n' oracle.
     return f'{{"commits_since_start":{commits},"files_touched":{touched}}}\n'

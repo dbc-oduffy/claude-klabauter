@@ -21,8 +21,13 @@ Wire params -- workflow.fire:
     model (str, optional)         -- driver model; defaults to
                                       ``fire.DEFAULT_MODEL`` (cheap tier --
                                       the driver calls one tool once).
-    max_turns (int, optional)     -- child turn cap; defaults to
-                                      ``fire.DEFAULT_MAX_TURNS``.
+    max_turns (int, optional)     -- child turn cap; when omitted, scales
+                                      with the emitted script's own declared
+                                      phase count (``fire._scaled_max_turns``,
+                                      floor ``fire.DEFAULT_MAX_TURNS``) rather
+                                      than a bare constant that never grew
+                                      with the workflow it bounds
+                                      (klabauter#41).
     claude_bin (str, optional)    -- the ``claude`` binary to invoke;
                                       defaults to ``"claude"`` (resolved via
                                       PATH, same as the interactive shim).
@@ -32,11 +37,19 @@ Wire params -- workflow.fire:
 
 Reply fields -- workflow.fire:
     the fire registry record (see ``fire.fire_workflow`` docstring): {
-      "fire_id", "pid", "script_path", "plugin_dir", "claude_bin", "model",
-      "max_turns", "command", "started_at", "log_path", "state",
-      "exit_code", "exit_code_note", "outcome", "outcome_basis",
-      "driver_session_id", "status_checked_at", "status_checked_at_iso",
-      "log_size_bytes", "publish_lag_message", "_readme" }
+      "fire_id", "pid", "script_path", "repo_root", "plugin_dir",
+      "claude_bin", "model", "max_turns", "command", "started_at",
+      "log_path", "state", "exit_code", "exit_code_note", "outcome",
+      "outcome_basis", "failure_subtype", "driver_session_id",
+      "status_checked_at", "status_checked_at_iso", "log_size_bytes",
+      "publish_lag_message", "_readme" }
+      ``repo_root`` (claude-klabauter#41) is the resolved worktree ``cwd``
+      this fire's ``script_path`` was checked against (``None`` when no
+      ``repo_root`` was resolvable for this call) -- see fire-time
+      refusal, below.
+      ``failure_subtype`` (claude-klabauter#37) is the driver's own
+      terminal ``subtype`` (e.g. ``"error_max_turns"``) whenever
+      ``outcome`` is ``"failed"``; absent otherwise.
       ``publish_lag_message`` (DR-335) is non-``None`` only when the
       published engine mirror is more than 30 minutes AND more than zero
       engine-touching commits behind this fire's source tree -- see
@@ -82,8 +95,11 @@ Negative-spec:
     else None)``. Registry placement DOES therefore depend on the
     envelope's ``repo_root`` whenever a caller supplies one: it becomes the
     ``cwd`` that ``fire.py``'s ``_registry_dir`` -> ``sessions_dir`` walks
-    from. Only when ``repo_root`` is absent does placement fall back to
-    the process's own cwd / git-common-dir.
+    from. When ``repo_root`` is absent, ``fire.fire_workflow`` no longer
+    falls back to the firing process's own ambient cwd -- it resolves the
+    target tree from ``script_path`` itself instead, or refuses via
+    ``fire.RepoRootUnresolvableError`` when even that is not a git tree
+    (klabauter#37; see ``fire._resolve_target_repo``).
 """
 
 from __future__ import annotations
@@ -103,6 +119,14 @@ def _workflow_fire(params: dict, repo_root: Optional[Path] = None) -> dict:
     Raises:
         ValueError -- if ``script_path`` is missing.
         fire.ScriptNotFoundError -- if ``script_path`` does not exist.
+        fire.RepoRootUnresolvableError -- if no ``repo_root`` was resolved
+            AND ``script_path`` does not itself resolve to a git tree
+            (fail-loud; never silently proceeds against the firing
+            process's own ambient cwd, see klabauter#37).
+        fire.ScriptOutsideRepoRootError -- if ``script_path`` does not live
+            under the resolved repo root (klabauter#41 -- a fire aimed at
+            the wrong tree used to spawn a child that could not read its
+            own script and still reported success).
         fire.PluginDirResolutionError -- if ``--print-plugin-dir`` cannot
             be resolved (fail-loud; never silently omits the flag).
         fire.ConcurrencyCapExceededError -- if the live-fire count is at
@@ -119,7 +143,7 @@ def _workflow_fire(params: dict, repo_root: Optional[Path] = None) -> dict:
         cwd=str(repo_root) if repo_root is not None else None,
         claude_bin=params.get("claude_bin", "claude"),
         model=params.get("model", fire.DEFAULT_MODEL),
-        max_turns=params.get("max_turns", fire.DEFAULT_MAX_TURNS),
+        max_turns=params.get("max_turns"),
         concurrency_cap=params.get("concurrency_cap", fire.DEFAULT_CONCURRENCY_CAP),
     )
 

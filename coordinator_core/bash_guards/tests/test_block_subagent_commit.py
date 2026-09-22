@@ -1691,7 +1691,7 @@ def test_redirection_target_is_not_treated_as_a_pathspec_element():
 
 
 def test_pathspec_token_after_a_mid_pathspec_redirect_is_still_checked():
-    """Review: coordinator:code-reviewer -- a redirect interspersed mid-
+    """A redirect interspersed mid-
     pathspec previously truncated the guard's own ownership check at the
     first redirection token, silently dropping every real path after it
     (backstopped by the sink's independent re-validation, but the pre-check
@@ -2918,6 +2918,33 @@ def test_commit_v2_deleted_paths_are_scope_checked_too():
     assert reason == guard._LEG_SWEEPING_PATHSPEC
 
 
+#: Every `coordinator-invoke` door spelling an agent can actually type --
+#: one place for the next spelling to be added, mirroring
+#: `test_newly_added_committing_ops_all_deny`'s fixture-tuple shape
+#: (test_subagent_commit_prefilter_and_flags.py). Each entry is a format
+#: template taking `{op}` and `{payload}` (the JSON args string, already
+#: single-quoted where the template needs it).
+#:
+#: 1. bare on-PATH spelling
+#: 2. `.exe`-suffixed (Windows PATH resolution)
+#: 3. quoted Windows absolute path, `.exe`-suffixed
+#: 4. slash-separated POSIX absolute path
+#: 5. flags BEFORE the `<op>` positional (`--repo` is commonly trailing,
+#:    but the CLI accepts it either side -- `_first_positional_after_
+#:    invoke_module` is flag-tolerant by construction)
+#: 6. flags AFTER the `<op>` positional
+_DOOR_SPELLINGS = (
+    "coordinator-invoke {op} '{payload}'",
+    "coordinator-invoke.exe {op} '{payload}'",
+    # abs-path-ok: a literal fixture string the tokenizer parses as an
+    # argv0 -- not a real filesystem path on this or any other host.
+    '"C:\\\\Program Files\\\\coordinator\\\\bin\\\\coordinator-invoke.exe" {op} \'{payload}\'',
+    "/usr/local/bin/coordinator-invoke {op} '{payload}'",
+    "coordinator-invoke --repo /fake/git-root {op} '{payload}'",
+    "coordinator-invoke {op} '{payload}' --repo /fake/git-root",
+)
+
+
 def test_coordinator_invoke_door_is_covered_by_the_deny_matcher(monkeypatch):
     """The `coordinator-invoke` door reaches the SAME
     `coordinator_core.invoke.__main__.main` as the `-m` module spelling, and
@@ -2935,6 +2962,62 @@ def test_coordinator_invoke_door_is_covered_by_the_deny_matcher(monkeypatch):
         result = guard.check(_payload(cmd, agent_type=_SUBAGENT_TYPE))
         assert result is not None, op
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny", op
+
+
+def test_coordinator_invoke_door_matrix_predicate_denies_and_allows(monkeypatch):
+    """Every door spelling in `_DOOR_SPELLINGS` -- bare, `.exe`, quoted
+    Windows absolute path, POSIX absolute path, and flags on either side of
+    the `<op>` positional -- must resolve THROUGH the same predicate,
+    `_has_committing_op_invoke`, exactly like the bare spelling already
+    pinned above. This is the cheap in-process call and the only place a
+    spelling can be lost: the whole tokenizer and `_invoke_op_token_indices`
+    peel happens inside it (see that function's own docstring on why the
+    `coordinator-invoke` head is peeled-then-boundary-matched, unlike the
+    interpreter scan).
+
+    Split by axis rather than asserted twice per cell: the predicate is
+    checked for every spelling here (deny direction, on a committing op, and
+    allow direction, on `push.outstanding`); the envelope
+    (`guard.check()`) is checked separately, once per direction, in
+    `test_coordinator_invoke_door_matrix_envelope_...` below -- `check()`
+    reaches the spelling only through this same predicate, so the envelope
+    arm proves the wiring from predicate to verdict, which is
+    spelling-independent by construction. If that ever stops being true,
+    this predicate loop is what catches it.
+
+    Measured at HEAD 2026-09-11: all six deny cases already return True and
+    all six allow cases return False. This test is a pin, not a fix -- a
+    live disagreement here is a regression in `_invoke_op_token_indices`,
+    not a cue to write a second matcher (see this module's Anti-scope).
+    """
+    payload = '{"paths": ["a.py"]}'
+    for template in _DOOR_SPELLINGS:
+        deny_cmd = template.format(op="ceremony.commit_v2", payload=payload)
+        assert guard._has_committing_op_invoke(deny_cmd) is True, deny_cmd
+
+        allow_cmd = template.format(op="push.outstanding", payload=payload)
+        assert guard._has_committing_op_invoke(allow_cmd) is False, allow_cmd
+
+
+def test_coordinator_invoke_door_matrix_envelope_bare_spelling_allows_push_outstanding(
+    monkeypatch,
+):
+    """The allow-direction envelope, new alongside the matrix above: on the
+    bare `coordinator-invoke` spelling, `guard.check()` returns `None`
+    (ALLOW) for `push.outstanding`. The deny-direction envelope already
+    exists in `test_coordinator_invoke_door_is_covered_by_the_deny_matcher`
+    above and is not re-asserted here.
+
+    Not asserted per-spelling -- see this test's own module-level comment
+    on `_DOOR_SPELLINGS` and the docstring above: `check()` reaches the
+    spelling only through `_has_committing_op_invoke`, so this one case
+    proves the predicate-to-verdict wiring, and the matrix test proves the
+    predicate itself holds for every spelling.
+    """
+    _subagent(monkeypatch)
+    cmd = "coordinator-invoke push.outstanding '{}'"
+    result = guard.check(_payload(cmd, agent_type=_SUBAGENT_TYPE))
+    assert result is None, f"expected ALLOW for: {cmd!r}, got {result!r}"
 
 
 def test_both_invoke_spellings_resolve_the_same_op():
@@ -2955,3 +3038,56 @@ def test_both_invoke_spellings_resolve_the_same_op():
             for idx, seq in guard._invoke_op_token_indices(seg)
         ]
         assert found == ["ceremony.commit_v2"], cmd
+
+
+def test_committing_op_names_is_the_single_source_of_truth(monkeypatch):
+    """C2 (docs/plans/2026-09-11-the-subagent-commit-guard-s-door-coverage-
+    gets-pinned.md): the baton's AC-3 requires door-spelling recognition to
+    route THROUGH ``_COMMITTING_OP_NAMES``, asserted behaviourally -- not by
+    a source-text scan for "no second list" (considered and rejected: that
+    asserts spelling, this asserts behaviour).
+
+    Run against ONE spelling only -- the bare ``coordinator-invoke`` door.
+    The spelling axis (bare/``.exe``/quoted-absolute/flags-either-side) is
+    C1's (``test_coordinator_invoke_door_matrix_predicate_denies_and_allows``
+    and its envelope sibling above) and is NOT re-run here: membership in
+    ``_COMMITTING_OP_NAMES`` is checked once, downstream of the spelling
+    peel, on a token C1's matrix has already proven resolves identically for
+    every spelling.
+
+    Direction A: monkeypatch ``guard._COMMITTING_OP_NAMES`` to a frozenset
+    containing a synthetic name that is in no registry and contains no
+    ``commit`` substring -- if a second, independent list anywhere in the
+    door path still recognized a real committing op name, this synthetic
+    name would nonetheless be denied by that other list; instead we assert
+    the opposite failure mode is impossible by using the synthetic name
+    itself as the probed op, so a DENY here can only come from
+    ``_COMMITTING_OP_NAMES`` membership.
+
+    Direction B: monkeypatch a set with a real committing name REMOVED and
+    assert that name now ALLOWS. The removed name is
+    ``fleet.archive_release_accumulator``: it contains no literal ``commit``
+    substring (so the prefilter's own ``"commit" in cmd`` leg cannot rescue
+    a deny independent of the set), and it is not a git-identity/other-
+    matcher special case the way ``ceremony.commit_v2`` or
+    ``ceremony.scoped_git_commit`` are -- an allow-side path-scope leg does
+    not apply to a bare ``coordinator-invoke`` op token, so nothing else in
+    the door path can independently veto the allow.
+    """
+    _subagent(monkeypatch)
+
+    synthetic_name = "zzz.not_a_real_op_and_has_no_commit_substring"
+    monkeypatch.setattr(guard, "_COMMITTING_OP_NAMES", frozenset({synthetic_name}))
+    cmd = 'coordinator-invoke %s \'{"paths": ["a.py"]}\'' % synthetic_name
+    assert guard._has_committing_op_invoke(cmd) is True, cmd
+    result = guard.check(_payload(cmd, agent_type=_SUBAGENT_TYPE))
+    assert result is not None, cmd
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny", cmd
+
+    removed_name = "fleet.archive_release_accumulator"
+    real_names = frozenset(guard._COMMITTING_OP_NAMES) - {removed_name}
+    monkeypatch.setattr(guard, "_COMMITTING_OP_NAMES", real_names)
+    cmd2 = 'coordinator-invoke %s \'{"paths": ["a.py"]}\'' % removed_name
+    assert guard._has_committing_op_invoke(cmd2) is False, cmd2
+    result2 = guard.check(_payload(cmd2, agent_type=_SUBAGENT_TYPE))
+    assert result2 is None, f"expected ALLOW for: {cmd2!r}, got {result2!r}"

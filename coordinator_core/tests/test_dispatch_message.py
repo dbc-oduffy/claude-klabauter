@@ -355,7 +355,7 @@ def test_version_checked_before_params():
 def test_params_checked_before_method():
     """params=[1,2] (not dict) with method=999 (not str) → -32602 (params gate fires first).
 
-    Review: code-reviewer — F3: guards the second validation-order adjacency
+    Guards the second validation-order adjacency
     (params → method). Validation order is spec-pinned as:
         jsonrpc version → params type → method string → registry lookup → handler invoke
     If this order were swapped, method-integer check would fire first and return -32600
@@ -494,12 +494,13 @@ def test_keying_missing_origin_worktree_for_common_dir_op():
     """A common_dir-scoped op with no _origin_worktree → INVALID_PARAMS (-32602).
 
     AC-1c: fail-loud when a key is required but _origin_worktree is absent.
-    hooks.session_heartbeat is "common_dir"-scoped in _OP_KEY_SCOPE.
+    hooks.track_touched_files is "common_dir"-scoped in _OP_KEY_SCOPE (substitute
+    for the retired hooks.session_heartbeat example, same scope/routing).
     """
     msg = {
         "jsonrpc": "2.0",
         "id": 20,
-        "method": "hooks.session_heartbeat",
+        "method": "hooks.track_touched_files",
         "params": {},
         # deliberately no "_origin_worktree"
     }
@@ -507,7 +508,7 @@ def test_keying_missing_origin_worktree_for_common_dir_op():
     def _stub(params, ctx=None, repo_root=None):
         return {"ok": True}  # should not be reached
 
-    with _RegistryScope({"hooks.session_heartbeat": _stub}):
+    with _RegistryScope({"hooks.track_touched_files": _stub}):
         d = _run(dispatch_message(msg))
 
     assert "error" in d, f"Expected error, got result: {d.get('result')}"
@@ -612,7 +613,8 @@ def test_keying_unresolvable_key_fail_loud(tmp_path):
     fails (non-git path), dispatch_message returns INVALID_PARAMS (-32602) rather
     than silently picking a default repo or propagating INTERNAL_ERROR.
 
-    Uses hooks.session_heartbeat (common_dir scope) with a real but non-git tmp dir.
+    Uses hooks.track_touched_files (common_dir scope, substitute for the retired
+    hooks.session_heartbeat example) with a real but non-git tmp dir.
     """
     # tmp_path exists but is not inside any git repository — git_common_dir will fail
     non_git_dir = tmp_path / "not-a-git-repo"
@@ -620,7 +622,7 @@ def test_keying_unresolvable_key_fail_loud(tmp_path):
     msg = {
         "jsonrpc": "2.0",
         "id": 25,
-        "method": "hooks.session_heartbeat",
+        "method": "hooks.track_touched_files",
         "params": {},
         _ORIGIN_WORKTREE_FIELD: str(non_git_dir),
     }
@@ -628,7 +630,7 @@ def test_keying_unresolvable_key_fail_loud(tmp_path):
     def _stub(params, ctx=None, repo_root=None):
         return {"ok": True}  # must not be reached
 
-    with _RegistryScope({"hooks.session_heartbeat": _stub}):
+    with _RegistryScope({"hooks.track_touched_files": _stub}):
         d = _run(dispatch_message(msg))
 
     assert "error" in d, (
@@ -682,7 +684,7 @@ def test_resolve_op_repo_key_show_top_returns_request_repo(tmp_path):
 def test_resolve_op_repo_key_common_dir_missing_raises():
     """resolve_op_repo_key raises ValueError for common_dir-scoped ops with None request_repo."""
     try:
-        resolve_op_repo_key("hooks.session_heartbeat", None)
+        resolve_op_repo_key("hooks.track_touched_files", None)
     except ValueError as exc:
         assert "_origin_worktree" in str(exc) or "requires" in str(exc), (
             f"ValueError message must reference _origin_worktree or 'requires'; got {exc!r}"
@@ -1068,7 +1070,7 @@ def test_timeout_for_clamps_ceremony_ops_to_the_budget():
 def test_op_timeout_overrides_public_proxy_contents_and_immutability():
     """OP_TIMEOUT_OVERRIDES (public parity surface) mirrors _OP_TIMEOUT_OVERRIDES and is read-only.
 
-    Review: code-reviewer F4 — the public export shipped with zero direct test
+    The public export shipped with zero direct test
     coverage of its own contents or immutability, unlike OP_KEY_SCOPE's coverage test.
     DEC-2 emptied the table, and the `ceremony.scoped_git_commit` row DEC-2's
     revert had readmitted was itself revoked 2026-08-21 (DR-348, ceremony budget) —
@@ -1147,7 +1149,7 @@ def test_near_miss_timeout_env_warns(caplog):
         f"got: {[r.message for r in caplog.records]}"
     )
 
-    # Review: code-reviewer F1 — a legitimate future COORDINATOR_* var that merely
+    # A legitimate future COORDINATOR_* var that merely
     # mentions "timeout" in passing (not shaped like the real knob) must NOT fire.
     # A bare substring test ("COORDINATOR" in key and "TIMEOUT" in key) would have
     # nagged on this; the narrowed suffix-shaped match must not.

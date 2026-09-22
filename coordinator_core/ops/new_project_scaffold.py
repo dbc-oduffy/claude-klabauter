@@ -134,7 +134,7 @@ def _resolve_doe_root() -> Tuple[Optional[str], int]:
     Mirrors coordinator_core.ops.render_template_tree's `_resolve_doe_root`
     and coordinator_registry.doe_root()'s precedence.
 
-    Review: code-reviewer (2026-07-22, Finding 4) — DOE_ROOT was previously
+    DOE_ROOT was previously
     missing from this hand-rolled resolver, silently dropping the legacy-alias
     rung the shared coordinator_registry.doe_root() honors.
 

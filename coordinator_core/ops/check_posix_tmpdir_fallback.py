@@ -97,7 +97,7 @@ def _is_env_get_call(node: ast.AST) -> ast.Call | None:
     `os.getenv(...)` (or `<x>.getenv(...)` / bare `getenv(...)` alias
     shape), else None.
 
-    Review: code-reviewer Finding 1 (2026-07-28) — `os.getenv(...)` is
+    `os.getenv(...)` is
     functionally identical to `os.environ.get(...)` for this guard's
     purpose and is at least as common an idiom; the original matcher only
     covered the `.environ.get` spelling, leaving a detection blind spot in

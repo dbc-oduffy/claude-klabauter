@@ -672,7 +672,7 @@ def group_corpus(
         ) or _UNKNOWN_GROUP_KEY
         result.group_files.setdefault(ws_key, []).append(f)
 
-        # Review: coordinator:code-reviewer — was `artifact_class == "plan"`
+        # Was `artifact_class == "plan"`
         # only, so an `archived-spec` file (grouped by the same `workstream:`
         # key as a `plan`) never contributed a slug here, leaving two
         # distinct archived specs (or an archived spec + a plan with a
@@ -966,7 +966,7 @@ def _stamp_yaml_document(path: str, deliverable_id: str, repo_root: str) -> bool
     unreachable given the caller's already-threaded exclusion, kept for
     parity/defense).
 
-    Review: staff-eng — Finding 5(a-c) and the sibling insertion-point
+    And the sibling insertion-point
     finding, all closed together:
 
     (a) Reads and writes now route through `locked_write.locked_rmw` rather
@@ -1019,7 +1019,7 @@ def _stamp_yaml_document(path: str, deliverable_id: str, repo_root: str) -> bool
         # have to be fixed at `locked_write.py`'s read primitive, well
         # outside this module's write surface (see this function's own
         # docstring, point (a)).
-        # Review: coordinator:code-reviewer — collapsed the dead
+        # Collapsed the dead
         # CRLF-detection conditional that used to read as if it preserved
         # CRLF while being unable to.
         eol = "\n"
@@ -1502,7 +1502,7 @@ def main(
     total_ambiguous = len(ambiguous_keys) + len(ambiguous_sizing_refs)
     write_failed = 0
 
-    # Review: coordinator:code-reviewer — the deliverable_id leg's ambiguity
+    # The deliverable_id leg's ambiguity
     # gate used to be an early `return 2` here, which also blocked
     # `run_plan_id_leg` below (unreachable code after a `return`) even though
     # the plan_id leg is per-file and has no grouping/ambiguity concept of
@@ -1535,7 +1535,7 @@ def main(
         ):
             gfiles = result.group_files[ws_key]
 
-            # Review: coordinator:code-reviewer — a wholly-out-of-scope group
+            # A wholly-out-of-scope group
             # (every file either immutable or not in --only-kind) used to
             # `continue` here, skipping the per-file loop below entirely —
             # so its files got NO report line at all, not even

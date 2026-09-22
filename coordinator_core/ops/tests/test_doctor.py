@@ -435,7 +435,6 @@ def test_an_http_hook_does_not_swallow_a_broken_sibling_command(doe_root: Path):
     `command` entry must still report `broken` with the broken finding
     present; the http entry must not short-circuit or miscount its sibling.
 
-    Review: coordinator:code-reviewer Finding 4.
     """
     from coordinator_core.ops import doctor
 
@@ -488,7 +487,6 @@ def test_a_typo_type_with_zero_real_commands_is_broken_not_ok(doe_root: Path):
     either. Must still report `broken`, never the bare `ok` the `total == 0`
     early-return would otherwise take.
 
-    Review: coordinator:code-reviewer coverage-gap finding (test_doctor.py).
     """
     from coordinator_core.ops import doctor
 

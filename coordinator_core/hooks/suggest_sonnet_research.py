@@ -111,7 +111,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     # Subagent suppression — agent_id resolves (bare-hex unnamed agent, or named
     # teammate `a<name>-<16hex>` + session_id) via the shared, fail-closed
     # `resolve_subagent_identity`; suppress advisory at subagent altitude.
-    # Review: code-reviewer — A-F4: restore format guard; `present()` alone would
+    # Restore format guard; `present()` alone would
     # suppress on any non-empty agent_id string, including malformed values. That
     # fail-closed property now comes from `resolve_subagent_identity`'s branch
     # (c), which returns "" for garbage, short hex, uppercase hex, and malformed

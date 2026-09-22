@@ -77,7 +77,11 @@ from typing import Dict, List, Optional, Set
 
 from coordinator_core._settings_home import settings_home
 from coordinator_core.dag import _parse_frontmatter, _read_meta
-from coordinator_core.engine_root import coordinator_engine_root_env
+from coordinator_core.engine_root import (
+    coordinator_engine_root_env,
+    engine_source_root as _engine_source_root,
+    is_published_engine_mirror as _is_published_engine_mirror,
+)
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.emit.sections.initiatives import _simple_yaml_load
 from coordinator_core.ops.fleet._common import main_worktree_root
@@ -92,7 +96,7 @@ logger = logging.getLogger(__name__)
 
 _MACHINE_LOCAL_IMPL_ENV = "MACHINE_LOCAL_IMPL"
 _CLAUDE_HOME_ENV = "CLAUDE_HOME"
-# Review: code-reviewer — subprocess timeout bound so a hung registry script
+# Subprocess timeout bound so a hung registry script
 # does not block the thread indefinitely (at most once per process; still bounded).
 _MACHINE_LOCAL_TIMEOUT = 5  # seconds
 
@@ -137,6 +141,42 @@ def _machine_local_get(key: str) -> Optional[str]:
     return result.stdout.strip()
 
 
+def _refuse_published_mirror(root: str) -> Optional[str]:
+    """Refuse a resolved root that is the published engine mirror.
+
+    This op does NOT route through ``coordinator_core.state_root``, so it does
+    not inherit that module's published-mirror guard — it resolves its own root
+    and returns it directly as a write target (``_central_initiatives_dir``).
+    Under the publish identifier transform the registry key the machine-local
+    rung reads is rewritten to name the mirror, so the published engine
+    resolves "the central repo" to ITSELF and writes land in a gitignored
+    build artifact: exit 0, plausible printed path, content readable by
+    nobody (see ``queue_append._refuse_published_mirror``, the sibling guard
+    this mirrors, for the concrete two-entries-lost history).
+
+    Returns None rather than raising: unlike ``queue_append`` (which has a
+    dedicated ``_ClaudeKlabauterUnresolvable`` degrade path), this op's existing
+    contract for an unresolvable central root is to return None and let
+    ``_central_initiatives_dir`` fall through to its worktree-local
+    ``state/initiatives/`` fallback (with its own once-per-process WARN) —
+    a mirror root is treated the same as an unresolvable one, not as a
+    distinct error class.
+
+    Spec backlink: state/bug-backlog/2026-08-20-central-scope-queue-entries-land-in-the-6a0c80dedc44.yaml
+    Spec backlink: state/bug-backlog/2026-08-28-deliverable-rollup-writes-initiatives-into-the-published-mirror.yaml
+    """
+    if not _is_published_engine_mirror(root):
+        return root
+    logger.warning(
+        "deliverable.rollup: claude-klabauter central-state root resolved to the "
+        "PUBLISHED engine mirror (%r), not a live working tree — refusing to "
+        "resolve initiatives there (it is gitignored and not visible to "
+        "callers). Falling back to worktree-local state/initiatives/.",
+        root,
+    )
+    return None
+
+
 def _claude_klabauter_root() -> Optional[str]:
     """Resolve the claude-klabauter repo root.
 
@@ -144,8 +184,17 @@ def _claude_klabauter_root() -> Optional[str]:
         1. ``COORDINATOR_ENGINE_ROOT`` env var (via the accessor) — trusted
            as-is, but ONLY when this process is the one the caller ran in
            (see below).
+        1.5. ``engine_source_root()`` (the transform-proof ``engine.source_root``
+           registry key) — reached only on the served route, where rung 1 is
+           skipped. Already mirror-safe by construction (returns None rather
+           than a mirror path — see its own docstring).
         2. ``machine-local get repos.claude_klabauter``.
         3. Returns None when unresolvable; callers degrade gracefully (WARN+skip).
+
+    Rungs 1 and 2 are each wrapped in ``_refuse_published_mirror`` — mirroring
+    ``queue_append._claude_klabauter_root``'s five-rung chain — so a root that resolves
+    to the published engine mirror is treated as unresolvable rather than
+    returned as a write target (see that function's docstring for why).
 
     The engine-root env var is a property of a CALLING process. Under the warm
     engine this op executes in a long-lived server process whose environment
@@ -155,20 +204,25 @@ def _claude_klabauter_root() -> Optional[str]:
     nowhere the caller can see (see ``queue_append._output_root_override``'s
     docstring for the same hazard on the sibling op). ``execution_route() ==
     IN_PROCESS`` is true for every non-server process, so the env var stays
-    honoured everywhere except the served route, which falls through to the
-    machine-local registry lookup instead (correct in both routes, since it
-    resolves the true repo root rather than a caller-scoped override).
+    honoured everywhere except the served route, which falls through to rung
+    1.5 and then the machine-local registry lookup instead (correct in both
+    routes, since it resolves the true repo root rather than a caller-scoped
+    override).
 
     Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC13
     """
     override = (coordinator_engine_root_env(__name__) or "").strip()
     if override and op_latency.execution_route() == op_latency.IN_PROCESS:
-        # Review: code-reviewer — expand ~ and shell vars so users setting
+        # Expand ~ and shell vars so users setting
         # COORDINATOR_ENGINE_ROOT=~/X/... get the correct absolute path
         # instead of a literal tilde that won't resolve.
-        return os.path.expanduser(os.path.expandvars(override))
+        expanded = os.path.expanduser(os.path.expandvars(override))
+        return _refuse_published_mirror(expanded)
+    source_root = _engine_source_root()
+    if source_root:
+        return source_root
     val = _machine_local_get("repos.claude_klabauter")
-    return val if val else None
+    return _refuse_published_mirror(val) if val else None
 
 
 # ---------------------------------------------------------------------------
@@ -520,7 +574,7 @@ def _resolve_initiative(
     ``initiatives_dir / (initiative_id + ".yaml")`` — the initiatives_dir is a
     controlled path derived from the worktree root, not from any wire token.
     """
-    # Review: code-reviewer — guard against path-traversal in frontmatter-sourced initiative_id.
+    # Guard against path-traversal in frontmatter-sourced initiative_id.
     # A value like "../../evil" would produce a path outside state/initiatives/ even with
     # is_file() as defence-in-depth; reject any id containing a path separator or leading '.'.
     if not initiative_id or "/" in initiative_id or "\\" in initiative_id or initiative_id.startswith("."):
@@ -660,7 +714,7 @@ def _handler(
         # root — the WARNING already logged inside _scan_artifacts_by_deliverable_id
         # is today's only signal of that; scan_incomplete is on the wire as of DoE's
         # be8b5d88 reader-widen, so it is passed through here rather than dropped.
-        # Review: code-reviewer — use _empty_payload to avoid dual maintenance of the safe-null shape.
+        # Use _empty_payload to avoid dual maintenance of the safe-null shape.
         return _empty_payload(deliverable_id, scan_incomplete=scan_incomplete)
 
     # ------------------------------------------------------------------
@@ -671,7 +725,7 @@ def _handler(
     # ------------------------------------------------------------------
     initiatives_dir = _central_initiatives_dir(worktree_root)
 
-    seen_ids: Set[str] = set()  # Review: code-reviewer — parameterize consistent with file-wide typing convention
+    seen_ids: Set[str] = set()  # Parameterize consistent with file-wide typing convention
     advances_initiatives: List[Dict[str, Optional[str]]] = []
 
     for fm in matching_artifacts:

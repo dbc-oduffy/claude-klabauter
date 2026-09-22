@@ -2,7 +2,6 @@
 `machine_local_dump_repos` (cli_shared.py) and `_machine_local_dump_repos`
 (coordinator-doc-new.py).
 
-Review: state/subagent-share/a3d742ff-223c-4133-aedd-ed60ce61b558/amp-review-s6.md
 Finding 2 -- these batch counterparts to the old enumerate-then-`get` path
 had zero test coverage, and the underlying `dump --prefix repos --format
 json` implementation (`_machine_local.py::cmd_dump`) does NOT live in this

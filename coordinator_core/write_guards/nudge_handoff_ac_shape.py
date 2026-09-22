@@ -328,7 +328,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             parse_consumed_handoff_acceptance_criteria,
         )
 
-        # Review: coordinatorstaff-eng-0839d50e Finding 0 — leg A
+        # Leg A
         # (`workstream_complete/__init__.py`'s consumed-handoff evaluator)
         # branches on `kind` BEFORE it ever calls
         # `parse_consumed_handoff_acceptance_criteria`: for
@@ -348,7 +348,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if parsed.get("total", 0) != 0:
             return None
 
-        # Review: coordinatorstaff-eng-0839d50e Finding 3 — fire only when
+        # Fire only when
         # this edit actually changed the AC section, not on every unrelated
         # write to a handoff whose AC section was already prose-shaped.
         # Compare the pre-image's own AC state (same parser) to the

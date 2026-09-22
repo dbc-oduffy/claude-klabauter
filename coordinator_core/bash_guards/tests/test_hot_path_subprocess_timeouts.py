@@ -10,7 +10,7 @@ walks the real syntax tree of every module the guard chain actually
 imports, so reformatting or reordering keyword arguments cannot hide a
 missing timeout from this test. It also tracks module-level
 ``from subprocess import run as r``-shaped bindings (including aliases,
-Review: code-reviewer F3, P2) and flags bare-name calls through them, so
+code-reviewer F3, P2) and flags bare-name calls through them, so
 aliasing the import cannot hide a missing timeout either -- see
 ``_subprocess_name_bindings``. Function-local (not module-level) aliasing
 imports are the one remaining gap; see that helper's own docstring.
@@ -290,7 +290,7 @@ def test_pin_is_red_against_a_deliberately_timeout_less_call(tmp_path):
 
 
 def test_aliased_subprocess_import_call_without_timeout_is_flagged(tmp_path, monkeypatch):
-    """Review: code-reviewer F3, P2 -- the visitor must not be blind to
+    """The visitor must not be blind to
     ``from subprocess import run as r; r(...)`` (an ``ast.Name`` call, not
     the ``ast.Attribute`` shape the original detector matched). Writes a
     real module under a throwaway `coordinator_core` package layout so
@@ -323,7 +323,6 @@ def test_reachable_modules_includes_every_named_fix_site():
         "coordinator_core.subagent_sandbox.engine",
         "coordinator_core.write_guards.block_subagent_plan_body_write",
         "coordinator_core.bash_guards._write_bump_marker",
-        "coordinator_core.bash_guards._branch_set",
         "coordinator_core.bash_guards.dispatch_checks",
         "coordinator_core.bash_guards.commit_tripwires",
     ):

@@ -480,7 +480,6 @@ class EndToEndSizingCascadeClosesTest(unittest.TestCase):
         import asyncio
 
         import coordinator_core.ops.deliverable_cascade as cascade_mod
-        import coordinator_core.ipc as ipc_mod
 
         with _tmp_git_repo() as (repo, _out_path):
             sizing_out = repo / "state" / "sizings" / "2026-08-10-e2e.yaml"
@@ -519,8 +518,12 @@ class EndToEndSizingCascadeClosesTest(unittest.TestCase):
             self.assertEqual(plan_result.returncode, 0, plan_result.stderr)
 
             plan_relpath = "docs/plans/2026-08-10-e2e-plan.md"
-            handler = ipc_mod.get_op_handler("deliverable.cascade_terminal")
-            self.assertIsNotNone(handler)
+            # `deliverable.cascade_terminal` is a killed op (K-104, 2026-08-27) --
+            # `ipc.get_op_handler` refuses it outright. `_run_cascade`
+            # (plan_status_transition.py) never dials the JSON-RPC registry for
+            # this: it imports `deliverable_cascade._handler` and calls it
+            # in-process, the same surviving path exercised here.
+            handler = cascade_mod._handler
 
             result = asyncio.run(
                 handler(

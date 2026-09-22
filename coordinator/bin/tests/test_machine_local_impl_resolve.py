@@ -1,7 +1,7 @@
 """test_machine_local_impl_resolve.py — regression net for the settings-home-first
 resolution ladder in `coordinator/bin/lib/machine_local_impl_resolve.py`.
 
-Review: code-reviewer (F1, P1) — the diff that introduced this module had zero
+The diff that introduced this module had zero
 test coverage for its own precedence fix (settings-home tried before the
 retired `~/.claude/bin` compat mirror). Every resolver below is exercised
 across all five states relevant to the ladder: env-override (where

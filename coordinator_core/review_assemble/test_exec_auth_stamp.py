@@ -709,6 +709,72 @@ def test_malformed_block_header_fails_clean_not_as_a_traceback(tmp_path: Path) -
     assert "execution_authorized_note" in result["error"]
 
 
+_MULTILINE_QUOTED_NOTE_PLAN = """---
+title: "test plan"
+status: draft
+execution_authorized_note: 'Scope of this authorization: C1-C3 only. C4 stays gated
+  on the DR-287 ruling...'
+---
+
+# Test Plan
+
+Some body content.
+"""
+
+
+def test_multiline_quoted_note_refuses_rather_than_truncates(tmp_path: Path) -> None:
+    """state/bug-backlog/2026-08-20-review-exec-auth-stamp-truncates-a-multi-
+    898a8003e121.yaml: a multi-line SINGLE-QUOTED `execution_authorized_note`
+    (YAML's own line-folding, no `|`/`>` header) used to be silently
+    corrupted -- `read_fm_block_scalar` only recognises the block-scalar
+    shape, so this note fell through to a single-line `replace_fm_field`
+    write, truncating the note at its first physical line and stranding
+    "on the DR-287 ruling..." as an orphaned line the next parse read as a
+    bogus top-level key. Refusing is the fix: the write must not land at
+    all, and the file must be byte-identical to before the attempt."""
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-08-20-multiline-quoted-note.md"
+    plan_path.write_text(_MULTILINE_QUOTED_NOTE_PLAN, encoding="utf-8")
+    before = plan_path.read_text(encoding="utf-8")
+
+    exit_code, result = stamp_execution_authorization(
+        str(plan_path), "PM", "single line replacement", at="2026-08-20",
+        repo_root=tmp_path,
+    )
+
+    assert exit_code == EXIT_BUSINESS_FAIL
+    assert "multi-line" in result["error"]
+    assert "execution_authorized_note" in result["error"]
+    # Refused means untouched -- not half-written with the scope-limiting
+    # continuation line stranded as an orphan key.
+    assert plan_path.read_text(encoding="utf-8") == before
+    assert "on the DR-287 ruling" not in before.split("execution_authorized_note")[0]
+
+
+def test_multiline_quoted_note_refuses_on_append_note_too(tmp_path: Path) -> None:
+    """The refusal applies to `--append-note` (and the `authorize-invocation`
+    mint that delegates to it) as much as an outright `--note` replace --
+    both routes end at the same single-line write over a value that spans
+    more than one physical line."""
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-08-20-multiline-quoted-note-append.md"
+    plan_path.write_text(_MULTILINE_QUOTED_NOTE_PLAN, encoding="utf-8")
+    before = plan_path.read_text(encoding="utf-8")
+
+    exit_code, result = stamp_invocation_authorization(
+        str(plan_path), typed_command="/execute-plan", utterance="go",
+        at="2026-08-20", repo_root=tmp_path,
+    )
+
+    assert exit_code == EXIT_BUSINESS_FAIL
+    assert "multi-line" in result["error"]
+    assert plan_path.read_text(encoding="utf-8") == before
+
+
 def test_cli_stamp_verb_fires_stamp_approved_as_a_separate_commit(tmp_path: Path) -> None:
     """C3 (docs/plans/2026-08-20-the-rungs-get-writers.md): the `stamp` CLI
     verb fires `stamp-approved` after its own exec-auth write returns 0,

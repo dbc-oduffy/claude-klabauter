@@ -760,7 +760,7 @@ def test_apply_size_cut_large_file_floor_never_selects_live_verdict():
 
 
 def test_large_file_floor_above_ordinary_floor_still_gates_the_upper_cohort(tmp_path):
-    """Review: coordinator:code-reviewer P2 — when large_file_floor_days
+    """When large_file_floor_days
     exceeds floor_days, the day >= floor_int branch must still exclude a
     large-file entry that hasn't reached its own (higher) floor. Pre-fix,
     reaching floor_int admitted the whole cohort unconditionally, deleting
@@ -1116,3 +1116,25 @@ def test_archives_seen_flat_list_sorted_by_bytes_desc(tmp_path):
     assert top["bytes"] == 900
     assert top["session_id"] == sid_b
     assert top["verdict"] == "too-recent"
+
+
+def test_watchdog_ceiling_bails_remaining_directories_never_touches_them(tmp_path):
+    """coordinator_core.ops.scratchpad_sweep::sweep_scratchpads --
+    watchdog_ceiling_secs=0 must trip before the first session directory is
+    evaluated, so every directory in the fixture reports "watchdog-bail" and
+    is never scanned/reclaimed -- regression for
+    state/bug-backlog/2026-08-10-scratchpad-sweep-has-no-watchdog-ceiling.yaml
+    ("Its walk is uninterruptible once started")."""
+    tmp_path = _build_fixture(tmp_path)
+
+    result = _sweep(tmp_path, watchdog_ceiling_secs=0.0)
+
+    assert result["watchdog_bailed"] is True
+    bail_sids = {
+        e["session_id"] for e in result["entries"] if e["verdict"] == "watchdog-bail"
+    }
+    # Every non-self directory the fixture built is reported bailed --
+    # nothing was scanned, sized, or reclaimed once the ceiling tripped.
+    assert bail_sids == {_SID_LIVE, _SID_DEAD_RECENT, _SID_DEAD_OLD, _SID_NO_SCRATCHPAD}
+    assert result["bytes_reclaimed"] == 0
+    assert result["bytes_reclaimable"] == 0

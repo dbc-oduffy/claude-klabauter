@@ -12,6 +12,7 @@ import io
 import json
 import pathlib
 import sys
+import time
 
 import pytest
 
@@ -568,6 +569,231 @@ def test_main_stamps_the_watch_presence_record_every_tick(tmp_path):
     assert record["tick_source"] == "monitor"
 
 
+# --- Item 1 (2026-09-19 memo): displaced-watch teardown. A successor takes
+# this repo's record at entry (E1); the displaced watch's next `stamp()`
+# declines. Before this fix the decline was silent and the loop polled on
+# forever -- E2, the reproduced defect (`A/A/monitor/4 prior=B`, `B arm+90s
+# REFUSED`). Teardown fires on a HOLDER mismatch only; a same-holder writer
+# or `tick_source` mismatch is the same crown's other instrument and must
+# stay a quiet decline (constraint named explicitly in the memo).
+
+
+def _injecting_sleep(repo_root, record):
+    """A `sleep_fn` that, on its FIRST call only, writes a rival record --
+    simulating a successor (or the same crown's other instrument) taking the
+    record BETWEEN this watch's iterations, since `sleep_fn` runs after one
+    tick's `poll_once`+`stamp` and before the next's. Firing only once keeps
+    a `max_iterations` run from re-injecting on every iteration and mirrors
+    the memo's E1/E2 shape: the successor writes ONE takeover stamp at entry.
+
+    Written via `write_atomic` directly, UNCONDITIONALLY -- never through
+    THIS module's own `watch_heartbeat.stamp()`, which is itself gated by
+    `is_fresh_and_foreign` and would decline to overwrite an already-fresh
+    record (this watch's own tick 1 write). The memo's own entry writer
+    (`coordinator/skills/group-em/watch_heartbeat.py::_stamp_watch` on the
+    DoE plane, not in this tree) is exactly this: an unconditional takeover
+    stamp at entry -- entry always wins, which is WHY the old watch's next
+    `stamp()` is the one that discovers it is now foreign, not the other way
+    round (memo: `E1 takeover: entry True B/B/entry/0 prior=None`)."""
+    from coordinator_core.group_em import watch_heartbeat
+
+    fired = []
+
+    def _sleep(_seconds):
+        if fired:
+            return
+        fired.append(True)
+        watch_heartbeat.write_atomic(
+            watch_heartbeat.watch_path(str(repo_root)), record
+        )
+
+    return _sleep
+
+
+def _rival_record(
+    holder_session_id, writer_session_id, tick_source, holder_name=None,
+    declinations=None, now_epoch=None,
+):
+    """A well-formed heartbeat record, the shape `write_atomic` writes and
+    `stamp` would produce -- built by hand so `_injecting_sleep` can write it
+    unconditionally (see that function's docstring for why `stamp()` itself
+    cannot be used here)."""
+    from coordinator_core.group_em import watch_heartbeat
+
+    now_epoch = time.time() if now_epoch is None else now_epoch
+    return {
+        "holder_session_id": holder_session_id,
+        "holder_name": holder_name,
+        "last_tick_at": watch_heartbeat.iso_instant(now_epoch),
+        "tick_source": tick_source,
+        "next_expected_by": watch_heartbeat.next_expected_by(now_epoch, 1380.0),
+        "subscribed_peers": 0,
+        "declinations": list(declinations or []),
+        "writer_session_id": writer_session_id,
+        "pid": None,
+        "pid_start_epoch": None,
+    }
+
+
+def test_main_tears_down_and_stops_when_a_successor_takes_the_record(tmp_path):
+    from coordinator_core.group_em import watch_heartbeat
+
+    # A successor enters and stamps its own takeover BETWEEN this watch's
+    # first and second ticks -- a long interval so its record is still FRESH
+    # (and therefore foreign) when the second tick's own `stamp()` runs.
+    sleep_fn = _injecting_sleep(
+        tmp_path,
+        _rival_record(
+            holder_session_id="successor-em",
+            writer_session_id="successor-w",
+            tick_source="entry",
+            holder_name="claude-klabauter-successor",
+        ),
+    )
+
+    with mock.patch.object(
+        watch, "_measure_snapshot_ms", return_value=(1.0, [])
+    ), mock.patch.object(
+        watch, "poll_once", return_value=({}, [], {}, 0)
+    ) as poll_mock:
+        watch.main(
+            str(tmp_path),
+            caller_session_id="displaced-watcher",
+            group_em_session_id="displaced-em",
+            stream=io.StringIO(),
+            sleep_fn=sleep_fn,
+            max_iterations=5,
+        )
+
+    # Tick 1 armed cleanly (nothing held the record yet); the successor's
+    # write lands in the sleep between ticks 1 and 2; tick 2's own `stamp()`
+    # is declined on the holder mismatch and the loop exits THERE -- never
+    # reaching a third tick, which is the E2 orphan-retake shape.
+    assert poll_mock.call_count == 2
+
+    # The successor's record survives, untouched by the displaced watch.
+    with open(watch_heartbeat.watch_path(str(tmp_path)), encoding="utf-8") as fh:
+        record = json.load(fh)
+    assert record["holder_session_id"] == "successor-em"
+
+
+def test_main_teardown_line_names_the_successor(tmp_path):
+    from coordinator_core.group_em import watch_heartbeat
+
+    sleep_fn = _injecting_sleep(
+        tmp_path,
+        _rival_record(
+            holder_session_id="successor-em",
+            writer_session_id="successor-w",
+            tick_source="entry",
+            holder_name="claude-klabauter-successor",
+        ),
+    )
+
+    stream = io.StringIO()
+    with mock.patch.object(
+        watch, "_measure_snapshot_ms", return_value=(1.0, [])
+    ), mock.patch.object(
+        watch, "poll_once", return_value=({}, [], {}, 0)
+    ):
+        watch.main(
+            str(tmp_path),
+            caller_session_id="displaced-watcher",
+            group_em_session_id="displaced-em",
+            stream=stream,
+            sleep_fn=sleep_fn,
+            max_iterations=5,
+        )
+
+    lines = stream.getvalue().splitlines()
+    displaced = [line for line in lines if line.startswith("DISPLACED")]
+    assert len(displaced) == 1
+    assert "claude-klabauter-successor" in displaced[0]
+    assert "successor-em" in displaced[0]
+
+
+def test_main_does_not_tear_down_on_a_same_holder_writer_only_decline(tmp_path):
+    """The measured cron-vs-monitor case (`watch_heartbeat`'s own C1 note):
+    same holder, different writer/tick_source -- the same crown's other
+    instrument, not a displacement. The loop must keep running."""
+    from coordinator_core.group_em import watch_heartbeat
+
+    sleep_fn = _injecting_sleep(
+        tmp_path,
+        _rival_record(
+            holder_session_id="group-em-1",
+            writer_session_id="cron-writer",
+            tick_source="cron",
+            declinations=["cron-row"],
+        ),
+    )
+
+    stream = io.StringIO()
+    with mock.patch.object(
+        watch, "_measure_snapshot_ms", return_value=(1.0, [])
+    ), mock.patch.object(
+        watch, "poll_once", return_value=({}, [], {}, 0)
+    ) as poll_mock:
+        watch.main(
+            str(tmp_path),
+            caller_session_id="monitor-writer",
+            group_em_session_id="group-em-1",
+            stream=stream,
+            sleep_fn=sleep_fn,
+            max_iterations=3,
+        )
+
+    # Never tore down -- ran every iteration the caller asked for, including
+    # the ticks after the cron writer's mid-loop stamp declined this watch's
+    # own write.
+    assert poll_mock.call_count == 3
+    assert "DISPLACED" not in stream.getvalue()
+
+    # The cron writer's record survives declined, exactly as before this fix
+    # -- this watch's own holder ("group-em-1") never got to overwrite it,
+    # but it also never tore itself down over it.
+    with open(watch_heartbeat.watch_path(str(tmp_path)), encoding="utf-8") as fh:
+        record = json.load(fh)
+    assert record["writer_session_id"] == "cron-writer"
+
+
+def test_displacement_record_is_none_when_nothing_declined(tmp_path):
+    from coordinator_core.group_em import watch_heartbeat
+
+    assert (
+        watch_heartbeat.displacement_record(str(tmp_path), "me", "my-writer")
+        is None
+    )
+
+
+def test_displacement_record_is_none_on_a_same_holder_decline(tmp_path):
+    from coordinator_core.group_em import watch_heartbeat
+
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="me", declinations=[],
+        interval_seconds=1380.0, writer_session_id="writer-a",
+        tick_source="cron",
+    )
+    assert (
+        watch_heartbeat.displacement_record(str(tmp_path), "me", "writer-b")
+        is None
+    )
+
+
+def test_displacement_record_names_the_new_holder_on_a_foreign_decline(tmp_path):
+    from coordinator_core.group_em import watch_heartbeat
+
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="them", declinations=[],
+        interval_seconds=1380.0, writer_session_id="their-writer",
+        holder_name="the-successor",
+    )
+    record = watch_heartbeat.displacement_record(str(tmp_path), "me", "my-writer")
+    assert record is not None
+    assert record["holder_session_id"] == "them"
+    assert record["holder_name"] == "the-successor"
+
+
 def test_parked_line_reuses_the_verdicts_epoch_and_reads_no_second_time():
     """The transcript was already reduced once by `classify_peer` this tick;
     re-deriving the same number here was a duplicate seek-from-EOF read
@@ -1099,7 +1325,7 @@ def test_a_departure_across_two_wakes_is_reported_whatever_the_cadence():
 
 
 def test_gone_emits_even_when_persistence_raises(tmp_path):
-    """Review: coordinatorcode-reviewer.a933f243c20654e60, Finding 1 -- pins
+    """Pins
     the emit-then-persist ordering as deliberate, not incidental.
 
     `poll_once` emits its GONE line INSIDE the call, before `save_prev_parked`
@@ -1399,6 +1625,46 @@ def test_cli_status_answers_alive_for_a_fresh_record_and_exits_zero(tmp_path, ca
     assert capsys.readouterr().out.startswith("ALIVE")
 
 
+def test_cli_status_exits_two_when_the_process_cannot_be_confirmed_running(tmp_path, capsys):
+    """Item 2 (2026-09-19 memo): staleness arithmetic alone must not read
+    ALIVE. A fresh, well-formed record whose writer process is CONFIRMED
+    gone (not merely unknown) reads UNKNOWN, never ALIVE -- exit 2, not 0."""
+    from coordinator_core.group_em import watch_heartbeat
+
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="group-em-1", declinations=[],
+        interval_seconds=30.0, holder_name="claude-klabauter-ad", writer_session_id="w1",
+        subscribed_peers=3,
+    )
+    with mock.patch.object(
+        watch_heartbeat, "process_confirmed_alive", return_value=False
+    ):
+        rc = watch._cli(["--repo-root", str(tmp_path), "--status"])
+    assert rc == 2
+    out = capsys.readouterr().out
+    assert out.startswith("ALIVE")  # the record's own staleness read is unchanged...
+    assert "cannot be confirmed running" in out  # ...but the exit code is not 0
+
+
+def test_cli_status_exits_two_when_the_process_cannot_be_confirmed_either_way(tmp_path, capsys):
+    """A fresh record recorded before this fix shipped (or one whose pid
+    could not be captured) carries no usable pid witness --
+    `process_confirmed_alive` answers `None`, and `None` must not be
+    promoted to ALIVE."""
+    from coordinator_core.group_em import watch_heartbeat
+
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="group-em-1", declinations=[],
+        interval_seconds=30.0, holder_name="claude-klabauter-ad", writer_session_id="w1",
+        subscribed_peers=3,
+    )
+    with mock.patch.object(
+        watch_heartbeat, "process_confirmed_alive", return_value=None
+    ):
+        rc = watch._cli(["--repo-root", str(tmp_path), "--status"])
+    assert rc == 2
+
+
 def test_cli_status_exits_two_on_a_repo_no_watch_ever_covered(tmp_path, capsys):
     # UNKNOWN gets its own code: a caller that reads 0 as "fine" must not read
     # "nobody ever looked" as fine, which is the collapse this flag exists for.
@@ -1668,7 +1934,7 @@ def test_inbox_counts_reads_status_off_the_frontmatter_head(tmp_path):
     assert isinstance(taken_at, float)
 
 
-# Review: coordinatorcode-reviewer (finding #2) -- a genuinely undecodable memo must
+# A genuinely undecodable memo must
 # degrade to None per the function's own contract, not raise UnicodeDecodeError
 # uncaught through _inbox_counts's per-entry loop. Real invalid UTF-8 bytes, not a
 # monkeypatched exception, so this pins the behaviour rather than a mock.

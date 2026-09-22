@@ -48,7 +48,7 @@ def test_lowercased_variant_recognized() -> None:
 
 
 def test_mixed_present_and_absent_preserves_order_and_skips_non_matches() -> None:
-    # Review: code-reviewer (Finding 4) — the existing "multiple values" test only covered an
+    # The existing "multiple values" test only covered an
     # all-matching list; this proves "skip non-matching, keep matching, preserve match order"
     # rather than a hypothetical all-or-nothing bug where one non-match short-circuits the list.
     assert parse_closure_trailers(["RECS-42", "this closes the loop", "OPS-7"]) == [

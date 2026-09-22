@@ -49,10 +49,8 @@ Negative-spec (hard-won):
           invariant (OpClass in coordinator_core/authz/classification.py; DR-208), and any
           disk write from an advisory hook handler is a violation.
 
-      BOOKKEEPING ops (4, pcore-08 + receiver-state-sensor) — MAY write under
+      BOOKKEEPING ops (3, pcore-08 + receiver-state-sensor) — MAY write under
       .git/coordinator-sessions/ only:
-        - session_heartbeat:       writes last_activity field in
-                                   .git/coordinator-sessions/<sid>/meta.json
         - agent_completion_log:    appends to .git/coordinator-sessions/logs/agent-audit.jsonl
         - track_dispatched_agents: writes .git/coordinator-sessions/<sid>/dispatched-agents.txt
                                    and .git/coordinator-sessions/.agents/<aid>/em-session-id.txt
@@ -428,7 +426,7 @@ Negative-spec (hard-won):
       (invoke/__main__.py, test fixtures, ceremony scripts) — no socket, no service loop.
       Backlink: docs/decisions/DR-215-coordinator-core-command-type-execution-model.md
 """
-# Review: code-reviewer (slice-A F1) — added DR-211 to Backlinks so the governing
+# Added DR-211 to Backlinks so the governing
 # authority for the FLEET archival block is visible when scanning the Backlinks section.
 
 from __future__ import annotations
@@ -917,7 +915,7 @@ def _warn_on_near_miss_timeout_env(environ: Optional[Dict[str, str]] = None) -> 
             )
 
 
-# Review: code-reviewer F2 — import-time side effect must never break
+# import-time side effect must never break
 # `import coordinator_core.ipc` for production dispatch, even if a future
 # refactor makes the scan capable of raising.
 try:
@@ -1168,6 +1166,19 @@ def _resolve_dispatch_timeout_secs() -> float:
     return min(requested, DISPATCH_TIMEOUT_SECS)
 
 
+def _dispatch_timeout_unclamped(method: str, msg: Any = None) -> float:
+    """Per-op timeout resolution WITHOUT the ceremony clamp -- the shared body
+    of `_timeout_for` and `mutation_read_deadline_for`, which differ only in
+    whether that clamp is then applied. Kept in one place so a change to the
+    resolution order cannot land in one and miss the other."""
+    lane_budget = publish_lane.budget_for(method, msg)
+    if lane_budget is not None:
+        return lane_budget
+    if method in _OP_TIMEOUT_OVERRIDES:
+        return _OP_TIMEOUT_OVERRIDES[method]
+    return _resolve_dispatch_timeout_secs()
+
+
 def _timeout_for(method: str, msg: Any = None) -> float:
     """Per-op dispatch timeout, with the ceremony budget applied as a hard ceiling.
 
@@ -1212,16 +1223,38 @@ def _timeout_for(method: str, msg: Any = None) -> float:
     revoked 2026-08-21 by the budget). It is kept as a live table so a genuinely
     justified NON-ceremony widening has somewhere to land.
     """
-    lane_budget = publish_lane.budget_for(method, msg)
-    if lane_budget is not None:
-        return lane_budget
-    if method in _OP_TIMEOUT_OVERRIDES:
-        resolved = _OP_TIMEOUT_OVERRIDES[method]
-    else:
-        resolved = _resolve_dispatch_timeout_secs()
+    resolved = _dispatch_timeout_unclamped(method, msg)
     if is_ceremony_method(method):
         return min(resolved, CEREMONY_BUDGET_SECS)
     return resolved
+
+
+def mutation_read_deadline_for(method: str, msg: Any = None) -> float:
+    """How long a client may wait to READ the answer to a mutation it has
+    already put on the wire. `_timeout_for` without the ceremony clamp.
+
+    THE TWO ARE NOT THE SAME KIND OF NUMBER, which is why this has its own
+    name. `CEREMONY_BUDGET_SECS` is a PERFORMANCE bar: an op over it is a
+    defect (DR-344). This is a TRANSPORT deadline: how long before a client
+    concludes it will never hear back. Using the performance bar as the
+    transport deadline means that the moment an op misses its target, the
+    client destroys its own ability to learn whether the mutation happened --
+    a slowness report becomes an integrity unknown, exactly when the op is
+    slow. `warm/client.py::_mutation_deadline_for` is the caller, and its own
+    comment records what that cost in practice.
+
+    NOT A BUDGET WIDENING: `CEREMONY_BUDGET_SECS` and `_timeout_for` are
+    untouched, and every ceremony op is still held to the bar and still
+    reported when it misses. Only the reading of the answer is longer, and a
+    longer read is never a resend, so it cannot double-execute.
+
+    Negative spec: not a general-purpose timeout. "How long may this op take"
+    is `_timeout_for`, clamp included. This is only for a client that has
+    already delivered a mutating request and is deciding how long to keep
+    reading the same response.
+    """
+    return _dispatch_timeout_unclamped(method, msg)
+
 
 
 # ---------------------------------------------------------------------------
@@ -1659,6 +1692,7 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
 
         from coordinator_core.session import core as _session_core
         from coordinator_core.session import scope as _scope
+        from coordinator_core.session import touch_record as _touch_record
 
         # AC8 (docs/plans/2026-08-30-the-c-door-sends-the-callers-session-
         # identity.md) - this resolution MINTS: the id chosen here names the
@@ -1676,7 +1710,7 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
         # this seam already chose deliberately: under-declaration, never a
         # false claim (see the `_SCOPE_TOUCH_PATHS_KEY` contract comment).
         # Cold is untouched - `os.environ` there is the caller's own.
-        # Review: overengineering-reviewer (finding 2) — routed through the
+        # Routed through the
         # one shared accessor (session.core.attributable_session_id) rather
         # than re-deriving the warm/cold branch here.
         sid = _session_core.attributable_session_id(sid_cwd)
@@ -1728,6 +1762,7 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
                 try:
                     _scope.touch(
                         sid, abs_path, path_repo_root, root=path_repo_root,
+                        kind=_touch_record.KIND_WRITE,
                     )
                 except Exception as exc:  # fail-open — one bad path must not abort the rest
                     _log().debug(
@@ -1875,7 +1910,7 @@ def get_op_handler(name: str, msg: Any = None) -> Optional[Callable]:
     dispatched op. See
     cross-repo/inbox/2026-07-25-doe-claude-em-cutover-advance-cannot-resolve-gate-op.md.
 
-    Review: code-reviewer F11 — added to allow fleet-op callers to resolve handlers
+    Added to allow fleet-op callers to resolve handlers
     via the public op key rather than accessing the op module's private handler
     function name directly.
     """
@@ -2094,6 +2129,55 @@ def _lazy_import_and_lookup(method: str, msg: Any = None) -> Optional[Callable]:
 # ---------------------------------------------------------------------------
 # Shared dispatch core — steps 2-7 on a pre-parsed message dict
 # ---------------------------------------------------------------------------
+
+class _EscapedBaseException(Exception):
+    """Carrier for a non-``Exception`` ``BaseException`` raised by an op handler.
+
+    ``asyncio`` treats ``SystemExit`` and ``KeyboardInterrupt`` specially inside a
+    Task: ``Task.__step`` re-raises them into the event loop instead of handing them
+    to the awaiter, so the ``await`` in ``asyncio.wait_for`` sees a bare
+    ``CancelledError`` and the ``except BaseException`` arm at the dispatch site
+    never runs. The exception then leaves the process-level dispatch chokepoint and
+    terminates the engine, which is exactly what that arm exists to prevent.
+    Converting at the handler boundary, before the Task machinery sees it, keeps it
+    an ordinary exception the whole way up.
+    """
+
+    def __init__(self, wrapped: BaseException):
+        super().__init__("%s: %s" % (type(wrapped).__name__, wrapped))
+        self.wrapped = wrapped
+
+
+def _run_handler_absorbing_base(handler, params, repo_root):
+    """Call a sync op handler, re-raising a bare BaseException as a carrier.
+
+    ``asyncio`` is imported in-function, not at module scope: this module is held
+    to a module-count ceiling on the engine's cold-start path
+    (``benchmarks/import-budget-manifest.json``), which is also why the dispatch
+    site imports it lazily. By the time this runs the dispatcher has already
+    imported it, so the statement is a ``sys.modules`` dict lookup.
+    """
+    import asyncio
+
+    try:
+        return handler(params, repo_root=repo_root)
+    except (Exception, asyncio.CancelledError):
+        raise
+    except BaseException as exc:
+        raise _EscapedBaseException(exc) from exc
+
+
+async def _await_handler_absorbing_base(awaitable):
+    """Await an async op handler, re-raising a bare BaseException as a carrier."""
+    import asyncio
+
+    try:
+        return await awaitable
+    except (Exception, asyncio.CancelledError):
+        raise
+    except BaseException as exc:
+        raise _EscapedBaseException(exc) from exc
+
 
 def _handler_exception_error(exc: BaseException) -> dict:
     """Build the JSON-RPC error object for an exception that escaped an op handler.
@@ -2321,7 +2405,7 @@ async def _dispatch_message_impl(msg: dict) -> dict:
     #     an op handler are logged and converted to INTERNAL_ERROR, preventing unexpected
     #     process-level side-effects from propagating to the caller.
     #
-    # Review: code-reviewer — F5: inspect.iscoroutinefunction preferred over
+    # inspect.iscoroutinefunction preferred over
     # asyncio.iscoroutinefunction (deprecated Python 3.12+); no behavior change.
     #
     # Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C3
@@ -2380,7 +2464,9 @@ async def _dispatch_message_impl(msg: dict) -> dict:
             # at the handler's call site (AC-3 Gap-3 — enforced by CI grep gate).
             try:
                 result = await asyncio.wait_for(
-                    handler(params, repo_root=op_repo_key),
+                    _await_handler_absorbing_base(
+                        handler(params, repo_root=op_repo_key)
+                    ),
                     timeout=op_timeout,
                 )
             except asyncio.TimeoutError:
@@ -2400,6 +2486,8 @@ async def _dispatch_message_impl(msg: dict) -> dict:
                     "coordinator_core.ipc: op %r raised %s: %s", method, type(exc).__name__, exc,
                     exc_info=True,
                 )
+                if isinstance(exc, _EscapedBaseException):
+                    exc = exc.wrapped
                 return {
                     "jsonrpc": "2.0",
                     "id": id_,
@@ -2410,7 +2498,9 @@ async def _dispatch_message_impl(msg: dict) -> dict:
             # stalled while the sync work runs; makes the per-invocation timeout effective.
             try:
                 result = await asyncio.wait_for(
-                    asyncio.to_thread(handler, params, repo_root=op_repo_key),
+                    asyncio.to_thread(
+                        _run_handler_absorbing_base, handler, params, op_repo_key
+                    ),
                     timeout=op_timeout,
                 )
             except asyncio.TimeoutError:
@@ -2430,6 +2520,8 @@ async def _dispatch_message_impl(msg: dict) -> dict:
                     "coordinator_core.ipc: op %r raised %s: %s", method, type(exc).__name__, exc,
                     exc_info=True,
                 )
+                if isinstance(exc, _EscapedBaseException):
+                    exc = exc.wrapped
                 return {
                     "jsonrpc": "2.0",
                     "id": id_,
@@ -2543,7 +2635,9 @@ def _timeout_error_envelope(method: str, op_timeout: float, id_: Any) -> dict:
 
 
 
-async def dispatch_message(msg: dict, *, caller: Optional[str] = None) -> dict:
+async def dispatch_message(
+    msg: dict, *, caller: Optional[str] = None, corr_id: Optional[str] = None
+) -> dict:
     """Validate + dispatch ``msg``, recording a durable per-op wall-clock sample.
 
     Thin timing wrapper around ``_dispatch_message_impl`` (which retains this
@@ -2602,6 +2696,16 @@ async def dispatch_message(msg: dict, *, caller: Optional[str] = None) -> dict:
     Spec backlink: state/handoffs/2026-08-08-engine-fails-the-load-norm.md
                    docs/wiki/machine-load-norm.md
 
+    ``corr_id`` (2026-08-25-a-process-time-row-cannot-be-joined-to-its-own):
+    a wrapping call site (dispatch_from_hook, dispatch_ops_from_hook) that
+    mints its own `corr_id` before calling here MAY hand it in, so its own
+    `record_op_process_time` row shares the SAME `corr_id` as the
+    started/complete rows this function records -- the join the process-time
+    row exists to support. Omitted (the default, and every pre-existing
+    call site), this function mints its own via `new_correlation_id()`
+    exactly as before -- purely additive, never a behavior change for an
+    unmigrated caller.
+
     STAMP GATE (checked FIRST, before anything else in this function): a
     refused dispatch never ran, so it gets no `record_op_started`/
     `record_op_latency` row -- those measure real invocations, and a
@@ -2648,8 +2752,7 @@ async def dispatch_message(msg: dict, *, caller: Optional[str] = None) -> dict:
     _nested_token = _NESTED_DISPATCH_CPU_MS.set([])
     outcome = "ok"
 
-    corr_id = None
-    # Review: code-reviewer (Finding 2, P2) — sid is resolved once here, in the
+    # the Game Dev Reviewer is resolved once here, in the
     # entry block, not independently re-resolved in the `finally` block below.
     # If the entry block raises after this point but before `sid` is assigned
     # (or `record_op_started` itself raises), the completion row inherits
@@ -2693,7 +2796,8 @@ async def dispatch_message(msg: dict, *, caller: Optional[str] = None) -> dict:
         )
         from coordinator_core.session.core import resolve_session_id
 
-        corr_id = new_correlation_id()
+        if corr_id is None:
+            corr_id = new_correlation_id()
         sid = resolve_session_id() or None
         record_op_started(
             op=method if isinstance(method, str) else "<unknown>",
@@ -3223,6 +3327,13 @@ def dispatch_from_hook(
     process_start = _time.process_time()
     spawn_start = _spawn_count_or_none()
     _caller = "coordinator_core.ipc.dispatch_from_hook"
+    # Minted here, not inside dispatch_message, so THIS function's own
+    # process-time row below can carry the SAME corr_id as the
+    # started/complete rows dispatch_message records for this call --
+    # 2026-08-25-a-process-time-row-cannot-be-joined-to-its-own.
+    from coordinator_core.telemetry.op_latency import new_correlation_id
+
+    _corr_id = new_correlation_id()
     try:
         # C16 (following up C15's honest PARTIAL): this function IS one of
         # `dispatch_message`'s own call sites, and now declares itself
@@ -3231,7 +3342,9 @@ def dispatch_from_hook(
         # signature (`coordinator_core.ops.tests.test_ipc_dispatch_from_hook`)
         # are in THIS row's `writes:` and have been widened to accept
         # `caller=`.
-        response = asyncio.run(dispatch_message(envelope, caller=_caller))
+        response = asyncio.run(
+            dispatch_message(envelope, caller=_caller, corr_id=_corr_id)
+        )
     finally:
         process_ms = (_time.process_time() - process_start) * 1000.0
         request_repo = resolve_request_repo(envelope) or resolve_caller_cwd(envelope)
@@ -3243,6 +3356,7 @@ def dispatch_from_hook(
             t_start=t_start,
             repo_root=request_repo,
             sid=_telemetry_sid(),
+            corr_id=_corr_id,
             spawns=_spawn_delta(spawn_start, _spawn_count_or_none()),
             caller=_caller,
         )
@@ -3351,11 +3465,20 @@ def dispatch_ops_from_hook(
             process_start = _time.process_time()
             spawn_start = _spawn_count_or_none()
             _caller = "coordinator_core.ipc.dispatch_ops_from_hook"
+            # Same join fix as dispatch_from_hook: mint here and hand it in,
+            # so this op's process-time row shares its corr_id with the
+            # started/complete rows dispatch_message records for it --
+            # 2026-08-25-a-process-time-row-cannot-be-joined-to-its-own.
+            from coordinator_core.telemetry.op_latency import new_correlation_id
+
+            _corr_id = new_correlation_id()
             try:
                 # C16 (following up C15's honest PARTIAL): declares itself
                 # explicitly now that this function's own test doubles
                 # (in this row's `writes:`) accept `caller=`.
-                response = await dispatch_message(envelope, caller=_caller)
+                response = await dispatch_message(
+                    envelope, caller=_caller, corr_id=_corr_id
+                )
             finally:
                 record_op_process_time(
                     op=op_name,
@@ -3364,6 +3487,7 @@ def dispatch_ops_from_hook(
                     source_path="hook_batch",
                     t_start=t_start,
                     sid=_telemetry_sid(),
+                    corr_id=_corr_id,
                     repo_root=(
                         resolve_request_repo(envelope) or resolve_caller_cwd(envelope)
                     ),

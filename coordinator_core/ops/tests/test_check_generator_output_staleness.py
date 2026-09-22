@@ -327,7 +327,6 @@ def test_vendored_parent_offset_freshly_regenerated_reads_fresh(tmp_path, monkey
     """A `generated_from_sha` naming the PARENT of a freshly-regenerated
     artifact's own commit must read FRESH, not drifted (trap a).
 
-    Review: code-reviewer da34f46b flagged the original fixture as vacuous —
     its regen commit never touched `sources`, so the assertion passed
     identically whether `sha` was treated as the correct EXCLUSIVE lower
     bound or an off-by-one-shifted one, because the (correctly) narrower

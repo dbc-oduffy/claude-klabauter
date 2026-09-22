@@ -949,7 +949,7 @@ async def _try_close(
     proof_applies = False
     if _is_complete_delivery_proof(delivery_proof):
         stub_deliverable_id = _read_deliverable_id(_read_meta(str(stub_path)))
-        # Review: staff-eng Finding 3 -- `_is_complete_delivery_proof`
+        # `_is_complete_delivery_proof`
         # strips before testing emptiness, so normalize both sides of this
         # comparison too: `_read_deliverable_id` already returns a stripped
         # value, but `delivery_proof["deliverable_id"]` is compared here
@@ -1005,7 +1005,7 @@ async def _try_close(
                     if guard_res.get("exit_code") == 0
                     else "guard-declined-indeterminate"
                 ),
-                # Review: code-reviewer — `guard_res.get("children", [])` is read
+                # `guard_res.get("children", [])` is read
                 # identically on both the exit_code 0 and exit_code 2 branches;
                 # this is correct today only because `_fail_closed_error_reply`
                 # (handoff_children.py) always sets `children: []` explicitly on
@@ -1458,7 +1458,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "pairs_resolved": 0,
             "no_candidates": True,
             "message": (
-                # Review: code-reviewer Finding 3 — leads with a distinct
+                # Leads with a distinct
                 # opening clause so this quiet-path string is not byte-
                 # identical to the loud message above through "...closes_stubs
                 # list;" (a reader skimming `message` without checking

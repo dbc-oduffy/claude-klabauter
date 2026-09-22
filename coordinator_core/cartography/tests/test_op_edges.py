@@ -374,9 +374,19 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 def test_oracle_post_commit_tail_resolves_named_ops():
     entry = op_edges_for_file(_REPO_ROOT, "coordinator_core/ops/ceremony/post_commit_tail.py")
-    assert "deliverable.cascade_terminal" in entry["lookups"]
     assert "handoff.transition" in entry["lookups"]
-    assert "handoff.close_origin_stub" in entry["lookups"]
+    # "deliverable.cascade_terminal" does NOT belong here: the op is killed
+    # (K-104) and post_commit_tail.py's own `run()` docstring documents the
+    # 2026-08-27 repoint -- `cascade_handler`, when the caller supplies none,
+    # is bound directly to `deliverable_cascade._handler`, bypassing
+    # `get_op_handler` entirely so the dead op's `OpSuspendedError` can never
+    # reach this tail. "handoff.close_origin_stub" does NOT belong here
+    # either: `close_origin_stub_handler` is a caller-injected parameter (see
+    # the module docstring's "Origin-stub-close handler injection" section)
+    # -- this file never resolves it itself, `wsc_tail.py` does. Neither name
+    # is a `get_op_handler` call site this file's own AST contains.
+    assert "deliverable.cascade_terminal" not in entry["lookups"]
+    assert "handoff.close_origin_stub" not in entry["lookups"]
 
 
 # test_oracle_tail_ops_resolves_review_trail_write removed 2026-08-25: tail_ops.py's

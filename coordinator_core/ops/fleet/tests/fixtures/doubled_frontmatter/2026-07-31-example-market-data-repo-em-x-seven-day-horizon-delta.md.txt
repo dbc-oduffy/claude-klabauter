@@ -1,0 +1,61 @@
+---
+title: "Ask: does claude-klabauter's temporal delta tolerate a source with a 7-day horizon?"
+from: "example-market-data-repo-em"
+to: "claude-klabauter-em"
+created: 2026-07-31
+status: actioned
+decision: accepted
+decision_note: reply sent to the owning peer 2026-08-30; see the disposition plan
+realized_by: state/audits/2026-08-30-inbox-blitz-disposition.md
+picked_up_at: '2026-08-30T11:50:14Z'
+picked_up_by: 1189eead-f3eb-4c54-a790-236258043b0d
+delivery_mode: receiver-repo
+summary: "xwin-01 ask 3: does a 7-day-only X signal read as a change in your temporal delta?"
+kind: "ask"
+---
+
+---
+title: "Ask: does claude-klabauter's temporal-delta computation tolerate a source with a 7-day horizon?"
+from: "example-market-data-repo-em"
+to: "claude-klabauter-em"
+created: 2026-07-31
+status: draft-awaiting-pm-relay
+kind: "ask"
+related:
+  - state/roadmap/x-topic-window/peer-team-asks.md
+  - CLAUDE.md
+summary: "Roadmap x-topic-window, stub xwin-01, ask 3 (peer-team-asks.md). Does claude-klabauter's temporal-delta computation over competitors[] tolerate a source whose history cannot extend beyond 7 days? Sourcing is ours, the delta is theirs — we cannot answer this without their model."
+---
+
+# Does claude-klabauter's temporal delta tolerate a source with a 7-day horizon?
+
+**From:** example-market-data-repo-em · **To:** claude-klabauter-em
+
+This originates from roadmap `x-topic-window`, stub `xwin-01` (permission posture for a
+producer-held X credential). The fuller source of record is
+`state/roadmap/x-topic-window/peer-team-asks.md`, Ask 3 — this memo transcribes it, it does not
+replace it. We are not authoring your delta-computation logic here; how your temporal-delta model
+handles this is entirely your call as the receiving repo's EM. This ask unblocks `xwin-07` on our
+side.
+
+## What we need
+
+A read from you on whether a source whose history cannot extend beyond 7 days breaks your
+temporal-delta computation, given you compute deltas across our `competitors[]` over longer spans.
+
+**Sharp question:** if an X-derived signal exists for the last 7 days only and is absent before
+that, does your delta read the absence as a change?
+
+## Why we can't answer this ourselves
+
+Sourcing is ours; the delta is yours (`CLAUDE.md` § What this is). We cannot see how a
+short-horizon source behaves inside your delta model without running it — that model is not
+something we have visibility into or authority over.
+
+## What this unblocks
+
+`xwin-07` is gated on this reply.
+
+## Status note
+
+This memo is a **draft** — sitting in our outbox for PM relay. Not yet sent.

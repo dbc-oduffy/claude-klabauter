@@ -274,7 +274,7 @@ def test_module_missing_sync_mirror_entirely_is_not_detected():
 def test_sibling_reached_via_a_differently_spelled_same_location_still_yields_its_segment(
     tmp_path,
 ):
-    # Review: coordinator:code-reviewer (Finding 1) — `foreign_dir_names_for_row`
+    # `foreign_dir_names_for_row`
     # must `.resolve()` both sides before `relative_to`, since two `dest_dir`s can
     # denote the same on-disk location while being spelled differently (a
     # symlinked component here; a surviving `.`/`..` segment or a Windows

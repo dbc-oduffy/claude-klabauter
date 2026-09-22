@@ -150,7 +150,7 @@ def test_seven_dim_no_fabrication_false_on_absent_citation(tmp_path):
 
 
 def test_seven_dim_no_fabrication_true_for_doc_relative_citation(tmp_path):
-    # Review: code-reviewer — Finding (P2). `verify_doc` must be called with
+    # `verify_doc` must be called with
     # `doc_relative_checker`, not `repo_exists` alone — a citation that only
     # resolves relative to the citing plan's own directory (not repo-root)
     # must not read as fabrication. `sibling.py` exists ONLY under

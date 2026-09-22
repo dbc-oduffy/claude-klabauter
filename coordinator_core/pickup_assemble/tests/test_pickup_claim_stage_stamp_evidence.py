@@ -51,7 +51,7 @@ pytestmark = [
 
 @pytest.fixture(autouse=True)
 def _reset_registry_snapshot_cache():
-    # Review: coordinator:code-reviewer P2 — this file exercises
+    # This file exercises
     # session_live/claim_holder_live, which route through liveness's
     # per-process registry-snapshot memoization
     # (liveness_mod._cached_registry_lookup). Only
@@ -193,7 +193,7 @@ def test_reclaim_basis_stays_dead_holder_for_confirmed_dead_process(
 def test_reclaim_basis_downgrades_confirmed_live_verdict_to_liveness_unknown(
     tmp_path, as_session, holder_reads_live, monkeypatch
 ):
-    """Review: staff-eng F1 — `basis` used to be derived from
+    """`basis` used to be derived from
     `session_verdict`'s basis string alone, discarding the liveness boolean
     (slot 0). A `(True, "stable-pid", None)` verdict — the process-identity
     check CONFIRMED the holder alive — must never be labelled `"dead-holder"`
@@ -222,7 +222,7 @@ def test_reclaim_basis_downgrades_confirmed_live_verdict_to_liveness_unknown(
 def test_reclaim_basis_holder_absent_for_no_evidence_at_all(
     tmp_path, as_session, holder_reads_live
 ):
-    """Review: staff-eng F2 — `session_verdict` returning `None` (no local
+    """`session_verdict` returning `None` (no local
     session dir AND no harness-registry record for the holder anywhere) used
     to map to `"dead-holder"`, asserting a process confirmation that never
     ran on the dominant takeover path. Real wiring here (no `session_verdict`

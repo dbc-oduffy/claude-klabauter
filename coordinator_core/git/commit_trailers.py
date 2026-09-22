@@ -150,7 +150,7 @@ def _resolve_session_id(git_dir: str) -> str:
     Session-Id is recoverable and honest; a confidently wrong one is neither,
     and is what made the 2026-08-29 window unusable as an attribution key.
     Cold is untouched: `os.environ` there IS the caller's own."""
-    # Review: overengineering-reviewer (finding 2) — routed through the one
+    # Routed through the one
     # shared accessor (session.core.attributable_session_id) rather than
     # re-deriving the warm/cold branch here.
     return _session_core.attributable_session_id()
@@ -249,7 +249,6 @@ def _normalize_scope_path(raw_path: str) -> str:
     see that finding (review-integrator P2, slice B,
     coordinatorcode-reviewer-f5f569aa.md) for the full asymmetry. Never
     raises; a blank/whitespace-only entry normalizes to ``""``."""
-    # Review: coordinatorcode-reviewer af3dcdba64a143dbb (P3, override APPLY) --
     # an unstripped leading "/" left `["", "coordinator_core", "ops"]` as the
     # entry's segments, which can never prefix-match an always-relative
     # committed path; this tier then abstained and a lower, session-keyed

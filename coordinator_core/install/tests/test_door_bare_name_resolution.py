@@ -324,7 +324,7 @@ def test_posix_rules_skip_a_non_executable_candidate(tmp_path: Path) -> None:
 
 
 def test_the_platform_axis_is_one_named_model_not_a_set_of_flags() -> None:
-    """Review: overengineering-reviewer (Kira, pass 2, finding N2). The seam is
+    """overengineering-reviewer (Kira, pass 2, finding N2). The seam is
     ONE bit because that is the whole live requirement -- the impure caller
     derives `rules` from `sys.platform` alone. Pinning the model names (rather
     than a pair of independently-settable booleans) is what stops the next

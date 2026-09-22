@@ -74,23 +74,9 @@ the chunk, not a detail):
         resolves to a served response or a clean `None`, never a raised
         exception. That mechanical guarantee stands, unchanged.
 
-        RETIRED 2026-08-21 (PM ruling, state/handoffs/2026-08-21_103635_
-        reaching-the-warm-engine.md, verbatim: "I'd rather have a fail than
-        a silent slow. Much rather."): what is retired is NOT this table's
-        own never-raise contract -- it is the CALLER'S assumption that a
-        `None` here is always safe to fall through to a cold spawn.
-        "The cold path is a SUCCESS path" described `coordinator_core.
-        invoke.__main__._dispatch_argv_body`'s OWN behaviour, documented
-        here because this preamble's whole design leaned on that caller
-        always having a safe landing. It no longer does: that function now
-        fails hard on a `None` here (when warm is enabled and the caller
-        did not opt into manual-testing mode via
-        `ipc.is_unstamped_dispatch_allowed()`) instead of degrading to a
-        slow cold spawn. See `invoke.__main__`'s own "6a. Warm preamble"
-        comment for the enforcement half of this retirement -- this module
-        itself needed no code change, only this notice: `try_warm_dispatch`
-        was already returning the same honest `None` this policy now acts
-        on differently.
+        The caller (`invoke.__main__._dispatch_argv_body`) runs cold on a
+        `None` after one bounded boot wait, LOUDLY -- a `None` is never a
+        delivered mutation, so that cold run cannot execute an op twice.
 
 Caller-identity seam: `_caller_session_id()` resolves THIS client process's
 own session id (`coordinator_core.session.core.resolve_session_id()`) --
@@ -262,14 +248,24 @@ READ_DEADLINE_SECS = 2.0
 #: this deadline exists to guarantee, silently absent everywhere it was not the
 #: incident's own op (WARN, coordinator-code-reviewer sidecar dcf219af, SLICE
 #: 1). `_mutation_deadline_for` below derives the real wait per-op from
-#: `ipc._timeout_for` -- the same source of truth the caller's own ceiling is
-#: derived from -- so the wait stays inside that ceiling for every op, not just
-#: the one this incident concerned. Deriving from that shared source of truth is
-#: also why this client needed no change of its own when the ceremony budget
-#: landed: `_mutation_deadline_for` inherits the 2s clamp automatically. This
-#: constant is now only the fail-safe floor: 30.0 mirrors `ipc`'s own
-#: `DISPATCH_TIMEOUT_SECS` default, so it can never itself outlive an
-#: un-derivable op's caller ceiling.
+#: `ipc.mutation_read_deadline_for`, and THE CEILING IS HELD FROM THE OTHER
+#: SIDE: the same dump the caller sizes that ceiling from
+#: (`invoke/__main__.py::_dump_op_timeouts`) publishes this transport deadline
+#: as `__ceremony_mutation_read_deadline__`, and `cc_invoke::
+#: _op_timeout_ceiling` takes the max of it and the op's budget.
+#:
+#: BOTH HALVES ARE LOAD-BEARING, and each alone reproduces the incident. This
+#: client once derived from `ipc._timeout_for` instead, which inherits the 2s
+#: `ceremony.*` clamp -- the same value as `READ_DEADLINE_SECS` -- so the
+#: extension computed `max(0.0, 2.0 - 2.0)` and waited ZERO seconds on exactly
+#: the ops that commit (fixed 2026-09-20). Dropping that clamp without also
+#: publishing the transport row put the 30s wait back outside a 2+2=4s caller
+#: ceiling, which is dcf219af's finding again by a different route. A change to
+#: either side that is not matched on the other silently restores it.
+#:
+#: This constant is now only the fail-safe floor: 30.0 mirrors `ipc`'s own
+#: `DISPATCH_TIMEOUT_SECS` default, which is what an un-derivable op's ceiling
+#: resolves from too.
 MUTATION_READ_DEADLINE_SECS = 30.0
 
 #: Frozen at import time, never reassigned -- the yardstick
@@ -320,7 +316,8 @@ _LIVE_TREE_COLD_MESSAGE = (
 
 #: The last reason THIS process went permanently cold, as
 #: `_log_live_tree_cold_once` phrased it -- read back by
-#: `invoke.__main__`'s fail-hard block via `last_cold_reason()`.
+#: `invoke.__main__`'s warm-miss block via `last_cold_reason()`, which names it in
+#: the loud cold-run notice and skips the boot wait (it recurs on every poll).
 #:
 #: Without it the operator got both halves of a contradiction and neither
 #: half named a path: this module's "every call from this tree goes cold",
@@ -724,12 +721,24 @@ def _op_may_mutate(method: Any) -> bool:
 
 def _mutation_deadline_for(method: Any) -> float:
     """The mutation read deadline for `method`, derived from the same source
-    of truth the CALLER's own kill ceiling comes from: `cc_invoke.py::
-    _op_timeout_ceiling` sizes that ceiling as `engine_budget(op) + MARGIN`,
-    and `engine_budget` is `ipc._timeout_for`. Deriving from the identical
-    function keeps this wait inside the caller's ceiling for every mutating
-    op, not just `ceremony.scoped_git_commit` -- see
-    `MUTATION_READ_DEADLINE_SECS`'s own comment for the gap this closes.
+    of truth the CALLER's own kill ceiling comes from -- `ipc`'s per-op
+    dispatch resolution -- but WITHOUT the `ceremony.*` performance clamp,
+    via `ipc.mutation_read_deadline_for` rather than `ipc._timeout_for`.
+
+    WHY THE CLAMP MUST NOT APPLY HERE. This wait is `mutation_deadline -
+    READ_DEADLINE_SECS` at the one call site below. `_timeout_for` clamps
+    every `ceremony.*` op to `CEREMONY_BUDGET_SECS`, which is 2.0 -- the same
+    value as `READ_DEADLINE_SECS`. So for every ceremony op the extension
+    computed `max(0.0, 2.0 - 2.0)` and waited ZERO additional seconds: the
+    mechanism whose entire purpose is to not abandon a delivered mutation was
+    inert for exactly the ops that commit, while a non-ceremony mutation got
+    the intended 28s. Every commit on a loaded box reported
+    `WARM_DISPATCH_INDETERMINATE` and then landed seconds later.
+
+    The clamp is a PERFORMANCE bar; this is a TRANSPORT deadline. See
+    `ipc.mutation_read_deadline_for` for why conflating them turns a slowness
+    report into an integrity unknown. No budget is widened by this: the op is
+    still held to `CEREMONY_BUDGET_SECS` and still reported when it misses.
 
     THE DERIVATION ALWAYS RUNS. An explicit `MUTATION_READ_DEADLINE_SECS`
     (a test, an operator) may only NARROW the result -- `min(override,
@@ -751,9 +760,9 @@ def _mutation_deadline_for(method: Any) -> float:
     wait.
     """
     try:
-        from coordinator_core.ipc import _timeout_for
+        from coordinator_core.ipc import mutation_read_deadline_for
 
-        derived = _timeout_for(method)
+        derived = mutation_read_deadline_for(method)
     except Exception:
         derived = _MUTATION_READ_DEADLINE_DEFAULT
     if MUTATION_READ_DEADLINE_SECS != _MUTATION_READ_DEADLINE_DEFAULT:
@@ -779,7 +788,15 @@ def _mutation_deadline_for(method: Any) -> float:
 #: and this one must be read every time it fires.
 #:
 #: So the text now states the uncertainty it actually has and keeps every
-#: instruction unchanged. NEGATIVE SPEC: do not restore a delivery claim here
+#: instruction unchanged.
+#:
+#: 2026-09-21 (C4, docs/plans/2026-09-20-stop-the-engine-spawning-to-talk-to-
+#: itself.md): "a slow op is not a hung one, and the engine does not stop when
+#: this client stops waiting" cut for the same reason. Both are claims about the
+#: engine this client cannot observe, and both were contradicted the day they
+#: were cited: a no-op ping waited 28.8s on a server idle at 0.0% CPU, which is
+#: neither "slow" nor observably "working". The "may never have started" half
+#: already carries the only uncertainty the client actually has. NEGATIVE SPEC: do not restore a delivery claim here
 #: without a server-side read/dispatch acknowledgement to support it -- an ack
 #: is the only thing that would make the stronger sentence true, and no part
 #: of today's framing gives this client one.
@@ -787,8 +804,7 @@ _MUTATION_INDETERMINATE_MESSAGE = (
     "warm dispatch indeterminate: this MUTATING op's request was written to "
     "the warm engine's pipe, which did not answer in time. Whether the engine "
     "read it is unknown from here, so the op may have COMPLETED, or may never "
-    "have started -- a slow op is not a hung one, and the engine does not stop "
-    "when this client stops waiting. Reconcile against real state (e.g. `git "
+    "have started. Reconcile against real state (e.g. `git "
     "log`) before re-running; re-running blind is how a duplicate commit "
     "happens, and finding no trace means it is safe to re-run. Deliberately "
     "NOT retried and NOT re-run cold here: a mutation the engine IS executing, "
@@ -844,8 +860,18 @@ def _indeterminate_envelope(msg: dict, detail: str) -> dict:
     }
 
 
-def try_warm_dispatch(msg: dict) -> Optional[dict]:
+def try_warm_dispatch(msg: dict, *, read_deadline_secs: Optional[float] = None) -> Optional[dict]:
     """Attempt one warm-pipe request/response for JSON-RPC request `msg`.
+
+    `read_deadline_secs`, when given, lowers the liveness read below
+    `READ_DEADLINE_SECS` so a caller holding its own bound (the op/CLI door's
+    `_wait_for_warm_boot`) can charge the attempt against it. It bounds the
+    whole read ONLY for a compute-only op, whose expiry is a plain miss.
+    NEGATIVE SPEC: it never shortens a DELIVERED mutation's wait -- the
+    extension still runs to `_mutation_deadline_for`, because abandoning a
+    delivered mutation early mints an indeterminate for an op that may merely
+    be slow. A caller that must bound a mutation probes with a compute-only op
+    first and dispatches the mutation only once the server answers.
 
     Returns the JSON-RPC response dict when the warm server served it --
     ANY well-formed response counts, including an error envelope, per the
@@ -863,7 +889,7 @@ def try_warm_dispatch(msg: dict) -> Optional[dict]:
     signal rather than propagated.
     """
     try:
-        result = _try_warm_dispatch_inner(msg)
+        result = _try_warm_dispatch_inner(msg, read_deadline_secs)
     except Exception as exc:  # noqa: BLE001 -- Backstop 2: never fail the op
         print(
             f"[warm-client] preamble failed, falling back to cold: {exc!r}",
@@ -950,7 +976,9 @@ def _record_cold_fallback(op: "str | None" = None) -> None:
         return
 
 
-def _try_warm_dispatch_inner(msg: dict) -> Optional[dict]:
+def _try_warm_dispatch_inner(
+    msg: dict, read_deadline_secs: Optional[float] = None
+) -> Optional[dict]:
     if not is_warm_enabled():
         return None
 
@@ -1038,6 +1066,17 @@ def _try_warm_dispatch_inner(msg: dict) -> Optional[dict]:
     if claimed_home:
         request[settings_home_claim.SETTINGS_HOME_FIELD] = claimed_home
 
+    # Per-session guard overrides (`env_forwarding.CALLER_PREFIXES`), the same
+    # prefix rule both native doors walk their environment for, and for the same
+    # reason as every seam above: the server's own values are its spawner's, and
+    # it scrubs them at boot. Carried in `_env`, the door's own envelope object,
+    # and only when one is set -- an ordinary call is unchanged byte-for-byte.
+    from coordinator_core.warm.env_forwarding import is_caller_prefixed
+
+    overrides = {k: v for k, v in os.environ.items() if v and is_caller_prefixed(k)}
+    if overrides:
+        request["_env"] = overrides
+
     payload = json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n"
 
     # At most 2 attempts: the original open, plus the table's single
@@ -1114,7 +1153,10 @@ def _try_warm_dispatch_inner(msg: dict) -> Optional[dict]:
             fh.flush()
             delivered = True
             pending = _PendingRead(fh)
-            line = pending.wait(READ_DEADLINE_SECS)
+            liveness_secs = READ_DEADLINE_SECS
+            if read_deadline_secs is not None:
+                liveness_secs = max(0.0, min(READ_DEADLINE_SECS, read_deadline_secs))
+            line = pending.wait(liveness_secs)
             if line is _TIMED_OUT:
                 # The liveness probe expired. For a compute-only op that is the
                 # table's own "wedged server -> go cold" row, unchanged. For a
@@ -1124,12 +1166,16 @@ def _try_warm_dispatch_inner(msg: dict) -> Optional[dict]:
                 if not _op_may_mutate(msg.get("method")):
                     return None
                 mutation_deadline = _mutation_deadline_for(msg.get("method"))
-                line = pending.wait(
-                    max(0.0, mutation_deadline - READ_DEADLINE_SECS)
-                )
+                line = pending.wait(max(0.0, mutation_deadline - liveness_secs))
                 if line is _TIMED_OUT:
                     return _indeterminate_envelope(
                         msg, f"no response within {mutation_deadline}s"
+                    )
+                if not line or not line.strip():
+                    # Held past the probe, then closed silently: engaged, not
+                    # unserviced -- see the zero-byte branch below. -> warm-pool P0 (e).
+                    return _indeterminate_envelope(
+                        msg, "closed without a response after delivery"
                     )
         except BrokenPipeError:
             if delivered and _op_may_mutate(msg.get("method")):

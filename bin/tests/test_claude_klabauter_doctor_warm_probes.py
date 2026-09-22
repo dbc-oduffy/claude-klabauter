@@ -37,6 +37,7 @@ Spec backlink: docs/plans/2026-08-19-warm-engine-gets-an-honest-instrument.md §
 from __future__ import annotations
 
 import importlib.util
+import socket
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -354,6 +355,10 @@ def short_sock_dir():
         shutil.rmtree(base, ignore_errors=True)
 
 
+@pytest.mark.skipif(
+    not hasattr(socket, "AF_UNIX"),
+    reason="AF_UNIX is not exposed by CPython's socket module on Windows",
+)
 class TestWarmSocketReachabilityPrimitive:
     """`_warm_check_socket_reachable` — the POSIX leg, against REAL AF_UNIX sockets.
 

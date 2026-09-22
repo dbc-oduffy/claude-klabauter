@@ -110,7 +110,12 @@ def _reason(result) -> str:
 # ---------------------------------------------------------------------------
 
 _EXPECTED_REVIEWER_DENY_MESSAGE = (
-    "BLOCKED: confined findings-agent Bash outside allowlist.\n"
+    # (Message-size discipline, 2026-09-11, C4 of
+    # docs/plans/2026-09-11-trim-the-remaining-over-cap-guard-messages.md)
+    # header shortened from "BLOCKED: confined findings-agent Bash outside
+    # allowlist." -- the dropped "confined findings-agent" was
+    # meta-commentary about the guard's own mechanism, not the verdict.
+    "BLOCKED: Bash outside allowlist.\n"
     "\n"
     "Command: rm -rf /\n"
     "Reason: not coordinator-doc-new (got: rm)\n"

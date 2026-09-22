@@ -705,7 +705,7 @@ def _is_plan_sidecar(filename: str, existing_names: frozenset[str] = frozenset()
        each one individually enumerated — the enumeration approach is what
        drifted in the first place.
 
-    Review: staff-eng F5 — this structural rule is convention-blind, not
+    This structural rule is convention-blind, not
     just suffix-blind: on the live corpus it excludes exactly 5 files, 4 of
     them intended timestamped sidecars but the 5th
     (``2026-07-05-strang-05-advisory-hook-degrade-silent-routing.phase0.md``)
@@ -980,7 +980,7 @@ def _resolve_deliverable_match(
     """Resolve possibly-several ``deliverable_id``-based (path, state)
     matches to either a single unambiguous winner or an ambiguity count.
 
-    Review: staff-eng F1 — the prior ``_pick_best_handoff_match`` picked a
+    The prior ``_pick_best_handoff_match`` picked a
     live-then-lexicographically-first candidate unconditionally, silently
     collapsing genuine ownership ambiguity (measured: 12 of 40
     ``deliverable_id``-resolved plans on the live corpus have 2-8 candidate
@@ -1250,7 +1250,7 @@ def _unlinked_reason(j: dict) -> str:
     A plan with nothing declared at all keeps the original, unchanged
     message (nothing WAS tried, so there is nothing more specific to say).
 
-    Review: staff-eng F4 — the former ``plan_id``/``origin_plan_id`` clause
+    The former ``plan_id``/``origin_plan_id`` clause
     is dropped along with that edge (F2); it accused every plan carrying a
     ``plan_id:`` of a defect that was really an unpopulated handoff-side
     field. Review: staff-eng F7 — bracket access throughout (every key here
@@ -1326,7 +1326,7 @@ def render_plans_index_markdown(
     archived = [j for j in plan_joins if j["resolution_state"] == "archived"]
     unlinked = [j for j in plan_joins if j["resolution_state"] == "gone"]
 
-    # Review: staff-eng F1 — resolution_method was computed by the join and
+    # resolution_method was computed by the join and
     # consumed by nothing; surfaced here as its own column so a reader can
     # tell a declared edge (predecessor_handoff) from an inferred one
     # (deliverable_id) rather than the two looking identical in the table.

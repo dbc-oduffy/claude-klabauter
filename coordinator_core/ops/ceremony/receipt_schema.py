@@ -416,7 +416,7 @@ _OPTIONAL_TOP_FIELDS: tuple[str, ...] = (
 # only when present; foreign_commit_count is int-checked only when present.
 
 _REQUIRED_OP_TAIL_FIELDS: tuple[str, ...] = ("phase", "acted", "skipped", "failed")
-# Review: code-reviewer Slice-A F3 — `failed_critical` is intentionally ABSENT from
+# `failed_critical` is intentionally ABSENT from
 # _REQUIRED_OP_TAIL_FIELDS for backward-compat with pre-C3 receipts (external tooling,
 # hand-crafted dicts, phase-1 receipts produced before C3 landed).  However,
 # failed_critical is load-bearing for the C3(C) exit predicate — a receipt that passes
@@ -483,7 +483,7 @@ def validate(receipt: dict[str, Any]) -> list[str]:
     top_phase = receipt["phase"]
     if not isinstance(top_phase, str) or not top_phase:
         errors.append("phase must be a non-empty string")
-    # Review: code-reviewer F4 — VALID_PHASES_TOP was defined but never enforced;
+    # VALID_PHASES_TOP was defined but never enforced;
     # a receipt with phase="garbage" previously passed validation silently.
     elif top_phase not in VALID_PHASES_TOP:
         errors.append(f"phase {top_phase!r} not in {VALID_PHASES_TOP}")
@@ -531,7 +531,7 @@ def validate(receipt: dict[str, Any]) -> list[str]:
         for tf in _REQUIRED_OP_TAIL_FIELDS:
             if tf not in op_tail:
                 errors.append(f"op_tail missing required field: {tf!r}")
-        # Review: code-reviewer F5 — op_tail.phase="" previously passed validation;
+        # op_tail.phase="" previously passed validation;
         # an empty phase label is meaningless (schema docstring requires e.g. "archival").
         if "phase" in op_tail and not (isinstance(op_tail["phase"], str) and op_tail["phase"]):
             errors.append("op_tail.phase must be a non-empty string")

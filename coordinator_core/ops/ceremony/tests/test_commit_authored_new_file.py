@@ -65,7 +65,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(args: list[str], cwd: Path, **kwargs) -> subprocess.CompletedProcess:
-    # Review: code-reviewer Finding 3 -- caller kwargs win over the helper's
+    # Caller kwargs win over the helper's
     # own suppression instead of colliding on a shared key (e.g. creationflags).
     run_kwargs = {**no_console_creationflags(), **kwargs}
     return subprocess.run(

@@ -232,7 +232,7 @@ _BASH_CORPUS = [
 
 
 def test_ac7_bash_still_admitted_by_the_real_registered_matchers(tmp_path, monkeypatch):
-    """Review: coordinatorcode-reviewer-92cd0b32 (AC7 tautology finding) --
+    """
     the prior version of this test compared `"Bash" in ("Bash",)` against
     `"Bash" in COMMAND_TOOL_NAMES`, both trivially True regardless of what
     the dispatcher actually registers. This introspects the REAL guard
@@ -478,7 +478,6 @@ def test_ac11_unparseable_segment_never_denies(
         % (result, guard_leg_name, cmd)
     )
 
-    # Review: coordinatorcode-reviewer-92cd0b32 (AC11 extraction-vs-decline
     # finding) -- every template in `_UNPARSEABLE_SEGMENT_TEMPLATES` still
     # lands a real `Out-File -FilePath` candidate alongside its "unparseable"
     # wrapper syntax, so the tokenizer parses AROUND the awkward syntax

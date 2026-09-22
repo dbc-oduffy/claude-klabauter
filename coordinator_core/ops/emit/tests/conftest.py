@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-# Review: coordinator:code-reviewer — Finding 1 (S5 priority-ledger battery): _write_node/_ledger
+# _write_node/_ledger
 # were copy-pasted byte-for-byte across five test modules; extracted here so drift can't happen.
 
 

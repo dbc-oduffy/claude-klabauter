@@ -54,7 +54,7 @@ import re
 import sys
 import time
 
-from typing import Mapping, Optional
+from typing import Any, Mapping, Optional
 
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import no_advisory, post_advisory
@@ -64,7 +64,7 @@ from coordinator_core.session.autonomous_sentinel import sentinel_path  # noqa: 
 from coordinator_core.session.context_usage_sidecar import read_usage
 from coordinator_core.session.mode_resolution import resolve_mode
 
-# Review: reviewer -- comment was stale: `sentinel_path` IS called directly by this
+# Comment was stale: `sentinel_path` IS called directly by this
 # module's own logic now, in the mise-en-place CONTINUANCE detection below (reads
 # the sentinel's own `mode` field to distinguish autonomous from mise-en-place runs;
 # `resolve_mode("autonomous", ...)` only answers presence, not that distinction --
@@ -143,25 +143,154 @@ def _portable_arg(value: str) -> str | None:
 GENERATES: list = []
 
 # ---------------------------------------------------------------------------
-# Anthropic-side fixed auto-compaction ceiling on the 1M-context tier.
+# Auto-compact threshold — derived at runtime, never a fixed ceiling.
 #
-# This is NOT one of our tunables — it is a fixed cost/attention ceiling
-# Anthropic applies on the 1M window (observed 2026-07-13, unchanged since),
-# decoupled from window size. It is why the red band in
-# _check_context_pressure_sync sits below 50%: on a 1M window a flat 50%
-# coincides EXACTLY with this ceiling (500_000 tokens), firing the warning
-# level with the cut instead of ahead of it and defeating the whole point of a
-# pre-emptive advisory — a handoff needs runway to compose before an
-# involuntary, lossy auto-compaction lands. The band sat at 47, then briefly at
-# 45, both on 2026-08-30: auto-compaction was observed firing at 47, and then
-# again at 47 with the band already at 45 — a warning at 45 has only two points
-# of runway before the cut, which is not enough to compose a handoff in. PM
-# ruling 2026-08-30 moved it to 43. Referenced by comment rather than by
-# arithmetic: the bands are
-# PM-set percentages, not values derived from this constant, and deriving them
-# from it would silently move them if Anthropic moves the ceiling.
+# Auto-compaction fires at `window - 33,000` tokens (confirmed against the
+# shipped binary, v2.1.278, and independently against Anthropic's published
+# ~967K default on the 1M tier: 1,000,000 - 33,000 = 967,000). `window` is
+# `CLAUDE_CODE_AUTO_COMPACT_WINDOW` where set — it outranks `/autocompact`,
+# `--autocompact`, and the `autoCompactWindow` setting, confirmed empirically
+# — else the model's own window, and an override above the model's window is
+# clamped down to it rather than trusted past model capacity.
+#
+# The bands below compare raw token runway to this threshold, never a
+# percentage of whichever window a given venue happens to report: the same
+# cut reads as a low-40s percentage against an attended host's window and a
+# low-90s percentage against a cloud client's, so a percentage band cannot
+# travel between venues.
 # ---------------------------------------------------------------------------
-_AUTO_COMPACT_CEILING_TOKENS_1M = 500_000
+#: `min(maxOutputTokens, 20000) + 13000`, and `maxOutputTokens` has not been
+#: observed below 20,000 on any tier this runs on.
+_AUTO_COMPACT_RESERVE_TOKENS = 33_000
+
+# The two band distances -- runway in tokens BACK from the threshold, not
+# percentages of a window. This is the one genuinely open design value left
+# in this derivation; both figures are runway budgets against the act each
+# band asks for, not a port of the old 40/43 pair:
+#   - ORANGE needs enough runway to let a session reach a natural stopping
+#     point before checkpointing -- a phase boundary, not "wherever the tool
+#     call happened to land". 100,000 tokens carries that.
+#   - RED needs enough runway to bring the task spine current (TaskUpdate the
+#     in-flight rows, record tried_and_abandoned) and commit -- a bounded,
+#     mechanical act, not open-ended work. 70,000 tokens is the narrowest
+#     width this same mechanism was ever observed to survive on: the band
+#     sat at a 50,000-token runway (45% of a 1M window) on 2026-08-30 and
+#     auto-compaction was observed landing before the act finished; 70,000
+#     tokens (43% of that window) was not.
+_ORANGE_RUNWAY_TOKENS = 100_000
+_RED_RUNWAY_TOKENS = 70_000
+
+
+def _model_window_tokens(context_window_block: Any) -> Optional[int]:
+    """Return the model's own context window in tokens, or None when the
+    reading does not name one.
+
+    None, never a default. A transcript-fallback reading knows raw token
+    counts but not the window they are a fraction of, and assuming the
+    largest tier there computes both bands against a threshold that can be
+    several times too generous -- the advisory then under-fires on exactly
+    the venue the fallback exists to serve. An unknown window is resolved by
+    the environment or it is no reading; this module's standing rule is that
+    an unmeasured session is silent, never warned with a guessed number.
+    """
+    size = (
+        context_window_block.get("context_window_size")
+        if isinstance(context_window_block, dict)
+        else None
+    )
+    if isinstance(size, bool) or not isinstance(size, (int, float)) or size <= 0:
+        return None
+    return int(size)
+
+
+def _effective_auto_compact_window(
+    model_window_tokens: Optional[int], env: Optional[Mapping[str, str]]
+) -> Optional[int]:
+    """Resolve the window auto-compaction actually cuts against, or None when
+    neither the reading nor the environment names one.
+
+    `CLAUDE_CODE_AUTO_COMPACT_WINDOW` where set (outranks the harness's other
+    override surfaces, confirmed empirically), else `model_window_tokens`.
+    An override larger than the model's own window is clamped down to it --
+    the harness cannot compact against more context than the model has -- but
+    an override with no model window to clamp against still resolves: it is
+    the harness's own figure, and it is the one a cloud session has.
+    """
+    source = env if env is not None else os.environ
+    raw = source.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+    override: Optional[int] = None
+    if raw:
+        try:
+            parsed = int(raw)
+        except (TypeError, ValueError):
+            parsed = 0
+        if parsed > 0:
+            override = parsed
+    if override is None:
+        return model_window_tokens
+    if model_window_tokens is None:
+        return override
+    return min(override, model_window_tokens)
+
+
+def _auto_compact_threshold_tokens(
+    model_window_tokens: Optional[int], env: Optional[Mapping[str, str]]
+) -> Optional[int]:
+    """The session's own resolved auto-compact cut in tokens, or None when no
+    window resolves.
+
+    Takes the already-resolved model window rather than re-deriving it from
+    the reading: the caller needs the same figure to denominate `used_tokens`
+    against, and two derivations of one number are two things to disagree.
+    """
+    effective_window = _effective_auto_compact_window(model_window_tokens, env)
+    if effective_window is None:
+        return None
+    return effective_window - _AUTO_COMPACT_RESERVE_TOKENS
+
+
+def _used_tokens_and_display_pct(
+    context_window_block: Any, denominator_tokens: Optional[int]
+) -> tuple[Optional[float], Optional[int]]:
+    """Return (used_tokens, display_pct), or (None, None) on no usable
+    reading.
+
+    Prefers the harness's own `used_percentage` (sidecar path), converted to
+    a token count against `denominator_tokens` so it compares apples-to-apples
+    with the token-denominated threshold. Falls back to `total_input_tokens`
+    (transcript-fallback path), deriving a display percentage from the same
+    denominator for message-text parity.
+
+    `denominator_tokens` is the window the threshold itself was computed
+    against. None means no window resolved at all, which is no reading -- the
+    percentage arm would otherwise report a token count against nothing.
+    """
+    if denominator_tokens is None or denominator_tokens <= 0:
+        return None, None
+    if not isinstance(context_window_block, dict):
+        return None, None
+
+    used_percentage = context_window_block.get("used_percentage")
+    if (
+        not isinstance(used_percentage, bool)
+        and isinstance(used_percentage, (int, float))
+        and math.isfinite(used_percentage)
+        and used_percentage >= 0
+    ):
+        used_tokens = used_percentage / 100.0 * denominator_tokens
+        return used_tokens, round(used_percentage)
+
+    total_input_tokens = context_window_block.get("total_input_tokens")
+    if (
+        not isinstance(total_input_tokens, bool)
+        and isinstance(total_input_tokens, (int, float))
+        and math.isfinite(total_input_tokens)
+        and total_input_tokens >= 0
+    ):
+        display_pct = round(total_input_tokens / denominator_tokens * 100)
+        return float(total_input_tokens), display_pct
+
+    return None, None
 
 # ---------------------------------------------------------------------------
 # Durable per-session advisory state (file-backed).
@@ -349,16 +478,23 @@ def _check_context_pressure_sync(
         transcript hasn't shrunk >=15% since PreCompact fired, treat as a false
         alarm and consume silently.
 
-    Phase 2: Throttled (5 min) threshold warnings, sidecar-sourced.
-        Two bands and only two: 40% of window (orange — consider a handoff if
-        the work cannot close in ~3% more) and 43% (red — handoff now, ahead of
-        compaction). Nothing fires below 40, and a session with no usable
-        reading gets silence, not an escalating UNKNOWN notice.
+    Phase 2: Throttled (5 min) threshold warnings, sidecar-sourced (with a
+    transcript fallback -- see below).
+        Two bands and only two, both token-runway distances back from the
+        session's own resolved auto-compact threshold (see
+        `_auto_compact_threshold_tokens`): ORANGE (consider a handoff if the
+        work cannot close within `_ORANGE_RUNWAY_TOKENS` more) and RED
+        (handoff now, ahead of compaction, with `_RED_RUNWAY_TOKENS` runway
+        to bring the task spine current and commit). Nothing fires short of
+        the orange bound, and a session with no usable reading gets silence,
+        not an escalating UNKNOWN notice.
 
-        The percentage comes from
+        The reading comes from
         `coordinator_core.session.context_usage_sidecar.read_usage` — the
-        registered statusline is that sidecar's sole writer — never from the
-        transcript (see the module Anti-scope comment above Phase 2 below).
+        registered statusline is that sidecar's sole writer for the primary
+        path; where no statusline runs (a cloud session registers none),
+        `read_usage`'s own transcript-path fallback derives the same reading
+        from the session's transcript JSONL.
         Self-throttle + bark-once guards persisted to a durable per-session JSON
         state file (_load_advisory_state / _save_advisory_state) — survives the
         fresh-process-per-fire execution model (see the module-level state-
@@ -382,7 +518,7 @@ def _check_context_pressure_sync(
     if not session_id:
         return ""
 
-    # Review: code-reviewer (B-F3) — use tempfile.gettempdir() throughout;
+    # Use tempfile.gettempdir() throughout;
     #   docstring motivates Windows portability and /tmp/ does not exist there.
     tmpdir = _tempfile().gettempdir()
 
@@ -464,7 +600,9 @@ def _check_context_pressure_sync(
                 "(use TaskList/TaskGet to re-orient). Re-read any active plan files "
                 "to restore continuity. Key decisions should already be on disk — "
                 "verify by checking your task list. Check metadata.tried_and_abandoned "
-                "on tasks for failed approaches before retrying anything."
+                "on tasks for failed approaches before retrying anything. The declared "
+                "tool set is dropped at compaction -- reload any ToolSearch-loaded tool "
+                "before using it."
                 "\n\n--- PRE-COMPACTION STATE SNAPSHOT ---\n"
             )
             postamble = "\n--- END SNAPSHOT ---"
@@ -475,7 +613,9 @@ def _check_context_pressure_sync(
                 "(use TaskList/TaskGet to re-orient). Re-read any active plan files "
                 "to restore continuity. Key decisions should already be on disk — "
                 "verify by checking your task list. Check metadata.tried_and_abandoned "
-                "on tasks for failed approaches before retrying anything."
+                "on tasks for failed approaches before retrying anything. The declared "
+                "tool set is dropped at compaction -- reload any ToolSearch-loaded tool "
+                "before using it."
             )
 
     # -----------------------------------------------------------------------
@@ -552,24 +692,31 @@ def _check_context_pressure_sync(
     # `mode` field (mise-en-place | autonomous) already carries that
     # distinction and was previously discarded here.
     # cross-repo/archive/2026-08-03-doe-claude-em-mise-continuance-context-pressure-text.md
-    mise_continuance = False
+    # `sentinel_content` is read ONCE here and reused below for both the
+    # mise-en-place branch and the RED-band "Autonomous run:" clause (C5):
+    # `autonomous_run` above only answers "does the sentinel exist", which is
+    # the right question for its OTHER consumers, but the RED-band text must
+    # not assert "Autonomous run:" for a sentinel whose content is neither
+    # recognised value -- an unrecognised or unreadable sentinel degrades to
+    # today's non-autonomous text rather than crashing or blocking.
+    sentinel_content = None
     if autonomous_run:
         try:
-            mise_continuance = (
-                sentinel_path(session_id).read_text(encoding="utf-8").strip()
-                == "mise-en-place"
-            )
+            sentinel_content = sentinel_path(session_id).read_text(encoding="utf-8").strip()
         except Exception:
-            mise_continuance = False
+            sentinel_content = None
+    mise_continuance = sentinel_content == "mise-en-place"
+    autonomous_recognized = sentinel_content == "autonomous"
 
-    reading = read_usage(session_id, now=time.time())
+    reading = read_usage(session_id, now=time.time(), transcript_path=transcript_path)
     context_window_block = reading.context_window if reading is not None else None
-
-    used_percentage = (
-        context_window_block.get("used_percentage")
-        if isinstance(context_window_block, dict)
-        else None
-    )
+    model_window_tokens = _model_window_tokens(context_window_block)
+    # The window the cut is measured against, resolved ONCE: it denominates
+    # the reading and computes the threshold, and those two have to be the
+    # same number. None means no window resolved -- a transcript-fallback
+    # reading on a box with no CLAUDE_CODE_AUTO_COMPACT_WINDOW set -- and an
+    # unresolved window is no reading, handled by the silence branch below.
+    effective_window_tokens = _effective_auto_compact_window(model_window_tokens, env)
 
     # --- Unmeasured is SILENT. Not a ladder, not a streak, not a one-time
     # heads-up. A session with no usable reading gets nothing from this check,
@@ -588,26 +735,23 @@ def _check_context_pressure_sync(
     # `bool` is an `int` and would read as 1%; NaN/inf survive an isinstance
     # check and then raise on int(); a negative is a figure the harness should
     # never emit and must not round toward "this session is empty". All four
-    # are no-reading, not zero.
-    if (
-        isinstance(used_percentage, bool)
-        or not isinstance(used_percentage, (int, float))
-        or not math.isfinite(used_percentage)
-        or used_percentage < 0
-    ):
+    # are no-reading, not zero -- see `_used_tokens_and_display_pct`.
+    used_tokens, display_pct = _used_tokens_and_display_pct(
+        context_window_block, effective_window_tokens
+    )
+    if used_tokens is None:
         # No usable reading -- no band check ran, so the throttle timestamp
         # is deliberately left untouched (see the T15 comment above
         # `throttled`). This is the common case for headless sessions and
         # runs once per tool call.
         return ""
 
-    # `round`, not `int`. The statusline renders the same figure with round()
-    # and colours its orange band at 40, so truncating here would show the
-    # operator an orange "40%" in the terminal with no advisory behind it for
-    # every raw value in [39.5, 40.0). The two halves of this contract agree
-    # at the boundary or the boundary is not observable.
-    # Review: code-reviewer (P2).
-    display_pct = round(used_percentage)
+    # `round`, not `int`, inside `_used_tokens_and_display_pct` -- the
+    # statusline renders the same figure with round(), so display text stays
+    # visually consistent with the terminal's own colouring. The DECISION
+    # boundary itself (`used_tokens` vs `orange_bound_tokens`/
+    # `red_bound_tokens`, below) is an exact float-token compare, unrounded --
+    # `round()` governs display only. Review: code-reviewer (P2).
     age_note = f" (measured {int(reading.age_seconds)}s ago)" if reading is not None else ""
 
     # A band check is now actually running against a usable reading -- this
@@ -615,26 +759,31 @@ def _check_context_pressure_sync(
     # comment above `throttled`).
     cp_state["throttle_last_check"] = time.time()
 
-    # --- The two bands, and there are only two (PM-set, 2026-08-18).
+    threshold_tokens = _auto_compact_threshold_tokens(model_window_tokens, env)
+    orange_bound_tokens = threshold_tokens - _ORANGE_RUNWAY_TOKENS
+    red_bound_tokens = threshold_tokens - _RED_RUNWAY_TOKENS
+    threshold_display_pct = round(threshold_tokens / effective_window_tokens * 100)
+
+    # --- The two bands, and there are only two (PM-set, 2026-08-18), now
+    # expressed as token runway back from the session's own resolved
+    # auto-compact threshold rather than as a percentage of whichever window
+    # a given venue happens to report (see the module-level derivation
+    # comment above `_AUTO_COMPACT_RESERVE_TOKENS`).
     #
-    # 40 — ORANGE. "Consider a handoff if this work cannot close within about
-    #      another 5% of window." An orientation signal, not an instruction.
-    # 43 — RED. "Go to handoff now, before compaction takes the choice away."
+    # ORANGE. "Consider a handoff if this work cannot close within
+    #      `_ORANGE_RUNWAY_TOKENS` more." An orientation signal, not an
+    #      instruction.
+    # RED. "Go to handoff now, before compaction takes the choice away."
     #
-    # Why 43 and not 50 on the 1M tier: auto-compaction fires at a fixed
-    # ~500K tokens there (_AUTO_COMPACT_CEILING_TOKENS_1M), so a 50% trigger
-    # coincides EXACTLY with the cut instead of landing ahead of it, and a
-    # handoff needs runway to compose. Why not 47, and why not 45: this band
-    # was 47 until 2026-08-30, moved to 45 that day because auto-compaction was
-    # observed firing at 47, and moved again the same day because a compaction
-    # was then observed at 47 with the band at 45 — two points of runway is not
-    # enough to compose a handoff in. PM ruling 2026-08-30: 43.
-    #
-    # NOTHING fires below 40. No checkpoint prompts, no "consider wrapping",
-    # no informational heads-up at 15/20/25%. That is the PM ruling, stated as
-    # a floor rather than a default: a check added here that fires under 40
-    # violates it no matter how quiet its wording.
-    if display_pct >= 43 and transcript_hash not in cp_state.get("critical_fired", []):
+    # NOTHING fires above the orange bound's own floor -- see
+    # `_ORANGE_RUNWAY_TOKENS`'s and `_RED_RUNWAY_TOKENS`'s own comments for
+    # why each width was chosen. That is the PM ruling, stated as a floor
+    # rather than a default: a check added here that fires with more runway
+    # left than the orange bound violates it no matter how quiet its wording.
+    if (
+        used_tokens >= red_bound_tokens
+        and transcript_hash not in cp_state.get("critical_fired", [])
+    ):
         _mark_advisory_fired(cp_state, transcript_hash, critical=True)
         _save_advisory_state(tmpdir, session_id, cp_state)
         # The autonomous variant REPLACES the recommendation rather than
@@ -671,7 +820,9 @@ def _check_context_pressure_sync(
                     f" disk is state that is lost. Run the full Phase 6 tail"
                     f" now (review loop to zero findings, end-of-run"
                     f" verification, tracker sweep, baton disposition), then"
-                    f" commit and checkpoint."
+                    f" bring the task spine current -- TaskUpdate in-flight"
+                    f" rows, record metadata.tried_and_abandoned on anything"
+                    f" abandoned -- then commit and checkpoint."
                     f"{_baton_affordance_clause(session_id)}"
                     f" Continue the run."
                 )
@@ -684,15 +835,16 @@ def _check_context_pressure_sync(
                 f" author the handoff — compaction from here is involuntary"
                 f" and lossy."
             )
-        if autonomous_run or compaction_warnings_variant == "informational":
+        if autonomous_recognized or compaction_warnings_variant == "informational":
             # The mode clause is chosen by WHICH side selected this variant, not
-            # by the variant itself. `autonomous_run` is the session's own
-            # sentinel, so naming it is a fact about this session. The fleet key
-            # is fleet-wins with no session pair, so it selects this text for
-            # sessions that are NOT autonomous -- opening those with "Autonomous
-            # run:" would assert something about the reader that is not true.
+            # by the variant itself. `autonomous_recognized` is the session's own
+            # sentinel CONTENT (not mere presence -- C5), so naming it is a fact
+            # about this session. The fleet key is fleet-wins with no session
+            # pair, so it selects this text for sessions that are NOT
+            # autonomous -- opening those with "Autonomous run:" would assert
+            # something about the reader that is not true.
             mode_clause = (
-                "Autonomous run:" if autonomous_run else "Informational mode:"
+                "Autonomous run:" if autonomous_recognized else "Informational mode:"
             )
             # The baton clause is what makes this variant actionable rather
             # than merely quieter. The mode exists so a session rides through
@@ -706,7 +858,9 @@ def _check_context_pressure_sync(
                 f" used{age_note}, measured from the harness's own context_window"
                 f" block. {mode_clause} compaction from here is involuntary and"
                 f" lossy, so state that is not on disk is state that is lost."
-                f" Commit and checkpoint now."
+                f" Bring the task spine current first -- TaskUpdate in-flight"
+                f" rows, record metadata.tried_and_abandoned on anything"
+                f" abandoned -- then commit and checkpoint now."
                 f"{_baton_affordance_clause(session_id)}"
                 f" Continue the run."
             )
@@ -720,7 +874,7 @@ def _check_context_pressure_sync(
 
     if (
         not throttled
-        and display_pct >= 40
+        and used_tokens >= orange_bound_tokens
         and transcript_hash not in cp_state.get("advisory_fired", [])
     ):
         _mark_advisory_fired(cp_state, transcript_hash, critical=False)
@@ -753,7 +907,7 @@ def _check_context_pressure_sync(
             f" block. Checkpoint state to disk at the next natural boundary so"
             f" the run is resumable."
             f"{_baton_affordance_clause(session_id)}"
-            f" The hard call comes at 43%."
+            f" The hard call comes at ~{threshold_display_pct}%."
         )
 
     _save_advisory_state(tmpdir, session_id, cp_state)
@@ -851,8 +1005,10 @@ def _check_runtime_tripwire_sync(session_id: str, agent_id: str) -> str:
     # read it as context pressure — the observed symptom was subagents wrapping
     # up at 15-20% of window "because the hook said to".
     #
-    # The PM's floor is that nothing prescribes a checkpoint below 40% of
-    # context. A wall-clock trigger cannot honour a context floor, so it is
+    # The PM's floor is that nothing prescribes a checkpoint short of the
+    # context-pressure orange band's own runway (see
+    # `_ORANGE_RUNWAY_TOKENS`). A wall-clock trigger cannot honour a context
+    # floor, so it is
     # opt-in rather than re-tuned: no minute value makes elapsed time a proxy
     # for occupancy. Set COORDINATOR_RUNTIME_TRIPWIRE=1 to re-arm it (the
     # RUNTIME_TRIPWIRE_*_MIN thresholds still apply when armed) — the
@@ -959,7 +1115,7 @@ def _check_runtime_tripwire_sync(session_id: str, agent_id: str) -> str:
     # SEPARATE file from the context-pressure state avoids a lost-update race
     # between the two checks, which run concurrently in the same process via
     # asyncio.gather + asyncio.to_thread (see the op handler below).
-    # Review: code-reviewer (B-F3) — use tempfile.gettempdir(); /tmp/ absent on Windows.
+    # Use tempfile.gettempdir(); /tmp/ absent on Windows.
     tmpdir = _tempfile().gettempdir()
     rt_bark_sentinel = os.path.join(tmpdir, f"rt-bark-once-{session_id}")
     if os.path.isfile(rt_bark_sentinel):
@@ -975,7 +1131,7 @@ def _check_runtime_tripwire_sync(session_id: str, agent_id: str) -> str:
     # --- Autonomous-run detection (session-wins key via the resolve_mode seam) ---
     autonomous = resolve_mode("autonomous", em_sid)
 
-    # Review: code-reviewer (B-F1) — fire-log append (state/runtime-tripwire-fire-log.tsv)
+    # fire-log append (state/runtime-tripwire-fire-log.tsv)
     #   dropped entirely. Calibration evidence now captured via the durable
     #   rt-bark-once-{session_id} sentinel above (touch-once, not an append log).
 
@@ -1054,7 +1210,7 @@ def _check_first_agent_dispatch_sync(session_id: str, tool_name: str) -> str:
     if not session_id or tool_name != "Agent":
         return ""
 
-    # Review: code-reviewer (B-F3) — use tempfile.gettempdir(); /tmp/ absent on Windows.
+    # Use tempfile.gettempdir(); /tmp/ absent on Windows.
     tmpdir = _tempfile().gettempdir()
     sentinel = _first_agent_dispatch_sentinel_path(tmpdir, session_id)
     if os.path.isfile(sentinel):
@@ -1161,7 +1317,7 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
     try:
         from coordinator_core.workflow_watch.tail import TailReader
 
-        # Review: overengineering-reviewer (F1) — a fresh TailReader starts
+        # A fresh TailReader starts
         # at offset 0, so an unseeded construction here reads the ENTIRE
         # session transcript on every Workflow PostToolUse event. This call
         # site takes exactly one snapshot (no repeated polling), so
@@ -1183,7 +1339,7 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
     # input carries no tool_response — so where the tail holds more than one
     # candidate launch, the right answer is to say so, not to pick one.
     match = None
-    # Review: code-reviewer (F2) — scoped to local_workflow launches only
+    # Scoped to local_workflow launches only
     # (the different-taskType case is handled by the breadcrumb branch below);
     # named accordingly so a future reader doesn't assume general-purpose scope.
     seen_local_workflow_task_ids: list[str] = []
@@ -1250,7 +1406,7 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
     if not task_id or not run_id or not transcript_dir:
         return ""
 
-    # Review: code-reviewer (B-F3) — use tempfile.gettempdir(); /tmp/ absent on Windows.
+    # Use tempfile.gettempdir(); /tmp/ absent on Windows.
     tmpdir = _tempfile().gettempdir()
     sentinel = _workflow_monitor_sentinel_path(tmpdir, session_id, task_id)
     if os.path.isfile(sentinel):
@@ -1488,7 +1644,7 @@ def _group_em_watch_arm_sentinel_path(tmpdir: str, session_id: str) -> str:
 
 
 def _group_em_watch_checked_sentinel_path(tmpdir: str, session_id: str) -> str:
-    # Review: review-integrator (finding #2, EM-ratified break-class) -- a
+    # A
     # SEPARATE sentinel from the "armed" one above. That one means "the
     # advisory fired, never re-check"; this one means "checked this session,
     # concluded there is nothing to arm, for a STABLE reason -- never
@@ -1542,7 +1698,6 @@ def _check_group_em_watch_arm_sync(session_id: str, transcript_path: str) -> str
     if not session_id:
         return ""
 
-    # Review: overengineering-reviewer (finding #2, EM-ratified break-class) --
     # the launcher probe is the cheapest check, so it runs FIRST and
     # short-circuits before the sentinel
     # check, the repo-root walk, the nomination read, or the whole-file
@@ -1563,7 +1718,7 @@ def _check_group_em_watch_arm_sync(session_id: str, transcript_path: str) -> str
     if os.path.isfile(sentinel):
         return ""
 
-    # Review: review-integrator (finding #2, EM-ratified break-class) -- the
+    # The
     # "armed" sentinel above only ever gets written on the success path, so
     # once a launcher ships, a non-Group-EM session would re-pay the
     # repo-root walk + nomination read below on EVERY PostToolUse event for
@@ -1794,7 +1949,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     # Built as a plain coroutine object here (not yet awaited/scheduled) so it
     # can be folded into the same asyncio.gather as the other three below when
     # session_id is present — genuinely concurrent, not stacked ahead of them.
-    # Review: code-reviewer (P2) — a prior sequential `await` here before
+    # A prior sequential `await` here before
     # asyncio.gather made total latency uh_text-time + gather-time instead of
     # max(all four), contradicting this module's own docstring. No ordering
     # dependency exists between this check and the other three (confirmed: it

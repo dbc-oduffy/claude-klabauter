@@ -125,7 +125,7 @@ def _cap_awaiting_gate_listing(text: str, cap: int, *, subcommand: str) -> str:
     stale subset) by capping EACH section independently, rather than
     capping their concatenation as one blob.
 
-    Review: code-reviewer — Finding [P2]. Capping the concatenation let the
+    [P2]. Capping the concatenation let the
     full listing alone reach `cap` and silently swallow the separator plus
     the ENTIRE stale-escalated section, with no signal that a semantically
     distinct escalation tier was among what was withheld (the reader's own
@@ -149,7 +149,7 @@ def _cap_awaiting_gate_listing(text: str, cap: int, *, subcommand: str) -> str:
     stale_part = text[sep_index + len(_AWAITING_GATE_SEPARATOR):].lstrip("\n")
     capped_full = _cap_rendered_lines(full_part, cap, subcommand=subcommand)
     capped_stale = _cap_rendered_lines(stale_part, cap, subcommand=subcommand)
-    # Review: code-reviewer — Finding [P3]. An empty full listing with a
+    # [P3]. An empty full listing with a
     # non-empty stale subset is reachable (`_cmd_awaiting_gate` prints the
     # separator only when the stale subset is non-empty, but prints the full
     # listing unconditionally, including when it's empty) — omit the empty

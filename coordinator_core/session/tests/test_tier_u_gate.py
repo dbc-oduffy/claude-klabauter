@@ -131,7 +131,7 @@ class TestEnforceTierUGate:
     def test_mixed_tier_u_and_tier_f_match_falls_through_to_tier_u_leg(
         self, tmp_path
     ):
-        """Review: coordinator:code-reviewer (Finding 1, tierf-s1-session) --
+        """
         a chained command whose FIRST segment satisfies the repo's
         configured ``fast_test_cmd`` (Tier F) and whose SECOND segment is
         a bare, unscoped runner invocation (Tier U) produces a single

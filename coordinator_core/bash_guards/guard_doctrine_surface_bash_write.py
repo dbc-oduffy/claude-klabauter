@@ -1409,7 +1409,7 @@ def _compose_deny_message(
     else:
         prose = (
             "BLOCKED: this Bash command writes a governed doctrine "
-            "surface. If the real target is one of the four files, use "
+            "surface. If the real target is one of the governed files, use "
             "Write or Edit."
         )
     return f"{prose}\n\nSee {citation}."

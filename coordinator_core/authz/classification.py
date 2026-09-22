@@ -66,13 +66,13 @@ class OpClass(enum.Enum):
 #          moment of archival to guard against TOCTOU races between plan/decision).
 #   D2-5. Ungated-UDS-only (reachable only over the ungated UDS; HTTP surface is excluded,
 #          not merely ungated — DR-211 D2(v)).
-# Review: code-reviewer (slice-A F2) — strengthened from token-level wording to
+# Strengthened from token-level wording to
 # transport-surface exclusion; the prior text could be read as permitting ungated HTTP.
 #
 # Authority: docs/decisions/DR-211-fleet-op-substrate-write-boundary.md § D2
 #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
 # ---------------------------------------------------------------------------
-# Review: code-reviewer — wrapped in MappingProxyType so mutation attempts raise TypeError
+# Wrapped in MappingProxyType so mutation attempts raise TypeError
 # rather than silently corrupting the classification surface (test-pollution and runtime-
 # privilege-escalation risk). Any caller doing OP_CLASSIFICATION["x"] = ... now fails loud.
 OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType({
@@ -258,10 +258,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #
     # Spec backlink: pln-pcore-08-async-bookkeeping-hoo-7920d5 § D2, C0.
     "hooks.track_touched_files": OpClass.MUTATING,
-    "hooks.session_heartbeat": OpClass.MUTATING,
     # hooks.receiver_state_sensor — MUTATING: writes the receiver-state sibling file
-    # (.git/coordinator-sessions/<sid>/receiver-state.json), same session-runtime write
-    # class as session_heartbeat immediately above, just a different sibling artifact.
+    # (.git/coordinator-sessions/<sid>/receiver-state.json), a session-runtime write
+    # under .git/coordinator-sessions/, same posture as track_touched_files above.
     # Spec backlink: docs/plans/2026-08-14-receiver-state-sensor.md § C3
     "hooks.receiver_state_sensor": OpClass.MUTATING,
     "hooks.agent_completion_log": OpClass.MUTATING,
@@ -325,7 +324,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # guard-kira-verdict-routed leg (read-only) and three sentinel-writing
     # wrappers over library op()s. See coordinator_core/hooks/stop_dispatch.py's
     # own module docstring for the full eight-leg disposition.
-    # Review: overengineering-reviewer (Kira) — the four sibling op-key rows
+    # The four sibling op-key rows
     # formerly here (guard_kira_verdict_routed, stop_em_report_altitude,
     # nudge_harness_directive_dispatch, nudge_unrouted_sizing) were removed
     # with their registrations; no consumer found for any of them.
@@ -452,7 +451,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # memo.transition — MUTATING: native Python port (strang-09) that writes memo
     # frontmatter in-place (claim/action/release verbs). No subprocess / node reach-back —
     # byte-faithful port of the DoE memo-transition.js oracle, not a delegation to it.
-    # Review: code-reviewer (F8) — DR-208 five-question affirmation added to match the file's
+    # DR-208 five-question affirmation added to match the file's
     # established affirmation discipline (citing ops/memo_transition.py; plan strang-09).
     # DR-208 five-question affirmation:
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
@@ -1776,7 +1775,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # addressee verdict via the shared _memo_resolver; never writes, commits, or
     # reaches the network (repo_root is read-only used to derive self_root via
     # main_worktree_root — see memo_check_addressee.py handler docstring).
-    # Review: code-reviewer (Finding 4) — moved out of the memo.list/draft/compose
+    # Moved out of the memo.list/draft/compose
     # trio's shared comment block (whose header says "all COMPUTE_ONLY: none of
     # the three...") so that header's "three" framing stays accurate; this is a
     # separate op, not a fourth member of that trio.
@@ -1793,7 +1792,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
     #      changelog_ops.py:append_day — atomic _atomic_write (mkstemp+os.replace) creates
     #      or replaces state/week-changelog/{date}.md in the caller's worktree.
-    #      Review: code-reviewer (Finding 3) — corrected stale {date}-{machine}.md filename
+    # Corrected stale {date}-{machine}.md filename
     #      shape to match the per-day filename collapse (PM ruling 2026-07-19).
     #   2. Writes into rag's relational store?                                 No.
     #      Writes only coordinator state/week-changelog/ markdown. Dual-write ban satisfied.
@@ -3740,7 +3739,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      Whether a given invocation spawns mypy depends on which dimension
     #      checks run/are registered; the write is not guaranteed on every
     #      call but is not ruled out either.
-    #   Review: coordinator:code-reviewer (wsc-D-registration) — the C1-era
+    # The C1-era
     #   affirmation above was written before C2/C3/C5/C7 landed their real
     #   dimension implementations in this tree; those implementations are
     #   already unconditionally imported by this module (not deferred), so a
@@ -4171,6 +4170,21 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      No subprocess, no network, no cache write -- unlike its
     #      op_census.report sibling, which persists a module index.
     "op_census.breaches": OpClass.COMPUTE_ONLY,
+    # freshness.commit_delta — COMPUTE_ONLY: the workday-start doc/test/bug-sweep
+    # commit-delta producer (ops/freshness_commit_delta.py::freshness_commit_delta).
+    # docs/plans/2026-09-10-cartography-churn-producer-and-staleness-registrations.md
+    # § C3, DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
+    #      Issues one read-only `git log --name-only` (via run_git) and returns a
+    #      computed aggregate over its stdout.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #      `_derive_deltas` is pure over the parsed git-log records.
+    #   5. Persistent state changes observable across process boundaries?      No.
+    #      One subprocess spawn (the git log read itself), no network, no cache
+    #      write.
+    "freshness.commit_delta": OpClass.COMPUTE_ONLY,
     # hooks.cater_subagent_start — MUTATING: composes the SubagentStart
     # additionalContext catering string and, in doing so, writes to disk.
     # coordinator_core/hooks/cater_subagent_start.py::_resolve_sidecar_leg calls
@@ -4227,7 +4241,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # evaluation (bash_guards/_advisory_dedupe.py :: mark_advised) — a real disk write,
     # even though the op's PRIMARY job is computing a verdict. Same posture as the
     # other hooks.* ops that write session-scoped bookkeeping (e.g.
-    # "hooks.session_heartbeat") rather than the read-only hooks.* entries above.
+    # "hooks.receiver_state_sensor") rather than the read-only hooks.* entries above.
     "warm_guard.evaluate": OpClass.MUTATING,
 
     # merge_assemble.apply — MUTATING: `coordinator_core.merge_assemble.
@@ -4268,6 +4282,71 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # "mutates nothing" (single-shot decision-object computation).
     "baton_assemble.apply": OpClass.MUTATING,
     "baton_assemble.brief": OpClass.COMPUTE_ONLY,
+
+    # learn_lessons_pipeline.apply — MUTATING: `coordinator_core.
+    # learn_lessons_pipeline.ops::_learn_lessons_pipeline_apply` is a thin
+    # adapter over `learn_lessons_pipeline.apply.apply()`, which recomputes
+    # the brief and dispatches its directives[] through a closed CLI/op
+    # table that extracts, verifies, drains the outbox, age-sweeps lessons,
+    # and stamps the run complete — real, persistent mutation.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?   Yes.
+    #      Outbox drain, age-sweep archival, run-stamp sentinel write.
+    #   2. Writes into rag's relational store?                                  No.
+    #   3. Opens any file for write (including sentinel creation)?              Yes.
+    #      The run-complete sentinel write (`run_stamp.stamp_run_complete`).
+    #   4. Mutates shared mutable state outside its own module?                 Yes.
+    #      The lessons outbox and lessons file are cross-process state.
+    #   5. Persistent state changes observable across process boundaries?       Yes.
+    # learn_lessons_pipeline.brief — read-only: `_learn_lessons_pipeline_brief`
+    # is a thin adapter over `learn_lessons_pipeline.brief()`, whose own
+    # docstring states it never mutates (single-shot decision-object
+    # computation over disk reads only).
+    # Spec: docs/plans/2026-09-11-the-lessons-pipeline-drains-without-a-ha.md § C5
+    "learn_lessons_pipeline.apply": OpClass.MUTATING,
+    "learn_lessons_pipeline.brief": OpClass.COMPUTE_ONLY,
+
+    # lessons.extract — COMPUTE_ONLY: `coordinator_core.ops.grind_ops::
+    # _lessons_extract` is a thin adapter over `extract-lessons.py::extract()`,
+    # which only reads `state/lessons/*.yaml` and returns computed record
+    # dicts; it opens no file for write.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?   No.
+    #   2. Writes into rag's relational store?                                  No.
+    #   3. Opens any file for write (including sentinel creation)?              No.
+    #   4. Mutates shared mutable state outside its own module?                 No.
+    #   5. Persistent state changes observable across process boundaries?       No.
+    #
+    # lessons.verify_extraction — COMPUTE_ONLY: `_lessons_verify_extraction`
+    # wraps `extract-lessons.py::verify()`, a read-only grounding check. The
+    # routing-records tempfile it spills to disk is throwaway (removed in a
+    # `finally` before the handler returns) and never a coordinator substrate
+    # artifact — no state persists past the call.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?   No.
+    #   2. Writes into rag's relational store?                                  No.
+    #   3. Opens any file for write (including sentinel creation)?              Yes,
+    #      transiently — a self-owned tempfile, deleted before return; not a
+    #      coordinator substrate artifact.
+    #   4. Mutates shared mutable state outside its own module?                 No.
+    #   5. Persistent state changes observable across process boundaries?       No.
+    #
+    # doctrine.surface_split_regenerate — MUTATING: `_doctrine_surface_split_
+    # regenerate` wraps `generate-doctrine-surface-split.py::
+    # regenerate_split_dir()`, which (absent `check_mode`) overwrites the
+    # split directory's `README.md` on disk — real, persistent mutation.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?   Yes.
+    #      Overwrites `<split_dir>/README.md`.
+    #   2. Writes into rag's relational store?                                  No.
+    #   3. Opens any file for write (including sentinel creation)?              Yes.
+    #   4. Mutates shared mutable state outside its own module?                 Yes.
+    #      The split directory is repo-tracked, cross-process state.
+    #   5. Persistent state changes observable across process boundaries?       Yes.
+    # Spec: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md § C9
+    "lessons.extract": OpClass.COMPUTE_ONLY,
+    "lessons.verify_extraction": OpClass.COMPUTE_ONLY,
+    "doctrine.surface_split_regenerate": OpClass.MUTATING,
 
     # git.maintenance — MUTATING: `coordinator_core.ops.git_maintenance::run_tier`
     # runs the tier's `git maintenance run` task set (gc/loose-objects/pack-refs/
@@ -4327,6 +4406,59 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # zero writes, pure computed dict.
     # Spec: docs/plans/2026-09-12-perforce-second-class-commit-and-shelve.md § C7, D9
     "p4.session_state": OpClass.COMPUTE_ONLY,
+
+    # RECORD authz-unclassified-ops-at-head — seven registered ops missing
+    # from this registry, leaving the registration-quad and drift-guard
+    # tests RED at HEAD.
+    #
+    # roadmap.plan_gate — COMPUTE_ONLY: ops/roadmap_plan_gate.py wraps
+    # `roadmap.plan_gate.assemble_plan_gate`, a pure scan. Module's own
+    # negative-spec: "Does NOT write, stamp, or mutate anything. ... Does
+    # NOT spawn." beyond the in-process git-index membership read.
+    "roadmap.plan_gate": OpClass.COMPUTE_ONLY,
+
+    # roadmap.blitz_land — MUTATING: ops/roadmap_blitz_land.py wraps
+    # `roadmap.blitz_land.land_wave`, which lands a wave's verdicts as
+    # real record writes ("Landing writes records" — module docstring's
+    # own negative-spec only disclaims committing and firing the next
+    # wave, never writing).
+    "roadmap.blitz_land": OpClass.MUTATING,
+
+    # memo.check_deliveries — COMPUTE_ONLY: ops/fleet/memo_send.py
+    # `_memo_check_deliveries`'s own docstring states plainly "'memo.
+    # check_deliveries' COMPUTE_ONLY op handler" and "Reads only: the
+    # sender's own ledger file, and the working trees + object stores of
+    # registered receiver repos ... Never writes into a receiver, never
+    # re-sends". `dry_run` is required True; no act mode exists.
+    "memo.check_deliveries": OpClass.COMPUTE_ONLY,
+
+    # docindex.emit — MUTATING: ops/docindex_emit.py `_docindex_emit`
+    # rewrites a resolved index document on disk
+    # (`(guarded_root / rel_path).write_text(...)`) whenever `write=True`
+    # and the comparison is ordinary drift. `write` defaults False but the
+    # op CAN write real coordinator substrate — same posture as
+    # fleet.backfill_reference_edges above (dry_run-default op still
+    # classified by its write-capable path, not its default params).
+    "docindex.emit": OpClass.MUTATING,
+
+    # workflow.bind_args — COMPUTE_ONLY: ops/workflow_bind.py composes and
+    # returns script TEXT only; module docstring states it "does not write
+    # to disk, matching workflow.scaffold's contract" — the caller places
+    # the file. The handler's only I/O is a read of the source script.
+    "workflow.bind_args": OpClass.COMPUTE_ONLY,
+
+    # baton.carry_forward — MUTATING: ops/baton_carry_forward.py
+    # `append_note` calls `session_baton.store.merge_baton`, a
+    # read-modify-write of the live session's baton.json under
+    # `.git/coordinator-sessions/<sid>/` — real, persistent (if
+    # session-scoped) mutation, same class already affirmed for
+    # session_baton.mint above.
+    #
+    # baton.carry_forward_read — COMPUTE_ONLY: `read_notes` calls
+    # `session_baton.store.read_baton` only; no write primitive on this
+    # path.
+    "baton.carry_forward": OpClass.MUTATING,
+    "baton.carry_forward_read": OpClass.COMPUTE_ONLY,
 })
 
 
@@ -4343,7 +4475,7 @@ def classify(op_name: str) -> OpClass:
         Do NOT add a default= fallback — silent treat-as-compute-only is the real
         privilege-escalation path (detect-then-fail-loud, not detect-then-silently-pick).
     """
-    # Review: code-reviewer — explicit guard replaces try/except/raise-from-None; single
+    # Explicit guard replaces try/except/raise-from-None; single
     # lookup makes the fail-closed intent immediately obvious without exception chain games.
     if op_name not in OP_CLASSIFICATION:
         raise KeyError(

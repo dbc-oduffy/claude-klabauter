@@ -142,7 +142,7 @@ def test_main_defaults_to_sys_argv(tmp_path, monkeypatch, capsys):
 
 
 def test_resolve_state_root_is_scoped_to_passed_cwd_not_ambient_cwd(tmp_path, monkeypatch):
-    """Review: code-reviewer (F1) — resolve_state_root(coordinator_root, cwd)
+    """resolve_state_root(coordinator_root, cwd)
     must resolve against *cwd*, not the process's ambient os.getcwd(). Two
     distinct (non-meta) repos: chdir the process into repo_a, then resolve
     against repo_b explicitly — the result must be scoped to repo_b."""
@@ -669,3 +669,21 @@ def test_format_json_still_renders_numbers_when_attributed():
     assert obj["chain_loe"]["agent_dispatches"] == 5
     assert obj["chain_loe"]["opus_dispatches"] == 1
     assert obj["chain_loe"]["tshirt"] == "S"
+
+
+def test_format_oneline_row_abbreviates_session_id_leading_six():
+    """`format_oneline_row` must emit the LEADING 6 chars of `session_id`,
+    matching the 207-of-207 live-corpus convention (2026-08-14 measurement)
+    of self-referring sessions everywhere else in this system -- not the
+    trailing 6, which 0 corpus rows use."""
+    from coordinator_core.session_ledger.aggregate_chain_loe import format_oneline_row
+
+    row = format_oneline_row(
+        "2026-08-14",
+        "a0df95e6-7369-4211-9ebd-c1eaa8466848",
+        "S",
+        3,
+        1,
+        "did a thing",
+    )
+    assert row == "2026-08-14 | a0df95 | S | 3d / 1o | did a thing"

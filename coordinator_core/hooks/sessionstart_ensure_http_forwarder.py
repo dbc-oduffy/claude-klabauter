@@ -330,10 +330,8 @@ def _ensure_current_forwarder(forwarder_path: Path) -> "Optional[str]":
 def _disclose(reason: str) -> dict:
     return context_only(
         "SessionStart",
-        f"COORDINATOR HTTP HOOK FORWARDER: {reason} -- the http hook forwarder "
-        "could not be ensured for this session; Bash-guard http-transport calls "
-        "may find no live backend for this session until a future SessionStart "
-        "recovers it.",
+        f"HTTP hook forwarder not ensured: {reason}. Bash-guard http calls may "
+        "find no backend this session.",
     )
 
 
@@ -352,9 +350,6 @@ async def _handler(params: dict, repo_root=None) -> dict:
             if not _spawn_forwarder_detached(forwarder_path):
                 return _disclose("won the probe bind but failed to spawn the forwarder process")
             return no_advisory()
-        return _disclose(
-            "could not determine whether the http hook forwarder is already running "
-            "(probe bind failed for a reason other than address-in-use)"
-        )
+        return _disclose("probe bind failed for a reason other than address-in-use")
     except Exception as exc:
         return _disclose(f"unexpected error ensuring the http hook forwarder: {exc!r}")

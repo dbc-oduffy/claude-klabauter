@@ -336,7 +336,7 @@ def _spine_write_sites(source: str) -> set[str]:
     task's `writes:` sequence), and a false write site manufactures a false
     conflict — the worse direction for a row already known to over-report.
 
-    Review: coordinator:code-reviewer (WSC-B, a676367b) — flagged the
+    Flagged the
     same-indent form as schema-legal and silently unmatched; caveat added
     here rather than widening the scanner.
     """
@@ -486,7 +486,7 @@ def _head(site: str) -> str:
     Two sites in different buckets therefore cannot overlap under
     `_paths_overlap`, and are never compared.
 
-    Review: coordinator:code-reviewer (WSC-B, a676367b) — the prior
+    The prior
     hand-rolled split diverged from `_normalize_path` on a `./`-prefixed
     site (bucketed under `"."` instead of the real first component) and on
     backslash-folding, silently dropping genuine cross-plan overlaps.

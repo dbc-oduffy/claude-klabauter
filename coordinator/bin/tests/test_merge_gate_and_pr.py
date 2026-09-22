@@ -182,7 +182,10 @@ def test_active_branch_guard_gh_failure_halts(monkeypatch, capsys):
 # these tests never touch the real engine, git, or the review-trail corpus.
 
 
-def test_coverage_gate_no_changed_files_passes(monkeypatch, capsys):
+def test_coverage_gate_no_changed_files_refuses(monkeypatch, capsys):
+    """C4/AC1: an empty changed-file set is indistinguishable from a `git
+    diff` failure (`_changed_files` folds the rc into empty stdout), so it
+    now exits 1 rather than the old fail-open 0."""
     monkeypatch.setattr(_mod, "_changed_files", lambda commit_range: [])
 
     def _fail(*args, **kwargs):
@@ -190,8 +193,8 @@ def test_coverage_gate_no_changed_files_passes(monkeypatch, capsys):
 
     monkeypatch.setattr(_mod, "_run_gate_validate_invocable", _fail)
     rc = _mod.main(["coverage-gate"])
-    assert rc == 0
-    assert "nothing to check" in capsys.readouterr().out
+    assert rc == 1
+    assert "no changed files" in capsys.readouterr().err
 
 
 def test_coverage_gate_covered_passes(monkeypatch, capsys):
@@ -239,9 +242,12 @@ def test_coverage_gate_uncovered_refuses(monkeypatch, capsys):
     # not re-word it to the server-side claim without checking
     # `GET /repos/dbc-example-operator/claude-klabauter/rulesets` is non-empty first.
     assert "not enforced at the git-push layer" in err
+    assert "review coverage is checked at merge, not at session close" in err
 
 
-def test_coverage_gate_dimension_unavailable_passes(monkeypatch, capsys):
+def test_coverage_gate_dimension_unavailable_refuses(monkeypatch, capsys):
+    """C4/AC1: UNAVAILABLE is not the review-dimension whitelist's PASS, so
+    it now exits 1 rather than the old fail-open 0."""
     monkeypatch.setattr(_mod, "_changed_files", lambda commit_range: ["a.py"])
     monkeypatch.setattr(
         _mod,
@@ -257,5 +263,184 @@ def test_coverage_gate_dimension_unavailable_passes(monkeypatch, capsys):
         },
     )
     rc = _mod.main(["coverage-gate"])
+    assert rc == 1
+    assert "unavailable" in capsys.readouterr().err
+
+
+def test_coverage_gate_dimension_absent_refuses(monkeypatch, capsys):
+    """C4/AC1: an absent review dimension now exits 1, not the old 0."""
+    monkeypatch.setattr(_mod, "_changed_files", lambda commit_range: ["a.py"])
+    monkeypatch.setattr(
+        _mod,
+        "_run_gate_validate_invocable",
+        lambda changed_files, diff_base, repo_root: {"dimensions": []},
+    )
+    rc = _mod.main(["coverage-gate"])
+    assert rc == 1
+    assert "review dimension absent" in capsys.readouterr().err
+
+
+def test_coverage_gate_names_live_and_ended_sessions(monkeypatch, capsys):
+    """C4/AC7: a session named in the FAIL detail's by-session grouping is
+    marked live (naming the reviewer dispatch as the alternative) or ended
+    (stating plainly that no remediation route exists yet), per
+    `session_live`."""
+    live_sid = "11112222-3333-4444-5555-666677778888"
+    ended_sid = "99998888-7777-6666-5555-444433332222"
+    detail = (
+        "uncovered: 2/2 commit(s) touching changed_files carry neither a "
+        "review-trail stamp nor a reviewer sidecar receipt (e.g. "
+        "aaaaaaaaaaaa) -- 2 code commit(s), 0 bookkeeping-only commit(s) not "
+        "in population\n"
+        "uncovered by session:\n"
+        f"  {live_sid}: aaaaaaaaaaaa\n"
+        f"  {ended_sid}: bbbbbbbbbbbb\n"
+    )
+    monkeypatch.setattr(_mod, "_changed_files", lambda commit_range: ["a.py"])
+    monkeypatch.setattr(
+        _mod,
+        "_run_gate_validate_invocable",
+        lambda changed_files, diff_base, repo_root: {
+            "dimensions": [{"dimension": "review", "verdict": "FAIL", "detail": detail}]
+        },
+    )
+
+    def _fake_session_live(sid, cwd=None):
+        return sid == live_sid
+
+    import coordinator_core.session.liveness as liveness
+
+    monkeypatch.setattr(liveness, "session_live", _fake_session_live)
+
+    rc = _mod.main(["coverage-gate"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert f"session {live_sid} is live" in err
+    assert "dispatch a reviewer from it" in err
+    assert f"session {ended_sid} has ended" in err
+    assert "no remediation route exists yet" in err
+
+
+# ---------------------------------------------------------------------------
+# coverage-gate --post-status (C5)
+# ---------------------------------------------------------------------------
+
+
+class _FakePostResult:
+    def __init__(self, posted, state, reason):
+        self.posted = posted
+        self.state = state
+        self.reason = reason
+
+    def to_json(self):
+        return {"posted": self.posted, "state": self.state, "reason": self.reason}
+
+
+def test_coverage_gate_post_status_success_exits_0(monkeypatch, capsys):
+    from coordinator_core.ops import post_coverage_status
+
+    def _fake_post(owner, repo, sha, commit_range, repo_root=None):
+        assert (owner, repo, sha) == ("acme", "widgets", "deadbeef")
+        return _FakePostResult(True, "success", "posted")
+
+    monkeypatch.setattr(post_coverage_status, "post_coverage_status", _fake_post)
+    rc = _mod.main([
+        "coverage-gate", "--post-status", "--sha", "deadbeef",
+        "--owner", "acme", "--repo", "widgets",
+    ])
     assert rc == 0
-    assert "unavailable" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert '"posted": true' in out
+    assert '"state": "success"' in out
+
+
+def test_coverage_gate_post_status_posted_failure_exits_1(monkeypatch, capsys):
+    from coordinator_core.ops import post_coverage_status
+
+    def _fake_post(owner, repo, sha, commit_range, repo_root=None):
+        return _FakePostResult(True, "failure", "coverage-gate: verdict 'FAIL'")
+
+    monkeypatch.setattr(post_coverage_status, "post_coverage_status", _fake_post)
+    rc = _mod.main([
+        "coverage-gate", "--post-status", "--sha", "deadbeef",
+        "--owner", "acme", "--repo", "widgets",
+    ])
+    assert rc == 1
+    assert '"state": "failure"' in capsys.readouterr().out
+
+
+def test_coverage_gate_post_status_unpostable_exits_1(monkeypatch, capsys):
+    from coordinator_core.ops import post_coverage_status
+
+    def _fake_post(owner, repo, sha, commit_range, repo_root=None):
+        return _FakePostResult(
+            False, None,
+            "unpostable: no GitHub token resolved (GITHUB_TOKEN/GH_TOKEN env, gh hosts.yml)",
+        )
+
+    monkeypatch.setattr(post_coverage_status, "post_coverage_status", _fake_post)
+    rc = _mod.main([
+        "coverage-gate", "--post-status", "--sha", "deadbeef",
+        "--owner", "acme", "--repo", "widgets",
+    ])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "GITHUB_TOKEN" in out
+    assert "GH_TOKEN" in out
+
+
+def test_coverage_gate_post_status_without_sha_is_argparse_error(capsys):
+    import pytest
+
+    with pytest.raises(SystemExit) as exc_info:
+        _mod.main(["coverage-gate", "--post-status"])
+    assert exc_info.value.code == 2
+    assert "--sha" in capsys.readouterr().err
+
+
+def test_coverage_gate_post_status_owner_repo_resolved_from_remote(monkeypatch, capsys):
+    from coordinator_core.ops import post_coverage_status
+    from coordinator_core.ops.ceremony import push
+
+    monkeypatch.setattr(push, "_resolve_github_owner_repo", lambda root: ("acme", "widgets"))
+
+    seen = {}
+
+    def _fake_post(owner, repo, sha, commit_range, repo_root=None):
+        seen["owner_repo"] = (owner, repo)
+        return _FakePostResult(True, "success", "posted")
+
+    monkeypatch.setattr(post_coverage_status, "post_coverage_status", _fake_post)
+    rc = _mod.main(["coverage-gate", "--post-status", "--sha", "deadbeef"])
+    assert rc == 0
+    assert seen["owner_repo"] == ("acme", "widgets")
+
+
+def test_coverage_gate_post_status_no_resolvable_remote_exits_1_posts_nothing(monkeypatch, capsys):
+    from coordinator_core.ops import post_coverage_status
+    from coordinator_core.ops.ceremony import push
+
+    monkeypatch.setattr(push, "_resolve_github_owner_repo", lambda root: None)
+
+    def _fail(*args, **kwargs):
+        raise AssertionError("post_coverage_status must not be called with no resolvable owner/repo")
+
+    monkeypatch.setattr(post_coverage_status, "post_coverage_status", _fail)
+    rc = _mod.main(["coverage-gate", "--post-status", "--sha", "deadbeef"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "--owner" in err and "--repo" in err
+
+
+def test_sessions_named_in_detail_skips_no_session_id_label(monkeypatch) -> None:
+    from coordinator_core.ops import gate_dimension_review
+
+    detail = (
+        "uncovered by session:\n"
+        "  11112222-3333-4444-5555-666677778888: aaaaaaaaaaaa\n"
+        f"  {gate_dimension_review._NO_SESSION_ID_LABEL}: bbbbbbbbbbbb\n"
+        "  (+3 more session(s))\n"
+    )
+    assert _mod._sessions_named_in_detail(detail) == [
+        "11112222-3333-4444-5555-666677778888"
+    ]

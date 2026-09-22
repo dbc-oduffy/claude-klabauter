@@ -525,7 +525,7 @@ def to_json(verdicts: "list[ForwarderVerdict]") -> str:
     return json.dumps(payload, indent=2, sort_keys=False) + "\n"
 
 
-# Review: overengineering-reviewer (Kira, pass 2, finding N2) -- `resolve_bare_name`
+# `resolve_bare_name`
 # carried two independently-settable booleans (`require_exec`, `powershell_first`)
 # where the one live caller derived both from a single bit. Four combinations
 # existed, two were production-reachable. One named model per platform, extended
@@ -636,7 +636,7 @@ def resolve_bare_name(
                 for entry in it:
                     by_folded.setdefault(entry.name.lower(), []).append(entry.name)
         except OSError:
-            # Review: code-reviewer S12/F3 -- an unreadable PATH directory is
+            # An unreadable PATH directory is
             # SKIPPED, which is what a real shell does, so this is the right
             # resolution behaviour and stays. What it cannot do is tell a
             # caller apart: an EACCES directory holding the door and a
@@ -650,7 +650,7 @@ def resolve_bare_name(
             found = by_folded.get(wanted.lower())
             if not found:
                 continue
-            # Review: reviewer (S6, finding 1) -- committing to ONE spelling
+            # Committing to ONE spelling
             # before checking `is_file()` let an exact-case DIRECTORY (e.g.
             # `zz.exe/`) shadow a real file of differing case (`zz.EXE`) in
             # the same folded bucket: the exact-case spelling won the bucket,
@@ -746,7 +746,7 @@ def bare_name_door_report() -> "list[str]":
     # (`door_install.DOOR_INSTALLED_NAME`, the single source of truth for it).
     # A hardcoded `.exe` here misses on every POSIX host and the early return
     # below then suppresses every finding this function exists to make.
-    # Review: reviewer (S6, finding 4) -- the prior wording cited `run_census`'s
+    # The prior wording cited `run_census`'s
     # local import of `substrate._derive_agent_helper_target_map` as precedent,
     # but that import serves a different function's cost tradeoff; it isn't
     # close analogy for this one. Function-local import here on its own
@@ -893,7 +893,7 @@ def _write_allowlist(verdicts: "list[ForwarderVerdict]", allowlist_path: Path = 
     `ops` import; if the resolver's shape changes, this changes with
     it.
 
-    Review: coordinator:code-reviewer -- this writer owns ONLY `$comment`
+    This writer owns ONLY `$comment`
     and `entrypoints`. Before C13's split
     (docs/dispatch-briefs/2026-09-01-the-dogfooded-install-stops-lying-
     about/C13.md) that was the file's whole shape, so a full-payload

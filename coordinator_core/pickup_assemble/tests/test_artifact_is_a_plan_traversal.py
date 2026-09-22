@@ -4,7 +4,7 @@ coordinator_core.pickup_assemble.tests.test_artifact_is_a_plan_traversal
 Purpose: pins `_artifact_is_a_plan`'s normalization against a `..`-traversal
 misclassification.
 
-Review: coordinator:code-reviewer — `artifact_path.replace(chr(92),
+`artifact_path.replace(chr(92),
 "/").lstrip("./")` strips a character SET, not a literal prefix: a
 traversal-shaped input like `"../../docs/plans/x.md"` has its leading run of
 `.`/`/` characters collapsed away entirely, leaving `"docs/plans/x.md"`,

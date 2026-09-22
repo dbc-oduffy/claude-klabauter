@@ -18,10 +18,16 @@ figures and renders them for C3 to state in the artifact:
     sampled.
   - the TIMING leg: process-time distributions read from the "fact_span" rows
     C1's instrumentation emits into `op-latency*.jsonl` (kind == "fact_span"),
-    grouped by `sid` into per-invocation aggregates, split into computed vs
-    degraded populations (a degraded fact short-circuits and is systematically
-    cheaper — blending the two would understate the computed cost and
-    overstate the degraded one).
+    grouped by `invocation_id` when a row carries one, else by `sid`, into
+    per-invocation aggregates, split into computed vs degraded populations (a
+    degraded fact short-circuits and is systematically cheaper — blending
+    the two would understate the computed cost and overstate the degraded
+    one). `coordinator_core/quick_wrap_assemble/__init__.py::brief` mints and
+    threads an `invocation_id` through all five facts it reads (see
+    `record_fact_span`'s own docstring), so rows written by that ceremony
+    group into a real per-ceremony aggregate; a row from any other caller
+    still falls back to the `sid`-collapsed aggregate — see
+    `state/bug-backlog/2026-08-27-fact-span-rows-cannot-yield-a-per-ceremo-d9be470c2039.yaml`.
 
 This module is explicitly OFFLINE: it is not itself held to the brightline's
 500ms per-process bar (it runs standalone, off the dispatch hot path), but its
@@ -461,11 +467,15 @@ def compute_timing_distributions(rows) -> dict:
 
     - PER-FACT (what `session_facts._timed_fact` emits, and the only shape the
       live sink contains): `{"kind": "fact_span", "t_start": float,
-      "sid": str|None, "fact": "session_facts.<name>", "elapsed_ms": float,
+      "sid": str|None, "invocation_id": str|None,
+      "fact": "session_facts.<name>", "elapsed_ms": float,
       "process_ms": float|None, "outcome": "computed"|"degraded"}`. Rows are
-      grouped by `sid` to recover the per-ceremony aggregate — the read-time
-      regrouping `record_fact_span`'s docstring names as the cost of not
-      buffering.
+      grouped by `invocation_id` when present, else `sid`, to recover the
+      per-ceremony aggregate — the read-time regrouping `record_fact_span`'s
+      docstring names as the cost of not buffering.
+      `quick_wrap_assemble.brief` now passes `invocation_id`, so rows it
+      writes group into a real per-ceremony aggregate; a row from a caller
+      that still omits it degrades to the `sid`-collapsed aggregate.
     - BUFFERED (this plan's PREFERRED shape, never built):
       `{..., "facts": {<name>: {"elapsed_ms": float, "degraded": bool}}}`.
       Kept because it is the shape this module's own tests were written
@@ -535,9 +545,10 @@ def compute_timing_distributions(rows) -> dict:
             continue
 
         stats.computed_ms.append(float(elapsed))
-        sid = row.get("sid")
-        if isinstance(sid, str):
-            by_invocation.setdefault(sid, {})[fact_name] = float(elapsed)
+        invocation_id = row.get("invocation_id")
+        grouping_key = invocation_id if isinstance(invocation_id, str) else row.get("sid")
+        if isinstance(grouping_key, str):
+            by_invocation.setdefault(grouping_key, {})[fact_name] = float(elapsed)
 
     for breakdown in by_invocation.values():
         aggregate.computed_ms.append(sum(breakdown.values()))

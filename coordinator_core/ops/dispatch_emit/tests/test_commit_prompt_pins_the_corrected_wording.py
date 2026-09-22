@@ -12,7 +12,7 @@ Negative-spec: the emitted commit prompt must never again claim a
 subject/trailer join ("joins on the subject"), and must name its own
 composing op so a reader knows where to correct the wording.
 
-Review: overengineering-reviewer (2026-08-31) — dropped
+Dropped
 `test_commit_prompt_never_instructs_the_nonexistent_flag`: the same
 "--deliverable-id" absence, same fixture args, is already pinned by
 `test_commit_prompt_forwards_deliverable_id.py::

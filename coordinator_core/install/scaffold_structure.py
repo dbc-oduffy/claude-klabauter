@@ -206,7 +206,7 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
             ),
         ),
         ShapedClause(
-            # Review: coordinator:code-reviewer — prose named only half the
+            # Prose named only half the
             # real gate (`if readme_text and not entry.gitkeep:`); a
             # gitkeep: true entry never gets a README written even if
             # readme-bearing.

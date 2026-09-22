@@ -461,7 +461,7 @@ def test_double_fire_unchanged_by_settings_only_presence(tmp_path, monkeypatch):
 
 
 def test_banner_renders_settings_only_danger_when_disjoint(tmp_path, monkeypatch):
-    """Review: code-reviewer (Finding 1) -- the settings-only danger section
+    """The settings-only danger section
     must render even when `double_fire` is False (disjoint surfaces, zero
     script overlap), not only when both conditions hold together."""
     content_root = tmp_path / "plugin-root"
@@ -774,7 +774,7 @@ def test_degraded_banner_renders_when_no_manifest_and_no_other_finding(
 
 
 def test_standalone_degraded_banner_when_nothing_else_to_report(tmp_path, monkeypatch):
-    # Review: coordinator:code-reviewer (P2) -- this test previously
+    # This test previously
     # asserted the standalone-degraded state was "not achievable without
     # settings entries" and unit-tested `format_hook_delivery_banner`
     # against a hand-built `HookDeliveryReport` on that premise. That claim
@@ -909,7 +909,7 @@ def test_standalone_stale_banner_names_unaccounted_command():
     `format_hook_delivery_banner` (same convention as the standalone
     degraded test above) as a fast, isolated check of the renderer alone.
 
-    Review: coordinator:code-reviewer (P2) -- this test previously claimed
+    This test previously claimed
     `stale`-with-zero-findings was "not reachable through
     `detect_hook_delivery_duplication`" because "any settings entry that
     does not overlap always becomes a settings-only finding". That claim
@@ -1117,6 +1117,51 @@ def test_double_fire_banner_and_kill_switch_detail_agree_on_shared_fixture(
     kill_switch_detail_line = gsi._double_fire_summary(config_dir)
     assert "ALREADY firing twice right now" in kill_switch_detail_line
     assert "could not be checked" not in kill_switch_detail_line
+
+
+# ---------------------------------------------------------------------------
+# The plugin-live branch of `_double_fire_summary` and
+# `gen_settings_hooks.generate`'s double-fire refusal describe the SAME state
+# to two audiences -- an operator reading the kill-switch banner, and the
+# generator deciding whether to write. They disagreed (2026-09-22,
+# doe-claude-b4): the banner called disarming unsafe on a boot where
+# generate() refuses to write at all. Pinned here against the real generator,
+# not a restatement of its docstring.
+# ---------------------------------------------------------------------------
+
+
+def test_plugin_live_branch_agrees_with_generate_s_own_refusal(tmp_path, monkeypatch):
+    """On plugin-live-and-resolvable boot: generate() must skip without
+    touching settings.json, and the kill-switch line must say disarming is
+    safe -- never that it would cause double-fire."""
+    from coordinator_core.install import gen_settings_hooks
+
+    content_root = tmp_path / "plugin-root"
+    content_root.mkdir()
+    _write_hooks_json(content_root, ["hooks/scripts/plugin-live.py"])
+    monkeypatch.setattr(gsi, "resolve_content_root", lambda: str(content_root))
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    _write_settings(config_dir, {"enabledPlugins": {"foo@bar": True}})
+    (config_dir / ".coordinator-hooks-enabled").touch()
+
+    report = gsi.detect_hook_delivery_duplication(config_dir)
+    assert (report.plugin_present, report.plugin_resolvable) == (True, True)
+    assert report.double_fire is False
+
+    out_path = config_dir / "settings-generated.json"
+    status = gen_settings_hooks.generate(
+        out_path=str(out_path),
+        hooks_json_override=str(content_root / "hooks" / "hooks.json"),
+        coordinator_root_override=str(content_root),
+    )
+    assert status == "skipped (plugin delivery already live)"
+    assert not out_path.exists()
+
+    line = gsi._double_fire_summary(config_dir)
+    assert "disarming is safe today" in line
+    assert "cause double-fire" not in line
 
 
 # ---------------------------------------------------------------------------

@@ -251,7 +251,7 @@ def test_cli_missing_subcommand_exits_nonzero():
 
 
 def test_additional_predecessor_flag_accumulates_via_append(tmp_path):
-    """Review: coordinator:code-reviewer af8ffeae P2 finding 1 — repeated
+    """Repeated
     --additional-predecessor flags accumulate and EVERY accumulated rung reaches the
     cascade's comparison.
 

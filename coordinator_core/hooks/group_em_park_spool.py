@@ -95,7 +95,7 @@ def append_record(path: str, record: dict) -> None:
     no read-modify-write, and no `os.replace`.
     """
     line = json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
-    with open(path, "a", encoding="utf-8") as fh:
+    with open(path, "a", encoding="utf-8", newline="\n") as fh:
         fh.write(line)
 
 

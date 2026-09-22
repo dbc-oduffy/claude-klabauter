@@ -133,7 +133,7 @@ def test_dispositions_constant_matches_plan_spec():
 
 
 def test_parse_fate_ending_in_run_shaped_substring_pins_documented_edge_case():
-    # Review: code-reviewer (Finding 2, 2026-07-12) — pins the CURRENT (imperfect
+    # Pins the CURRENT (imperfect
     # but documented) behavior for a fate whose own free text ends in a literal
     # "(run: ...)"-shaped substring with no separate trailing run-id group in the
     # source row. _ROW_RE's lazy-fate + end-anchored "(run: ...)" suffix cannot

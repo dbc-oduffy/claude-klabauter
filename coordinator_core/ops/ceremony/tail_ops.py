@@ -1,23 +1,13 @@
 """
 coordinator_core.ops.ceremony.tail_ops -- reused tail-op wiring + small cs_* native ports.
 
-Purpose: in-process (no bash/node spawn) wiring of ceremony tail ops -- ``coverage.gate``'s
-in-process wiring was since removed (see this module's own residue comment below);
-``review_trail.write`` was readmitted from suspension (PM ruling 2026-08-23) and is
-registered in ``coordinator_core/ops/__init__.py``, but this module still wires none of
-its own call sites against it (see the residue comment below) -- plus native Python ports of the two remaining
-``cs_*`` bash functions the OLD ``wsc_commit.py`` shelled out to via ``_run_cs_function``
-(``bash -c "source coordinator-session.sh && <fn>"``): ``cs_archive`` and
+Purpose: in-process (no bash/node spawn) wiring of ceremony tail ops, plus native Python ports
+of the two remaining ``cs_*`` bash functions the OLD ``wsc_commit.py`` shelled out to via
+``_run_cs_function`` (``bash -c "source coordinator-session.sh && <fn>"``): ``cs_archive`` and
 ``cs_release_artifact``. Also carries ``refresh_roadmap_callout`` -- the disposable STEP_2_75
-sibling render (native ``refresh_roadmap_callout.main`` port), ported from the OLD
-``wsc_commit.py``'s ``_tail_refresh_roadmap_callout`` and added here 2026-07-22 to close a C9
-wiring gap. C9's orchestrator (``wsc_tail.py``) composes all of these helpers into the
-single-pass pipeline; this module registers no top-level JSON-RPC op of its own.
-
-The former sibling, ``render_handoff_tracker`` (in-process port of the retired
-``render-handoff-tracker.js`` tracker render), was removed along with
-``renderers.render_repo_section`` -- see ``docs/plans/
-2026-08-14-retire-the-handoff-tracker-and-project-tracker-renders.md`` § C2.
+sibling render (native ``refresh_roadmap_callout.main`` port). The orchestrator
+(``wsc_tail.py``) composes all of these helpers into the single-pass pipeline; this module
+registers no top-level JSON-RPC op of its own.
 
 Fleet-op wiring follows the confirm-then-act contract (T1 preview ``dry_run:true`` -> T3 act
 ``dry_run:false``), resolved by public op-key string via ``coordinator_core.ipc.get_op_handler``
@@ -25,30 +15,11 @@ rather than importing each op module's private handler function -- a future op-m
 that drops the public registration surfaces cleanly as a ``None`` return, not an
 ``AttributeError`` at a private import site.
 
-Archive-sweeps were DETACHED, not in-process, from C2 (2026-07-23 plan
-``docs/plans/2026-07-23-wsc-tail-slim-down.md``) through 2026-08-25. ``fleet.
-archive_completed_plans``, ``fleet.archive_completed_handoffs``, and ``fleet.
-archive_actioned_memos`` used to be wired here as blocking two-phase calls
-(``archive_completed_plans`` / ``archive_completed_handoffs`` / ``sweep_actioned_memos``,
-now REMOVED -- 2769ms median of the ~3.3s ceremony, per the plan's Baseline table); an
-execute-time occasion re-verification found the "these already run elsewhere" duplication
-claim only partly true (no other occasion covers terminal plans or actioned memos within a
-session, and a long session between SessionStarts would archive nothing at all -- see plan
-§ Execution Notes "Occasion map re-verified"). C2's ``fire_archive_sweeps_detached``
-replaced the three blocking calls with detached CLI fires -- itself DELETED by C4
-(docs/plans/2026-08-25-the-terminal-handoff-sweep-stops-being-an-op.md § C4), whose spike
-found the detached-child-races-the-parent shape traded a budget win for a second-writer
-hazard (state/lessons/2026-07-23-universal-detaching-work-off-a-blocking-7183aecd6a29.yaml)
-with no net cost advantage over folding the archival move into the ceremony's own commit.
-The terminal-handoff sweep's live call site is now
+The terminal-handoff sweep's live call site is
 ``commit_pipeline.run_commit_pipeline``'s ``_run_in_plane_archive_sweep`` -- in-process,
-zero additional git spawns, zero additional commits (see that module). This module wires
-no call site for it any more; ``fleet.archive_completed_plans`` and ``fleet.
-archive_actioned_memos`` remain without any occasioned call site here (the former killed
-and rebuilt from scratch 2026-08-23, PM ruling, not yet re-earning one; the latter also
-killed outright the same day, PM ruling, then itself rebuilt from scratch and returned to
-the live registry at ``b8795931a`` -- see ``state/kill-ledger.md`` K-052 -- but still
-without an occasioned call site of its own here).
+zero additional git spawns, zero additional commits. This module wires no call site for it;
+``fleet.archive_completed_plans`` and ``fleet.archive_actioned_memos`` remain without any
+occasioned call site here.
 
 C5 (2026-07-23 wsc-tail-slim-down): ``refresh_roadmap_callout`` below was being dropped from
 ``wsc_tail.py``'s BLOCKING pre-commit tail and fired as a DETACHED CLI spawn instead, via
@@ -110,13 +81,6 @@ Negative-spec:
       docs/plans/2026-08-25-the-terminal-handoff-sweep-stops-being-an-op.md § C4); a
       repo-wide grep for either name returns no live caller. The replacement in-plane
       call site lives in ``commit_pipeline.py``, not here.
-
-Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C6
-Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 § C2
-Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 § C6
-Behavior reference (read for behavior, not structure, per the plan's Anti-scope):
-    Port of: coordinator-session.sh cs_archive, cs_release_artifact,
-    _cs_claim_held_by_me (DoE e34f2484, 2026-07-22).
 
 REMOVED 2026-08-27 (PM ruling, abd587695): the in-plane archival sweep
 `commit_pipeline._run_in_plane_archive_sweep` and its three legs are GONE from the
@@ -335,10 +299,9 @@ def refresh_roadmap_callout(worktree_root: Path, consumed_handoff_paths: List[st
     ``_ROADMAP_ID_ALLOWLIST_RE`` (bare identifier, no "..", no path separators) before use,
     mirroring the DoE pickup skill's allowlist guard.
 
-    Ported from the OLD ``wsc_commit.py``'s ``_tail_refresh_roadmap_callout`` -- widened here
-    to loop over the caller-supplied ``consumed_handoff_paths`` list directly (C9's
+    Loops over the caller-supplied ``consumed_handoff_paths`` list directly -- the
     orchestrator resolves the consumed set once, up front, via ``find_all_consumed_handoffs``,
-    rather than threading it through a per-node ``PipelineContext`` read).
+    rather than threading it through a per-node ``PipelineContext`` read.
 
     Returns {acted, skipped, failed} plus ``roadmap_stub_index_paths`` -- the repo-relative
     ``state/roadmap/<roadmap_id>/STUB-INDEX.md`` path for every roadmap successfully refreshed
@@ -421,22 +384,14 @@ def refresh_roadmap_callout(worktree_root: Path, consumed_handoff_paths: List[st
 
 
 # ---------------------------------------------------------------------------
-# fire_tracker_and_roadmap_detached -- C5 (2026-07-23 wsc-tail-slim-down):
-# render_handoff_tracker + refresh_roadmap_callout were dropped from the BLOCKING
-# wsc_tail.py pre-commit path and fired as DETACHED CLI spawns instead.
-# render_handoff_tracker itself was later retired outright 2026-08-14 (see
-# docs/plans/2026-08-14-retire-the-handoff-tracker-and-project-tracker-renders.md
-# § C2); refresh_roadmap_callout above remains the live call target of the CURRENT
-# wsc_tail.py pre-commit tail until that module's own C5 edit repoints its STEP_2_75
-# call site onto this detached-fire function (see this module's own docstring "C5"
-# section, and the executor report that landed this function, for the precise
-# before/after wsc_tail.py needs).
+# fire_tracker_and_roadmap_detached: refresh_roadmap_callout is fired as a
+# DETACHED CLI spawn rather than run in the BLOCKING wsc_tail.py pre-commit path.
 # ---------------------------------------------------------------------------
 
 #: bin/ CLI name (relative to ``<worktree_root>/coordinator/bin/``) this function
 #: spawns detached -- the SAME occasion CLI `/handoff` SKILL.md and workday-start
-#: already invoke standalone (module docstring "C5"), reused here rather than a
-#: second, WSC-only spawn mechanism.
+#: already invoke standalone, reused here rather than a second, WSC-only spawn
+#: mechanism.
 _ROADMAP_CALLOUT_CLI_SCRIPT = "refresh-roadmap-callout.py"
 
 
@@ -487,9 +442,7 @@ def fire_tracker_and_roadmap_detached(
     seam, same "record the SPAWN attempt only" result contract, no second spawn mechanism
     invented.
 
-    Its former handoff-tracker render leg was removed 2026-08-14 along with the
-    renderer it fired (`docs/plans/2026-08-14-retire-the-handoff-tracker-and-project-
-    tracker-renders.md` § C2). Fires `refresh-roadmap-callout.py` once per distinct
+    Fires `refresh-roadmap-callout.py` once per distinct
     allowlist-valid `roadmap_id` found in `consumed_handoff_paths`' frontmatter
     (`_consumed_handoff_roadmap_ids`) -- a clean `skipped[]` entry, not a failure, when
     no consumed handoff carries a roadmap_id.
@@ -555,25 +508,10 @@ def fire_tracker_and_roadmap_detached(
 
 
 # ---------------------------------------------------------------------------
-# coverage.gate's ceremony-close wiring was removed here (K-001,
-# state/kill-ledger.md): the DAG fixpoint walk it drove cost ~150-180s per
-# close, one git subprocess per chain commit. `coordinator_core.coverage.
-# run_coverage_gate`, the `coverage.gate` op handler, and
-# `coordinator/bin/review-coverage-gate.py` still exist as mint-only
-# plumbing reachable from `cmd_brightline_gate` (removed, K-007)
-# (coordinator/bin/wsc-coverage-gate-runner.py) -- see that op module's own
-# docstring for the live kill-candidate note.
-# ---------------------------------------------------------------------------
-# review_trail.write's in-process wiring (review_trail_metadata_complete,
-# write_review_trail, write_review_trail_many) was removed here (PM ruling
-# 2026-08-23, kill review_trail.write). The op module itself
-# (coordinator_core/ops/review_trail_write.py) was NOT deleted outright --
-# the same 2026-08-23 PM ruling later readmitted it from SUSPENSION, and it
-# is registered again (coordinator_core/ops/__init__.py registers
-# "review_trail.write"). This module registers no top-level JSON-RPC op of
-# its own and still performs no direct write for review-trail -- every write
-# site lived in this now-live op module, so re-wiring a call here (if ever
-# wanted) is a fresh decision, not a restoration of deleted code.
+# This module does not wire coverage.gate's ceremony-close DAG fixpoint walk,
+# and does not wire review_trail.write's in-process call (review_trail_
+# metadata_complete, write_review_trail, write_review_trail_many). Neither is
+# a call site here; re-wiring either is a fresh decision, not a restoration.
 # ---------------------------------------------------------------------------
 
 

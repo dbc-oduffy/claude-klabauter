@@ -31,6 +31,13 @@ Function-to-oracle map:
                                                                  a completed 1:1 port of the
                                                                  node CLI the bash oracle used
                                                                  — no subprocess/node hop)
+    cs_stamp_plan_superseded <- cs_stamp_plan_superseded()      (native in-process call to
+                                                                 coordinator_core.ops.plan_status_transition.main,
+                                                                 the exact route
+                                                                 cs_stamp_plan_implemented
+                                                                 takes, verb stamp-superseded;
+                                                                 NEW, no bash-oracle
+                                                                 predecessor)
     cs_gate_recheck_handoff  <- cs_gate_recheck_handoff()      (handoff.transition gate-recheck)
     cs_repark_handoff        <- cs_repark_handoff()            (handoff.transition repark)
     cs_unclaim_handoff       <- cs_unclaim_handoff()           (handoff.transition unclaim;
@@ -141,6 +148,14 @@ Exit-code contract (mirrors the oracle function-by-function):
                               args, missing --plan, plan not found, unparseable
                               frontmatter). No transport-failure path remains —
                               there is no subprocess/node hop left to fail.
+    cs_stamp_plan_superseded — pure 0/1 contract, identical in shape to
+                              cs_stamp_plan_implemented above: the native
+                              port's exit code (plan_status_transition.main,
+                              verb stamp-superseded) is returned verbatim —
+                              0 on transition-applied or already-superseded
+                              no-op, 1 on error (missing/invalid --by, --plan
+                              not found, unparseable frontmatter, or a plan
+                              already terminal at a DIFFERENT status).
 
 Negative-spec:
     - Does NOT reimplement any frontmatter-mutation LOGIC — that lives entirely in the
@@ -807,7 +822,7 @@ def _read_current_shipped_in(handoff_path: str) -> Optional[str]:
     avoid the ops-package import-cycle `stamp_shipped_in`'s own docstring
     documents for `_stamp_handler`)."""
     try:
-        # Review: code-reviewer (nit F4) — UnicodeDecodeError (a ValueError
+        # UnicodeDecodeError (a ValueError
         # subclass, not an OSError) on non-UTF-8 bytes must also degrade to
         # None per this function's "None on unreadable" contract; this sits
         # directly on the AC6/AC7 refusal-vs-noop decision path.
@@ -1470,6 +1485,31 @@ def cs_ship_handoff(
 ) -> int:
     """Terminal ship transition: stamp shipped_in + flip deployment_state -> shipped.
 
+    Thin int-returning wrapper over `_cs_ship_handoff_core` (see that function
+    for the full contract, including the retain-is-never-an-error and
+    claim-release semantics). `archive-stamp-cli.py` uses this return value
+    directly as a process exit code, so its shape (`int`, not the `(rc,
+    retained)` pair the core computes) stays exactly as every existing caller
+    already depends on."""
+    rc, _retained = _cs_ship_handoff_core(handoff_path, archive=archive, sha=sha, force=force)
+    return rc
+
+
+def _cs_ship_handoff_core(
+    handoff_path: str,
+    archive: bool = False,
+    sha: Optional[str] = None,
+    force: bool = False,
+) -> "tuple[int, bool]":
+    """Terminal ship transition: stamp shipped_in + flip deployment_state -> shipped.
+
+    Returns `(exit_code, retained)` — `retained` is `True` when the live-
+    children guard (or an indeterminate/fail-closed read) left the handoff
+    untouched rather than flipping it, so a caller that needs to tell "landed"
+    apart from "deferred, still in_flight" (both `exit_code == 0`, per the
+    Retention paragraph below) can. `cs_ship_handoff` above discards the
+    second element for callers that only ever wanted the process-exit shape.
+
     Composes handoff.archive_transition (NOT the plain handoff.transition op) so
     every caller — standalone (/pickup, /workstream-complete embedded bash blocks
     via DoE's archive-stamp-cli) included — gets the SAME unconditional
@@ -1517,6 +1557,22 @@ def cs_ship_handoff(
     genuine no-commit-found no-op still distinguishes "left unset" (nothing
     was ever there) from "retained prior value `<X>`" (AC7) — it no longer
     reports both as "left unset".
+
+    Claim release (Census row 3, docs/plans/2026-09-11-handoff-lifecycle-one-
+    legal-state-table.md § C4): a genuine ship — `rc == 0` AND the op did NOT
+    retain (`result.get("retained")` is falsy) — releases this handoff's claim
+    via the EXISTING seam `coordinator_core.session.claims.release_artifact`,
+    the same call shape `pickup_assemble/apply.py` (three call sites) and
+    `pickup_assemble/__init__.py` already use for `("handoff", basename)`. This
+    fires AFTER the ship has independently verified as landed (the op's own
+    rc/retained verdict, already computed above) — never on the retain path: a
+    live-children RETAIN also returns rc 0, and releasing its claim would
+    unclaim a baton that is still live. Failure to release is reported on
+    stderr, never swallowed, and never converts this successful ship into a
+    non-zero exit — `release_artifact` itself never raises (best-effort,
+    holder-identity-checked, no-op on a non-holder or already-released claim;
+    see its own docstring), so the only failure shape here is an unexpected
+    exception from resolving the worktree, caught and reported the same way.
     """
     if force and not (sha and sha.strip()):
         print(
@@ -1524,7 +1580,7 @@ def cs_ship_handoff(
             "force must never trigger its own resolution",
             file=sys.stderr,
         )
-        return 1
+        return 1, False
     mode = "stamp_shipped" if archive else "stamp_only"
     params: dict = {"mode": mode}
     if sha:
@@ -1533,6 +1589,7 @@ def cs_ship_handoff(
         params["force"] = True
     result = _call_handoff_archive_transition(handoff_path, params)
     rc = int(result.get("exit_code", 1))
+    retained = bool(result.get("retained"))
     if rc != 0:
         print(f"cs_ship_handoff: {result.get('error', 'unknown error')}", file=sys.stderr)
     else:
@@ -1546,7 +1603,22 @@ def cs_ship_handoff(
             value = result.get(key)
             if value:
                 print(f"cs_ship_handoff: {key}={value}", file=sys.stderr)
-    return rc
+        if not retained:
+            try:
+                from coordinator_core.session.claims import release_artifact
+
+                worktree, _ = _resolve_repo_root_for(Path(handoff_path))
+                basename = Path(handoff_path).name
+                release_artifact(
+                    "handoff", basename, cwd=str(worktree) if worktree else None
+                )
+            except Exception as exc:  # noqa: BLE001 -- never mask a successful ship
+                print(
+                    f"cs_ship_handoff: claim release for {handoff_path} failed "
+                    f"({exc.__class__.__name__}: {exc}) — ship itself succeeded",
+                    file=sys.stderr,
+                )
+    return rc, retained
 
 
 def _archive_move_landed(handoff_path: str, worktree: Optional[Path]) -> bool:
@@ -1646,7 +1718,7 @@ def _reread_supersede_frontmatter(current_path: Path) -> tuple[Optional[str], Op
     no frontmatter; that shape reads as a verification failure to the caller, never
     as a silent pass."""
     try:
-        # Review: code-reviewer (nit F4) — UnicodeDecodeError (a ValueError
+        # UnicodeDecodeError (a ValueError
         # subclass, not an OSError) on non-UTF-8 bytes must also fail closed
         # to (None, None) per this function's own contract.
         text = current_path.read_text(encoding="utf-8")
@@ -1737,7 +1809,7 @@ def cs_supersede_archive_handoff(
             file=sys.stderr,
         )
         return 2
-    # Review: code-reviewer (P2) — this previously imported
+    # This previously imported
     # `claimed_or_shipped_at_path` out of a package literally named `tests`
     # (a future `exclude = ["coordinator_core.tests*"]` on `pyproject.toml`'s
     # `include = ["coordinator_core*"]` would have silently broken this at
@@ -1827,7 +1899,7 @@ def _foreign_live_holder_refusal(handoff_path: str, claimant_sid: str) -> "str |
     detects, which the operator can still see in the returned frontmatter.
     """
     try:
-        # Review: code-reviewer (P1 Finding 2) — this read holds TWO properties
+        # This read holds TWO properties
         # together and neither may be dropped: (1) fence-bounded (the hand-rolled
         # split_frontmatter + read_fm_field_unquoted pair, kept over
         # read_frontmatter_field specifically because that shared reader is not
@@ -1951,7 +2023,7 @@ def _record_claimant_identity_best_effort(
     try:
         slug = resolve_operating_person().get("github")
     except Exception:  # noqa: BLE001 — best-effort; see this function's own contract
-        # Review: code-reviewer 2026-08-30 P1. This call sat ahead of every
+        # code-reviewer 2026-08-30 P1. This call sat ahead of every
         # try/except, so a raising resolver propagated out of a function whose
         # docstring promises it never aborts the caller's claim -- and both call
         # sites invoke it as the LAST statement after the transition has already
@@ -1974,7 +2046,7 @@ def _record_claimant_identity_best_effort(
 
             record = harness_registry.lookup(claimant_sid)
         except Exception:  # noqa: BLE001 — best-effort; a registry read is not a claim
-            # Review: code-reviewer (P1 Finding 1) — a raise here means "cannot
+            # A raise here means "cannot
             # tell", NOT "this claimant genuinely has no name". Folding both into
             # `record = None` made the removal arm below indistinguishable from a
             # clean no-name lookup, so a transient registry error deleted a real,
@@ -2611,6 +2683,21 @@ def cs_stamp_plan_implemented(plan_path: str) -> int:
                 file=sys.stderr,
             )
     return rc
+
+
+def cs_stamp_plan_superseded(plan_path: str, by: str) -> int:
+    """Flips a plan's frontmatter status: to superseded via the native
+    coordinator_core.ops.plan_status_transition port — the exact same
+    in-process route cs_stamp_plan_implemented takes
+    (``plan_status_transition.main(["stamp-superseded", "--plan", plan_path,
+    "--by", by])``). Returns the op's own exit code verbatim: the op's
+    refusal (a missing/invalid ``--by``, an already-terminal-at-a-different-
+    status plan) is the authoritative gate — this wrapper adds no gating of
+    its own, mirroring cs_stamp_plan_implemented's own "pure 0/1 contract"
+    (see this module's docstring, Exit-code contract section). An
+    already-superseded plan no-ops at rc 0 (the op's own idempotent-skip
+    branch, _stamp_superseded's `status == "superseded"` case)."""
+    return plan_status_transition.main(["stamp-superseded", "--plan", plan_path, "--by", by])
 
 
 # ---------------------------------------------------------------------------

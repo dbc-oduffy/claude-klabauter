@@ -57,7 +57,7 @@ def _legal_disposition_values(judgment_point: Mapping[str, Any]) -> set[str]:
     read back. An answer naming a value absent from this set is what
     this module's `resume_decisions` refuses on rather than coercing.
 
-    Review: overengineering-reviewer -- private to this module rather than a
+    Private to this module rather than a
     shared reader in `envelope.py`: this function has exactly one production
     caller (below), unlike `judgment_points_by_id`, which genuinely has two
     (`resume_decisions` here and `pickup_assemble.apply`).

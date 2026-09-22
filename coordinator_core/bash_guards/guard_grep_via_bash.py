@@ -584,7 +584,16 @@ def _composed_advisory(
         # `_BACKTICK_RE` (`` `([^`\n]+)` ``) never matches across a
         # newline, so this guard's message-size floor is pinned by this
         # rewrite's own length, not by wrapper prose -- see this guard's
-        # C8 execution report for the measured floor.
+        # C8 execution report for the measured floor. RECONFIRMED (C3,
+        # docs/plans/2026-09-11-trim-the-remaining-over-cap-guard-messages.md):
+        # even with every wrapper word stripped (no lede prefix, no
+        # fallback sentence, no override note) the two-segment fixture
+        # `grep -rn TODO src/ | wc -l` still measures ~323 prose bytes
+        # against a 220-byte cap -- the un-exemptable, non-indented first
+        # and last lines of the embedded rewrite alone exceed the cap on
+        # their own. Nothing in this file's remaining wrapper prose is the
+        # cost; left over cap for adjudication (GUARD_MESSAGE_EXEMPTIONS is
+        # outside this row's `writes:`).
         lede = "%s one-fewer-fork replacement instead: %s" % (
             _SHAPE_NAME,
             partial_rewrite,

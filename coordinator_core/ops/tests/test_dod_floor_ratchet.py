@@ -188,7 +188,7 @@ def test_docstrings_measurer_is_registered_at_import_time():
     assert "docstrings" in MEASURERS
 
 
-# Review: coordinator:code-reviewer-3c4f24d7 -- CLI/argparse wiring (`main()`)
+# CLI/argparse wiring (`main()`)
 # had no direct coverage; only the library functions it delegates to were
 # exercised. `main()` reads `repo_root=None` internally (cwd-relative), so
 # these tests chdir into `tmp_path` via monkeypatch rather than passing

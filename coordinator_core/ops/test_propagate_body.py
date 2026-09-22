@@ -1,8 +1,8 @@
 """
 coordinator_core.ops.test_propagate_body
 
-Tests for the handoff.propagate op (B1, docs/plans/2026-08-01-baton-spine-
-information-integrity.md).
+Tests for the handoff.propagate op (B1, DoE-claude docs/plans/2026-08-01-
+baton-spine-information-integrity.md).
 
 Import guard: coordinator_core.ops.propagate_body MUST be imported at module
 load time so @register_op("handoff.propagate") fires and populates _REGISTRY
@@ -39,7 +39,7 @@ Coverage:
       block_subagent_commit's intent (module docstring point 4).
 
 Spec backlink: coordinator_core/ops/propagate_body.py
-               docs/plans/2026-08-01-baton-spine-information-integrity.md
+               DoE-claude docs/plans/2026-08-01-baton-spine-information-integrity.md
 """
 
 from __future__ import annotations

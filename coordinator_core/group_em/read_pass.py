@@ -204,7 +204,7 @@ def _parse_iso_stamp(value: Any) -> Optional[datetime]:
     string -- missing field, wrong type, or malformed text. A naive result
     (no explicit offset) is assumed UTC. Never raises.
 
-    Review: coordinator:overengineering-reviewer -- the body was a second
+    The body was a second
     implementation of `receiver_state.parse_iso_timestamp`, character for
     character. Kept as a name because this module's callers read `stamped_at`
     (a receiver-state field) rather than a transcript `timestamp`, and that
@@ -431,7 +431,7 @@ def _transcript_moved_since(
         return None
     if trusted:
         return activity_epoch > stamp_dt.timestamp()
-    # Review: coordinator:code-reviewer (P2) -- the untrusted (mtime) fallback
+    # The untrusted (mtime) fallback
     # is barred from answering "moved", never from answering "has not moved".
     # The bias is ONE-DIRECTIONAL: a bookkeeping rewrite can only push mtime
     # forward, and any real write is at or before it, so `mtime <= stamp`
@@ -526,7 +526,7 @@ def classify_peer(
             "candidate": False,
             "unclassifiable": False,
             "contradicted": False,
-            # Review: coordinator:code-reviewer (finding 1) -- `cwd` threaded
+            # `cwd` threaded
             # onto every verdict row so `send_pass._dwell_seconds` can use the
             # peer's own cwd (`peer.get("cwd") or repo_root`), matching this
             # module's own pattern, instead of always assuming `repo_root`.
@@ -660,7 +660,7 @@ def classify_peer(
 
     status = peer.get("status")
     reduced_lines: list = []
-    # Review: overengineering-reviewer (finding out of this reviewer's own
+    # overengineering-reviewer (finding out of this reviewer's own
     # scope, flagged by it as staff-eng's; applied here per EM instruction)
     # -- this local used to be named `transcript_activity_epoch`, the exact
     # name of the module function promoted to public in this same session
@@ -710,7 +710,7 @@ def classify_peer(
         # contradicted row.
         "contradicted": False,
         "cwd": peer.get("cwd"),
-        # Review: coordinator:code-reviewer (P2, double read) -- this leg
+        # This leg
         # already reduced the tail and derived the epoch; threading it onto the
         # verdict (the same way `cwd` is) lets `watch._parked_line` report the
         # peer's idle time without re-reducing the same file in the same tick.

@@ -34,7 +34,10 @@ and act is surfaced in the result envelope with a named skip reason
 simply not enumerated as a candidate — `build_dry_run_result` carries no
 skip list at T1 (`skipped: []` is hardcoded empty there); the record's
 never-flipped guarantee holds, but "surfaced with a reason" is a T3-only
-property, not a T1 one. `cascade_backstop_sweep` and this family's own
+property, not a T1 one in the WIRE envelope. `_handle_preview`'s own
+`scan_skipped` out-param (see `_archive_terminal_sizings`'s docstring) lets
+an in-process caller still recover the T1 refusal reasons without widening
+that frozen envelope. `cascade_backstop_sweep` and this family's own
 governing boundary are explicit on this point: a sweep that decides for
 itself that work is "finished" is exactly the failure DR-293 forbids. Every
 code path in this module is read-then-move or refuse-to-move; none is
@@ -313,7 +316,7 @@ def _dirty_sizing_relpaths(worktree_root: Path, candidate_relpaths: List[str]) -
 
 @register_op("fleet.archive_terminal_sizings")
 async def _archive_terminal_sizings(
-    params: dict, repo_root=None
+    params: dict, repo_root=None, scan_skipped: Optional[List[dict]] = None,
 ) -> dict:
     """JSON-RPC 'fleet.archive_terminal_sizings' handler.
 
@@ -327,6 +330,19 @@ async def _archive_terminal_sizings(
     Worktree root is derived engine-side via main_worktree_root(common_dir).
     params.repo_root is the optional D3 consistency check ONLY — NOT the
     worktree source (mirrors archive_plans.py's Key Decision 5).
+
+    scan_skipped: optional caller-owned out-list, appended to in place with
+    every T1-excluded terminal sizing (cannot-derive-date / AC6 forward-
+    pointer refusal) as {"id", "reason"}. NOT part of the frozen dry_run
+    wire envelope (build_dry_run_result's own `skipped` key stays `[]` at
+    T1, unchanged — see this module's "Never-infer boundary" docstring) —
+    this is a side channel for an in-process caller (sweep-terminal-
+    sizings.py) that needs the T1 refusal census even when it collapses
+    `candidates` to empty, mirroring sweep-terminal-handoffs.py's own
+    `scan_skipped=` out-param on its classify call. JSON-RPC dispatch never
+    passes this kwarg, so remote callers see no behavior change. Ignored
+    entirely when dry_run:false (T3 act already reports its own skips via
+    the wire `skipped[]` field).
     """
     validated = validate_params(params)
     if isinstance(validated, dict):
@@ -354,16 +370,26 @@ async def _archive_terminal_sizings(
         return build_act_result(mode, [], [], [])
 
     if dry_run:
-        return await _handle_preview(mode, worktree_root, sizings_dir, common_dir)
+        return await _handle_preview(
+            mode, worktree_root, sizings_dir, common_dir, scan_skipped=scan_skipped,
+        )
     else:
         return await _handle_act(mode, worktree_root, sizings_dir, candidate_ids, common_dir)
 
 
 async def _handle_preview(
-    mode: str, worktree_root: Path, sizings_dir: Path, common_dir: Path
+    mode: str,
+    worktree_root: Path,
+    sizings_dir: Path,
+    common_dir: Path,
+    scan_skipped: Optional[List[dict]] = None,
 ) -> dict:
     """T1 preview: enumerate terminal sizings, apply the cannot-derive-date
     and forward-pointer-refusal guards, return candidates.
+
+    See `_archive_terminal_sizings`'s own docstring for `scan_skipped`'s
+    contract — it never affects the returned envelope, only what this
+    function appends to the caller-owned out-list, when given one.
     """
     candidates: List[dict] = []
 
@@ -372,10 +398,18 @@ async def _handle_preview(
         if status not in _TERMINAL_STATUSES:
             continue  # not terminal — never flipped, never surfaced as a candidate
 
+        rel_path = rel_id(path, worktree_root)
+
         # cannot-derive-date guard (T1 filter, mirrors archive_plans): a
         # terminal sizing with no YYYY-MM-DD prefix has no archive
         # destination — never present it as an archivable candidate.
         if _derive_yyyy_mm(path.name) is None:
+            if scan_skipped is not None:
+                scan_skipped.append({
+                    "id": rel_path,
+                    "reason": f"cannot-derive-date: filename {path.name!r} "
+                              f"has no YYYY-MM-DD prefix",
+                })
             continue
 
         # AC6 forward-pointer refusal gate (T1 filter): a live plan FK holds
@@ -384,9 +418,10 @@ async def _handle_preview(
         if plan_fk is not None:
             refusal = _forward_plan_refusal_reason(worktree_root, plan_fk)
             if refusal is not None:
+                if scan_skipped is not None:
+                    scan_skipped.append({"id": rel_path, "reason": refusal})
                 continue
 
-        rel_path = rel_id(path, worktree_root)
         title = _extract_title(path) or path.stem
         candidates.append({
             "id": rel_path,

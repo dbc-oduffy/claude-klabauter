@@ -179,7 +179,7 @@ def test_intent_falls_back_to_summary_and_says_so(tmp_path, as_session):
 
 
 def test_second_different_adoption_never_clobbers_first_intent(tmp_path, as_session):
-    """Review: reviewer 2026-09-01-codereview-sliceB #1/#2 -- a title-less
+    """A title-less
     first adoption can legitimately stamp `intent` alone (fail-open posture,
     § `_adopt_into_baton` docstring). A SECOND, DIFFERENT artifact adopted in
     the same session must not re-fire the naming block and overwrite that

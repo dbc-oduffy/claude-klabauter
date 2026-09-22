@@ -171,7 +171,7 @@ def _wrap_flat_op(op_fn) -> dict:
     return _handler
 
 
-# Review: overengineering-reviewer (Kira) — these three keys had no
+# These three keys had no
 # registration, dispatch site, or cross-module caller (grepped across
 # claude-klabauter and DoE-claude); DoE's own hook shims import
 # `coordinator_core.hooks.<module>.op` directly and never go through
@@ -249,7 +249,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
             continue
         is_block, text = _extract_advisory(result)
         if is_block:
-            # Review: coordinator:code-reviewer — a block must survive the
+            # A block must survive the
             # fold even with a falsy reason; decoupling is_block from text
             # would let a deny("Stop", "") evaporate silently.
             block_reasons.append(text or "<no reason given>")

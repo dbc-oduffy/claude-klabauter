@@ -1333,7 +1333,6 @@ def test_windows_spaced_username_coordinator_doc_new_cmd_allows(monkeypatch):
 
 
 def test_windows_spaced_username_coordinator_doc_new_py_allows(monkeypatch):
-    # Review: coordinator:code-reviewer, Finding 2 follow-up (2026-08-17) --
     # the scaffolder's real on-disk name carries a literal ``.py`` suffix
     # (Divergence 19), which the embedded-space rewrite passes did not
     # recognize (only the bare name plus ``.exe``/``.cmd``). This is the

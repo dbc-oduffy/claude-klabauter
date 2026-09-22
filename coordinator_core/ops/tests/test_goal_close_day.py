@@ -159,7 +159,7 @@ def test_writes_nothing(tmp_path):
 
 
 def test_unparseable_today_override_falls_back_to_real_utc_today():
-    # Review: code-reviewer — no prior test exercised the try/except ValueError
+    # No prior test exercised the try/except ValueError
     # fallback branch; every other test passes a valid ISO `today=`.
     from datetime import datetime, timezone
 
@@ -345,7 +345,7 @@ def test_different_repo_row_is_out_of_scope_for_close(tmp_path):
 
 
 def test_reclosing_already_closed_row_raises_value_error(tmp_path):
-    # Review: code-reviewer — a decision naming an already-done/dropped goal_id
+    # A decision naming an already-done/dropped goal_id
     # must not resolve to a source row; accepting it would silently overwrite
     # the terminal status already on the wire via the latest-wins collapse.
     _write_shard(tmp_path, [_row(goal_id="abc123def456", status="done")])
@@ -358,7 +358,7 @@ def test_reclosing_already_closed_row_raises_value_error(tmp_path):
 
 
 def test_unreadable_central_state_root_fails_loud_on_write_leg(tmp_path, monkeypatch):
-    # Review: code-reviewer — the write leg's "fails loud on unreadable root"
+    # The write leg's "fails loud on unreadable root"
     # claim previously fired only incidentally via the generic "missing" check;
     # this asserts the dedicated, correctly-diagnosed exception.
     unreadable_root = tmp_path / "unreadable"

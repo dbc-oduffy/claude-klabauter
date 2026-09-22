@@ -67,7 +67,7 @@ import dataclasses
 import json
 import os
 import platform
-import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -207,10 +207,24 @@ PLUGIN_MANIFEST_REL = (".claude-plugin", "plugin.json")
 #: registered (see `assert_hook_plane_armed`).
 PLUGIN_HOOKS_REL = ("hooks", "hooks.json")
 
-#: A script path inside a hook command or argument — the engine's own
-#: `guard_settings_integrity._SCRIPT_TOKEN_RE`, re-stated because this module
-#: must not import `coordinator_core`.
-_SCRIPT_TOKEN_RE = re.compile(r"(\S*\.(?:py|sh|mjs|js))\b")
+#: A script file's recognized extensions inside a hook command or argument —
+#: the engine's own `guard_settings_integrity._SCRIPT_TOKEN_RE` set, re-stated
+#: because this module must not import `coordinator_core`. Checked against an
+#: already `shlex`-isolated piece (`_shlex_pieces`), not scanned with `\S*`
+#: over a raw multi-word string: a quoted path with an embedded space is one
+#: piece by then, and `\S*` cannot cross a space it might still contain
+#: (code-reviewer F2).
+_SCRIPT_EXTENSIONS = (".py", ".sh", ".mjs", ".js")
+
+
+def _script_tail(piece: str) -> str | None:
+    """The `<dir>/<file>` tail of `piece` if it names a script file, else None."""
+    normalized = piece.replace("\\", "/").strip("'\"")
+    if not normalized.endswith(_SCRIPT_EXTENSIONS):
+        return None
+    tail = "/".join(normalized.split("/")[-2:])
+    return tail or None
+
 
 #: The marketplace manifest, read for the marketplace's declared name. Both
 #: halves of the record's `<plugin>@<marketplace>` key are READ from the clone,
@@ -429,7 +443,7 @@ def run_step(name: str, fn, report: Report) -> None:
 
     Returns nothing: every step must still run and be named in the report
     even after an earlier one fails (the all-steps-failing case
-    `scripts/tests/test_cloud_setup.py` pins), so short-circuiting later
+    `scripts/tests/test_cloud_setup_orchestration.py` pins), so short-circuiting later
     steps on an earlier failure is not this function's job.
 
     Every verdict carries the step's elapsed time, measured here rather than at
@@ -752,7 +766,7 @@ def pin_session_path(report: Report) -> None:
         settings = {}
     settings.setdefault("env", {})["PATH"] = value
     tmp_path = settings_path.with_suffix(settings_path.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(settings, indent=2))
+    tmp_path.write_text(json.dumps(settings, indent=2), newline="\n")
     tmp_path.replace(settings_path)
 
     # Read back off disk, not asserted from the dict just written — the same
@@ -781,20 +795,15 @@ def assert_hook_plane_armed(report: Report) -> None:
     up until an agent notices a ceremony running with no engine-minted run-id.
     Nothing gated on that. This does.
 
-    Three facts, all read off disk:
+    Two facts, all read off disk:
 
     - At least one hook-delivery surface the runtime consults registers hooks:
       `settings.json`'s own `hooks` block, OR the coordinator plugin's
       `hooks/hooks.json` (see `_plugin_hook_delivery`). The plugin surface is
-      not a fallback, it is the NORMAL case: the engine's
-      `gen_settings_hooks.generate` deliberately leaves `settings.json`'s
-      `hooks` unwritten whenever plugin-side delivery is live, because writing
-      both fires every hook twice. Reading `settings.json` alone therefore
-      reported a perfectly installed container as unarmed (claude-klabauter#28)
-      — and told its sessions to disbelieve guards that were firing.
-    - No hook is delivered by BOTH surfaces. `drop_double_fired_settings_hooks`
-      runs first and removes such entries, so a hit here means that repair
-      did not land.
+      not a fallback, it is the NORMAL case (claude-klabauter#28). Double-fired
+      entries are `drop_double_fired_settings_hooks`'s job, run after every
+      writer and just before this; it either removes them or raises, so this
+      assert does not re-detect them.
     - `.doe-root` resolves through at least one rung the no-launcher fences read.
       At least one, deliberately NOT all: `<settings-home>/machine-local/.doe-root`
       is the canonical target and `~/.claude/.doe-root` is a legacy fallback that
@@ -817,15 +826,17 @@ def assert_hook_plane_armed(report: Report) -> None:
         hook_event_count = len(hooks) if isinstance(hooks, (dict, list)) else 0
     except Exception as e:  # noqa: BLE001 - an unreadable settings file is a verdict
         read_error = f"{type(e).__name__}: {e}"
-    plugin, delivered = _plugin_hook_delivery(settings)
-    double_fired = _double_fired_hooks(settings, delivered) if plugin["armed"] else []
+    plugin = _plugin_hook_delivery(settings)
+    plugin.pop("_delivered", None)
     settings_armed = hook_event_count > 0
-    delivery = {
-        (True, True): "both",
-        (True, False): "settings",
-        (False, True): "plugin",
-        (False, False): "none",
-    }[(settings_armed, plugin["armed"])]
+    if settings_armed and plugin["armed"]:
+        delivery = "both"
+    elif settings_armed:
+        delivery = "settings"
+    elif plugin["armed"]:
+        delivery = "plugin"
+    else:
+        delivery = "none"
     hooks_present = delivery != "none"
 
     settings_home = os.environ.get("COORDINATOR_SETTINGS_HOME") or ""
@@ -851,7 +862,6 @@ def assert_hook_plane_armed(report: Report) -> None:
         "hook_event_count": hook_event_count,
         "settings_read_error": read_error,
         "plugin_hooks": plugin,
-        "double_fired": double_fired,
         "doe_root_resolves": doe_root_resolves,
         "doe_root_rungs": rungs,
     }
@@ -863,18 +873,13 @@ def assert_hook_plane_armed(report: Report) -> None:
             + (f" ({read_error})" if read_error else "")
             + f" and the coordinator plugin delivers none ({plugin['reason']})"
         )
-    if double_fired:
-        problems.append(
-            f"{len(double_fired)} hook(s) registered by both {settings_path} and the "
-            f"coordinator plugin fire twice per event, e.g. {double_fired[0]}"
-        )
     if not doe_root_resolves:
         problems.append("`.doe-root` resolves through no rung the no-launcher fences read")
     if problems:
         raise RuntimeError("; ".join(problems))
 
 
-def _plugin_hook_delivery(settings: dict) -> tuple[dict, dict[str, set[str]]]:
+def _plugin_hook_delivery(settings: dict) -> dict:
     """Whether the coordinator plugin's own hook manifest will deliver hooks to a
     session launched here, read off disk the way the runtime reads it.
 
@@ -892,42 +897,55 @@ def _plugin_hook_delivery(settings: dict) -> tuple[dict, dict[str, set[str]]]:
     is dependency-free by design and must not import `coordinator_core`.
 
     Never raises: every broken link is a recorded `reason`, `armed` False.
-    Also returns, per event, the `_hook_identities` the manifest delivers —
-    what `_double_fired_hooks` compares `settings.json` against. Kept off
-    `result` because `result` lands in the JSON report and sets do not.
+    Also carries, under `_delivered` (a dict of sets, popped by
+    `drop_double_fired_settings_hooks` and never left on a value stored into the
+    JSON report), the per-event script identities the manifest actually
+    delivers. A script identity counts as delivered only when EVERY token
+    naming it is `${CLAUDE_PLUGIN_ROOT}`-prefixed — the same convention
+    `missing_files` existence-checks — so a hook this function never verified
+    exists can't stand in as the "still delivered" copy that licenses removing
+    the `settings.json` side (code-reviewer F1).
     """
-    result: dict = {"armed": False, "event_count": 0, "missing_files": [], "reason": ""}
-    delivered: dict[str, set[str]] = {}
+    result: dict = {
+        "armed": False,
+        "event_count": 0,
+        "missing_files": [],
+        "reason": "",
+        "_delivered": {},
+    }
+    delivered: dict[str, set[str]] = result["_delivered"]
     try:
         key = _plugin_record_key(Path(CLONES["coordinator-claude"]["dest"]))
     except Exception as e:  # noqa: BLE001 - an unreadable clone manifest is a recorded miss
         result["reason"] = f"plugin key unreadable: {type(e).__name__}: {e}"
-        return result, delivered
+        return result
     result["key"] = key
     enabled = settings.get("enabledPlugins")
     if not (isinstance(enabled, dict) and enabled.get(key) is True):
         result["reason"] = f"{key} is not enabled in settings.json"
-        return result, delivered
+        return result
     try:
         records = json.loads(
             _claude_home().joinpath(*PLUGIN_RECORD_REL).read_text(encoding="utf-8")
         )["plugins"][key]
+        if not isinstance(records, list):
+            raise TypeError(f"expected a list of plugin records, got {type(records).__name__}")
         install_path = next(
             r["installPath"] for r in records if isinstance(r, dict) and r.get("installPath")
         )
     except Exception as e:  # noqa: BLE001 - an absent record is a recorded miss
-        result["reason"] = f"no installed-plugin record names an installPath for {key} ({type(e).__name__})"
-        return result, delivered
+        result["reason"] = f"no installed-plugin record names an installPath for {key} ({type(e).__name__}: {e})"
+        return result
     result["install_path"] = install_path
     manifest = Path(install_path).joinpath(*PLUGIN_HOOKS_REL)
     try:
         hooks = json.loads(manifest.read_text(encoding="utf-8")).get("hooks")
     except Exception as e:  # noqa: BLE001 - an unreadable manifest is a recorded miss
         result["reason"] = f"{manifest} unreadable: {type(e).__name__}"
-        return result, delivered
+        return result
     if not isinstance(hooks, dict) or not hooks:
         result["reason"] = f"{manifest} registers no hook event"
-        return result, delivered
+        return result
     result["event_count"] = len(hooks)
     referenced: set[str] = set()
     for event, groups in hooks.items():
@@ -935,19 +953,47 @@ def _plugin_hook_delivery(settings: dict) -> tuple[dict, dict[str, set[str]]]:
             for hook in group.get("hooks", []) if isinstance(group, dict) else []:
                 if not isinstance(hook, dict):
                     continue
-                delivered.setdefault(event, set()).update(_hook_identities(hook))
+                if hook.get("type") == "http":
+                    url = hook.get("url")
+                    if isinstance(url, str) and url:
+                        delivered.setdefault(event, set()).add(f"url:{url}")
+                    continue
                 args = hook.get("args") if isinstance(hook.get("args"), list) else []
+                ids: set[str] = set()
+                all_prefixed = True
                 for token in [hook.get("command"), *args]:
-                    if isinstance(token, str) and token.startswith("${CLAUDE_PLUGIN_ROOT}/"):
-                        referenced.add(token[len("${CLAUDE_PLUGIN_ROOT}/"):])
+                    if not isinstance(token, str):
+                        continue
+                    for piece in _shlex_pieces(token):
+                        normalized = piece.replace("\\", "/")
+                        prefixed = normalized.startswith("${CLAUDE_PLUGIN_ROOT}/")
+                        if prefixed:
+                            referenced.add(normalized[len("${CLAUDE_PLUGIN_ROOT}/"):])
+                        tail = _script_tail(normalized)
+                        if tail:
+                            ids.add(tail)
+                            all_prefixed = all_prefixed and prefixed
+                if ids and all_prefixed:
+                    delivered.setdefault(event, set()).update(ids)
     missing = sorted(rel for rel in referenced if not Path(install_path, rel).is_file())
     result["missing_files"] = missing
     if missing:
         result["reason"] = f"{manifest} names {len(missing)} absent file(s), e.g. {missing[0]}"
-        return result, delivered
+        return result
     result["armed"] = True
     result["reason"] = f"{key} delivers {len(hooks)} hook event(s) from {manifest}"
-    return result, delivered
+    return result
+
+
+def _shlex_pieces(token: str) -> list[str]:
+    """`token` split on whitespace the way a shell would, so a quoted path
+    containing a space keeps its full tail instead of being cut at the space
+    (code-reviewer F2). Falls back to a plain whitespace split on anything
+    `shlex` can't parse (an unbalanced quote) rather than raising."""
+    try:
+        return shlex.split(token, posix=True)
+    except ValueError:
+        return token.split()
 
 
 def _hook_identities(hook: dict) -> set[str]:
@@ -966,27 +1012,11 @@ def _hook_identities(hook: dict) -> set[str]:
     for token in [hook.get("command"), *args]:
         if not isinstance(token, str):
             continue
-        for script in _SCRIPT_TOKEN_RE.findall(token.replace("\\", "/")):
-            tail = "/".join(script.strip("'\"").split("/")[-2:])
+        for piece in _shlex_pieces(token):
+            tail = _script_tail(piece.replace("\\", "/"))
             if tail:
                 identities.add(tail)
     return identities
-
-
-def _double_fired_hooks(settings: dict, delivered: dict[str, set[str]]) -> list[str]:
-    """`<event>: <identities>` for every `settings.json` hook the plugin already
-    delivers on the same event. A hook counts only when EVERYTHING it runs is
-    plugin-delivered on that event: one that also runs something the plugin
-    does not is not a duplicate, and removing it would lose that something."""
-    found: list[str] = []
-    hooks = settings.get("hooks")
-    for event, groups in (hooks.items() if isinstance(hooks, dict) else []):
-        for group in groups if isinstance(groups, list) else []:
-            for hook in group.get("hooks", []) if isinstance(group, dict) else []:
-                ids = _hook_identities(hook) if isinstance(hook, dict) else set()
-                if ids and ids <= delivered.get(event, set()):
-                    found.append(f"{event}: {', '.join(sorted(ids))}")
-    return found
 
 
 def drop_double_fired_settings_hooks(report: Report) -> None:
@@ -1003,10 +1033,10 @@ def drop_double_fired_settings_hooks(report: Report) -> None:
 
     Removes only when the plugin is verified armed (`_plugin_hook_delivery`),
     so a removed entry is always still delivered — never the last copy. Only
-    exact duplicates go (`_double_fired_hooks`); every other entry, group field
-    and event is kept, and a `hooks` block emptied by the removal is dropped.
-    Runs after every writer and before `assert_hook_plane_armed`, which reports
-    anything this left behind.
+    exact duplicates go; every other entry, group, field and event is kept in
+    the same walk, and a `hooks` block emptied by the removal is dropped.
+    Runs once, after every writer has finished, immediately before
+    `assert_hook_plane_armed`. A failed write raises, which `run_step` records.
     """
     settings_path = _claude_home() / "settings.json"
     try:
@@ -1016,37 +1046,38 @@ def drop_double_fired_settings_hooks(report: Report) -> None:
         return
     if not isinstance(settings, dict):
         raise ValueError(f"{settings_path} is not a JSON object")
-    plugin, delivered = _plugin_hook_delivery(settings)
-    removed = _double_fired_hooks(settings, delivered) if plugin["armed"] else []
+    plugin = _plugin_hook_delivery(settings)
+    delivered: dict[str, set[str]] = plugin.pop("_delivered", {})
+    removed: list[str] = []
+    if plugin["armed"] and isinstance(settings.get("hooks"), dict):
+        kept_events: dict = {}
+        for event, groups in settings["hooks"].items():
+            kept_groups = []
+            for group in groups if isinstance(groups, list) else []:
+                if not isinstance(group, dict):
+                    kept_groups.append(group)
+                    continue
+                kept_hooks = []
+                for hook in group.get("hooks", []):
+                    ids = _hook_identities(hook) if isinstance(hook, dict) else set()
+                    if ids and ids <= delivered.get(event, set()):
+                        removed.append(f"{event}: {', '.join(sorted(ids))}")
+                        continue
+                    kept_hooks.append(hook)
+                if kept_hooks:
+                    kept_groups.append({**group, "hooks": kept_hooks})
+            if kept_groups:
+                kept_events[event] = kept_groups
+        if removed:
+            if kept_events:
+                settings["hooks"] = kept_events
+            else:
+                del settings["hooks"]
     report.hook_dedupe = {"settings_path": str(settings_path), "removed": removed}
     if not removed:
         return
-    kept_events: dict = {}
-    for event, groups in settings["hooks"].items():
-        kept_groups = []
-        for group in groups if isinstance(groups, list) else []:
-            if not isinstance(group, dict):
-                kept_groups.append(group)
-                continue
-            kept_hooks = [
-                hook
-                for hook in group.get("hooks", [])
-                if not (
-                    isinstance(hook, dict)
-                    and (ids := _hook_identities(hook))
-                    and ids <= delivered.get(event, set())
-                )
-            ]
-            if kept_hooks:
-                kept_groups.append({**group, "hooks": kept_hooks})
-        if kept_groups:
-            kept_events[event] = kept_groups
-    if kept_events:
-        settings["hooks"] = kept_events
-    else:
-        del settings["hooks"]
     tmp = settings_path.with_suffix(settings_path.suffix + ".tmp")
-    tmp.write_text(json.dumps(settings, indent=2))
+    tmp.write_text(json.dumps(settings, indent=2), newline="\n")
     tmp.replace(settings_path)
     _safe_print(f"[cloud_setup] removed {len(removed)} double-fired hook(s) from {settings_path}")
 
@@ -1155,7 +1186,7 @@ def run_claude_klabauter_setup(report: Report) -> None:
     print(result.stdout, end="")
     report.setup_exit_code = result.returncode
     if result.returncode != 0:
-        # Review: overengineering-reviewer finding 6 — inlined the former
+        # Inlined the former
         # `_output_tail` helper (single call site). The report stores
         # `step.detail` untruncated, but a whole install log per failed step
         # would bury the verdict it exists to deliver, so the raise carries
@@ -1243,7 +1274,7 @@ def _claude_home() -> Path:
     function runs. If the shared rule's shape or message changes, check here
     too.
 
-    # Review: coordinator:code-reviewer Finding 1 -- the refusal only has
+    # The refusal only has
     # standing to judge CLAUDE_HOME. HOME and expanduser("~") are values this
     # process's operator never set and never chose to misconfigure; a VM whose
     # real home legitimately ends in .claude must resolve, not be refused with
@@ -1265,7 +1296,7 @@ def _claude_home() -> Path:
             )
         base = claude_home_env
     else:
-        base = os.environ.get("HOME") or os.path.expanduser("~")
+        base = Path.home()
     return Path(base) / ".claude"
 
 
@@ -1337,7 +1368,7 @@ def register_plugin_settings() -> None:
     settings[AUTO_COMPACT_WINDOW_SETTING] = CLOUD_AUTO_COMPACT_WINDOW_TOKENS
 
     tmp_path = settings_path.with_suffix(settings_path.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(settings, indent=2))
+    tmp_path.write_text(json.dumps(settings, indent=2), newline="\n")
     tmp_path.replace(settings_path)
 
 
@@ -1482,7 +1513,7 @@ def register_live_plugin_record() -> None:
 
     record_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = record_path.with_name(record_path.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n")
     tmp.replace(record_path)
     print(f"[cloud_setup] plugin record: {key} -> {live}")
 
@@ -1666,7 +1697,7 @@ def _find_doctrine_source() -> tuple[Path | None, list[str]]:
     tried = [str(c) for c in candidates]
     for cand in candidates:
         candidate_doctrine = cand / "CLAUDE.md"
-        # Review: coordinator:code-reviewer Finding 2 -- is_file() does not
+        # is_file() does not
         # test readability (it only needs traversal permission on parent
         # dirs, not read permission on the leaf), so an unreadable CLAUDE.md
         # would previously win the search and a later, good candidate would
@@ -1724,7 +1755,7 @@ def install_global_doctrine(report: Report) -> None:
         rules_dest = claude_home / "rules"
         rules_dest.mkdir(parents=True, exist_ok=True)
         rules_files = sorted(rules_src.glob("*.md"))
-        # Review: coordinator:code-reviewer Finding 3 -- no per-file
+        # No per-file
         # isolation (deliberate: no rollback on a partial copy, see the
         # docstring above), but a mid-loop failure previously left the
         # step's detail as raw exception text with no way to tell "0 of N
@@ -2032,7 +2063,6 @@ def register_machine_local_repo_keys(report: Report) -> None:
     # raises when neither rung is available, and the keys were left as {} —
     # indistinguishable in the report from a step that never ran, against a
     # docstring promising each key's verdict individually.
-    # Review: coordinator:code-reviewer.
     for _key in MACHINE_LOCAL_REPO_KEYS.values():
         report.machine_local_keys.setdefault(_key, "skipped: no machine-local CLI resolved")
     argv = _machine_local_argv()
@@ -2129,7 +2159,7 @@ def install_hooks_fleet(report: Report) -> None:
     for clone_name in TRUST_ANCHOR_KEYS:
         repo_root = Path(CLONES[clone_name]["dest"])
         hook_path = repo_root / ".git" / "hooks" / "prepare-commit-msg"
-        # Review: code-reviewer (finding 1) — presence alone (`is_file()`) is
+        # Presence alone (`is_file()`) is
         # satisfied by a stale, zero-byte, or hand-authored non-executable
         # hook surviving an earlier aborted run; require it be executable too,
         # since git silently skips a non-executable hook at commit time.
@@ -2248,7 +2278,6 @@ def _resolve_rag_project_root(report: Report) -> str:
         # silently and then baked into a registration nothing can read back.
         # This fleet routinely mounts six or more. Record the ambiguity and fall
         # back to the one root that is defensible without guessing.
-        # Review: coordinator:code-reviewer.
         report.rag_project_root_ambiguity = [c.name for c in checkouts]
         return str(_resolved_root(RETRIEVAL_REPO_SLUG, report))
     return str(_resolved_root(RETRIEVAL_REPO_SLUG, report))
@@ -2297,7 +2326,6 @@ def run_example_retrieval_repo_cloud_install(report: Report) -> None:
     # first python3 on PATH the installer would resolve a different one than
     # everything around it, and the pre-boot set would land where the rest of
     # the run does not look. _machine_local_argv already does this.
-    # Review: coordinator:code-reviewer.
     argv = [
         sys.executable,
         str(installer),
@@ -2426,7 +2454,7 @@ def register_retrieval_mcp_entry(report: Report) -> None:
     data["mcpServers"] = servers
     config_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = config_path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8", newline="\n")
     tmp.replace(config_path)
     report.mcp_entry_written = {"config_path": str(config_path), "entry": entry}
     print(f"[cloud_setup] MCP entry registered: {RETRIEVAL_REPO_SLUG} -> {entry['url']}")
@@ -2492,7 +2520,7 @@ def _image_default_path() -> str:
         for line in Path("/etc/environment").read_text(encoding="utf-8").splitlines():
             if line.startswith("PATH="):
                 value = line[len("PATH=") :].strip().strip('"').strip("'")
-                # Review: coordinator:code-reviewer F3 -- /etc/environment is not a
+                # /etc/environment is not a
                 # shell and performs no expansion, so a value written with
                 # shell-expansion syntax (e.g. PATH="$PATH:/opt/foo") is unusable
                 # verbatim: it puts a literal "$PATH" into the env-var box, which
@@ -2526,7 +2554,7 @@ def _image_search_path(default_entries: list[str]) -> str:
     `default_entries` is the caller's already-computed `_image_default_path()`
     split, passed in rather than re-derived here.
     """
-    # Review: coordinator:code-reviewer F4 -- this process' own PATH used to be
+    # This process' own PATH used to be
     # searched AHEAD of the image default, so a transient directory carried
     # only by whatever bootstrap wrapper launched this script (a venv, a shim
     # dir) could win `shutil.which` and get baked into the durable
@@ -2590,9 +2618,9 @@ def _hook_plane_status_line(report: Report) -> str:
     and a clean run writing no verdict at all made silence indistinguishable
     from health — the exact failure mode this line exists to end. ARMED means
     everything `assert_hook_plane_armed` requires: at least one delivery
-    surface registers hooks, none of them fire twice, and `.doe-root`
-    resolves. `hook_plane` absent (the probe never ran) reports UNARMED with
-    an `unknown` delivery surface rather than silently omitting the line.
+    surface registers hooks and `.doe-root` resolves. `hook_plane` absent
+    (the probe never ran) reports UNARMED with an `unknown` delivery surface
+    rather than silently omitting the line.
     """
     hook_plane = report.hook_plane or {}
     delivery = hook_plane.get("hook_delivery", "unknown")
@@ -2600,7 +2628,6 @@ def _hook_plane_status_line(report: Report) -> str:
         report.hook_plane
         and hook_plane.get("hooks_registered")
         and hook_plane.get("doe_root_resolves")
-        and not hook_plane.get("double_fired")
     )
     return f"HOOK PLANE: {'ARMED' if armed else 'UNARMED'} (delivery: {delivery})"
 
@@ -2618,7 +2645,7 @@ def _verdict_body(report: Report) -> str:
 
     failed = [step for step in report.steps if not step.ok]
     if failed:
-        # Review: coordinator:code-reviewer F2 -- "".splitlines() is [], so an
+        # "".splitlines() is [], so an
         # empty detail (StepResult.detail's own default) raised IndexError here,
         # which _record_session_surfaces_best_effort then swallowed, losing the
         # whole verdict surface for a `list index out of range` line instead of
@@ -2663,15 +2690,6 @@ def _verdict_body(report: Report) -> str:
         )
 
     hook_plane = report.hook_plane or {}
-    if hook_plane.get("double_fired"):
-        sections.append(
-            "## Some hooks fire TWICE\n\n"
-            f"`{hook_plane.get('settings_path')}` and the coordinator plugin both register:\n\n"
-            + "\n".join(f"- `{entry}`" for entry in hook_plane["double_fired"])
-            + "\n\nEach of these runs twice per event: expect duplicated guard verdicts and "
-            "duplicated SessionStart context. Remedy: delete those entries from "
-            "`settings.json`'s `hooks` block — the plugin still delivers them."
-        )
     if hook_plane and not (hook_plane.get("hooks_registered") and hook_plane.get("doe_root_resolves")):
         broken = []
         if not hook_plane.get("hooks_registered"):
@@ -2769,7 +2787,7 @@ def _write_rule_surface(basename: str, body: str | None) -> bool:
         rule_path.unlink(missing_ok=True)
         return False
     rule_path.parent.mkdir(parents=True, exist_ok=True)
-    rule_path.write_text(body, encoding="utf-8")
+    rule_path.write_text(body, encoding="utf-8", newline="\n")
     return True
 
 
@@ -2807,7 +2825,7 @@ def write_session_verdict(report: Report) -> None:
 
 def write_report(report: Report) -> None:
     INSTALL_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    INSTALL_REPORT_PATH.write_text(json.dumps(report.to_dict(), indent=2))
+    INSTALL_REPORT_PATH.write_text(json.dumps(report.to_dict(), indent=2), newline="\n")
 
 
 def _safe_print(text: str) -> None:
@@ -3007,7 +3025,7 @@ def main() -> int:
         print(f"[cloud_setup] refusing: {reason}")
         report = Report()
         report.steps.append(StepResult("host precondition", False, reason))
-        # Review: coordinator:code-reviewer F1 -- the refusal is the single most
+        # The refusal is the single most
         # severe pre-boot outcome, and by write_session_verdict's own rationale
         # is exactly when a session most needs cloud-preboot-verdict.md: the
         # JSON report requires a reader, the rules surface does not.

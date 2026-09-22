@@ -197,7 +197,7 @@ def test_pure_literal_clean_meta_has_no_findings():
 
 
 def test_pure_literal_allows_nan_and_infinity_as_bare_identifier_values():
-    # Review: code-reviewer (Finding 5, nit) — NaN/Infinity are JS literal
+    # NaN/Infinity are JS literal
     # values, not variable references; must not be flagged as bare identifiers.
     block = extract_meta_block(
         "export const meta = { name: 'x', description: 'y', retries: Infinity, delta: NaN };"
@@ -305,7 +305,7 @@ def test_forbidden_global_real_call_outside_string_still_flagged_alongside_maske
 
 
 def test_forbidden_global_date_now_spares_namespaced_property_access():
-    # Review: code-reviewer (Finding 4, nit) — myObj.Date.now() is a property
+    # myObj.Date.now() is a property
     # access on a caller-defined object, not the global Date.now(); the
     # negative lookbehind (?<!\.) must spare it.
     scrubbed = scrub("const t = myObj.Date.now();")
@@ -567,7 +567,7 @@ def test_run_checks_f1_fixture_end_to_end_no_error():
 
 
 def test_run_checks_meta_description_with_call_shape_text_is_not_error():
-    """Review: code-reviewer (Finding 1, P0) — a conformant meta.description
+    """A conformant meta.description
     string VALUE containing a call-shape token / parenthetical (e.g. "them
     (top 10)", "pipeline()") must NOT false-positive as meta-impure-call;
     run_checks must feed check_meta_pure_literal/check_meta_required_fields
@@ -631,7 +631,7 @@ def test_meta_phase_titles_reads_titles_only_not_every_quoted_string():
     assert meta_phase_titles(block) == {"Only"}
 
 
-# Review: code-reviewer (Finding 4, minor) -- the two tests above both pin the fix
+# The two tests above both pin the fix
 # against ONE shape (homogeneous object-form, single-quote-style detail escaping) and
 # exercise none of the shapes that independently broke it one layer down (Findings
 # 1-3). Each test below is one of those reproductions, added as its own regression case

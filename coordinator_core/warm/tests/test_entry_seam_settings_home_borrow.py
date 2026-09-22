@@ -85,6 +85,22 @@ def test_malformed_claim_pops_rather_than_binds(monkeypatch, bad):
     assert os.environ["COORDINATOR_SETTINGS_HOME"] == _SPAWNER_HOME
 
 
+@pytest.mark.parametrize("bad", ["", "relative/path", "not-a-home", "C:foo"])
+def test_malformed_claim_emits_a_diagnostic(monkeypatch, bad):
+    """(d2) A malformed claim is popped AND surfaced to a warm caller's own
+    diagnostic sink -- the cold leg already raises ValueError on the same
+    input (`_settings_home._require_rooted`), so the warm leg silently
+    swallowing it left the caller unable to tell its override was ignored."""
+    _set_spawner_env(monkeypatch)
+    diagnostics: list = []
+
+    with per_request_state(settings_home=bad, diagnostics=diagnostics, isolated=True):
+        assert "COORDINATOR_SETTINGS_HOME" not in os.environ
+
+    assert diagnostics, "malformed settings_home claim must emit a diagnostic"
+    assert "COORDINATOR_SETTINGS_HOME" in diagnostics[0]
+
+
 def test_absence_binds_nothing(monkeypatch):
     """(e) Absence binds nothing -- inherit-on-absent, matching this seam's
     other axes: a request that carried no claim leaves the enclosing scope's

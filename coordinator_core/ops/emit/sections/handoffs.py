@@ -328,7 +328,7 @@ def _derive_handoff_id(repo: str, path: Optional[str]) -> tuple[str, str]:
     probability at 24 bits alone is ~several thousand records, a real ceiling for a corpus that
     grows unbounded. Widening the human-readable slug portion widens that entropy without
     changing the join key's shape.
-    Review: code-reviewer -- Finding 7 -- prior wording claimed "non-trivial ... at just a
+    Prior wording claimed "non-trivial ... at just a
     few hundred records", which overstated the actual birthday-bound math (a few hundred
     records at 24 bits alone is well under 1% collision probability); corrected.
 
@@ -390,7 +390,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
     # is stripped back out post-dump — the byte-identity leg of AC7 depends on both.
     _human_axis_on = human_axis_vendored()
 
-    # Review: code-reviewer -- Finding 1 (28a20f28) -- baton_class.py's `_load_mapping`
+    # baton_class.py's `_load_mapping`
     # deliberately re-reads+re-parses the vendored schema on every call and its own
     # docstring tells a tight-loop caller to cache at its own boundary instead of
     # asking the module to cache silently. `kind` is drawn from a small, bounded
@@ -398,7 +398,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
     # this loop's cost to at most one schema read per DISTINCT kind for the whole
     # `collect()` call, not one read+parse per handoff record.
     #
-    # Review: code-reviewer -- Finding 2 (28a20f28) -- `baton_class()` can raise
+    # `baton_class()` can raise
     # `BatonClassSchemaError` (missing/corrupt/unparseable vendored schema). Every other
     # failure mode in this file degrades rather than aborting (`_query_records` broad-
     # excepts to `[]`; per-record contract violations are quarantined into `malformed`),
@@ -578,7 +578,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
             record["human_claimant"] = _jq_or(fm.get("human_claimant"), None)
         records.append(record)
 
-    # Review: code-reviewer -- Finding 2 (28a20f28) -- surface the baton_class degrade
+    # Surface the baton_class degrade
     # (if any) as an observable diagnostic rather than a silent None on every record;
     # mirrors the dangling-priority-ledger-reference diagnostic pattern below.
     if _baton_class_schema_error is not None:

@@ -532,7 +532,11 @@ def _resolve_executing_plan_keys(git_root: Optional[str], session_id: str) -> se
     return keys
 
 
-def _advisory_reason(file_path: str, subagent_type: str = _EXECUTOR_TYPE) -> str:
+def _advisory_reason(
+    file_path: str,
+    subagent_type: str = _EXECUTOR_TYPE,
+    executing_keys: Optional[set] = None,
+) -> str:
     """C16 narrowing — non-blocking nudge for an executor writing a
     plan/problem-set body OTHER than the one its own sidecar names as the
     plan it is executing. Deliberately much shorter than
@@ -545,13 +549,30 @@ def _advisory_reason(file_path: str, subagent_type: str = _EXECUTOR_TYPE) -> str
     dispatch.md) routed cleanly-resolved unenumerated kinds here too — an
     operator reading a nudge that names a type they did not dispatch
     debugs the wrong thing.
+
+    ``executing_keys`` — the plan/problem-set keys this guard already
+    resolved from the session's own sidecars (``check()``'s
+    ``_resolve_executing_plan_keys`` call). Named here per
+    state/bug-backlog/2026-08-06-c16-s-advisory-reason-never-names-the-pl-
+    b38e24982c9f.yaml: the prior message told an executor its write was
+    "outside the plan you're executing" without ever saying which plan the
+    guard resolved, so a stale or absent sidecar left no visibility into
+    what was actually matched against. Sibling C18c's own
+    ``_advisory_reason`` names its resolved alternative; this brings that
+    same offer-completeness to this leg. An empty/``None`` set (no
+    resolvable sidecar) says so explicitly rather than omitting the clause.
     """
     file_path_safe = _sanitize_file_path_for_reason(file_path)
+    if executing_keys:
+        resolved = ", ".join(sorted(executing_keys))
+    else:
+        resolved = "none (no resolvable sidecar)"
     if subagent_type != _EXECUTOR_TYPE:
         return (
             f"Note: {file_path_safe} is a plan/problem-set body; "
             f"subagent_type {subagent_type!r} is not on coordinator's "
             "enumerated agent roster.\n"
+            f"Resolved currently-executing plan(s): {resolved}\n"
             "Use instead:\n"
             "  add the type to the roster, or confirm scope with the EM if "
             "editing this file is your deliverable"
@@ -559,6 +580,7 @@ def _advisory_reason(file_path: str, subagent_type: str = _EXECUTOR_TYPE) -> str
     return (
         f"Note: {file_path_safe} is a plan/problem-set body outside the plan "
         "you're executing.\n"
+        f"Resolved currently-executing plan(s): {resolved}\n"
         "Use instead:\n"
         "  if this is your stated deliverable, confirm scope with the EM"
     )
@@ -779,7 +801,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     target_key = _plan_body_key(normalized)
     executing_keys = _resolve_executing_plan_keys(git_root, session_id)
     if not target_key or target_key not in executing_keys:
-        reason = _advisory_reason(file_path, subagent_type)
+        reason = _advisory_reason(file_path, subagent_type, executing_keys)
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",

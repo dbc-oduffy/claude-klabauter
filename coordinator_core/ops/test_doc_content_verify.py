@@ -189,7 +189,7 @@ class TestNegativeSurface:
         )
         assert findings == []
 
-    # Review: code-reviewer — Finding 2 (P2). The four tests above call
+    # The four tests above call
     # is_excluded() directly on an un-truncated literal, which passes
     # against a broken end-to-end implementation (Finding 1) — the fenced-
     # code-path extractor could truncate the very prefix these tests

@@ -72,7 +72,7 @@ from coordinator_core.git_scope import (
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-# Review: code-reviewer (F9) — inline _EMIT_DIR; matches validate.py's style (_VENDOR_ROOT = Path(__file__).resolve().parent / "_vendor")
+# Inline _EMIT_DIR; matches validate.py's style (_VENDOR_ROOT = Path(__file__).resolve().parent / "_vendor")
 _VENDOR_CONTRACT = Path(__file__).resolve().parent / "_vendor" / "cockpit-contract"
 
 # PIN_SHA_FILE records the cockpit-contract-release ref SHA at vendoring time.
@@ -82,6 +82,10 @@ PIN_SHA_FILE = _VENDOR_CONTRACT / ".doe-ref-pin"
 
 # Path inside the DoE clone where the conformance fixture lives (CD-1).
 _FIXTURE_REL = Path("coordinator/cockpit-contract/conformance/emission-conformance.json")
+
+# The whole-body schema the fixture is normative for (same vendored pin validate.py
+# validates emitted entity arrays against — CD-1's "fails its own schema" is this file).
+_ENVELOPE_SCHEMA_FILE = _VENDOR_CONTRACT / "schema" / "snapshot-envelope.schema.json"
 
 # Dedicated freshness ref DoE advances on every intentional contract change (CD-2 / AC8).
 _CONTRACT_RELEASE_REF = "refs/tags/cockpit-contract-release"
@@ -141,7 +145,7 @@ class DriftWarning(UserWarning):
     It is distinct from bare UserWarning so callers can filter or escalate it by
     category (``warnings.filterwarnings("error", category=DriftWarning)`` in tests).
 
-    Review: code-reviewer (F1) — distinguishable from routine WARN/skip so the
+    Distinguishable from routine WARN/skip so the
     "pin ABSENT but ref now on origin" state cannot be silently ignored.
     """
 
@@ -173,7 +177,7 @@ class DoeResolveError(RuntimeError):
 def _parse_toml_text(text: str) -> Optional[dict]:
     """Parse TOML text with tomllib (3.11+) or tomli, returning None on failure.
 
-    Review: code-reviewer (F5) — separated from _read_toml_file so resolve_doe_clone
+    Separated from _read_toml_file so resolve_doe_clone
     can pre-read the file once and pass the text here, avoiding a second read_text()
     call when the TOML parse fails and the regex fallback is needed.
     """
@@ -236,7 +240,7 @@ def resolve_doe_clone() -> Path:
     for registry_path in _registry_paths():
         if not registry_path.exists():
             continue
-        # Review: code-reviewer (F5) — read once, pass text to both the TOML parser and
+        # Read once, pass text to both the TOML parser and
         # the regex fallback so the file is never read twice for the same path.
         text = registry_path.read_text(encoding="utf-8")
         data = _parse_toml_text(text)
@@ -302,7 +306,7 @@ def _parse_semver(version: str) -> tuple[int, int, int]:
     their three-component equivalents ("2.5.0") — without padding, (2, 5) < (2, 5, 0)
     in Python, which would incorrectly fire DriftError for semantically equal versions.
 
-    Review: code-reviewer (F4) — pad to length 3 to prevent two-component version
+    Pad to length 3 to prevent two-component version
     strings from comparing as less than their three-component semantic equivalents.
     """
     try:
@@ -346,6 +350,70 @@ def check_version_band(pinned_version: str, fixture: dict) -> None:
             "cockpit-contract pin (python3 bin/claude-klabauter-revendor-cockpit-contract.py) to satisfy the version-band gate "
             "(DR-210 § 2 / strang-02 AC_Q-a-band)."
         )
+
+
+# ---------------------------------------------------------------------------
+# Fixture-body check — the fixture validated against the schema it is normative for
+# ---------------------------------------------------------------------------
+
+def check_fixture_body(fixture: dict) -> None:
+    """Fail loud when the fixture BODY does not validate against the envelope schema.
+
+    The version band and freshness ref both describe whether the fixture is CURRENT;
+    neither reads a single entity out of it. A fixture can pass both while its body has
+    rotted — every entity missing a field the schema now requires, an enum value the
+    schema dropped — and both gates report clean. This is the check that reads the
+    body: the two fixture-metadata keys (``contract_version``,
+    ``min_supported_contract_version``) are not part of the envelope contract (the
+    envelope schema declares neither and is ``additionalProperties: false``) and are
+    held out before validating, exactly as the fixture generator holds them out before
+    writing (``emit_conformance_fixture.envelope_portion``).
+
+    Raises DriftError naming the violation count and, for each of the first 20, the
+    JSON-pointer-style path and schema message — re-vendoring alone cannot fix this;
+    the fixture itself must be regenerated (``emit_conformance_fixture.py``).
+
+    Negative-spec: this is a read-only check. It does not regenerate or write the
+    fixture — that is ``coordinator_core.contract.cockpit_schema.emit_conformance_
+    fixture``'s job, not this drift-check's.
+    """
+    from coordinator_core.contract.cockpit_schema.emit_conformance_fixture import (
+        _FIXTURE_METADATA_KEYS,
+    )
+    from coordinator_core.ops.emit.validate import _jsonschema
+
+    if not _ENVELOPE_SCHEMA_FILE.exists():
+        raise DriftError(
+            f"vendored envelope schema not found at {_ENVELOPE_SCHEMA_FILE} — cannot "
+            "validate the DoE fixture body. Re-run the vendor step "
+            "(python3 bin/claude-klabauter-revendor-cockpit-contract.py) to repopulate it."
+        )
+    schema = json.loads(_ENVELOPE_SCHEMA_FILE.read_text(encoding="utf-8"))
+
+    jsonschema = _jsonschema()
+    validator_cls = jsonschema.validators.validator_for(schema)
+    validator_cls.check_schema(schema)
+    validator = validator_cls(schema)
+
+    body = {k: v for k, v in fixture.items() if k not in _FIXTURE_METADATA_KEYS}
+    errors = sorted(validator.iter_errors(body), key=lambda e: list(e.path))
+    if not errors:
+        return
+
+    shown = errors[:20]
+    rendered = "\n".join(
+        f"  {'.'.join(str(p) for p in e.path) or '<root>'}: {e.message}"
+        for e in shown
+    )
+    omitted = len(errors) - len(shown)
+    if omitted:
+        rendered += f"\n  ... {omitted} additional violation(s) omitted"
+    raise DriftError(
+        f"DoE conformance fixture body fails its own schema "
+        f"({len(errors)} violation(s) against {_ENVELOPE_SCHEMA_FILE.name}):\n"
+        f"{rendered}\nRegenerate the fixture: "
+        "python3 -m coordinator_core.contract.cockpit_schema.emit_conformance_fixture --write"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -404,7 +472,7 @@ def probe_freshness_ref(doe_clone: Path) -> Optional[str]:
     repository (git-dir confined to its own tree) before either runs. See
     ``coordinator_core/git_scope.py`` for the 2026-08-03 incident.
 
-    Review: code-reviewer (F1) — dereference via local rev-parse ^{} (reviewer-approved
+    Dereference via local rev-parse ^{} (reviewer-approved
     alternative) so annotated tags yield a commit SHA rather than a tag-object SHA.
     merge-base returns exit 128 ("Not a commit") on a tag-object SHA, silently breaking
     the AheadOfReleaseWarning path when cockpit-contract-release is an annotated tag
@@ -505,7 +573,7 @@ def probe_freshness_ref(doe_clone: Path) -> Optional[str]:
     # a maintained DoE clone); if the object is absent, we fall back to raw_sha
     # (same behaviour as before this fix — no regression vs the pre-existing path).
     #
-    # Review: code-reviewer (F1) — prefer local rev-parse ^{} over the
+    # Prefer local rev-parse ^{} over the
     # --dereference ls-remote flag because Apple git 2.x does not expose
     # --dereference on ls-remote; the reviewer's finding explicitly listed
     # rev-parse ^{} as an equivalent alternative.
@@ -594,7 +662,7 @@ def check_freshness(doe_clone: Optional[Path] = None) -> None:
     AheadOfReleaseWarning is NOT a DriftWarning — it does NOT cause the re-vendor
     post-check to die (DR-203 reader-first invariant).
 
-    Review: code-reviewer (F1) — when pin contains ABSENT, still probe origin.  If the
+    When pin contains ABSENT, still probe origin.  If the
     ref has appeared on origin, emit DriftWarning (not DriftError — hard-fail the moment
     DoE publishes would break claude-klabauter before re-vendor can run; a loud, distinct,
     category-distinguishable warning is the safer choice that preserves operations while
@@ -697,13 +765,19 @@ def run_drift_check(
       1. Resolve DoE clone via machine-local registry (body read — no origin).
       2. Read the DoE-HEAD conformance fixture body.
       3. check_version_band: fail loud when pinned_version < min_supported.
-      4. check_freshness: probe the dedicated ref; warn on absent, fail on mismatch.
+      4. check_fixture_body: fail loud when the fixture body itself does not
+         validate against the schema it is normative for — the version band and
+         the freshness ref both describe whether the fixture is current, neither
+         reads an entity out of it.
+      5. check_freshness: probe the dedicated ref; warn on absent, fail on mismatch.
 
     Returns the parsed fixture dict (convenience: callers that also need the fixture
     for normalization/comparison do not need a second read_doe_fixture() call).
 
-    Negative-spec: this function reads ONE file and issues ONE network probe.  It does
-    NOT re-vendor the pin, does NOT write any files, and does NOT touch rag's store.
+    Negative-spec: this function reads TWO files (the fixture body and the vendored
+    envelope schema check_fixture_body validates it against) and issues ONE network
+    probe.  It does NOT re-vendor the pin, does NOT write any files, and does NOT touch
+    rag's store.
     """
     from coordinator_core.ops.emit.validate import read_schema_version
 
@@ -714,6 +788,7 @@ def run_drift_check(
         pinned_version = read_schema_version()
 
     check_version_band(pinned_version, fixture)
+    check_fixture_body(fixture)
     check_freshness(doe_clone)
 
     return fixture

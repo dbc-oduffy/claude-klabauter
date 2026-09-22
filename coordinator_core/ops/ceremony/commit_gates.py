@@ -1,90 +1,62 @@
 """
 coordinator_core.ops.ceremony.commit_gates -- native ports of the deleted
-`check-workstream-complete-deletion-blocks.sh` (164 LOC) and `dirty-tree-gate.sh`
-(187 LOC), the C3 chunk of the `wsc_tail` rebuild
-(docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md).
+`check-workstream-complete-deletion-blocks.sh` and `dirty-tree-gate.sh`.
 
-NO IN-COMMIT CALLER, AND THAT IS RECORDED, NOT AN OVERSIGHT. As of 2026-08-29
-nothing on the commit path invokes these gates. `run_commit_pipeline` called
-three of them (`deletion_block_gate`, `carry_gate`, `op_scope_coverage_gate`)
-immediately before landing; it was killed at the 500ms brightline and C3
-repointed every caller onto `commit_paths` / `ceremony.commit_v2`, which
-implement none of them
-(docs/plans/2026-08-29-the-push-subsystem-leaves-and-then-the-pipeline-can-go.md,
-C4). The capability drop is filed as a P1 with the exposure enumerated and a
-proposed action:
-state/bug-backlog/2026-08-29-the-commit-v2-route-runs-none-of-the-fou-3e8811d511b7.yaml.
-(The `dirty_tree_gate()` originally listed alongside these three had zero
-production callers of its own -- unlike the other three, nothing on any
-route ever invoked it -- and was deleted outright under the brightline kill
-bar rather than carried as a fourth capability-drop entry; the P1's exposure
-enumeration above predates that deletion and should be read as three gates,
-not four.)
+These gates ARE invoked on the commit path: `ceremony.commit_v2` imports
+`_pre_commit_gates` from this module and calls it before landing a commit.
+`deletion_block_gate` also has a standalone CLI entry point in `main()`
+below, reached by `coordinator/bin/check-workstream-complete-deletion-blocks`
+(registered in `authz/dispatchable.py`).
 
-READ THAT BEFORE REINSTATING OR DELETING EITHER SIDE. The gates are not free,
-and `commit_v2` is the zero-spawn replacement for an op killed on process
-cost -- putting them back blind puts that cost on the sanctioned committer
-every session and the dispatchable `git-commit-agent` route through. The P1
-wants a spike measuring each gate in-process first. Equally, "no caller" is
-not licence to delete this module: `deletion_block_gate` still has one live
-entry point in `main()` below, reached by
-`coordinator/bin/check-workstream-complete-deletion-blocks` (registered in
-`authz/dispatchable.py`).
+The gates are not free -- `commit_v2` is a zero-spawn committer, and putting
+a gate back on that path puts its process cost on every session through the
+sanctioned committer and the dispatchable `git-commit-agent` route. Measure
+a gate in-process before widening what it checks.
 
 Two gates, both pure-Python classification over `git` state (routed through
-`git_native`'s single Windows-safe subprocess choke point -- AC3):
+`git_native`'s single Windows-safe subprocess choke point):
 
   deletion_block_gate() -- validates the composed commit message's
       "Deleted (Step 2.67):" / "Kept (Step 2.67):" blocks (see
-      `commit_message.compose_message`, C2) against staged reality:
+      `commit_message.compose_message`) against staged reality:
         Assertion-1 -- every Deleted-claimed path is staged for deletion.
         Assertion-2 -- every Kept-claimed path exists at HEAD or in the
                         staged set.
-        Assertion-3 (F3, the inverse check) -- staged deletions present but
+        Assertion-3 (the inverse check) -- staged deletions present but
                         no Step 2.67 block at all is a fail (the EM forgot
                         to account for them).
-      Scoped to `gate_paths` (C2's dual-path-set output) -- NOT the whole
-      index -- so a concurrent sibling session's own staged deletion outside
-      `gate_paths` can never trip Assertion-3 through this caller (this is
-      the exact false-positive the 2026-07-07 example-cockpit-repo incident
-      reported; the deleted bash gate's own header documents the same fix).
+      Scoped to `gate_paths` -- NOT the whole index -- so a concurrent
+      sibling session's own staged deletion outside `gate_paths` can never
+      trip Assertion-3 through this caller.
       Skip-gate-when-empty: an empty `gate_paths` AND no Step 2.67 block in
       the message is a legitimate no-deletions session -- skipped entirely,
       not scored as an ambiguous pass.
 
 Both gates report (never raise) -- callers get a typed outcome with a
 diagnostics list, mirroring the bash originals' "print diagnostics, set exit
-code" shape rather than a Python exception flow (the caller, `commit_pipeline`
-C4, decides how to surface a failed gate to the op's result envelope).
-
-Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C3 (AC10).
-Provenance: ported from `DoE:coordinator/bin/check-workstream-complete-deletion-blocks.sh`
-  and `DoE:coordinator/bin/dirty-tree-gate.sh` (both still present on disk at
-  `/Users/example-operator/X/DoE-claude/coordinator/bin/` at port time -- not yet deleted
-  by the kill list at the time this chunk was authored).
+code" shape rather than a Python exception flow; the caller decides how to
+surface a failed gate to the op's result envelope.
 
 Negative-spec (hard-won, preserved from the bash originals):
-  - deletion_block_gate() does NOT re-derive gate_paths -- the caller (C2's
-    `compute_gate_paths`) is the sole source; this module only reads it.
+  - deletion_block_gate() does NOT re-derive gate_paths -- the caller is the
+    sole source; this module only reads it.
   - Neither gate shells out to bash, node, or awk -- all parsing is native
     Python string/regex work; every git read routes through
-    `git_native._git` (AC2/AC3), never a bare `subprocess.run`.
+    `git_native._git`, never a bare `subprocess.run`.
   - The em-dash split in Kept-block parsing uses a literal Python string
     (U+2014, three UTF-8 bytes 0xE2 0x80 0x94) -- Python has no BSD-awk vs
-    gawk octal-vs-hex portability landmine to reproduce; noted here, not
-    carried forward.
+    gawk octal-vs-hex portability landmine to reproduce.
   - `tracked_at_head` (the Kept-claim existence check) is intentionally left
     UNSCOPED to `gate_paths` -- it is a HEAD snapshot, not staged state, and
     the bash original scopes only the staged reads. It is, however, scoped
-    to `parsed.kept_claimed` itself: since C3 (2026-08-21) both legs of
-    Assertion-2 route through `coordinator_core.git.git_state`
-    (`read_index` for the staged set, `head_blobs(cwd, parsed.kept_claimed)`
-    for HEAD membership -- a targeted lookup over the handful of
-    Kept-claimed paths, never `git`'s own unscopeable `ls-tree -r HEAD`
-    walk over the whole tree) with no `git` spawn at all. Both reads are
-    still issued only when the parsed message actually carries a
-    Kept-claim, since no other assertion consumes either set -- a spawn/
-    read-count reduction, never a widening.
+    to `parsed.kept_claimed` itself: both legs of Assertion-2 route through
+    `coordinator_core.git.git_state` (`read_index` for the staged set,
+    `head_blobs(cwd, parsed.kept_claimed)` for HEAD membership -- a
+    targeted lookup over the handful of Kept-claimed paths, never `git`'s
+    own unscopeable `ls-tree -r HEAD` walk over the whole tree) with no
+    `git` spawn at all. Both reads are issued only when the parsed message
+    actually carries a Kept-claim, since no other assertion consumes
+    either set.
 """
 
 from __future__ import annotations
@@ -243,32 +215,24 @@ def _parse_name_status_rename_sources(name_status_stdout: str) -> List[str]:
     """Extract rename SOURCE paths ("R<score>\\t<old>\\t<new>") from `git diff
     --name-status --find-renames` output.
 
-    Purpose (2026-08-06 fix, live incident -- a move-set commit, ~15
-    changelog blocks + ~300 review-trail records relocated into archive
-    directories, refused with "Deleted-claim NOT staged for deletion" for
-    every moved path, even after the caller staged the deletions itself
-    first): `commit_pipeline.explicit_stage` classifies a path that
-    vanished from the worktree and reappeared elsewhere as a genuine
-    deletion (`StageOutcome.deletion_paths`), and `run_commit_pipeline`
-    composes a "Deleted (Step 2.67):" claim for it -- correctly, the old
-    path is gone. But once BOTH the vacated source and the identical-
-    content destination are staged in the SAME `git add` batch, git's own
-    `--find-renames` diff pairs them into one `R100 old new` line instead
-    of a `D old` + `A new` pair -- `_parse_name_status_deletions` above
-    deliberately excludes rename lines (see its own docstring), so
-    Assertion-1 (below) saw the source path as NOT staged for deletion at
-    all, and failed a claim the pipeline's own staging logic had made
-    accurate.
+    Purpose: a "Deleted (Step 2.67):" claim can be genuinely correct for a
+    path even when the staged diff does not show it as a bare `D` line. If
+    both the vacated source and the identical-content destination are
+    staged in the SAME `git add` batch, git's own `--find-renames` diff
+    pairs them into one `R100 old new` line instead of a `D old` + `A new`
+    pair -- `_parse_name_status_deletions` above deliberately excludes
+    rename lines (see its own docstring), so Assertion-1 (below) would
+    otherwise see the source path as not staged for deletion and fail an
+    accurate claim.
 
     This is a SEPARATE, narrower reader of the same `--name-status` output,
     used ONLY by Assertion-1 (below) to recognize that a rename source path
-    has genuinely vacated its old location in the staged tree -- the same
-    fact `explicit_stage` already used to justify the Deleted claim in the
-    first place. Assertion-3's F3 inverse check keeps using
-    `_parse_name_status_deletions` UNCHANGED (rename lines still excluded
-    there) -- an ordinary content-preserving rename must not be forced to
-    carry a Step 2.67 block just because this function also exists; only
-    Assertion-1's "does this CLAIM match staged reality" question widens.
+    has genuinely vacated its old location in the staged tree. Assertion-3's
+    inverse check keeps using `_parse_name_status_deletions` UNCHANGED
+    (rename lines still excluded there) -- an ordinary content-preserving
+    rename must not be forced to carry a Step 2.67 block just because this
+    function also exists; only Assertion-1's "does this CLAIM match staged
+    reality" question widens.
     """
     sources: List[str] = []
     for line in name_status_stdout.splitlines():
@@ -284,13 +248,11 @@ def _staged_deletions_and_renames_in_process(
     cwd: Union[str, Path], gate_scope: Set[str]
 ) -> Tuple[Set[str], Set[str]]:
     """`(staged_deletions, rename_sources)` for `gate_scope`, in-process (no
-    `git` spawn) -- the POST-`git add` counterpart of `commit_pipeline.
-    _swept_rename_delete_paths` (same exact-(mode,sha)-match rename test),
-    with its OWN fresh read of the CURRENT (post-add) index rather than
-    reusing `explicit_stage`'s pre-add snapshot -- byte-identical `git diff
-    --cached --name-status --find-renames` argv, but a different index state
-    either side of the `git add` (2026-08-26, C2b of docs/dispatch-briefs/
-    2026-08-26-the-commit-op-stops-asking-git-eleven-times/C2b.md).
+    `git` spawn), using the same exact-(mode,sha)-match rename test as an
+    ordinary swept-rename-delete classification, with its OWN fresh read of
+    the CURRENT (post-add) index rather than a pre-add snapshot -- the argv
+    is byte-identical to `git diff --cached --name-status --find-renames`,
+    but the index state differs on either side of the `git add`.
 
     A `gate_scope` member present at HEAD but absent from the current index
     is either a swept DELETE or a swept RENAME: an exact `(mode, sha)` match
@@ -348,15 +310,13 @@ def deletion_block_gate(
 ) -> GateOutcome:
     """Validate a composed commit message's Step-2.67 blocks against staged reality.
 
-    Purpose: the C3 AC10 deletion-block gate port. See module docstring for
-    the three assertions and the skip-gate-when-empty / scoped-to-gate_paths
-    rules.
+    Purpose: see module docstring for the three assertions and the
+    skip-gate-when-empty / scoped-to-gate_paths rules.
 
-    AC3/AC11 (docs/plans/2026-08-13-claim-release-deadlock-and-the-doctrine-
-    that-rejects-it.md): protects against a commit message whose Step-2.67
-    Deleted/Kept claims diverge from staged reality -- git itself has no
-    notion of commit-MESSAGE-vs-diff consistency, only diff content. Every
-    call recomputes this from current git state; nothing is cached or held
+    Protects against a commit message whose Step-2.67 Deleted/Kept claims
+    diverge from staged reality -- git itself has no notion of
+    commit-MESSAGE-vs-diff consistency, only diff content. Every call
+    recomputes this from current git state; nothing is cached or held
     across calls. Outlet: fix the message body or re-stage to match the
     claims, then re-invoke -- a fresh sub-second gate call, no human wait
     (the CLI's own remedy text at the bottom of this module states the same
@@ -365,7 +325,7 @@ def deletion_block_gate(
     Params:
         msg_text   -- the composed commit message (from `commit_message.
                        compose_message`).
-        gate_paths -- C2's `compute_gate_paths()` output; the scope every
+        gate_paths -- the caller's dual-path-set output; the scope every
                       staged read below is filtered to (except
                       `tracked_at_head`, intentionally unscoped -- see
                       negative-spec). Ignored (treated as always-unscoped)
@@ -378,13 +338,13 @@ def deletion_block_gate(
                       (an empty `gate_scope` set falls through to the
                       unfiltered branch) -- the flag exists ONLY to
                       distinguish two different meanings of an empty
-                      `gate_paths`: C2's "nothing in scope, skip entirely"
+                      `gate_paths`: "nothing in scope, skip entirely"
                       (default, `whole_index=False`) vs. the CLI
                       trampoline's "no pathspec given, check the WHOLE
                       staged index" (`whole_index=True`) -- the bash
                       original's standalone/no-pathspec mode, where an
-                      empty `gate_paths` must NOT short-circuit past the F3
-                      inverse check.
+                      empty `gate_paths` must NOT short-circuit past the
+                      Assertion-3 inverse check.
     """
     has_block = has_step267_block(msg_text)
     gate_scope: Set[str] = set(gate_paths)
@@ -394,13 +354,13 @@ def deletion_block_gate(
 
     parsed = parse_step267_blocks(msg_text)
 
-    # Assertion-1 needs a WIDER set than Assertion-3 does (2026-08-06 fix --
-    # see `_parse_name_status_rename_sources`'s own docstring for the
-    # incident): a Deleted-claimed path whose old location git paired into a
-    # rename (identical/near-identical content staged at a new path in the
-    # SAME batch) has genuinely vacated that path in the staged tree, even
-    # though it is not a bare `D` line. Scoped by `gate_scope` the same way
-    # `staged_deletions` is.
+    # Assertion-1 needs a WIDER set than Assertion-3 does -- see
+    # `_parse_name_status_rename_sources`'s own docstring: a Deleted-claimed
+    # path whose old location git paired into a rename (identical/
+    # near-identical content staged at a new path in the SAME batch) has
+    # genuinely vacated that path in the staged tree, even though it is not
+    # a bare `D` line. Scoped by `gate_scope` the same way `staged_deletions`
+    # is.
     #
     # In-process (`_staged_deletions_and_renames_in_process`, no `git`
     # spawn) whenever `gate_scope` is non-empty -- the common, scoped
@@ -505,9 +465,8 @@ def declared_deletion_gate(
 ) -> GateOutcome:
     """Every IN-SCOPE staged deletion must be declared in `declared_deletions`.
 
-    SIBLING to `deletion_block_gate`, not a replacement -- see this module's
-    header and `docs/plans/2026-08-30-deletion-accountability-without-the-
-    cere.md`. `deletion_block_gate`'s Assertion-3 requires a "Step 2.67"
+    SIBLING to `deletion_block_gate`, not a replacement.
+    `deletion_block_gate`'s Assertion-3 requires a "Step 2.67"
     commit-body block, a `workstream-complete` ceremony convention the
     general committer (`ceremony.commit_v2`) cannot assume -- measured, it
     would refuse ~86% of this repo's commits. This gate replaces the prose
@@ -540,29 +499,22 @@ def declared_deletion_gate(
     `IndexParseError` (an unmerged, mid-merge-conflict index) is caught and
     reported as a FAILING outcome naming the unmerged state -- a read this
     gate cannot answer is a refusal, never a silent pass (same posture as
-    `dirty_tree_gate`'s F1 code-review finding, and `deletion_block_gate`'s
-    own Kept-claim read above).
+    `deletion_block_gate`'s own Kept-claim read above).
 
     CANDIDATE PRE-FILTER, so the index is read only when we are about to
-    refuse (2026-08-30 plan amendment, same day as C1/C2 -- the first cut of
-    this gate called `_staged_deletions_and_renames_in_process` unconditionally,
-    which reads the WHOLE index internally (`read_index(cwd)` has no scoping
-    parameter) and cost ~58ms on this repo, pushing `_pre_commit_gates` over
-    `commit_v2`'s 50ms `PROCESS_TIME_TARGET_MS` -- measured, not guessed:
-    `coordinator_core/benchmarks/tests/test_commit_v2_process_time_gate.py`
-    went from green to a 60.5ms bracketed mean). The gate's actual job is to
-    catch an UNDECLARED deletion, and an ordinary commit -- including every
-    commit that declares its deletions correctly -- has no candidate for
-    that at all: a `gate_paths` member that is either already declared, or
-    still present on disk, cannot possibly be an undeclared deletion, and
-    both are answerable with no index read whatsoever (`declared_deletions`
-    is an in-memory set; `os.path.exists` is a stat, not a git read). Only a
-    path that survives BOTH filters -- undeclared AND absent from the
-    worktree -- might be a genuine undeclared staged deletion, and only then
-    is `_staged_deletions_and_renames_in_process` called, scoped to that
-    narrowed candidate set (still the same helper, same rename test, same
-    unmerged-index posture -- nothing about C1's reuse mandate changes,
-    only when it runs).
+    refuse. `_staged_deletions_and_renames_in_process` reads the WHOLE index
+    internally (`read_index(cwd)` has no scoping parameter), so calling it
+    unconditionally costs a process budget this gate does not need to spend:
+    the gate's actual job is to catch an UNDECLARED deletion, and an ordinary
+    commit -- including every commit that declares its deletions correctly
+    -- has no candidate for that at all. A `gate_paths` member that is
+    either already declared, or still present on disk, cannot possibly be an
+    undeclared deletion, and both are answerable with no index read
+    whatsoever (`declared_deletions` is an in-memory set; `os.path.exists`
+    is a stat, not a git read). Only a path that survives BOTH filters --
+    undeclared AND absent from the worktree -- might be a genuine undeclared
+    staged deletion, and only then is `_staged_deletions_and_renames_in_process`
+    called, scoped to that narrowed candidate set.
 
     Ordering is load-bearing: `declared_deletions` membership is checked
     BEFORE `os.path.exists`, so a correct N-path deletion commit that
@@ -645,71 +597,61 @@ def carry_gate(
     gate_paths: Sequence[str],
 ) -> GateOutcome:
     """Refuse a staged `state/handoffs/*.md` whose `carried_items` declare
-    undeclared state -- a third gate beside `deletion_block_gate` and
-    `dirty_tree_gate`, modelled on the latter (same module, same
-    `GateOutcome` shape).
+    undeclared state -- a sibling gate beside `deletion_block_gate` (same
+    module, same `GateOutcome` shape).
 
-    Purpose: `docs/plans/2026-08-10-the-carry-gate-the-commit-pipeline-never-
-    asked-for.md` § C1 (AC1-AC7). Delegates every rule to
+    Purpose: delegates every rule to
     `coordinator_core.ops.handoff_carry_gate.evaluate_gate` -- this function
     does not re-implement the carry_id/disposition/disposition_detail rules,
     it only decides WHICH staged paths to run them against and how a
     violation reaches this pipeline's `diagnostics`.
 
     Scope: filtered to `gate_paths` entries matching `state/handoffs/*.md`
-    (single path segment under `state/handoffs/`, mirroring
-    `_build_known_scope`'s own non-recursive `handoffs_dir.glob("*.md")`
-    scan above). An empty filtered set returns `skipped=True` without
-    reading a single file (AC5) -- this gate has nothing to say about a
-    commit that stages no handoff.
+    (single path segment under `state/handoffs/`). An empty filtered set
+    returns `skipped=True` without reading a single file -- this gate has
+    nothing to say about a commit that stages no handoff.
 
     Per-path outcome:
-      - The path is ABSENT from the worktree at gate time (AC8) -- a
-        legitimate skip, not a refusal, checked via `(root / path).exists()`
-        BEFORE `read_carried_items` is ever called (never via catching the
-        `OSError` that call would otherwise raise -- that would re-open
-        AC7, see below). A path only reaches this gate at all because
-        `commit_message.compute_gate_paths` put it in `gate_paths` --
-        `[*commit_paths, *deleted_paths]` -- which folds in every
-        EM-authored `deleted_paths` entry alongside staged content; a
+      - The path is ABSENT from the worktree at gate time -- a legitimate
+        skip, not a refusal, checked via `(root / path).exists()` BEFORE
+        `read_carried_items` is ever called (never via catching the
+        `OSError` that call would otherwise raise, which would conflate a
+        deliberate deletion with a genuine read failure). A path only
+        reaches this gate at all because the caller's `gate_paths` folds in
+        every EM-authored `deleted_paths` entry alongside staged content; a
         deliberate `git rm state/handoffs/*.md` (`/distill` disposal, any
         handoff removal) is exactly that: an entry with no file behind it
         by design, not a read failure. Archival *swept* renames never reach
-        `gate_paths` this way -- `compute_commit_paths` folds those in
-        separately -- so this skip is scoped to genuine EM-authored
-        deletions only.
+        `gate_paths` this way, so this skip is scoped to genuine
+        EM-authored deletions only.
       - The path EXISTS but `read_carried_items` raises `CarryGateError`
         (unparseable frontmatter, `carried_items` not a list) or `OSError`
         (permissions, race, or any other read failure) -- a REFUSAL, not a
-        skip (AC7), mirroring `baton_assemble.apply.
-        _dispatch_handoff_carry_gate`'s own unreadable-vs-refusal
-        distinction one layer up. The existence check above means this
-        branch's `OSError` is never the ordinary "file is being deleted"
-        case -- only a genuinely present-but-unreadable file reaches it.
+        skip, mirroring the unreadable-vs-refusal distinction one layer up
+        in `baton_assemble.apply._dispatch_handoff_carry_gate`. The
+        existence check above means this branch's `OSError` is never the
+        ordinary "file is being deleted" case -- only a genuinely
+        present-but-unreadable file reaches it.
       - `read_carried_items` returns `[]` (absent `carried_items` key, or an
         explicitly empty array) -- `evaluate_gate([])` is `ok=True`; this is
-        a legitimate pass here, NOT the vacuous-pass hazard the plan's
-        Anti-scope names -- that hazard was about authoring-time validation
-        with no staged-path precondition; this gate only ever fires on a
-        staged handoff, so absence of the FIELD (as opposed to absence of
-        the FILE, the AC8 case above) genuinely means "nothing carried".
+        a legitimate pass here: this gate only ever fires on a staged
+        handoff, so absence of the FIELD (as opposed to absence of the
+        FILE, above) genuinely means "nothing carried".
       - `evaluate_gate(items)` returns `ok=False` -- every violation line is
-        appended to `diagnostics` VERBATIM (AC3), prefixed only with the
-        path, never re-worded.
+        appended to `diagnostics` VERBATIM, prefixed only with the path,
+        never re-worded.
 
-    Any refusal appends `_CARRY_GATE_RESTAGE_HINT` once (AC6) -- the
-    pipeline leaves a refused path unstaged; the operator must re-stage
-    after fixing the entries above.
+    Any refusal appends `_CARRY_GATE_RESTAGE_HINT` once -- the pipeline
+    leaves a refused path unstaged; the operator must re-stage after fixing
+    the entries above.
 
-    AC3/AC11 (docs/plans/2026-08-13-claim-release-deadlock-and-the-doctrine-
-    that-rejects-it.md): protects against a staged handoff whose
-    `carried_items` claim state the entries themselves don't actually
-    satisfy -- git stages file bytes, it has no notion of this field's
-    semantics. Every call re-reads and re-evaluates the staged file fresh;
-    nothing persists between calls. Outlet: the EM authoring the handoff
-    fixes the flagged entries per the diagnostic (`_CARRY_GATE_RESTAGE_HINT`
-    above), re-stages, and re-invokes -- a fresh sub-second gate call, no
-    human wait.
+    Protects against a staged handoff whose `carried_items` claim state the
+    entries themselves don't actually satisfy -- git stages file bytes, it
+    has no notion of this field's semantics. Every call re-reads and
+    re-evaluates the staged file fresh; nothing persists between calls.
+    Outlet: the EM authoring the handoff fixes the flagged entries per the
+    diagnostic (`_CARRY_GATE_RESTAGE_HINT` above), re-stages, and
+    re-invokes -- a fresh sub-second gate call, no human wait.
     """
     root = Path(worktree_root)
     handoff_paths = [p for p in gate_paths if _HANDOFF_PATH_RE.match(p)]
@@ -720,9 +662,9 @@ def carry_gate(
     diagnostics: List[str] = []
 
     for path in handoff_paths:
-        # AC8: absence is the deletion signal, checked BEFORE the read --
-        # never via catching read_carried_items' own OSError, which would
-        # also swallow a genuinely unreadable EXISTING file and re-open AC7.
+        # Absence is the deletion signal, checked BEFORE the read -- never
+        # via catching read_carried_items' own OSError, which would also
+        # swallow a genuinely unreadable EXISTING file.
         if not (root / path).exists():
             continue
 
@@ -908,8 +850,7 @@ def op_scope_coverage_gate(
         "predicate could not be evaluated" case above. See `_extract_dict_str_keys`'s own
         docstring and `_MultipleModuleBindingsError`.
 
-    AC3/AC11 (docs/plans/2026-08-13-claim-release-deadlock-and-the-doctrine-
-    that-rejects-it.md): protects against an op silently defaulting to
+    Protects against an op silently defaulting to
     `"none"` scope for lack of an `_OP_KEY_SCOPE` entry -- git has no notion
     of this cross-table registration invariant, only file content. Every
     call re-reads both source files and re-parses their dict literals fresh;
@@ -1039,6 +980,24 @@ def _parse_cli_args(argv: Sequence[str]) -> Optional[tuple]:
     Purpose: reproduces the bash original's argv shape byte-for-byte --
     a bare `--` with zero trailing paths is equivalent to omitting it
     (whole-index mode), matching the original's header comment.
+
+    Pathspec separator normalisation (2026-08-26 bug-backlog, P2+P3) lives
+    HERE, not at any one caller -- `gate_scope` in `deletion_block_gate` is
+    an exact-string set built from `git diff --cached --name-status`
+    output, which always spells paths with forward slashes; any pathspec
+    producer that hands over a Windows-separated path would otherwise drop
+    silently out of scope. Normalising in this one shared parse point
+    covers every caller by construction (a directive builder, a hand
+    invocation, a future sibling ceremony) rather than depending on each
+    one replicating the same `.replace` call.
+
+    PLATFORM-CONDITIONAL (`os.name == "nt"`), not a blanket strip: a
+    backslash is always a path separator on Windows and never legal in a
+    filename there, but on POSIX it is a legal filename character. An
+    unconditional strip would rewrite a genuine POSIX filename containing
+    a backslash into a path that matches nothing, silently dropping it out
+    of the gate's scope -- the same silent narrowing this normalisation
+    exists to prevent, in the other direction.
     """
     if len(argv) < 1:
         return None
@@ -1047,6 +1006,8 @@ def _parse_cli_args(argv: Sequence[str]) -> Optional[tuple]:
     pathspec: List[str] = []
     if rest and rest[0] == "--":
         pathspec = rest[1:]
+    if os.name == "nt":
+        pathspec = [p.replace("\\", "/") for p in pathspec]
     return (msg_file, pathspec)
 
 
@@ -1085,10 +1046,10 @@ def main(argv: Sequence[str]) -> int:
         return 3
 
     # No pathspec at all (or `--` with zero trailing paths, per _parse_cli_args)
-    # is whole-index mode -- must NOT trip deletion_block_gate()'s C2-only
+    # is whole-index mode -- must NOT trip deletion_block_gate()'s
     # skip-gate-when-empty shortcut (see that function's `whole_index` param
     # docstring for why an empty gate_paths means something different here
-    # than it does for C2's caller).
+    # than it does for its other caller).
     outcome = deletion_block_gate(
         msg_text, gate_paths=pathspec, cwd=cwd, whole_index=not pathspec
     )

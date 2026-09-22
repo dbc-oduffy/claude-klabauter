@@ -311,6 +311,21 @@ def _extract_candidate_root(cmd: str, cwd: Optional[str], env: Dict[str, str]) -
     return cwd
 
 
+def resolves_to_claude_home(path: str, env: Dict[str, str]) -> bool:
+    """True iff ``path`` resolves to Claude Home -- the comparison this guard
+    denies, exposed for the in-process callers of the scaffold that this
+    PreToolUse guard never sees (``ops/bootstrap_repo.py``,
+    ``install/maximalist.py``), so every refusal shares one definition.
+    False when either side cannot be resolved (fail open, as below)."""
+    claude_home = _resolve_claude_home(env)
+    if not claude_home:
+        return False
+    try:
+        return _canonical(path) == claude_home
+    except OSError:
+        return False
+
+
 def is_denied_repo_setup_claude_home(
     cmd: str, cwd: Optional[str], env: Dict[str, str]
 ) -> bool:
@@ -341,9 +356,9 @@ def is_denied_repo_setup_claude_home(
 
 def _deny_reason() -> str:
     return (
-        "BLOCKED: repo-setup's scaffold cannot target ~/.claude -- not a "
-        "working tree. Run it against the project clone instead: "
-        "/repo-setup --root <path-to-that-clone>."
+        "BLOCKED: repo-setup's scaffold cannot target ~/.claude -- it is "
+        "not a working tree. Run repo-setup against the project clone you "
+        "mean to set up: /repo-setup --root <path-to-that-clone>."
     )
 
 

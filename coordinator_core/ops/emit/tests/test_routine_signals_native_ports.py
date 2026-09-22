@@ -2,7 +2,7 @@
 check-weekly/arch-audit-staleness in-process wiring, and rollups' local-day/review-trail
 native sources).
 
-Review: code-reviewer (F1) — ``TestRunStalenessNative`` / ``TestLocalDayAndIsoWeek`` /
+``TestRunStalenessNative`` / ``TestLocalDayAndIsoWeek`` /
 ``TestReviewTrailFacts`` below close the gap between this docstring's coverage claim and
 the file body; previously only the distill-backlog port (``_count_distill_backlog`` /
 ``_distill_slug`` / ``_resolve_distill_root``) was exercised here despite the docstring

@@ -27,7 +27,7 @@ Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C9
 
 from __future__ import annotations
 
-from coordinator_core._hook_envelope import no_advisory, rewrite_input
+from coordinator_core._hook_envelope import no_advisory, payload_of, rewrite_input
 from coordinator_core.hooks.support.worktree_isolation_strip import compute_strip
 from coordinator_core.ipc import register_op
 
@@ -35,6 +35,9 @@ from coordinator_core.ipc import register_op
 @register_op("hooks.strip_worktree_isolation")
 async def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Workflow) op: strip a banned `isolation: "worktree"` field."""
+    # Normalize the two params shapes
+    # both engine doors and the cold chain send (see block_worktree_tool).
+    params = payload_of(params)
     if params.get("tool_name") != "Workflow":
         return no_advisory()
 

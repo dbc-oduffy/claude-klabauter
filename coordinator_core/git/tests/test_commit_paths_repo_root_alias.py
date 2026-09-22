@@ -51,7 +51,7 @@ def test_the_agents_verbatim_block_lands_a_commit(repo):
         repo_root=repo,
         paths=["a.txt"],
         deleted_paths=["gone.txt"],
-        message="verbatim block\n\nbody",
+        message="verbatim block\n\nremoves gone.txt",
     )
 
     assert _subjects(repo)[0] == "verbatim block"

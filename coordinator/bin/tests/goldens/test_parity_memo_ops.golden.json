@@ -65,7 +65,7 @@
       },
       "returncode": 1,
       "stdout": "",
-      "stderr": "memo-transition: memo cross-field validation failed:\n  kind: invalid enum value \"ack\" for kind (kind must be one of: ask, consult, fyi, proposal. Absent is also valid (reader applies 'ask' default). Note: 'ack' is not a kind \u2014 acknowledgement is receipt-state.)\n",
+      "stderr": "memo-transition: memo cross-field validation failed:\n  kind: invalid enum value \"ack\" for kind (kind must be one of: ask, consult, fyi, proposal, bug. Absent is also valid (reader applies 'ask' default). Note: 'ack' is not a kind \u2014 acknowledgement is receipt-state.)\n",
       "resulting_file_content": "---\nkind: ack\nstatus: open\nfrom: sender-session\nsummary: A test memo.\ncreated: 2026-06-01\n---\n"
     },
     "claim_reject_central_only_missing_to": {

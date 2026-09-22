@@ -2,14 +2,21 @@
 coordinator_core.ops.plan_tasks_render — read/projection module over the
 plan `## Tasks` task-spine's disposition field set.
 
-Purpose: two generated (never hand-maintained, D6) read projections over
-the spine rows a plan already carries:
+Purpose: three generated (never hand-maintained, D6) read/compute
+projections over the spine rows a plan already carries:
 
   1. ``render_closed_items(rows)`` — the human-legible "Closed items"
      markdown section, grouped by disposition.
   2. ``spine_projection(rows)`` — the unresolved-head-in-full /
      closed-tail-as-count shape a subagent sidecar can consume without
      reading every closed row's prose.
+  3. ``dispositions_for_delivered(rows, delivered_ids, ...)`` — the missing
+     computation step behind klabauter#44's "no op sets a spine row's
+     disposition, so a delivered row re-emits as live forever": nothing in
+     this pipeline ever computed WHAT a closing write for a delivered row
+     should even contain, so there was nothing for a mutate op to be
+     handed. This function derives that payload; it does not write it —
+     see negative-spec below.
 
 Nothing physically moves out of the spine (D6) — both outputs are computed
 fresh from the current rows on every call; there is no stored/cached
@@ -54,12 +61,21 @@ Negative-spec:
   - Does NOT write any file, does NOT call git, does NOT lock — pure read
     + compute. A caller wanting to splice the rendered section back into a
     plan body does that itself (e.g. via a future op); this module never
-    touches plan source bytes.
+    touches plan source bytes. ``dispositions_for_delivered`` is no
+    exception: it returns a payload shaped for
+    ``coordinator_core.ops.plan_tasks_mutate``'s ``resolve`` verb
+    (``id``/``disposition``/``disposition_ref``) — it never calls that op,
+    never opens ``locked_rmw``, and never mutates ``rows`` in place.
   - Does NOT re-implement the fenced-block locate rule inline — see above.
   - Does NOT validate rows against the vendored schema. A row missing or
     misshaping ``disposition`` is read tolerantly (falls back to the
     schema's own ``open`` default, D1) rather than raising — schema
     enforcement is ``schema_validate.py``'s surface (C2), not this one's.
+  - ``dispositions_for_delivered`` does NOT decide WHICH ids are delivered
+    — that evidence (a landed commit sha, a DONE dispatch report) lives
+    outside this module and outside this plan's own spine, so the caller
+    supplies ``delivered_ids`` rather than this module inferring it from
+    disk or git. Never widen this into a delivery-detection heuristic.
 """
 
 from __future__ import annotations
@@ -159,6 +175,65 @@ def spine_projection(rows: list) -> dict:
     """
     open_rows = [row for row in rows if _disposition(row) == _OPEN]
     return {"open": open_rows, "closed_count": len(rows) - len(open_rows)}
+
+
+# ---------------------------------------------------------------------------
+# (c) the disposition-write payload behind a delivered row (klabauter#44)
+# ---------------------------------------------------------------------------
+
+
+def dispositions_for_delivered(
+    rows: list,
+    delivered_ids,
+    *,
+    disposition: str = "coded",
+    disposition_ref: str | None = None,
+) -> list[dict]:
+    """Derive the ``plan.tasks.mutate resolve`` batch payload that would
+    close every row in ``delivered_ids`` — the computation klabauter#44
+    found missing: nothing produced this payload, so nothing was ever
+    handed to ``resolve``, and a delivered row's ``disposition`` stayed at
+    its schema default (``open``) forever, re-emitting as live on every
+    subsequent read of the spine.
+
+    Returns one ``{"id": ..., "disposition": ...}`` dict per row in
+    ``rows`` whose ``id`` is in ``delivered_ids`` AND whose CURRENT
+    disposition is still ``open`` (via ``_disposition``, D1-tolerant) — an
+    id already resolved to some other disposition is left out, so a
+    caller can pass this straight to ``resolve``'s batch param without
+    re-deriving idempotency itself (re-resolving an already-closed row is
+    the caller's decision, not this function's). ``disposition_ref`` is
+    included only when supplied, and then on every returned entry
+    uniformly — this function has no way to derive a per-row ref (a commit
+    sha, a queue path) from ``rows`` alone; the caller who knows what
+    landed supplies it or leaves it to ``resolve``'s own required-only-
+    conditionally validation.
+
+    ``delivered_ids`` may be any iterable — a ``set`` is not required, and
+    passing a ``list`` (e.g. straight off a dispatch report) works
+    unchanged. An id in ``delivered_ids`` naming no row in ``rows`` is
+    silently ignored: this function derives payload for rows that exist,
+    it does not validate the caller's delivery evidence.
+
+    Row ORDER in the return mirrors ``rows``' own order, not
+    ``delivered_ids``' — matching ``resolve``'s own batch semantics, which
+    treat order as insignificant but this keeps output deterministic for a
+    given ``rows`` input regardless of how ``delivered_ids`` was built
+    (e.g. from an unordered set).
+    """
+    wanted = set(delivered_ids)
+    updates: list[dict] = []
+    for row in rows:
+        row_id = row.get("id")
+        if row_id not in wanted:
+            continue
+        if _disposition(row) != _OPEN:
+            continue
+        entry = {"id": row_id, "disposition": disposition}
+        if disposition_ref is not None:
+            entry["disposition_ref"] = disposition_ref
+        updates.append(entry)
+    return updates
 
 
 # ---------------------------------------------------------------------------

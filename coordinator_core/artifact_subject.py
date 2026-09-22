@@ -68,7 +68,7 @@ class CrossCuttingArtifact(Exception):
 
 
 _CROSS_CUTTING_PATTERNS = (
-    # Review: code-reviewer -- bash oracle's `case` alternation matches only
+    # Bash oracle's `case` alternation matches only
     # the two literal casings `DR-207`/`dr-207` (no case-insensitive flag set);
     # re.IGNORECASE was an undocumented broadening past the faithful-repro
     # contract this migration wave holds itself to. Tightened to exact parity.

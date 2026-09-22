@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.bash_guards import scope_orphan_census as census_mod
+from coordinator_core.git.run import GitResult
 
 # Spawns a real external process (git, for repo fixture setup and tracked-at-
 # HEAD checks); runs at cadence gates, not per-commit.
@@ -67,6 +68,12 @@ def _named_owner_line(ts: str, session_id: str, path: str, owner_session: str) -
         f"{ts} | {session_id} | foreign-staged | {path} | "
         f"owner:session {owner_session} | pending-resolution"
     )
+
+
+def _commit_with_session_trailer(repo: Path, filename: str, session_id: str) -> None:
+    (repo / filename).write_text("x\n", encoding="utf-8")
+    _git(repo, "add", filename)
+    _git(repo, "commit", "-q", "-m", f"msg for {filename}\n\nSession-Id: {session_id}\n")
 
 
 # --- log parsing / iteration -------------------------------------------------
@@ -376,6 +383,78 @@ def test_run_census_new_unexplained_cause_lands_in_genuinely_unowned(repo: Path,
         log_path="",
     )
     assert census_mod.classify_cause(str(repo), event) == "genuinely-unowned"
+
+
+# --- coverage (state/bug-backlog/2026-08-28-the-scope-guard-s-instrument-is-
+# absent-f-d1921a288f7b.yaml remedy (b): a by_cause zero must never be
+# readable as a population rate without the coverage denominator beside it)
+# ------------------------------------------------------------------------
+
+
+def test_run_census_coverage_counts_session_dirs_against_committing_sessions(repo: Path):
+    _commit_with_session_trailer(repo, "a.txt", "sess-aaa")
+    _commit_with_session_trailer(repo, "b.txt", "sess-bbb")
+    _write_log(
+        repo,
+        "sess-aaa",
+        [_orphan_line("2026-08-27T09:00:00Z", "sess-aaa", "archive/handoffs/a.md")],
+    )
+
+    result = census_mod.run_census(str(repo))
+
+    assert result.coverage["committing_sessions"] == 2
+    assert result.coverage["sessions_with_dir"] == 1
+    assert result.coverage["coverage_ratio"] == pytest.approx(0.5)
+
+
+def test_run_census_coverage_present_even_with_no_session_dirs_at_all(repo: Path):
+    # The exact shape the row's body describes: a session dir count of 0
+    # against a nonzero committing-session count must surface as a coverage
+    # ratio, not read like a clean `by_cause` census of zero foreign paths.
+    _commit_with_session_trailer(repo, "a.txt", "sess-aaa")
+
+    result = census_mod.run_census(str(repo))
+
+    assert result.total_events == 0
+    assert result.coverage["sessions_with_dir"] == 0
+    assert result.coverage["committing_sessions"] == 1
+    assert result.coverage["coverage_ratio"] == pytest.approx(0.0)
+
+
+def test_run_census_coverage_ratio_is_none_when_no_committing_sessions(repo: Path):
+    # The seed commit fixture carries no Session-Id trailer, so the
+    # denominator is 0 -- must read as "unknown", never as a divide-by-zero
+    # or a false 100%.
+    result = census_mod.run_census(str(repo))
+
+    assert result.coverage["committing_sessions"] == 0
+    assert result.coverage["coverage_ratio"] is None
+
+
+def test_run_census_coverage_committing_sessions_is_none_on_git_failure(repo: Path, monkeypatch):
+    monkeypatch.setattr(
+        census_mod,
+        "run_git",
+        lambda *a, **k: GitResult(returncode=128, stdout="", stderr="fatal", timed_out=False),
+    )
+
+    result = census_mod.run_census(str(repo))
+
+    assert result.coverage["committing_sessions"] is None
+    assert result.coverage["coverage_ratio"] is None
+
+
+def test_run_census_coverage_scoped_by_since(repo: Path):
+    _commit_with_session_trailer(repo, "old.txt", "sess-old")
+    result = census_mod.run_census(str(repo), since="2099-01-01T00:00:00Z")
+    assert result.coverage["committing_sessions"] == 0
+
+
+def test_to_dict_includes_coverage(repo: Path):
+    _commit_with_session_trailer(repo, "a.txt", "sess-aaa")
+    result = census_mod.run_census(str(repo))
+    payload = result.to_dict()
+    assert payload["coverage"]["committing_sessions"] == 1
 
 
 def test_to_dict_round_trips_all_fields(repo: Path):

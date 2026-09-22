@@ -54,13 +54,15 @@ from __future__ import annotations
 
 import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import Optional
 
 import pytest
 
-from coordinator_core.benchmarks.process_time import batched_process_time_ms
+from coordinator_core.benchmarks.process_time import (
+    batched_process_time_ms,
+    in_process_time_ms,
+)
 from coordinator_core.subagent_sandbox.engine import load_policy, resolve_git_root
 from coordinator_core.subagent_sandbox.provision_report import (
     _build_doc_text,
@@ -374,19 +376,27 @@ def test_dispatch_leg_receipt_marginal_cost_is_under_one_millisecond(
     branch (matches `_provision`'s own real dispatch-time code path,
     never the idempotent provision_key branch).
 
-    Repeated `_MARGINAL_MEASURE_REPS` times per leg and MEDIANED (never a
-    single sample) for the same reason `test_ceremony_brief_budget.py`
-    medians its own `time.process_time()` reads: a sub-millisecond delta is
-    well inside this box's GC/scheduler jitter on any single sample."""
+    C6 census finding (`_provision_once`'s named open case): `_provision`
+    calls `resolve_git_root(cwd)`, which genuinely spawns a real `git
+    rev-parse` subprocess -- `in_process_time_ms` below measures only the
+    CALLING process's own CPU (its own module docstring, "the children
+    trap") and cannot see that spawn's cost, exactly like the
+    `time.process_time()` loop it replaces here, which excludes children on
+    every platform for the same reason. That spawn is honest to omit for
+    THIS assertion specifically because it is a DIFFERENTIAL: the git spawn
+    happens identically on both the with-receipt and without-receipt legs,
+    so its cost cancels in the subtraction below regardless of which
+    in-process instrument reads it. Batch-amortised via `in_process_time_ms`
+    (C6) rather than this test's own former fixed-N median loop, closing
+    the same sub-tick trap a fixed-N per-call sample is exposed to."""
 
     def _median_process_time_ms(agent_type: str) -> float:
-        samples = []
-        for _ in range(_MARGINAL_MEASURE_REPS):
-            t0 = time.process_time()
-            _provision_once(git_root=git_repo, policy_path=policy_path, agent_type=agent_type)
-            samples.append((time.process_time() - t0) * 1000.0)
-        samples.sort()
-        return samples[len(samples) // 2]
+        return in_process_time_ms(
+            lambda: _provision_once(
+                git_root=git_repo, policy_path=policy_path, agent_type=agent_type
+            ),
+            k=_MARGINAL_MEASURE_REPS,
+        )["process_time_ms"]
 
     without_receipt_ms = _median_process_time_ms(NON_REVIEWER_ELIGIBLE_TYPE)
     with_receipt_ms = _median_process_time_ms(REVIEWER_TYPE)

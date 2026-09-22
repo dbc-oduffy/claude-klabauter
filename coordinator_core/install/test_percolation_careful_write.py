@@ -401,19 +401,23 @@ def test_install_one_refuse_strategy_preserves_destination_and_reports(tmp_path,
 
 
 def test_install_one_check_only_foreign_tracked_stale_reports_not_managed_here(tmp_path, capsys):
-    dst = tmp_path / "dst" / "publish_sync.py"
+    # A tracked non-code manifest entry (unlike publish_sync.py, a `.py` that
+    # `_install_one`'s suffix classification always force-overwrites): the
+    # live path's own verdict (`_install_one_live_would_rewrite`) is "would
+    # not rewrite" only when `force_overwrite` stays False, which is exactly
+    # the setup_files loop's call shape for this kind of entry.
+    dst = tmp_path / "dst" / ".percolate-identity.example"
     dst.parent.mkdir(parents=True)
     dst.write_text("stale content\n", encoding="utf-8")
-    src = tmp_path / "src" / "publish_sync.py"
+    src = tmp_path / "src" / ".percolate-identity.example"
     src.parent.mkdir(parents=True)
     src.write_text("new template\n", encoding="utf-8")
 
-    # Must not raise SubstrateFatalError -- today's unconditional-raise
-    # behaviour is exactly what AC6's check-mode contract changes for this
-    # one classification.
+    # Must not raise SubstrateFatalError -- a foreign-tracked destination the
+    # live path would not rewrite reports "not managed here" instead.
     _install_one(
         src, dst, False, "machine-local", True,
-        force_overwrite=True, write_strategy="careful",
+        write_strategy="careful",
     )
 
     out = capsys.readouterr().out
@@ -506,13 +510,13 @@ def test_percolation_git_identity_resolved_once_per_directory(tmp_path, monkeypa
     _init_tracking_repo(setup_dest, _SETUP_TEMPLATE_FILES + _SETUP_TEMPLATE_HOOK_FILES)
 
     calls = []
-    real_run = substrate.subprocess.run
+    real_run_git = substrate.run_git
 
-    def _counting_run(argv, **kwargs):
-        calls.append(argv)
-        return real_run(argv, **kwargs)
+    def _counting_run_git(args, **kwargs):
+        calls.append(list(args))
+        return real_run_git(args, **kwargs)
 
-    monkeypatch.setattr(substrate.subprocess, "run", _counting_run)
+    monkeypatch.setattr(substrate, "run_git", _counting_run_git)
 
     bin_dst = install_base / "bin"
     _percolation_and_path_steps(

@@ -207,7 +207,7 @@ def test_default_resolution_cmd_forwarder_process_time() -> None:
         [str(_CMD_FORWARDER), "list"], k=K_INVOCATIONS, cwd=str(_REPO_ROOT)
     )
     assert result["procs_per_call"] <= 7.0, result
-    # Review: coordinator:code-reviewer -- 500.0 is the CLAUDE.md brightline
+    # 500.0 is the CLAUDE.md brightline
     # itself, a coarser bar this test's own docstring is not about; pinning
     # the ratchet to it would let a >2x regression off this test's own
     # baseline (234.4ms) pass silently. Ratchet at ~1.5x the recorded
@@ -228,7 +228,7 @@ def test_default_resolution_python_direct_process_time() -> None:
         [sys.executable, str(_PY_CLI), "list"], k=K_INVOCATIONS, cwd=str(_REPO_ROOT)
     )
     assert result["procs_per_call"] <= 6.0, result
-    # Review: coordinator:code-reviewer -- same brightline-vs-baseline gap as
+    # Same brightline-vs-baseline gap as
     # the forwarder test above; 500.0 would pass a 208ms -> 400ms regression
     # undetected. Ratchet at ~1.5x this test's own baseline (208.3ms).
     assert result["process_time_ms"] <= 312.5, result
@@ -243,7 +243,7 @@ def test_bare_interpreter_floor_process_time() -> None:
 
     result = batched_process_time_ms([sys.executable, "-c", "pass"], k=K_INVOCATIONS)
     assert result["procs_per_call"] == 1.0, result
-    # Review: coordinator:code-reviewer -- headroom rationale for the ~4x gap
+    # Headroom rationale for the ~4x gap
     # over the measured floor (26.0ms pinned baseline, 36.5ms this session's
     # re-measurement, both module docstring). Kept wide deliberately: unlike
     # the stamped-root test's shared-fleet-server noise, this floor's
@@ -281,6 +281,10 @@ def test_stamped_engine_root_python_direct_reaches_near_zero_spawns() -> None:
     assert result["process_time_ms"] <= 150.0, result
 
 
+@pytest.mark.deliberate_wall_clock(
+    reason="warm-down fail-fast: a dead pipe must return near-instantly rather than block near "
+    "READ_DEADLINE_SECS -- a behaviour only wall clock can observe"
+)
 def test_stub_root_warm_down_fails_fast(tmp_path: Path) -> None:
     """AC9's own "distinct from warm-down" contrast case: an isolated,
     uniquely-stamped engine root with NO pipe ever created. `try_warm_
@@ -319,6 +323,10 @@ def test_stub_root_warm_down_fails_fast(tmp_path: Path) -> None:
     assert elapsed < 0.5, f"warm-down should fail fast, not near READ_DEADLINE_SECS: {elapsed}s"
 
 
+@pytest.mark.deliberate_wall_clock(
+    reason="a blocked readline() on a daemon thread burns no CPU, so the READ_DEADLINE_SECS "
+    "wait it manufactures is observable only on wall clock, never process time"
+)
 def test_warm_wedged_additive_cost_accept_against_brightline() -> None:
     """AC9: warm server up but not answering. `_open_pipe` monkeypatched to
     a fake pipe whose `readline()` blocks past `READ_DEADLINE_SECS` --

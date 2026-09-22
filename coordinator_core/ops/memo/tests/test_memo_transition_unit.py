@@ -100,7 +100,7 @@ def _git_track(repo: Path, target: Path) -> None:
 # (1) Action disposition validation — mutual-exclusion (retargeted to _action)
 # ---------------------------------------------------------------------------
 
-# Review: code-reviewer (F2) — _validate_action_disposition was a dead function never called by
+# _validate_action_disposition was a dead function never called by
 # _action. Its is-not-None semantics (decision="" treated as "supplied") differed from _action's
 # live truthy guard (decision="" treated as "not supplied"), and it raised ValueError instead of
 # returning _err() (violating AC6). Tests retargeted to _action directly against a real git repo
@@ -1069,10 +1069,7 @@ created: 2026-06-01
         assert result["exit_code"] == 0
         assert result["applied"] is False
 
-    def test_action_correct_realization_requires_decision(self, tmp_path):
-        """--correct-realization without --decision fails loud (no realized_by to
-        correct on an actioned_note-shape memo)."""
-        actioned_note_fixture = """\
+    _ACTIONED_NOTE_FIXTURE = """\
 ---
 kind: fyi
 status: actioned
@@ -1084,9 +1081,44 @@ summary: A test memo.
 created: 2026-06-01
 ---
 """
-        memo = self._setup_memo(tmp_path, actioned_note_fixture)
+
+    def test_action_note_correction_succeeds_unchanged_shape(self, tmp_path):
+        """--correct-realization without --decision, on an actioned_note-shape
+        memo, corrects actioned_note in place — the superseded text is
+        preserved inside a [correction ...] clause, no new frontmatter key."""
+        memo = self._setup_memo(tmp_path, self._ACTIONED_NOTE_FIXTURE)
+        result = _action(memo, {"actioned_note": "corrected note", "correct_realization": True})
+        assert result["exit_code"] == 0
+        assert result["applied"] is True
+
+        fm = _fm_dict(memo)
+        assert fm["actioned_note"].startswith("corrected note")
+        assert "noted" in fm["actioned_note"]
+        assert "correction" in fm["actioned_note"]
+        assert set(fm.keys()) == {
+            "kind", "status", "picked_up_at", "picked_up_by", "actioned_note",
+            "from", "summary", "created",
+        }
+        assert validate_memo_cross_fields(fm) == []
+
+    def test_action_note_correction_shape_flip_still_fails_loud(self, tmp_path):
+        """--correct-realization never unlocks a SHAPE flip — a decision-shape
+        memo re-actioned with only --actioned-note (no --decision) still fails
+        loud, byte-for-byte, same as an unchanged-verdict-only flag would."""
+        memo = self._setup_memo(tmp_path, self._ACTIONED_FIXTURE)
+        before = Path(memo).read_text(encoding="utf-8")
         result = _action(memo, {"actioned_note": "different note", "correct_realization": True})
         assert result["exit_code"] == 1
+        assert result["applied"] is False
+        assert "the disposition shape cannot change" in result["error"]
+        assert Path(memo).read_text(encoding="utf-8") == before
+
+    def test_action_note_correction_exact_match_still_noop(self, tmp_path):
+        """Re-actioning an actioned_note-shape memo with the SAME note text is
+        still the pre-existing idempotent no-op, correct_realization or not."""
+        memo = self._setup_memo(tmp_path, self._ACTIONED_NOTE_FIXTURE)
+        result = _action(memo, {"actioned_note": "noted", "correct_realization": True})
+        assert result["exit_code"] == 0
         assert result["applied"] is False
 
     # -- _resolve ---------------------------------------------------------

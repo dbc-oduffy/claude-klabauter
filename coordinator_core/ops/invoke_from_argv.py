@@ -172,6 +172,37 @@ class EntrypointNotWarmLoadableError(ValueError):
 #: read from or written to under a directory it wasn't told about.
 _ENTRYPOINT_CWD_LOCK = threading.Lock()
 
+#: Set to the entrypoint name for the span `_run_entrypoint` runs its `main`,
+#: warm- OR cold-served. A native-route shim (`entry_point_shim.
+#: _native_route_entry`) reads it to run its implementation instead of routing
+#: back through this op. `COORDINATOR_EXECUTION_ROUTE=warm_server` alone does
+#: not cover it: a cold `python -m coordinator_core.invoke invoke.from_argv`
+#: declares no route, so its shim routed again, missed warm, spawned another
+#: cold child, and so on -- a self-perpetuating chain (~7 spawns/s, 430+ deep)
+#: whose every rung also queued on the warm door. Spelling pinned by
+#: `coordinator/bin/tests/test_native_route_entry_served_side.py`.
+SERVED_ENTRYPOINT_ENV = "COORDINATOR_SERVED_ENTRYPOINT"
+
+#: (entrypoint, leading verb) pairs whose run reaches
+#: `workday-complete-step1-validate.py`, which waits up to
+#: `suite_mutex.MUTEX_WAIT_SECS` on the machine-wide suite mutex and then runs a
+#: full test suite. Served here, that pins a shared pool worker for minutes and
+#: outlives the door's 30s deadline: every call ends -32004 with the validator
+#: still running unread, and a few concurrent close ceremonies starve the pool
+#: for every session on the box. Refused with -32007 before anything loads, so
+#: the door runs them cold in the caller's own process tree, where the mutex
+#: wait costs nobody else a worker.
+#:
+#: THE SANCTIONED CARVE-OUT LIST, and the only one: everything else reaches the
+#: warm engine (DR-344). Membership is by PM ruling and by enumeration here --
+#: satisfying the rationale is not membership. Why occupancy rather than latency
+#: is the axis, and why -32007 is the code that makes the cold leg legitimate:
+#: docs/reference/warm-pool-carve-outs.md.
+_POOL_REFUSED_VERBS = frozenset({
+    ("workday-complete-assemble", "apply"),
+    ("workday-complete-args-and-validate", "run-step1"),
+})
+
 
 def _resolve_entrypoint_script(entrypoint: str) -> Path:
     """Validates `entrypoint` against the committed allowlist and against
@@ -506,7 +537,7 @@ def _help_call_argv(script: Path, argv: list) -> list:
     return prefix + ["--help"]
 
 
-def _run_entrypoint(entrypoint: str, argv: list, cwd: str) -> dict:
+def _run_entrypoint(entrypoint: str, argv: list, cwd: str, stdin: str = "") -> dict:
     """Runs `coordinator/bin/<entrypoint>.py`'s OWN `main(argv)` in-process.
 
     Chdir's to `cwd` (the door's cwd, never this server process's own cwd)
@@ -517,6 +548,15 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str) -> dict:
     this call can see the caller's cwd. Stdout/stderr are captured the same
     way `_dispatch_argv` captures the generic dispatcher's own prints, so a
     warm pool worker's real streams are never written to.
+
+    `sys.stdin` is borrowed the same way, and is ALWAYS replaced: with the
+    caller's declared payload (`stdin`, the door's hook-mode `params.stdin`)
+    or with an empty stream. Served in-process, the real `sys.stdin` is the
+    warm SERVER's own handle, so a CLI that reads it (`hook-run.py`'s
+    `_read_event`) sees no caller input at all -- or blocks on a handle no
+    caller owns. That is how every guard behind the door in hook mode read an
+    empty event, lost `cwd`, and returned `-32602` for a payload that must be
+    denied and one that must be allowed alike.
 
     The caller's SESSION IDENTITY is already true in `os.environ` by the time
     this function runs — `coordinator_core.warm.entry_seam.per_request_state`
@@ -576,6 +616,11 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str) -> dict:
     own `--help` by then, so it renders its real usage like any other shape.
     """
     script = _resolve_entrypoint_script(entrypoint)
+    if argv and (entrypoint, argv[0]) in _POOL_REFUSED_VERBS:
+        raise EntrypointNotWarmLoadableError(
+            f"invoke.from_argv: {entrypoint} {argv[0]} runs a test suite behind the "
+            "machine-wide suite mutex; it runs cold, never in the shared pool."
+        )
     shape = _entrypoint_argv_shape(script)
 
     help_requested = any(a in ("--help", "-h") for a in argv)
@@ -599,7 +644,10 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str) -> dict:
         previous_cwd = os.getcwd()
         previous_sys_path = list(sys.path)
         previous_sys_argv = list(sys.argv)
+        previous_stdin = sys.stdin
+        previous_served = os.environ.get(SERVED_ENTRYPOINT_ENV)
         try:
+            os.environ[SERVED_ENTRYPOINT_ENV] = entrypoint
             os.chdir(cwd)
             # WHY sys.argv IS SET, not just passed as a parameter. Served
             # in-process, `sys.argv` is the warm SERVER's own command line --
@@ -624,6 +672,7 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str) -> dict:
             # calls a bare `parser.parse_args()` mid-body, and no shape read
             # off its guard would reveal that.
             sys.argv = [str(script)] + list(call_argv)
+            sys.stdin = io.StringIO(stdin)
             with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(
                 stderr_buf
             ):
@@ -647,6 +696,11 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str) -> dict:
             os.chdir(previous_cwd)
             sys.path[:] = previous_sys_path
             sys.argv[:] = previous_sys_argv
+            sys.stdin = previous_stdin
+            if previous_served is None:
+                os.environ.pop(SERVED_ENTRYPOINT_ENV, None)
+            else:
+                os.environ[SERVED_ENTRYPOINT_ENV] = previous_served
 
     if help_requested:
         # Uniform with the cold door (`entry_point_shim.run_target`): a help
@@ -687,6 +741,10 @@ def _invoke_from_argv(params: dict, repo_root: Optional[Path] = None) -> dict:
               module's docstring). ABSENT: unchanged `_dispatch_argv` behaviour.
               PRESENT: names a `coordinator/bin/<entrypoint>.py` CLI whose own
               `main(argv)` runs instead — see `_run_entrypoint`.
+        stdin: Optional[str] — the caller's declared stdin payload (door hook
+              mode, `COORDINATOR_DOOR_STDIN_MODE=hook`). Becomes the named
+              entrypoint's `sys.stdin`; absent reads as empty. Only the
+              `entrypoint` leg reads it.
 
     Returns:
         {"stdout": str, "stderr": str, "exit_code": int} — byte-identical to
@@ -716,6 +774,7 @@ def _invoke_from_argv(params: dict, repo_root: Optional[Path] = None) -> dict:
     argv = params.get("argv")
     cwd = params.get("cwd")
     entrypoint = params.get("entrypoint")
+    stdin = params.get("stdin")
 
     if not isinstance(argv, list) or not all(isinstance(item, str) for item in argv):
         raise ValueError("invoke.from_argv requires params.argv to be a list of strings")
@@ -726,8 +785,11 @@ def _invoke_from_argv(params: dict, repo_root: Optional[Path] = None) -> dict:
             "invoke.from_argv requires params.entrypoint to be a non-empty string when present"
         )
 
+    if stdin is not None and not isinstance(stdin, str):
+        raise ValueError("invoke.from_argv requires params.stdin to be a string when present")
+
     if entrypoint is not None:
-        return _run_entrypoint(entrypoint, argv, cwd)
+        return _run_entrypoint(entrypoint, argv, cwd, stdin or "")
 
     from coordinator_core.invoke.__main__ import _dispatch_argv
 

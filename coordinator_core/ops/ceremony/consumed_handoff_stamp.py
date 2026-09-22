@@ -1095,7 +1095,7 @@ def _commit_and_push_follow_up(
             exc_info=True,
         )
 
-    # Review: code-reviewer — Finding 3: use the canonical PUSH_MODE_SYNC
+    # Use the canonical PUSH_MODE_SYNC
     # constant (commit_pipeline.py's own enum) instead of a bare string
     # literal so this stays in sync if the canonical value ever changes.
     if push_mode != PUSH_MODE_SYNC:
@@ -1114,7 +1114,7 @@ def _commit_and_push_follow_up(
     push_status = derive_push_status(push_outcome)
 
     if push_status == PUSH_STATUS_PUSHED:
-        # Review: code-reviewer — Finding 1 (P1): `push_with_retry` can
+        # `push_with_retry` can
         # fetch+`git rebase --onto` this follow-up commit on a rejected
         # push before re-pushing, which REWRITES its SHA. The pre-push
         # `follow_up_sha` captured above is therefore stale in exactly the

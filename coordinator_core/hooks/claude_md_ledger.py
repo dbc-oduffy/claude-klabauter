@@ -169,7 +169,7 @@ def parse_ledger(ledger_path: Path) -> List[LedgerRow]:
             continue
         cells = _split_table_cells(stripped)
         if len(cells) != 5:
-            # Review: code-reviewer — F4: a malformed row (e.g. a Reason
+            # A malformed row (e.g. a Reason
             # cell embedding an unescaped "|") must fail loud, not silently
             # drop the row -- a dropped row causes over-refusal ("no ledger
             # row") that is indistinguishable from an unclassified heading,
@@ -390,10 +390,8 @@ _LEDGER_PATH_OVERRIDES = {
 #: channel-purpose contract that is the routing authority for where content
 #: should go instead.
 _DEFAULT_DEMOTE_TARGET_HINT = (
-    "Demote target: route non-conduct, reference, or rationale content to "
-    "the wiki/decision-record channel (coordinator/docs/wiki/, channel 5) "
-    "per coordinator/docs/wiki/doctrine-channel-purposes.md, unless it "
-    "genuinely governs every agent's (or the EM's) conduct."
+    "Demote target: non-conduct content -> wiki (coordinator/docs/wiki/, "
+    "channel 5), per doctrine-channel-purposes.md."
 )
 
 
@@ -557,10 +555,9 @@ def admission_check_for_surface(
         new_size = len(new_content.encode("utf-8"))
         if new_size > old_size:
             return False, (
-                f"Refused: {surface} has no classification ledger yet "
-                f"(bootstrap disposition -- expected at {ledger_path}). "
-                f"Growth is blocked until one exists; shrinkage is always "
-                f"permitted. {_DEFAULT_DEMOTE_TARGET_HINT}"
+                f"Refused: {surface} has no ledger yet ({ledger_path}). "
+                f"Growth blocked until one exists; shrinkage always OK. "
+                f"{_DEFAULT_DEMOTE_TARGET_HINT}"
             )
         return True, ""
 

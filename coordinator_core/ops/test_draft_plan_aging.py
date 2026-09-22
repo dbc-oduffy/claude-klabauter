@@ -684,7 +684,7 @@ def test_list_orphaned_existing_sidecar_suffixes_still_excluded_no_regression(tm
 
 
 def test_is_census_local_sidecar_documented_coincidental_prefix_limitation(tmp_path):
-    """Review: code-reviewer — pins the documented residual limitation: a
+    """Pins the documented residual limitation: a
     dotted, legitimately-real plan filename whose prefix happens to match an
     unrelated real plan file on disk is misclassified as that file's
     sidecar, even though the two files have no actual parent/sidecar
@@ -1212,7 +1212,7 @@ def test_dangling_baton_reference_no_handoffs_dir(tmp_path):
 
 
 def test_list_orphaned_skips_undecodable_handoff_and_plan_files(tmp_path):
-    """Review: code-reviewer (regraded break-class by EM) — UnicodeDecodeError
+    """UnicodeDecodeError
     subclasses ValueError, not OSError, so the pre-existing `except OSError`
     guards around read_text did not catch it. A single corrupt/non-UTF-8
     file in state/handoffs/ or docs/plans/ must not crash list_orphaned

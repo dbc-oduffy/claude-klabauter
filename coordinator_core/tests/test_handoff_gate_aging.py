@@ -300,7 +300,7 @@ def test_classify_not_stale_when_prose_gate_dominates_and_recent(tmp_path):
 
 
 def test_classify_gate_propagates_scan_errors_from_shared_walker(tmp_path, monkeypatch):
-    """Review: code-reviewer — Finding 3 (P2) regression test. An unreadable
+    """Regression test. An unreadable
     archive subtree reported by the shared walker
     (`_collect_all_handoffs_for_gate_index`) must surface through
     `classify_gate`'s own `scan_errors` return, not be silently discarded —
@@ -527,7 +527,7 @@ def test_scan_triage_no_gate_evidence_block_passes_none(tmp_path):
 
 
 def test_read_gate_evidence_resolved_returns_none_on_malformed_yaml(tmp_path):
-    """Review: code-reviewer Finding 1 -- a `gate_evidence:` block whose
+    """A `gate_evidence:` block whose
     frontmatter contains invalid YAML (unparseable, not merely absent) must
     return `None`, per the reader's own 'never a caller-visible exception'
     contract, rather than letting `yaml.YAMLError` propagate and abort the
@@ -549,7 +549,7 @@ def test_read_gate_evidence_resolved_returns_none_on_malformed_yaml(tmp_path):
 
 
 def test_read_gate_evidence_resolved_returns_none_on_unreadable_encoding(tmp_path):
-    """Review: code-reviewer Finding 1 -- a non-UTF-8-encoded file raises
+    """A non-UTF-8-encoded file raises
     `UnicodeDecodeError` from `path.read_text(encoding='utf-8')`, NOT
     `OSError` — the pre-fix reader only caught `OSError` and would have let
     this propagate uncaught."""

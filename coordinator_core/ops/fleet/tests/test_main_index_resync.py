@@ -473,7 +473,6 @@ def test_reaps_resync_skips_candidates_not_in_reaped_by_id():
 # Part 1b — _update_index_with_retry: Windows console-suppression kwarg
 # ---------------------------------------------------------------------------
 #
-# Review: code-reviewer P2 (2026-08-13, distill.apply_disposal integration) —
 # _update_index_with_retry is the ONE shared spawn point behind
 # archive_and_commit's, rm_and_commit's, AND distill_apply_disposal's
 # main-index resync; the fix belongs here, not per call site. Spawn-free:

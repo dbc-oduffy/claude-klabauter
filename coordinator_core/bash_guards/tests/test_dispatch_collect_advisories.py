@@ -201,7 +201,7 @@ class TestHardDenyShortCircuitsPropertyC:
     alone, discarding already collected advisories."""
 
     def test_trailing_hard_deny_discards_collected_advisories(self, monkeypatch):
-        # Review: code-reviewer nit -- assert explicitly that no real
+        # Assert explicitly that no real
         # in-session-unlock sentinel is consulted/consumed on this path,
         # rather than relying on ambient on-disk state happening to be empty
         # for a fake guard name that could never have a real sentinel.
@@ -281,7 +281,7 @@ class TestAdvisoryFireRecordedOncePerEnvelopePropertyE:
             "_record_advisory_fire",
             lambda name, session_id, cwd: calls.append(name),
         )
-        # Review: code-reviewer nit -- same explicit in-session-unlock
+        # Same explicit in-session-unlock
         # assertion as TestHardDenyShortCircuitsPropertyC above (see there
         # for rationale).
         unlock_calls = []

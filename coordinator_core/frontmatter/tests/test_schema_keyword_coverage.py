@@ -88,7 +88,7 @@ _SUPPORTED_KEYWORDS = frozenset({
 # Non-keyword structural/metadata keys that may appear on a schema node but
 # are not JSON-Schema-keyword-position at all (schema identity/tooling
 # metadata, not something `_validate_json_schema_node` needs to recognize).
-# Review: code-reviewer — this test asserts KEYWORD NAMES are implemented,
+# This test asserts KEYWORD NAMES are implemented,
 # which is blind to the case where a keyword name is implemented but a
 # specific VALUE of it is not (e.g. `format: "date"` is handled but
 # `format: "uri"` was silently a no-op — same silent-non-enforcement class,

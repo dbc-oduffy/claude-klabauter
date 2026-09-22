@@ -204,7 +204,7 @@ def test_paths_traversal_entry_is_skipped_not_read(repo_tree: Path) -> None:
 
 
 def test_symlinked_subdir_escaping_root_is_not_walked(repo_tree: Path) -> None:
-    """Review: code-reviewer — `_iter_candidate_files` containment-checked
+    """`_iter_candidate_files` containment-checked
     only the top-level resolved path and then walked `rglob("*")`
     unguarded; `rglob` follows symlinked subdirectories, so a symlink under
     a scanned path resolving outside `root` was walked and read with no
@@ -275,7 +275,7 @@ def test_extensionless_non_python_shebang_file_is_not_derived(repo_tree: Path) -
 
 
 def test_is_prose_one_word_trailing_punctuation_boundary() -> None:
-    """Review: code-reviewer — [nit] the ``_MAX_STRUCTURAL_VALUE_WORDS``
+    """[nit] the ``_MAX_STRUCTURAL_VALUE_WORDS``
     one-word-or-less threshold has no test exercising a value that is
     whitespace-wise one "word" (so classified structural/non-prose) but is
     actually still prose because of trailing punctuation, e.g. a YAML

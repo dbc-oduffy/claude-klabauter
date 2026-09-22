@@ -512,10 +512,21 @@ def evaluate_payload_json(
         return None
     if not isinstance(payload, dict):
         return None
-    return evaluate(
-        payload,
-        policy_path=policy_path,
-        cwd=cwd,
-        skipped_out=skipped_out,
-        aggregate=aggregate,
-    )
+    # D4 (docs/plans/2026-09-11-state-writers-claim-through-one-seam.md § C6):
+    # this is the one entry both `__main__.main()` and the out-of-repo
+    # PreToolUse dispatchers converge on -- wrapped ONCE here, never per
+    # guard site, so a to-fix guard's seam-routed write (e.g.
+    # `validate_frontmatter_schema_deny._capture_guard_forensics`) lands a
+    # claim under whichever caller invoked this function. Deferred import:
+    # a payload that trips no seam-routed guard write still pays no import
+    # cost beyond this module's own.
+    from coordinator_core.cli_entry import recording_declared_writes  # noqa: PLC0415 -- deferred, see comment
+
+    with recording_declared_writes(cwd=cwd):
+        return evaluate(
+            payload,
+            policy_path=policy_path,
+            cwd=cwd,
+            skipped_out=skipped_out,
+            aggregate=aggregate,
+        )

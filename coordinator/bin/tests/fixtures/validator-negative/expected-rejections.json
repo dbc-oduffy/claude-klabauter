@@ -558,7 +558,7 @@
     {
       "fixture": "m09-invalid-kind-enum.md",
       "schema": "cross-repo-memo",
-      "rule_covered": "M-CROSS-8: kind must be one of ask, consult, fyi when present (ack is not valid)",
+      "rule_covered": "M-CROSS-8: kind must be one of ask, consult, fyi, proposal, bug when present (ack is not valid)",
       "expect_ok": false,
       "current_validator_result": {
         "ok": false,
@@ -566,7 +566,7 @@
           {
             "field": "kind",
             "error": "invalid enum value \"ack\" for kind",
-            "hint": "kind must be one of: ask, consult, fyi. Absent is also valid (reader applies 'ask' default). Note: 'ack' is not a kind — acknowledgement is receipt-state."
+            "hint": "kind must be one of: ask, consult, fyi, proposal, bug. Absent is also valid (reader applies 'ask' default). Note: 'ack' is not a kind — acknowledgement is receipt-state."
           }
         ]
       }

@@ -119,7 +119,7 @@ def test_cross_entrypoint_agreement():
     assert _normalize_root(actual_root) == _normalize_root(expected_root)
 
 
-# Review: code-reviewer (finding 1) — the `real_home` cross-entrypoint
+# The `real_home` cross-entrypoint
 # agreement test above depends on the box's own live registry contents and
 # cannot guarantee it exercises the wrapper's cheap short-circuit (the
 # `repos.claude_klabauter`-absent branch in `coordinator_engine_root_with_class`
@@ -402,7 +402,7 @@ def test_shim_skew_advisory_kill_switch(_skew_fixture, monkeypatch, capsys):
 def test_shim_skew_advisory_kill_switch_falsey_value_does_not_suppress(
     _skew_fixture, monkeypatch, capsys
 ):
-    # Review: code-reviewer — CLAUDE_KLABAUTER_ROOT_SKEW_QUIET=0/"false" must NOT be
+    # CLAUDE_KLABAUTER_ROOT_SKEW_QUIET=0/"false" must NOT be
     # treated as a truthy kill-switch (a bare `.get(...)` truthy check would
     # suppress on any non-empty string, including these).
     _skew_fixture.write_registry(claude_klabauter=True)
@@ -742,7 +742,6 @@ def test_dual_boot_absent_klabauter_pointer_honors_machine_local_registry_dir_ov
     override is actually consulted, not merely a value-equality assertion
     that could pass by coincidence.
 
-    Review: code-reviewer.
     """
     settings_home = tmp_path / "settings-home"
     settings_home_ml_dir = settings_home / "machine-local"

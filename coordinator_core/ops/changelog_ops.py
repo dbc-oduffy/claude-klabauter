@@ -264,7 +264,7 @@ def _normalise_block(block: str) -> str:
 def _find_section_start(content: str, header: str) -> int:
     """Return the line-anchored start index of header in content, or -1 if absent.
 
-    Review: code-reviewer (F1) — a plain content.find(header)/`header in content`
+    A plain content.find(header)/`header in content`
     substring search is exploitable by any two machine-name section headers where
     one is a lexical prefix of the other (e.g. "## 2026-02-01 — a" is a literal
     prefix of "## 2026-02-01 — ab") — safe_id() permits both individually. The
@@ -312,13 +312,53 @@ def _replace_section(content: str, header: str, new_block: str) -> str:
         after = rest[m.start() + 1 :]
         new_content = before + new_block.rstrip("\n") + "\n"
         if after.strip():
-            # Review: code-reviewer (F6) — this leading "\n" is what supplies the
+            # This leading "\n" is what supplies the
             # blank-line separator before the next section; after/new_block do not
             # carry it themselves.
             new_content += "\n" + after.lstrip("\n")
     else:
         new_content = before + new_block.rstrip("\n") + "\n"
     return new_content
+
+
+#: The machine segment every BACKFILLED day is recorded under, in place of the
+#: machine that happened to run the ceremony.
+#:
+#: WHY A BACKFILL IS NOT MACHINE-SCOPED. A live block records what one box did
+#: that day, and is correctly keyed by that box. A backfill is a different
+#: object: it is synthesized from git history for a date, and git history has no
+#: machine in it. Much of the work in a day's range now comes from cloud
+#: sessions that belong to no box at all (2026-09-09 landed entirely via
+#: `claude/*` PR merges), so labelling that range with the local hostname
+#: attributes other machines' — and nobody's — commits to whoever ran the
+#: ceremony last. Two boxes backfilling one day then each claim ALL of it:
+#: on 2026-09-22 this repo gained 11 `machine-b` blocks, three duplicating
+#: machine-a's 2026-09-12 backfill of the identical range (`2026-09-09.md` held
+#: two blocks, both "Commits: 34 (range: 2d9c3238..2487dbb7)").
+#:
+#: A backfilled date therefore gets exactly ONE block covering every commit in
+#: the range, whoever or whatever produced them. PM ruling 2026-09-22: "I don't
+#: want backfills to be limited to one box ... better to get all the changes by
+#: date."
+BACKFILL_MACHINE = "all-machines"
+
+
+def _superseded_backfill_headers(content: str, date: str) -> List[str]:
+    """Machine-keyed BACKFILL section headers for `date` — the records that the
+    single `BACKFILL_MACHINE` block replaces.
+
+    Identified by the `**Backfilled:** yes` provenance line `_compose_block`
+    writes, so a LIVE block (a real ceremony on a real box, which owns its
+    machine attribution and its own narrower range) is never touched.
+    """
+    headers = []
+    for m in re.finditer(rf"^## {re.escape(date)} — (.+)$", content, re.MULTILINE):
+        machine = m.group(1).strip()
+        if machine == BACKFILL_MACHINE:
+            continue
+        if re.search(r"^\*\*Backfilled:\*\*\s*yes", _extract_section(content, m.group(0)), re.MULTILINE):
+            headers.append(m.group(0))
+    return headers
 
 
 def append_day(
@@ -357,12 +397,18 @@ def append_day(
     Returns:
         {out_path: str, action: "written" | "replaced" | "unchanged"}
 
-    Review: code-reviewer (F2) — this pure function trusts its arguments;
+    This pure function trusts its arguments;
     `date`-shape validation lives only in `_append_day_handler`. A caller
     reaching this function directly does NOT get that guard for free.
     """
     if reviewed_lines is None:
         reviewed_lines = []
+
+    if is_backfill:
+        # A synthesized day is keyed by DATE, never by the box that ran the
+        # ceremony -- see BACKFILL_MACHINE for why the caller's machine is the
+        # wrong attribution for a machine-agnostic commit range.
+        machine = BACKFILL_MACHINE
 
     block = _compose_block(
         date=date,
@@ -391,7 +437,16 @@ def append_day(
 
     if changelog_file.exists():
         existing = changelog_file.read_text(encoding="utf-8", errors="replace")
-        # Review: code-reviewer (F1) — line-anchored lookup, not a plain substring
+        if is_backfill:
+            # Absorb any earlier machine-keyed backfill of this same date: those
+            # are this block's predecessors, each claiming the whole day under
+            # one box's name. Live blocks are left alone (see
+            # `_superseded_backfill_headers`).
+            for header in _superseded_backfill_headers(existing, date):
+                section = _extract_section(existing, header)
+                existing = existing.replace(section, "", 1).replace("\n\n\n", "\n\n")
+            existing = existing.strip() + "\n"
+        # line-anchored lookup, not a plain substring
         # membership test; see _find_section_start for why (prefix-colliding
         # machine-name headers, e.g. "## {date} — a" vs "## {date} — ab").
         if _find_section_start(existing, section_header) != -1:
@@ -406,7 +461,7 @@ def append_day(
             return {"out_path": str(changelog_file), "action": "replaced"}
         else:
             # Append section with blank-line separator (mirrors oracle: printf '\n' then printf '%s\n')
-            # Review: code-reviewer — atomic read-modify-write satisfies DR-216 D3; open("a")
+            # Atomic read-modify-write satisfies DR-216 D3; open("a")
             #   was non-atomic and left the file partially written on crash/full filesystem.
             new_content = existing + "\n" + block + "\n"
             _atomic_write(changelog_file, new_content)
@@ -465,7 +520,7 @@ async def _append_day_handler(
     # write-target filename "{date}.md" — reject traversal/non-ISO input before it
     # reaches the filesystem. This extends (does not replace) the existing safe_id
     # containment guards below, which cover 'machine' but never covered 'date'.
-    # Review: code-reviewer (F2) — the digit-grouping regex is shape-only (it
+    # The digit-grouping regex is shape-only (it
     # accepts calendar-invalid values like "2026-13-45"); genuine calendar
     # validity is checked via date.fromisoformat below. The regex is kept as a
     # first-pass gate so fromisoformat's lenient 3.11+ alternate-ISO-form parsing
@@ -588,7 +643,7 @@ def _has_daily_file(date: str, today: str, host: str, week_changelog_dir: Path) 
     """
     if (week_changelog_dir / f"{date}.md").exists():
         return True  # per-day collapsed file — always sacred, never overwritable
-    # Review: code-reviewer (F5) — own_backfill is only ever consulted inside the
+    # own_backfill is only ever consulted inside the
     # date == today branch below; compute it lazily (once, on first use) so a
     # past-date call doesn't pay an unconditional resolve()/stat.
     own_backfill: Optional[Path] = None
@@ -657,7 +712,7 @@ def backfill_gaps(
     Returns:
         {backfilled: [str, ...], skipped: [str, ...]}
 
-    Review: code-reviewer (F2) — this pure function trusts its arguments;
+    This pure function trusts its arguments;
     `today_override`-shape validation (unbounded loop toward
     `datetime.date.max` otherwise, one git-log subprocess per iteration)
     lives only in `_backfill_gaps_handler`. A caller reaching this function
@@ -742,7 +797,7 @@ async def _backfill_gaps_handler(
     # "{date}-{host}-backfill.md" write-target filename (via backfill_gaps()'s date
     # iteration) — reject traversal/non-ISO input before it reaches the filesystem.
     # Extends (does not replace) the existing safe_id containment guard on 'host' below.
-    # Review: code-reviewer (F2) — the digit-grouping regex is shape-only and does
+    # The digit-grouping regex is shape-only and does
     # not reject an out-of-range value like "9999-99-99". Because backfill_gaps'
     # loop bound (`d <= today`) is a raw string comparison, a "9999-99-99"-shaped
     # today sorts above every real calendar date (its month digit '9' beats any
@@ -768,7 +823,7 @@ async def _backfill_gaps_handler(
                 "error": f"backfill_gaps: 'today' param is not a valid YYYY-MM-DD date: {today_override!r}",
             }
 
-    # Review: code-reviewer — require explicit host to prevent silent attribution flip to
+    # Require explicit host to prevent silent attribution flip to
     #   daemon hostname when caller omits host and COORDINATOR_MACHINE is unset. Matches
     #   changelog.append_day's mandatory-machine discipline (DR-216 D2(iv) attribution).
     if host is None:
@@ -1430,7 +1485,6 @@ def upsert_reviewed(*, worktree: Path, date: str, machine: str) -> dict:
     Returns:
         {out_path: str, action: "replaced" | "unchanged" | "no_match"}
 
-    Review: code-reviewer (F2 precedent, see `append_day`'s own docstring) —
     this pure function trusts its arguments; `date`/`machine` shape
     validation lives only in `_upsert_reviewed_handler`.
     """
@@ -1453,7 +1507,7 @@ def upsert_reviewed(*, worktree: Path, date: str, machine: str) -> dict:
     new_reviewed_block = _reviewed_block_lines(reviewed_lines, has_non_trivial)
 
     old_indices = [i for i, ln in enumerate(section_lines) if _REVIEWED_LINE_RE.match(ln)]
-    # Review: code-reviewer (Finding 1) — old_indices is the contiguous run
+    # old_indices is the contiguous run
     # compose_block always emits together for machine-generated sections, but
     # this op's premise is that the section may carry human curation. A
     # curator-added, non-contiguous line elsewhere in the section that happens
@@ -1966,7 +2020,7 @@ def _batch_resolve_commits(worktree: Path, tokens: List[str]) -> Dict[str, Optio
     `--batch-check`'s own contract, so no result line ever needs to be
     matched back to its token by content.
 
-    Review: code-reviewer (F3, P2) — byte-parity with the old per-token
+    byte-parity with the old per-token
     `rev-parse --verify -q` loop is TESTED for resolvable, missing, and
     non-sha-hex tokens (see
     `test_changelog_cited_in_range_spawn_bound.py::
@@ -2128,7 +2182,6 @@ def inject_anchor(
           out_path is still populated (where a target was found) so the
           caller can inspect it.
 
-    Review: code-reviewer (F2 precedent, see `append_day`'s own docstring) —
     this pure function trusts its arguments; `date`/`machine` shape validation
     lives only in `_inject_anchor_handler`.
     """
@@ -2348,7 +2401,7 @@ def compute_day_fields(
     computation time (defaults to `date` when omitted, matching the oracle's
     `LOCAL_TODAY` default when no --for-date override applies).
 
-    Review: code-reviewer (F2) — this pure function trusts its arguments.
+    This pure function trusts its arguments.
     `date`/`local_today`/`commit_span` shape validation (ISO-date regex,
     commit_span 2-dot-range + git-flag-injection containment) lives only in
     `_compute_day_fields_handler`; a caller reaching this function directly
@@ -2356,6 +2409,26 @@ def compute_day_fields(
     """
     resolved_local_today = local_today or date
     is_backfill = date != resolved_local_today
+
+    if is_backfill and commit_span:
+        # A BACKFILL IGNORES THE CALLER'S SPAN and reads the date window.
+        #
+        # A two-endpoint `A..B` span only equals "that day's work" when the day
+        # is a linear run on one branch. It is not, once cloud sessions land via
+        # separately-merged `claude/*` PR lineages: a commit reachable only
+        # through another lineage is outside `A..B` no matter when it was
+        # authored. Measured 2026-09-22 while backfilling this repo:
+        # 2026-09-13's scan span held 3 commits against 29 that day (the
+        # endpoints were not ancestor-related), and 2026-09-17's span spanned
+        # SIX days and 1059 commits, overlapping three other backfilled days.
+        # Wrong in both directions, and invisible in the record it produces.
+        #
+        # The date window is what a backfilled day means: every commit with
+        # that committer date, whatever branch, box or cloud session produced
+        # it (PM ruling 2026-09-22 -- backfills are not limited to one box).
+        # A LIVE day still honours its caller's span: there the ceremony knows
+        # its own session's boundaries and the span is the narrower truth.
+        commit_span = None
 
     commits = _collect_commits(worktree, date, commit_span=commit_span)
     hashes = [c[0] for c in commits]
@@ -2443,7 +2516,7 @@ async def _compute_day_fields_handler(
                     f"<BASE>..<TIP> argument (2-dot range only; got {commit_span!r})"
                 )
             }
-        # Review: code-reviewer (F1) — Containment: commit_span reaches `git log`
+        # Containment: commit_span reaches `git log`
         # as a bare positional argument with no `--` separator ahead of it
         # (_collect_commits/_plans_touched). A leading-dash BASE or TIP
         # (e.g. "--output=/tmp/pwned..x") is otherwise indistinguishable from a

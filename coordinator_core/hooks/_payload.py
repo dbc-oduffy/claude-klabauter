@@ -37,7 +37,7 @@ def field(params: dict, key: str) -> str:
     value = params.get(key, "")
     if value is None:
         return ""
-    # Review: code-reviewer (A-F6) — str(True)="True" breaks "== 'true'" comparisons;
+    # str(True)="True" breaks "== 'true'" comparisons;
     # normalize bools to lowercase before str() conversion.
     if isinstance(value, bool):
         return "true" if value else "false"

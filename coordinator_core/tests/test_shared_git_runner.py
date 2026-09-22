@@ -64,6 +64,40 @@ under-fires still holds the line it does see:
     (`bound = _GIT_TIMEOUT; _run_git(args, timeout=bound)`) is invisible.
     One-hop resolution only, matching `spawn_policy`'s own scope.
 
+A THIRD REGISTER, ADDED LATER (`_FROZEN_DESTRUCTIVE_VERB_SITES`). The two
+registers above ask WHO SPAWNS: migrate a module onto `git.run` and both
+clear at once. Neither asks WHAT VERB -- a module already inside
+`_GRANDFATHERED_RUNNER_MODULES`, or one that has already migrated onto
+`run_git`, can add a `reset --hard` today and nothing above objects, because
+migration is exactly the axis those two registers watch and this one is
+orthogonal to it. `docs/reference/git-action-seam-carve-outs.md`'s "Not in
+scope" paragraph named that gap and handed it here. The verb register is a
+frozen, shrink-only, subset-asserted inventory in the same shape as the two
+above, keyed on (module, enclosing function, verb) rather than (module,
+enclosing) -- the verb is part of identity, since fixing one destructive
+call while leaving a sibling one in the same function must not look like a
+null diff. It shares this file's traversal helpers (`_leaf_name`,
+`_argv_exprs`, `_resolved_git_names`, `_enclosing_names`,
+`_generic_runner_names`, `_SPAWN_API_NAMES`) but stays a SEPARATE collector
+function from `_collect_module` -- one parameterised walk would blur the
+WHO-SPAWNS/WHAT-VERB distinction into a flag. Its scope is narrower than the
+two registers above: `coordinator_core/**` only, matching this plan's file
+scope (`docs/plans/2026-09-11-destructive-git-guards-are-action-shaped.md`
+§ File scope) -- `coordinator/bin` and `coordinator/lib` are not swept for
+this axis. Verb detection covers two spawn shapes: element 0 of a
+`run_git`- or `_run_git`-shaped argv, and element 1 of a raw `["git", ...]`
+(or `which`-resolved-head) argv literal. Migrating a call from a private
+runner onto `run_git` does NOT clear a row here, and must not: `run_git(["reset",
+"--hard"])` is exactly as destructive as the private-runner spelling it
+replaced. KNOWN BLIND SPOTS for this register are the same as the two
+above -- `shell=True` string form and cross-module indirection are
+invisible -- plus one more of its own: a destructive verb reached only
+through more than one hop of local binding (a name holding `"reset"` passed
+through a second function before reaching the argv) is invisible, matching
+the runner register's one-hop-only dial resolution. This register does NOT
+assert refusal or safety -- it enumerates and ratchets visibility only (no
+deny semantics; see the plan's Anti-scope).
+
 Negative-spec -- what this module does NOT assert:
   - It does NOT assert any module's git call COMPLETES inside the bound.
     That is a latency property with its own per-op measurements; this file
@@ -150,6 +184,49 @@ _GATE_SCOPE_ROOTS: tuple[str, ...] = ("coordinator_core", "coordinator/bin", "co
 #: Keyword names that carry an argv at a spawn call site.
 _ARGV_KEYWORDS: frozenset[str] = frozenset({"args", "argv", "cmd", "program_args"})
 
+#: Verbs a git subprocess argument makes destructive (plan AC2). A
+#: module-level literal, no wildcard. `commit` is forced in even though the
+#: plan's own census row 9 seed omitted it -- it is the verb in the
+#: 2026-08-06 incident this baton's own bug entry records.
+_DESTRUCTIVE_VERBS: frozenset[str] = frozenset(
+    {
+        "add",
+        "am",
+        "apply",
+        "branch",
+        "checkout",
+        "cherry-pick",
+        "clean",
+        "commit",
+        "filter-branch",
+        "gc",
+        "mv",
+        "prune",
+        "push",
+        "rebase",
+        "reset",
+        "restore",
+        "revert",
+        "rm",
+        "stash",
+        "switch",
+        "tag",
+        "update-ref",
+        "worktree",
+    }
+)
+
+#: Leaf names this collector treats as a `run_git`-shaped call -- the
+#: canonical seam and the private-runner spelling most modules in this tree
+#: still carry. WHO spawns is G7's question; this collector only asks WHAT
+#: VERB, so both spellings count identically.
+_RUN_GIT_LEAF_NAMES: frozenset[str] = frozenset({"run_git", "_run_git"})
+
+#: Narrower than `_GATE_SCOPE_ROOTS`: `coordinator_core/**` only, matching
+#: this plan's file scope. `coordinator/bin` and `coordinator/lib` are the
+#: CLI half of G7's population and are not this baton's file scope.
+_VERB_GATE_SCOPE_ROOTS: "tuple[str, ...]" = ("coordinator_core",)
+
 
 @dataclasses.dataclass(frozen=True)
 class GitSpawnSite:
@@ -224,14 +301,57 @@ def _resolved_git_names(tree: ast.Module) -> "frozenset[str]":
     return frozenset(names)
 
 
-def _carries_git_argv(expr: ast.expr, resolved_names: "frozenset[str]" = frozenset()) -> bool:
-    """True if `expr` contains an argv whose HEAD is git -- either the
-    `["git", ...]` (or tuple) literal, or a name `resolved_names` says holds
-    a resolved git binary path.
+def _git_argv_names(tree: ast.Module) -> "frozenset[str]":
+    """Names in this module bound directly to a git-headed `["git", ...]`
+    (or tuple) LITERAL -- the one-hop binding shape `_carries_git_argv`
+    cannot see on its own, since it walks the argv EXPRESSION at the spawn
+    call site and a bare name there carries no `"git"` literal to find:
+
+        cmd = ["git", "ls-files", ...]
+        subprocess.run(cmd)
+
+    Mirrors `_resolved_git_names`'s shape (walk every module/function-local
+    `Assign`/`AnnAssign`, collect `Name` targets) rather than a second
+    bespoke traversal -- one binding pattern, resolved the same way
+    regardless of what the bound value turns out to be. The accumulate
+    pair `argv = ["git"]; argv += args` is covered without a separate
+    `AugAssign` case: the initial literal `Assign` is what binds the name
+    here, and the later re-bind stays git-headed."""
+    names: set = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        if not (isinstance(value, (ast.List, ast.Tuple)) and value.elts):
+            continue
+        head = value.elts[0]
+        if isinstance(head, ast.Constant) and head.value == "git":
+            names.update(t.id for t in targets if isinstance(t, ast.Name))
+    return frozenset(names)
+
+
+def _carries_git_argv(
+    expr: ast.expr,
+    resolved_names: "frozenset[str]" = frozenset(),
+    argv_names: "frozenset[str]" = frozenset(),
+) -> bool:
+    """True if `expr` contains an argv whose HEAD is git -- the
+    `["git", ...]` (or tuple) literal, a name `resolved_names` says holds a
+    resolved git binary path, or a bare name `argv_names` says is itself
+    already bound to a git-headed argv literal.
 
     Walks rather than matching the node directly, because the argv is
     routinely a composition: `["git", "-C", root] + args`, `["git", *args]`,
-    `["git", "log"] + list(paths)`. All three carry the same literal head."""
+    `["git", "log"] + list(paths)`. All three carry the same literal head.
+    The bare-name case is checked separately, one hop only, matching this
+    gate's other one-hop resolutions: `expr` itself is the whole call-site
+    argv, so a Name found anywhere else inside a larger composition is not
+    treated as carrying it."""
+    if isinstance(expr, ast.Name) and expr.id in argv_names:
+        return True
     for node in ast.walk(expr):
         if isinstance(node, (ast.List, ast.Tuple)) and node.elts:
             head = node.elts[0]
@@ -328,12 +448,15 @@ def _collect_module(relpath: str, source: str) -> "tuple[list, list]":
     enclosing = _enclosing_names(tree)
     generics = _generic_runner_names(tree)
     resolved_names = _resolved_git_names(tree)
+    argv_names = _git_argv_names(tree)
 
     def is_git_spawn(call: ast.Call) -> bool:
         name = _leaf_name(call.func)
         if name is None or (name not in _SPAWN_API_NAMES and name not in generics):
             return False
-        return any(_carries_git_argv(argv, resolved_names) for argv in _argv_exprs(call))
+        return any(
+            _carries_git_argv(argv, resolved_names, argv_names) for argv in _argv_exprs(call)
+        )
 
     sites = {
         GitSpawnSite(module=relpath, enclosing=enclosing.get(id(node), "<module>"))
@@ -388,14 +511,20 @@ def _collect_module(relpath: str, source: str) -> "tuple[list, list]":
     return sorted(sites, key=lambda s: (s.module, s.enclosing)), sorted(dials)
 
 
-def _scope_files() -> list:
-    """Every non-test source file under the gate's roots, as
-    `(repo-relative posix path, absolute path)`. Reuses `spawn_policy`'s
+def _scope_files(roots: "tuple[str, ...]" = None) -> list:
+    """Every non-test source file under `roots` (default `_GATE_SCOPE_ROOTS`),
+    as `(repo-relative posix path, absolute path)`. Reuses `spawn_policy`'s
     traversal and test-tree partition rather than mirroring them -- the
     amplification gate's own docstring records the census and the gate
-    disagreeing twice on scope when each walked the tree its own way."""
+    disagreeing twice on scope when each walked the tree its own way.
+
+    Parameterised over `roots` so the verb register below can sweep the
+    narrower `_VERB_GATE_SCOPE_ROOTS` without a second copy of this
+    traversal."""
+    if roots is None:
+        roots = _GATE_SCOPE_ROOTS
     out: list = []
-    for root_name in _GATE_SCOPE_ROOTS:
+    for root_name in roots:
         root = _REPO_ROOT / root_name
         if not root.exists():
             continue
@@ -443,6 +572,102 @@ def collect_private_git_runners() -> "tuple[list, list]":
         sites.extend(module_sites)
         dials.extend(module_dials)
     return sites, dials
+
+
+@dataclasses.dataclass(frozen=True)
+class DestructiveVerbSite:
+    """One call site reaching a git subprocess with a destructive verb.
+    Keyed on (module, enclosing, verb) -- unlike `GitSpawnSite`, the verb IS
+    part of identity here: a module fixing one destructive call while
+    leaving a sibling destructive call in the same function must not look
+    like a null diff against this register."""
+
+    module: str
+    enclosing: str
+    verb: str
+
+
+def _verb_from_constant(node: ast.expr) -> "str | None":
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _raw_git_argv_verb(expr: ast.expr, resolved_names: "frozenset[str]") -> "str | None":
+    """Element 1 of a `["git", ...]` (or `which`-resolved-head) literal
+    found anywhere inside `expr`, if that element is a string constant.
+    Walks `expr` rather than matching it directly for the same reason
+    `_carries_git_argv` does -- the argv is routinely a composition."""
+    for node in ast.walk(expr):
+        if isinstance(node, (ast.List, ast.Tuple)) and len(node.elts) >= 2:
+            head = node.elts[0]
+            is_git_head = (isinstance(head, ast.Constant) and head.value == "git") or (
+                isinstance(head, ast.Name) and head.id in resolved_names
+            )
+            if not is_git_head:
+                continue
+            verb = _verb_from_constant(node.elts[1])
+            if verb is not None:
+                return verb
+    return None
+
+
+def _collect_verb_sites(relpath: str, source: str) -> list:
+    """One module's destructive-verb sites. Shares `_leaf_name`,
+    `_argv_exprs`, `_resolved_git_names`, `_enclosing_names`,
+    `_generic_runner_names` and `_SPAWN_API_NAMES` with `_collect_module`
+    above -- the shared traversal the module docstring's third-register
+    section requires -- but stays a SEPARATE function: `_collect_module`
+    asks WHO SPAWNS (migrating onto `git.run` clears it) and this one asks
+    WHAT VERB (migrating does not clear it, and must not). One
+    parameterised walk would blur that distinction into a flag."""
+    tree = ast.parse(source)
+    enclosing = _enclosing_names(tree)
+    resolved_names = _resolved_git_names(tree)
+    generics = _generic_runner_names(tree)
+    sites: set = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = _leaf_name(node.func)
+        if name is None:
+            continue
+        is_run_git_shaped = name in _RUN_GIT_LEAF_NAMES
+        if not (is_run_git_shaped or name in _SPAWN_API_NAMES or name in generics):
+            continue
+        for argv in _argv_exprs(node):
+            verb = None
+            if is_run_git_shaped and isinstance(argv, (ast.List, ast.Tuple)) and argv.elts:
+                verb = _verb_from_constant(argv.elts[0])
+            if verb is None:
+                verb = _raw_git_argv_verb(argv, resolved_names)
+            if verb is not None and verb in _DESTRUCTIVE_VERBS:
+                sites.add(
+                    DestructiveVerbSite(
+                        module=relpath,
+                        enclosing=enclosing.get(id(node), "<module>"),
+                        verb=verb,
+                    )
+                )
+    return sorted(sites, key=lambda s: (s.module, s.enclosing, s.verb))
+
+
+def collect_destructive_verb_sites() -> list:
+    """Sweep `_VERB_GATE_SCOPE_ROOTS`. Same skip-on-parse-error rule as
+    `collect_private_git_runners`, for the identical reason -- a shared tree
+    carries a peer session's mid-write file, and this gate has no opinion
+    about that."""
+    sites: list = []
+    for relpath, path in _scope_files(_VERB_GATE_SCOPE_ROOTS):
+        try:
+            source = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        try:
+            sites.extend(_collect_verb_sites(relpath, source))
+        except (SyntaxError, ValueError):
+            continue
+    return sites
 
 
 #: Frozen inventory of modules that spawn git without going through
@@ -498,6 +723,7 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator/bin/merge-gate-and-pr.py",
         "coordinator/bin/merge-recovery-and-tag-cut.py",
         "coordinator/bin/merge-release-notes-derive.py",
+        "coordinator/bin/parallel-review-gate-decision.py",
         "coordinator/bin/percolate-full-payload-proof.py",
         "coordinator/bin/percolate-push.py",
         "coordinator/bin/percolate-round.py",
@@ -506,6 +732,7 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator/bin/publish.py",
         "coordinator/bin/reap-integrated-review-findings.py",
         "coordinator/bin/reap-stale-subagent-sidecars.py",
+        "coordinator/bin/record-platform-outcome.py",
         "coordinator/bin/red-set-report.py",
         "coordinator/bin/refresh-plugin-live-install.py",
         "coordinator/bin/regen-cockpit-schema.py",
@@ -537,6 +764,8 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/benchmarks/harness.py",
         "coordinator_core/benchmarks/interleave.py",
         "coordinator_core/benchmarks/op_fixtures.py",
+        "coordinator_core/cartography/file_index.py",
+        "coordinator_core/cartography/tree.py",
         "coordinator_core/chain_attribution.py",
         "coordinator_core/consolidate_assemble/__init__.py",
         "coordinator_core/consolidate_assemble/apply.py",
@@ -545,6 +774,7 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/diff_scoped_tests.py",
         "coordinator_core/distill/delete_guard.py",
         "coordinator_core/frontmatter/schema_validate.py",
+        "coordinator_core/git/commit_signing.py",
         "coordinator_core/git/divergence.py",
         "coordinator_core/git/repo_root.py",
         "coordinator_core/git_scope.py",
@@ -590,6 +820,7 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/ops/draft_plan_aging.py",
         "coordinator_core/ops/emit/context.py",
         "coordinator_core/ops/emit/doe_drift.py",
+        "coordinator_core/ops/emit/enrich.py",
         "coordinator_core/ops/emit/resolvers.py",
         "coordinator_core/ops/emit/lma_cache.py",
         "coordinator_core/ops/emit/sections/_shared.py",
@@ -613,6 +844,7 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/ops/platform_outcome_records.py",
         "coordinator_core/ops/promote_shipped_in_flight_stubs.py",
         "coordinator_core/ops/propagate_body.py",
+        "coordinator_core/ops/reap_in_flight_claims.py",
         "coordinator_core/ops/reap_orphaned_agent_dirs.py",
         "coordinator_core/ops/record_history.py",
         "coordinator_core/ops/release_tagging.py",
@@ -643,6 +875,7 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/orient_assemble/readers_branch_reconcile.py",
         "coordinator_core/orientation/regenerate_cache.py",
         "coordinator_core/person_resolver.py",
+        "coordinator_core/percolate/store.py",
         "coordinator_core/pickup_assemble/__init__.py",
         "coordinator_core/plan_assemble/predicates/composition_graph.py",
         "coordinator_core/plan_assemble/predicates/concurrent_preflight.py",
@@ -678,6 +911,7 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
         ("coordinator/bin/check-install-divergence.py", "_GIT_TIMEOUT_SECS"),
         ("coordinator/bin/coordinator-prepare-commit-msg.py", "_resolve_staged_paths(timeout)"),
         ("coordinator/bin/lib/workday_ceremony_lib.py", "git(timeout)"),
+        ("coordinator/bin/parallel-review-gate-decision.py", "_GIT_TIMEOUT_SECS"),
         ("coordinator/bin/percolate-round.py", "_GIT_PUSH_TIMEOUT_SECS"),
         ("coordinator/bin/reap-integrated-review-findings.py", "_GIT_TIMEOUT_SECS"),
         ("coordinator/bin/workday-start-day-branch-resolve.py", "_GIT_TIMEOUT"),
@@ -704,6 +938,7 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
         ("coordinator_core/ops/bootstrap_repo.py", "_COMMIT_TIMEOUT_SECS"),
         ("coordinator_core/ops/bootstrap_repo.py", "_GIT_TIMEOUT_SECS"),
         ("coordinator_core/ops/cascade_retract.py", "_SUBPROCESS_TIMEOUT_SEC"),
+        ("coordinator_core/ops/ceremony/git_native.py", "_DEFAULT_TIMEOUT_SECS"),
         ("coordinator_core/ops/changelog_ops.py", "_SUBPROCESS_TIMEOUT"),
         ("coordinator_core/ops/create_github_remote.py", "_GIT_TIMEOUT"),
         ("coordinator_core/ops/create_github_remote.py", "_NETWORK_TIMEOUT"),
@@ -751,8 +986,74 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
 #: all. Lowering either is free and is the point; raising either is the
 #: deliberate, reviewable act of arguing that the tree needs one more private
 #: git runner than it had yesterday.
-_PINNED_RUNNER_CEILING = 190
-_PINNED_DIAL_CEILING = 68
+_PINNED_RUNNER_CEILING = 198
+_PINNED_DIAL_CEILING = 70
+
+#: Frozen inventory of destructive-verb call sites (plan AC2/AC3). FROZEN
+#: 2026-09-19 over a full run of `collect_destructive_verb_sites()` across
+#: `coordinator_core` -- 41 sites. Several of these are READS whose
+#: subcommand happens to share a destructive verb's spelling
+#: (`branch --show-current`, `worktree list`, `stash list`) -- the plan's
+#: own census row 5 named these same files, and the register enumerates the
+#: VERB, not read-vs-write: "was this call safe" is exactly the judgment
+#: this baton declines to hand an AST collector (plan § "The fork is
+#: closed; what is left is a notch"; no deny semantics, see Anti-scope).
+#:
+#: SHRINK-ONLY, same rule and same remedy as the two registers above: do
+#: not add a row to silence a new site -- route the call through
+#: `coordinator_core.git.run` if it is not already, or accept in writing
+#: that the site is a known, intended destructive action.
+_FROZEN_DESTRUCTIVE_VERB_SITES: frozenset = frozenset(
+    {
+        ("coordinator_core/backlog_grind_assemble/apply.py", "_commit_one", "commit"),
+        ("coordinator_core/backlog_grind_assemble/apply.py", "_dispatch_checkout_and_backlog_note", "checkout"),
+        ("coordinator_core/backlog_grind_assemble/apply.py", "_stage_paths", "add"),
+        ("coordinator_core/backlog_grind_assemble/apply.py", "_unstage_paths", "reset"),
+        ("coordinator_core/bash_guards/_alternative_liveness.py", "_scratch_git_repo", "add"),
+        ("coordinator_core/bash_guards/_alternative_liveness.py", "_scratch_git_repo", "commit"),
+        ("coordinator_core/bash_guards/_alternative_liveness.py", "_trigger_destructive_git_revert", "add"),
+        ("coordinator_core/bash_guards/_alternative_liveness.py", "_trigger_destructive_git_revert", "commit"),
+        ("coordinator_core/bash_guards/dispatch_checks.py", "_bt_add_subtree_foreign_paths", "add"),
+        ("coordinator_core/baton_assemble/apply.py", "_cleanup_orphan_on_commit_pipeline_error", "reset"),
+        ("coordinator_core/benchmarks/handoff_supersede_baseline.py", "build_fixture", "add"),
+        ("coordinator_core/benchmarks/handoff_supersede_baseline.py", "build_fixture", "commit"),
+        ("coordinator_core/benchmarks/maintenance_tier_budget.py", "_make_throwaway_clone", "add"),
+        ("coordinator_core/consolidate_assemble/__init__.py", "branches_merged_into", "branch"),
+        ("coordinator_core/consolidate_assemble/__init__.py", "list_worktrees", "worktree"),
+        ("coordinator_core/consolidate_assemble/apply.py", "_clean_cherry_pick_conflict", "checkout"),
+        ("coordinator_core/consolidate_assemble/apply.py", "_clean_cherry_pick_conflict", "cherry-pick"),
+        ("coordinator_core/consolidate_assemble/apply.py", "_delete_branch", "branch"),
+        ("coordinator_core/consolidate_assemble/apply.py", "_delete_branch", "push"),
+        ("coordinator_core/consolidate_assemble/apply.py", "_dispatch_cherry_pick_and_delete", "cherry-pick"),
+        ("coordinator_core/consolidate_assemble/apply.py", "_dispatch_worktree_prune", "worktree"),
+        ("coordinator_core/consolidate_assemble/apply.py", "_dispatch_worktree_remove", "worktree"),
+        ("coordinator_core/contract/apply_base.py", "scoped_commit", "add"),
+        ("coordinator_core/contract/apply_base.py", "scoped_commit", "commit"),
+        ("coordinator_core/hooks/day_branch_assert.py", "_current_branch", "branch"),
+        ("coordinator_core/merge_assemble/__init__.py", "compute_version_bump_proposal", "tag"),
+        ("coordinator_core/ops/ceremony/detached_render_commit.py", "commit_own_artifact", "add"),
+        ("coordinator_core/ops/fan_out_integrator.py", "_git_current_branch", "branch"),
+        ("coordinator_core/ops/fleet_machinery_sweep.py", "_git_rm_cached", "rm"),
+        ("coordinator_core/ops/git_maintenance.py", "run_tier", "prune"),
+        ("coordinator_core/ops/propagate_body.py", "_commit_delivery", "add"),
+        ("coordinator_core/ops/propagate_body.py", "_commit_delivery", "reset"),
+        ("coordinator_core/ops/propagate_body.py", "_commit_delivery", "update-ref"),
+        ("coordinator_core/ops/renormalize_index.py", "_git_add_pathspec_from_stdin", "add"),
+        ("coordinator_core/ops/workday_complete_step2_5_dirty_tree.py", "_act_gitignore", "add"),
+        ("coordinator_core/ops/workday_complete_step2_5_dirty_tree.py", "_act_gitignore", "commit"),
+        ("coordinator_core/ops/workday_complete_step2_5_dirty_tree.py", "_act_gitignore", "rm"),
+        ("coordinator_core/ops/workday_surface_stale_stash_entries.py", "_run_stash_list", "stash"),
+        ("coordinator_core/orient_assemble/readers_branch_reconcile.py", "_current_branch", "branch"),
+        ("coordinator_core/percolate/round.py", "step_commit", "add"),
+        ("coordinator_core/percolate/round.py", "step_commit", "commit"),
+    }
+)
+
+#: Independent second copy of the register's size, literal for the same
+#: reason `_PINNED_RUNNER_CEILING` is (see that constant's comment) --
+#: importing the value under test would make this file agree with any
+#: register whatsoever and assert nothing.
+_PINNED_VERB_CEILING = 41
 
 
 def _runner_message(sites: list) -> str:
@@ -782,7 +1083,7 @@ def _dial_message(dials: list) -> str:
     )
 
 
-# Review: coordinator:code-reviewer (00814cf56f nit) -- these two gates were
+# These two gates were
 # already red before the 00814cf56f ceiling drop, against modules unrelated to
 # review-trail retirement (e.g. scope_orphan_census.py, session/scope.py). The
 # ceiling drop shrinks the registers correctly; it does not touch, cause, or
@@ -805,16 +1106,28 @@ def test_no_new_module_private_git_dial_outside_the_frozen_inventory():
 def test_the_registers_are_shrink_only():
     """The ratchet. Adding a grandfather row costs what raising a budget
     costs: this literal must move too, in the same diff, as an argument that
-    the tree needs one more private git runner than it had yesterday."""
-    assert len(_GRANDFATHERED_RUNNER_MODULES) <= _PINNED_RUNNER_CEILING, (
-        f"the runner register grew to {len(_GRANDFATHERED_RUNNER_MODULES)}, above the "
-        f"pinned {_PINNED_RUNNER_CEILING}. It shrinks only. A new module needing a git "
-        f"read calls coordinator_core.git.run.run_git; it does not join this list."
+    the tree needs one more private git runner than it had yesterday.
+
+    Equality, not `<=`: the two self-invalidation legs
+    (`test_every_grandfathered_runner_still_spawns_git`,
+    `test_every_grandfathered_dial_still_bounds_a_git_spawn`) already force
+    a live register down to exactly its ceiling on any drift, so slack
+    between `len(...)` and the pinned ceiling can only ever be a forgotten
+    manual edit, never an observed state. A `<=` here would let that slack
+    sit unnoticed instead of failing loudly."""
+    assert len(_GRANDFATHERED_RUNNER_MODULES) == _PINNED_RUNNER_CEILING, (
+        f"the runner register holds {len(_GRANDFATHERED_RUNNER_MODULES)} rows, not "
+        f"the pinned {_PINNED_RUNNER_CEILING}. It shrinks only. A new module needing "
+        f"a git read calls coordinator_core.git.run.run_git; it does not join this "
+        f"list. A register smaller than its ceiling means a row was removed without "
+        f"lowering the ceiling to match -- do that in the same diff."
     )
-    assert len(_GRANDFATHERED_DIALS) <= _PINNED_DIAL_CEILING, (
-        f"the dial register grew to {len(_GRANDFATHERED_DIALS)}, above the pinned "
+    assert len(_GRANDFATHERED_DIALS) == _PINNED_DIAL_CEILING, (
+        f"the dial register holds {len(_GRANDFATHERED_DIALS)} rows, not the pinned "
         f"{_PINNED_DIAL_CEILING}. It shrinks only. The two bounds a git spawn may "
-        f"carry live in coordinator_core.git.run."
+        f"carry live in coordinator_core.git.run. A register smaller than its "
+        f"ceiling means a row was removed without lowering the ceiling to match -- "
+        f"do that in the same diff."
     )
 
 
@@ -888,6 +1201,46 @@ def test_collector_sees_a_which_resolved_argv_head(source):
 
     assert [s.enclosing for s in sites] == ["probe"]
     assert dials == [("fake/probe.py", "_PROBE_TIMEOUT_SECS")]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param(
+            'import subprocess\n'
+            '_PROBE_TIMEOUT_SECS = 30\n'
+            'def probe(root):\n'
+            '    cmd = ["git", "-C", root, "ls-files"]\n'
+            '    return subprocess.run(cmd, timeout=_PROBE_TIMEOUT_SECS)\n',
+            id="one-hop-literal-binding",
+        ),
+        pytest.param(
+            'import subprocess\n'
+            '_PROBE_TIMEOUT_SECS = 30\n'
+            'def probe(args, root):\n'
+            '    argv = ["git"]\n'
+            '    argv += ["-C", root]\n'
+            '    argv += args\n'
+            '    return subprocess.run(argv, timeout=_PROBE_TIMEOUT_SECS)\n',
+            id="accumulate-augassign-binding",
+        ),
+    ],
+)
+def test_collector_sees_a_one_hop_bound_argv_name(source):
+    """The blind spot this gate's own docstring did not yet name: the
+    argv-expression walk at the call site sees only the EXPRESSION passed
+    to the spawn, so a name bound to a `["git", ...]` literal one line
+    earlier -- `cmd = ["git", ...]; subprocess.run(cmd)` -- carried no
+    literal `"git"` head at the call itself and was invisible, the same way
+    a `which`-resolved head was invisible before `_resolved_git_names`
+    closed that gap. `_git_argv_names` closes this one the same way, and
+    the accumulate shape (`argv = ["git"]; argv += args`) needs no separate
+    case: the initial literal `Assign` is what binds the name, and the
+    later re-bind stays git-headed."""
+    sites, dials = _collect_module("fake/one_hop.py", source)
+
+    assert [s.enclosing for s in sites] == ["probe"]
+    assert dials == [("fake/one_hop.py", "_PROBE_TIMEOUT_SECS")]
 
 
 def test_contract_exempt_modules_still_declare_their_standalone_contract():
@@ -1184,3 +1537,130 @@ def test_the_pre_split_spellings_are_gone_and_stay_gone():
             "LOCAL_PLUMBING_BUDGET_SECS / REMOTE_BUDGET_SECS. Import the "
             "budget name; do not re-add a second name for the same number."
         )
+
+
+def _verb_message(entries: list) -> str:
+    listed = "\n".join(
+        f"  {module}: {enclosing} -> git {verb}" for module, enclosing, verb in sorted(entries)
+    )
+    return (
+        "these call sites reach a git subprocess with a destructive verb, "
+        "unregistered:\n"
+        f"{listed}\n"
+        "Either this is a known, intended destructive action -- add a row "
+        "to _FROZEN_DESTRUCTIVE_VERB_SITES and raise _PINNED_VERB_CEILING "
+        "to match, in the same diff -- or the call should not be reaching "
+        "git with that verb."
+    )
+
+
+def test_no_new_destructive_verb_site_outside_the_frozen_inventory():
+    """The gate (plan AC2/AC3). A call site reaching git with an
+    unregistered destructive verb fails here, in either spawn shape --
+    `run_git`/`_run_git`-shaped argv element 0, or a raw `["git", verb]`
+    (or `which`-resolved-head) argv element 1."""
+    sites = collect_destructive_verb_sites()
+    observed = {(s.module, s.enclosing, s.verb) for s in sites}
+    new = observed - _FROZEN_DESTRUCTIVE_VERB_SITES
+    assert not new, _verb_message(sorted(new))
+
+
+def test_the_verb_register_is_shrink_only():
+    """The ratchet (plan AC3). Adding a row costs what raising
+    `_PINNED_RUNNER_CEILING` costs above: a literal that must move in the
+    same diff, arguing in writing that the tree needs one more unenumerated
+    destructive call than it had yesterday."""
+    assert len(_FROZEN_DESTRUCTIVE_VERB_SITES) <= _PINNED_VERB_CEILING, (
+        f"the destructive-verb register grew to "
+        f"{len(_FROZEN_DESTRUCTIVE_VERB_SITES)}, above the pinned "
+        f"{_PINNED_VERB_CEILING}. It shrinks only."
+    )
+
+
+def test_every_frozen_destructive_verb_site_is_still_live():
+    """Self-invalidation (plan AC5), same rule as
+    `test_every_grandfathered_runner_still_spawns_git`. A row naming a site
+    that has been deleted, migrated off that verb, or renamed is a standing,
+    reviewed-looking pre-approval for whatever next reaches git with that
+    verb at that name. A failure here is a DELETE plus a ceiling drop, not
+    a re-key."""
+    sites = collect_destructive_verb_sites()
+    live = {(s.module, s.enclosing, s.verb) for s in sites}
+    dead = sorted(_FROZEN_DESTRUCTIVE_VERB_SITES - live)
+    assert not dead, (
+        "these _FROZEN_DESTRUCTIVE_VERB_SITES rows no longer name a live "
+        "destructive-verb site -- delete them (and lower "
+        "_PINNED_VERB_CEILING to match):\n"
+        + "\n".join(f"  {module}: {enclosing} -> git {verb}" for module, enclosing, verb in dead)
+    )
+
+
+def test_the_verb_collector_is_not_vacuous():
+    """Guards the guard (plan AC5), same rule as
+    `test_the_collector_is_not_vacuous`. A scope, traversal, or exclusion
+    change that silently stops finding anything would otherwise land
+    green."""
+    sites = collect_destructive_verb_sites()
+    assert sites, (
+        "the destructive-verb collector found no site anywhere in "
+        f"{_VERB_GATE_SCOPE_ROOTS} -- the gate is asserting nothing. Check "
+        "_VERB_GATE_SCOPE_ROOTS, _DESTRUCTIVE_VERBS and _RUN_GIT_LEAF_NAMES."
+    )
+
+
+def test_the_verb_collector_fires_on_a_synthetic_run_git_shaped_call():
+    """Fails-when-inverted leg, `run_git`-shaped half (plan AC4). Matches
+    `test_the_collector_fires_on_a_synthetic_private_runner`'s direct case:
+    proves the detector reports the shape it claims to rather than passing
+    because the tree happens to be clean."""
+    source = (
+        "from coordinator_core.git.run import run_git\n"
+        "def _wipe(cwd):\n"
+        "    return run_git(['reset', '--hard'], cwd=cwd)\n"
+    )
+    sites = _collect_verb_sites("synthetic/verb_direct.py", source)
+    assert [(s.enclosing, s.verb) for s in sites] == [("_wipe", "reset")]
+
+
+def test_the_verb_collector_fires_on_a_synthetic_raw_argv_call():
+    """Fails-when-inverted leg, raw-argv half (plan AC4). Matches
+    `test_the_collector_fires_on_a_synthetic_private_runner`'s split case:
+    the raw-argv shape is the exact bypass population the baton exists
+    for -- a gate that never reds here proves the harness runs, not that it
+    fires."""
+    source = (
+        "import subprocess\n"
+        "def _wipe(cwd):\n"
+        "    return subprocess.run(['git', 'reset', '--hard'], cwd=cwd)\n"
+    )
+    sites = _collect_verb_sites("synthetic/verb_split.py", source)
+    assert [(s.enclosing, s.verb) for s in sites] == [("_wipe", "reset")]
+
+
+def test_a_which_resolved_raw_argv_verb_is_also_detected():
+    """The `_resolved_git_names` blind spot G7 closed on 2026-08-25 applies
+    identically to the verb axis: a module resolving git through
+    `shutil.which("git")` and spawning `[git_bin, "reset", "--hard"]` carries
+    no literal `"git"` head, and this collector must not be blind to it
+    either."""
+    source = (
+        "import shutil, subprocess\n"
+        "def _wipe(cwd):\n"
+        "    git_bin = shutil.which('git')\n"
+        "    return subprocess.run([git_bin, 'reset', '--hard'], cwd=cwd)\n"
+    )
+    sites = _collect_verb_sites("synthetic/verb_which.py", source)
+    assert [(s.enclosing, s.verb) for s in sites] == [("_wipe", "reset")]
+
+
+def test_a_module_calling_the_shared_runner_with_a_non_destructive_verb_is_not_a_site():
+    """Negative control: a `run_git` call whose verb is not in
+    `_DESTRUCTIVE_VERBS` (a plain read) must be invisible, or every module
+    ever migrated onto the seam would immediately start failing this gate."""
+    source = (
+        "from coordinator_core.git.run import run_git\n"
+        "def read_status(cwd=None):\n"
+        "    return run_git(['status', '--porcelain'], cwd=cwd).stdout\n"
+    )
+    sites = _collect_verb_sites("synthetic/verb_read.py", source)
+    assert sites == []

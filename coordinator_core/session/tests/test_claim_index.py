@@ -219,7 +219,7 @@ def test_lookup_missing_sessions_dir_on_disk_is_unclaimed_not_unanswerable(tmp_p
 
 
 # ---------------------------------------------------------------------------
-# Review: coordinator:code-reviewer P1 -- an I/O error reading a claim
+# An I/O error reading a claim
 # source (as opposed to that source genuinely not existing) must surface as
 # UNANSWERABLE, never silently collapse to "unclaimed" -- that is the one
 # answer that authorizes a write.
@@ -1526,7 +1526,7 @@ def test_ac18_rebuild_at_projected_corpus_width_process_time_and_spawn_count(tmp
     delta_vs_today = round(rebuild_only_ms - _MEASURED_TODAY_MS, 3)
     delta_vs_bar = round(rebuild_only_ms - _BRIGHTLINE_MS, 3)
     verdict = "PASSES" if rebuild_only_ms <= _BRIGHTLINE_MS else "FAILS"
-    # Review: coordinator:code-reviewer nit — single computation, reused in
+    # Single computation, reused in
     # both the printed detail and the assertion below (was computed twice
     # via slightly different rounding paths).
     procs_excess = round(result["procs_per_call"] - floor["procs_per_call"], 3)

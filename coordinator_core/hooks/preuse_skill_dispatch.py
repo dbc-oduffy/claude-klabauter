@@ -54,6 +54,15 @@ affecting a sibling. This op always returns a context-only envelope or
 `no_advisory()` — never `permissionDecision`; every leg here is advisory
 only.
 
+A raising leg leaves a best-effort stderr breadcrumb naming the leg and
+the exception, matching `preuse_agent_dispatch` and
+`agent_postuse_dispatch`. Without it a leg that raised and a leg that
+genuinely had nothing to say emit the identical envelope, so a silently
+broken `pickup_autofire` reads as an empty baton spool — observed on this
+Skill entry path, coordinator-claude#50's shape. The breadcrumb never
+reaches the agent's context: a leg failure is operator diagnostics, not
+advisory text.
+
 Emission: collect each matched leg's non-empty text, in REGISTRY order,
 and emit exactly ONE `context_only("PreToolUse", "\\n\\n".join(parts))` — or
 `no_advisory()` when no leg produced a part.
@@ -74,6 +83,7 @@ Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C8
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from typing import FrozenSet, List, Optional, Tuple
 
@@ -166,8 +176,16 @@ async def _handler(params: dict, repo_root=None) -> dict:
     for leg in matched:
         try:
             text = await _run_leg(leg, params)
-        except BaseException:
-            continue  # fail-open for this leg alone
+        except BaseException as exc:  # fail-open for this leg alone
+            try:
+                print(
+                    "preuse_skill_dispatch: leg=%s raised %s: %s — its sibling legs are "
+                    "unaffected" % (leg.leg_id, type(exc).__name__, exc),
+                    file=sys.stderr,
+                )
+            except Exception:
+                pass
+            continue
         if text:
             parts.append(text)
 

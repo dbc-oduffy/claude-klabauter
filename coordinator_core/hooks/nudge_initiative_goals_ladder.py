@@ -56,7 +56,7 @@ import re
 from pathlib import Path
 from typing import List, Optional
 
-from coordinator_core.hooks._envelope import no_advisory, post_advisory
+from coordinator_core.hooks._envelope import no_advisory, payload_of, post_advisory
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.ipc import get_op_handler, register_op
 
@@ -100,28 +100,19 @@ async def _resolve_goal_candidates(repo_root: str, text: str) -> list:
 
 
 def _compose_nudge_message(initiative_id: str, candidate_ids: List[str], candidate_ids_str: str):
-    """Pure message composer, routed through `message_envelope.compose`. See
-    `_WIKI_ANCHOR` for the relocated explanation of the escape-hatch env var
-    and remedy shapes."""
+    """Pure message composer, routed through `message_envelope.compose`."""
     if candidate_ids_str:
-        prose = (
-            "Initiative {} has no goals field; candidate goal(s): {}. Attach "
-            "one, or ignore -- nothing is blocked.".format(initiative_id, candidate_ids_str)
-        )
         first_id = candidate_ids[0] if candidate_ids else ""
-        alternative = "coordinator-initiative attach --goals {} state/initiatives/{}.yaml".format(
-            first_id, initiative_id
-        )
+        goal_ref = first_id
     else:
-        prose = (
-            "Initiative {} has no goals field, and this repo has goal(s) "
-            "under state/goals/. Tag one, or ignore -- nothing is "
-            "blocked.".format(initiative_id)
+        goal_ref = "<goal-id>"
+    prose = (
+        "Initiative {} has no goals field. Attach instead: "
+        "`coordinator-initiative attach --goals {} state/initiatives/{}.yaml`".format(
+            initiative_id, goal_ref, initiative_id
         )
-        alternative = "coordinator-initiative attach --goals <goal-id> state/initiatives/{}.yaml".format(
-            initiative_id
-        )
-    return compose(prose, alternative=alternative, anchor=_WIKI_ANCHOR)
+    )
+    return compose(prose)
 
 
 def _extract_write_fields(params: dict) -> tuple:
@@ -243,6 +234,9 @@ async def _handler(params: dict, repo_root=None) -> dict:
     initiative has no `goals` field and the repo carries goal(s) to attach.
     """
     try:
-        return await _handle(params if isinstance(params, dict) else {})
+        # Normalize the two params
+        # shapes both engine doors and the cold chain send (see
+        # block_worktree_tool).
+        return await _handle(payload_of(params))
     except Exception:
         return no_advisory()

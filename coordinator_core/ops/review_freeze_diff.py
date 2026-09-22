@@ -50,14 +50,49 @@ Negative-spec (hard-won — do NOT reintroduce):
     - Does NOT delete or rotate a prior freeze under the same slice_id — a
       second freeze under the same id overwrites the prior pair (same
       last-write-wins posture as ``review_trail.write``).
-    - An empty diff (e.g. a range with no net change under ``paths``) is a
-      VALID outcome, not an error: both files are still written, and the
-      returned envelope carries ``"empty": true`` for the caller to note —
-      never a die-silent-on-zero-match gate.
+    - An UNRESTRICTED empty diff (``paths`` is ``None``/empty and the range
+      nets to zero change) is a VALID outcome, not an error: both files are
+      still written, and the returned envelope carries ``"empty": true`` for
+      the caller to note — never a die-silent-on-zero-match gate.
+      REVERSED for a restricted freeze (see next entry): the same "empty
+      diff is valid" reasoning does not extend to a ``--paths`` entry that
+      itself contributed nothing.
+    - A ``--paths`` entry that matched NO change in the range is now a
+      refusal, not silence. The frozen diff used to be able to come out
+      narrower than the caller asked for with nothing saying so — a typo, a
+      path the range never touched, or an edit that nets to zero all looked
+      identical to "covered but boring" (K-101). ``_uncovered_paths``
+      computes this in-process from the diff `freeze_diff` already holds (no
+      added spawn) and the refusal fires BEFORE either output file is
+      written, same posture as the zero-commit-range refusal below. The
+      envelope carries ``uncovered_paths`` naming every unmatched entry:
+      ``[]`` on success (including the valid unrestricted-empty case above),
+      ``None`` on an unrelated error. There is no override flag; the remedy
+      is to re-run without the dead entry.
+    - Coverage matching is literal-or-directory-prefix ONLY — there is no
+      fnmatch/wildmatch reimplementation. An entry containing a glob
+      metacharacter (``*``, ``?``, ``[``) or starting with ``:`` (a magic
+      pathspec) is excluded from the coverage check entirely and is NEVER
+      reported as uncovered — it is not a path this op knows how to test for
+      "matched no change", not a claim that it is always covered.
+    - A rename or copy counts as covered if EITHER the old or the new path
+      is in ``paths`` — read from the diff's own ``rename from``/``rename
+      to``/``copy from``/``copy to`` header lines, not re-derived from the
+      ``diff --git`` line (whose two sides differ for a rename, so the
+      equal-halves split below does not apply to it).
+    - Does NOT catch the moved-file case: a file moved out of the pathspec
+      by a concurrent sweep shows up under ``git diff <range> -- <old-path>``
+      as a plain deletion of the old path, which counts as a covered change
+      (a deletion is a change). Seeing that the content actually moved
+      outside the pathspec needs rename detection over the UNRESTRICTED
+      diff — a second git spawn, which this op's spawn budget forbids (see
+      "Cost:" below). The killed K-101 warning had the same blind spot, so
+      this is not a regression against what was cut.
     - Does NOT treat a zero-net-change diff over a >= 1-commit range as an
-      error (see negative-spec entry above) — that stays a valid ``empty:
-      true`` outcome. The ONLY refusal this op adds is a diff-shaped
-      ``range_`` (contains ``..``/``...``) that resolves to ZERO COMMITS via
+      error (see negative-spec entries above) — an unrestricted one stays a
+      valid ``empty: true`` outcome. The ONLY refusal this op adds beyond
+      the coverage refusal above is a diff-shaped ``range_`` (contains
+      ``..``/``...``) that resolves to ZERO COMMITS via
       ``git rev-list --count`` — a range mangled en route (e.g. a Windows
       `.cmd` forwarder eating the caret in `<sha>^..<sha>`) collapsing to
       `<sha>..<sha>`. That refusal fires BEFORE either output file is
@@ -67,6 +102,14 @@ Negative-spec (hard-won — do NOT reintroduce):
       into a second home: this op owns its own check because
       ``review_trail_write.py`` is a heavily peer-trafficked file whose own
       call sites this fix does not touch.
+
+Cost: pending — measured cold (one CLI freeze with ``--paths`` against one
+    without, process time and procs via
+    ``coordinator_core.benchmarks.process_time.batched_process_time_ms``) as
+    part of P1b (`coordinator/bin/freeze-review-diff.py`'s test suite), which
+    hands the numbers here through its run report (AC-P1-6). The coverage
+    check itself adds no spawn: it parses the ``git diff`` output this op
+    already holds.
 """
 
 
@@ -96,15 +139,175 @@ def _validate_slice_id(slice_id: str) -> Optional[str]:
     return None
 
 
-def _error(message: str) -> dict:
+def _error(message: str, uncovered_paths: Optional[List[str]] = None) -> dict:
     """Structured-error envelope: contract fields present, values None, plus "error"."""
     return {
         "diff_path": None,
         "head_sha_path": None,
         "head_sha": None,
         "empty": None,
+        "uncovered_paths": uncovered_paths,
         "error": message,
     }
+
+
+_MAGIC_PATHSPEC_CHARS = ("*", "?", "[")
+
+
+def _is_magic_pathspec(entry: str) -> bool:
+    """True for an entry this coverage check does not attempt to test: a
+    glob-metacharacter entry (``*``, ``?``, ``[``) or a ``:``-prefixed magic
+    pathspec. Excluded from `_uncovered_paths` entirely — never reported as
+    uncovered (see module negative-spec). There is no fnmatch/wildmatch
+    reimplementation; the one production caller passes literal repo paths."""
+    return entry.startswith(":") or any(ch in entry for ch in _MAGIC_PATHSPEC_CHARS)
+
+
+def _c_unquote(token: str) -> str:
+    """Reverse git's C-style quoting of a path (``core.quotePath``, on by
+    default): a ``"``-wrapped token with ``\\NNN`` octal byte escapes for
+    non-ASCII/unusual bytes, plus ``\\\\``/``\\"``/``\\n``/``\\t``/``\\r``.
+    A token that is not quoted is returned unchanged."""
+    if len(token) < 2 or token[0] != '"' or token[-1] != '"':
+        return token
+    inner = token[1:-1]
+    out = bytearray()
+    i = 0
+    simple = {"n": b"\n", "t": b"\t", "r": b"\r", "\\": b"\\", '"': b'"'}
+    while i < len(inner):
+        ch = inner[i]
+        if ch == "\\" and i + 1 < len(inner):
+            nxt = inner[i + 1]
+            if nxt in "01234567":
+                j = i + 1
+                digits = ""
+                while j < len(inner) and inner[j] in "01234567" and len(digits) < 3:
+                    digits += inner[j]
+                    j += 1
+                out.append(int(digits, 8) & 0xFF)
+                i = j
+                continue
+            if nxt in simple:
+                out.extend(simple[nxt])
+                i += 2
+                continue
+            out.extend(nxt.encode("utf-8"))
+            i += 2
+            continue
+        out.extend(ch.encode("utf-8"))
+        i += 1
+    return out.decode("utf-8", errors="surrogateescape")
+
+
+def _strip_ab_prefix(token: str) -> str:
+    """Strip the pinned ``a/``/``b/`` prefix (`freeze_diff` always spawns
+    ``git diff`` with ``--src-prefix=a/ --dst-prefix=b/``, so no other
+    prefix is ever seen here)."""
+    if token.startswith("a/") or token.startswith("b/"):
+        return token[2:]
+    return token
+
+
+def _read_quoted_token(s: str) -> tuple[str, str]:
+    """Read one C-quoted token (``s`` starts with ``"``) and return
+    ``(token_including_quotes, remainder_after_token_and_one_space)``."""
+    i = 1
+    n = len(s)
+    while i < n:
+        if s[i] == "\\":
+            i += 2
+            continue
+        if s[i] == '"':
+            break
+        i += 1
+    token = s[: i + 1]
+    rest = s[i + 1 :]
+    if rest.startswith(" "):
+        rest = rest[1:]
+    return token, rest
+
+
+def _parse_diff_git_header(rest: str) -> tuple[Optional[str], Optional[str]]:
+    """Parse the text after ``diff --git `` into ``(a_path, b_path)``, both
+    with the ``a/``/``b/`` prefix and any C-quoting stripped.
+
+    For a non-rename header the a/ and b/ halves are the SAME path (pinned
+    ``--src-prefix``/``--dst-prefix``), so an unquoted line splits
+    deterministically around its middle space even when the path itself
+    contains spaces. A quoted line is read token-by-token instead, which
+    has no such ambiguity. A rename/copy header's two sides differ and are
+    NOT parsed here — `_covered_paths_from_diff` reads those from the
+    dedicated ``rename from``/``rename to``/``copy from``/``copy to``
+    lines instead. Returns ``(None, None)`` when the line does not fit
+    either shape (a rename/copy diff --git line, unquoted)."""
+    if rest.startswith('"'):
+        a_tok, remainder = _read_quoted_token(rest)
+        a_path = _strip_ab_prefix(_c_unquote(a_tok))
+        if remainder.startswith('"'):
+            b_tok, _ = _read_quoted_token(remainder)
+            b_path = _strip_ab_prefix(_c_unquote(b_tok))
+        else:
+            b_path = _strip_ab_prefix(remainder)
+        return a_path, b_path
+
+    n = len(rest)
+    mid = n // 2
+    if n % 2 == 1 and rest[mid] == " ":
+        a_tok, b_tok = rest[:mid], rest[mid + 1 :]
+        a_path, b_path = _strip_ab_prefix(a_tok), _strip_ab_prefix(b_tok)
+        if a_path == b_path:
+            return a_path, b_path
+    return None, None
+
+
+def _covered_paths_from_diff(diff_text: str) -> set:
+    """Every path this diff touches: both sides of each ``diff --git``
+    header (same path, for a non-rename), plus both sides of every
+    rename/copy header — so either side of a rename counts as covered."""
+    covered: set = set()
+    for line in diff_text.split("\n"):
+        if line.startswith("diff --git "):
+            a_path, b_path = _parse_diff_git_header(line[len("diff --git ") :])
+            if a_path is not None:
+                covered.add(a_path)
+            if b_path is not None:
+                covered.add(b_path)
+        elif line.startswith("rename from "):
+            covered.add(_c_unquote(line[len("rename from ") :]))
+        elif line.startswith("rename to "):
+            covered.add(_c_unquote(line[len("rename to ") :]))
+        elif line.startswith("copy from "):
+            covered.add(_c_unquote(line[len("copy from ") :]))
+        elif line.startswith("copy to "):
+            covered.add(_c_unquote(line[len("copy to ") :]))
+    return covered
+
+
+def _entry_covered(entry: str, covered_paths: set) -> bool:
+    """True iff `entry` matches a covered path by equality or as a
+    directory prefix of it (matching is literal-or-directory-prefix ONLY,
+    see module negative-spec)."""
+    entry_norm = entry.rstrip("/")
+    for cp in covered_paths:
+        if cp == entry_norm or cp.startswith(entry_norm + "/"):
+            return True
+    return False
+
+
+def _uncovered_paths(diff_text: str, paths: Optional[List[str]]) -> List[str]:
+    """Every entry in `paths` that matched NO change in `diff_text`,
+    computed in-process over the diff `freeze_diff` already holds (adds no
+    spawn). A glob/magic-pathspec entry is excluded from the check and never
+    reported (see module negative-spec). `paths` of `None`/empty returns
+    `[]` — an unrestricted freeze has nothing to be narrower than."""
+    if not paths:
+        return []
+    covered_paths = _covered_paths_from_diff(diff_text)
+    return [
+        p
+        for p in paths
+        if not _is_magic_pathspec(p) and not _entry_covered(p, covered_paths)
+    ]
 
 
 def _zero_commit_range_error(range_: str, repo_root: Path) -> Optional[str]:
@@ -181,11 +384,18 @@ def freeze_diff(
     A colliding freeze is a structured error naming both the id and the path;
     a re-freeze producing byte-identical content is idempotent and allowed.
 
+    Also refuses, BEFORE writing either file, when `paths` carries an entry
+    that matched no change in the range (see `_uncovered_paths` and the
+    module negative-spec) — computed in-process from the diff already held,
+    no added spawn.
+
     Returns:
         On success: {"diff_path": str, "head_sha_path": str, "head_sha": str,
-                     "empty": bool, "error": None}
+                     "empty": bool, "uncovered_paths": [], "error": None}
         On failure: {"diff_path": None, "head_sha_path": None, "head_sha": None,
-                     "empty": None, "error": str}
+                     "empty": None, "uncovered_paths": list[str] | None, "error": str}
+                    (`uncovered_paths` is the unmatched entries on a coverage
+                    refusal, `None` on any other error.)
     """
     return freeze_diffs_batch(
         repo_root, [{"slice_id": slice_id, "range": range_, "paths": paths}]
@@ -389,6 +599,14 @@ def freeze_diffs_batch(
             continue
 
         diff_text = per_pair_diff[i]
+        uncovered = _uncovered_paths(diff_text, normalized[i]["paths"])
+        if uncovered:
+            results[i] = _error(
+                "--paths entries matched no change in the range: "
+                f"{', '.join(uncovered)} — re-run without them.",
+                uncovered_paths=uncovered,
+            )
+            continue
         diff_path = diffs_dir / f"{slice_id}.diff"
         sha_path = diffs_dir / f"{slice_id}.head.sha"
 
@@ -411,6 +629,7 @@ def freeze_diffs_batch(
             "head_sha_path": str(sha_path),
             "head_sha": head_sha,
             "empty": not diff_text.strip(),
+            "uncovered_paths": [],
             "error": None,
         }
 

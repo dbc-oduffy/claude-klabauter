@@ -79,10 +79,9 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.nudge_foreground_agent_dispatch": "common_dir",
     "hooks.nudge_em_code_dispatch":          "common_dir",
     "hooks.track_touched_files":             "common_dir",
-    "hooks.session_heartbeat":               "common_dir",
-    # hooks.receiver_state_sensor — common_dir, same reason as session_heartbeat
-    # immediately above: repo_root resolves the session dir under
-    # .git/coordinator-sessions/ for the receiver-state sibling-file write.
+    # hooks.receiver_state_sensor — common_dir: repo_root resolves the session
+    # dir under .git/coordinator-sessions/ for the receiver-state sibling-file
+    # write.
     "hooks.receiver_state_sensor":           "common_dir",
     "hooks.agent_completion_log":            "common_dir",
     "hooks.track_dispatched_agents":         "common_dir",
@@ -127,7 +126,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # it calls cutover.gate internally against the same main-worktree-rooted
     # state/roadmap/**/cutovers/ record and must resolve the identical worktree.
     "cutover.advance":                       "common_dir",
-    # Review: code-reviewer (F13) — show_top is the KEYING scope (which worktree's daemon
+    # show_top is the KEYING scope (which worktree's daemon
     # partition handles the request), not the memo location. Memo may live in any registered
     # git repo's cross-repo/; containment gate (memo_transition.py:_containment_check) governs
     # reachability. The prior comment "memo lives in the caller worktree" was misleading for
@@ -205,7 +204,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # hooks.stop_dispatch (C3) — repo_root handler arg unused: resolves its
     # own repo root from params["payload"]["cwd"]. Same "none" class as the
     # other repo_root-less hooks.* ops above.
-    # Review: overengineering-reviewer (Kira) — the four sibling
+    # The four sibling
     # residue/wrapper op-key rows formerly here (guard_kira_verdict_routed,
     # stop_em_report_altitude, nudge_harness_directive_dispatch,
     # nudge_unrouted_sizing) were removed with their registrations; no
@@ -215,9 +214,9 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # sentinel + state-snapshot only to tempfile.gettempdir(), keyed by
     # session_id, never to a repo/worktree path; repo_root is unused (always
     # None). Same "none" class as ping / the other repo_root-less hooks.* ops
-    # above, not common_dir like session_heartbeat (its "follows the
-    # session_heartbeat.py shape" note in the module docstring is about the
-    # async-bookkeeping/write-side-effect PATTERN, not repo-key scoping).
+    # above, not common_dir like hooks.receiver_state_sensor (its
+    # async-bookkeeping/write-side-effect PATTERN is about session-runtime
+    # writes, not repo-key scoping).
     "hooks.context_pressure_precompact":     "none",
     # W4-C16: wave 4's hook bodies (W4-C5..C14). "none" for every handler
     # whose repo_root parameter goes unused (resolves its own repo root from
@@ -363,6 +362,13 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # over a caller-supplied `files` list, no repo_root involvement.
     # Spec: cross-repo memo, 2026-08-06 architecture survey.
     "cartography.op_edges":                  "none",
+    # docindex.emit — "none": same cartography.* target-resolution model
+    # (explicit target_root wire param, ANY repo, never the caller's own
+    # dispatching tree); every discovered/resolved index and entry file is
+    # read/written via the caller-supplied target_root, path-guarded, with no
+    # repo_root-derived state access.
+    # Spec: docs/plans/2026-08-14-registry-indexes-are-emitted-from-their-directory.md § C3.
+    "docindex.emit":                         "none",
     # goals.reassess_krs — no repo_root-derived state access, all paths (goals_dir,
     # bin_dir, signal_repo_root) are explicit caller-supplied params from the DoE-side
     # trampoline, which resolves them itself exactly as the original bash script
@@ -716,6 +722,14 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # missing-repo_root guard.
     # Spec: state/bug-backlog/2026-08-25-the-memo-outbox-does-not-clean-itself-up-after-a-send.yaml
     "memo.reconcile_outbox":                  "common_dir",
+    # memo.check_deliveries — "common_dir", the scope its own handler docstring
+    # already declares (`ops/fleet/memo_send.py :: _memo_check_deliveries`). It is a
+    # sender-side COMPUTE_ONLY sweep over the CALLING repo's own sent-ledger, whose
+    # path is derived by main_worktree_root(common_dir) exactly as memo.send does, so
+    # it keys the same way. "none" would be wrong on the one axis that matters: the
+    # handler fails loud on a missing repo_root rather than degrading, so an omitted
+    # entry does not read as a harmless default — it makes the op unreachable.
+    "memo.check_deliveries":                  "common_dir",
     # memo.heal_inbox — "common_dir": the heal reads and writes only the CALLING
     # repo's own surfaces — its memo_corpus_root-resolved inbox/archive (a
     # main-worktree-rooted state/ tree) and its refs/coordinator/inbox/* anchors
@@ -1698,6 +1712,13 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # read to the wrong git common dir and report another tree's breaches as
     # this one's.
     "op_census.breaches":                       "show_top",
+    # freshness.commit_delta — "show_top": `commit_delta()` resolves HEAD's
+    # ancestry from the `repo_root` it is given, forwarded straight through as
+    # `_derive_deltas`'s own `repo_root` argument (docs/plans/2026-09-10-
+    # cartography-churn-producer-and-staleness-registrations.md § C3). "none"
+    # would key a linked worktree's read to the wrong git common dir and report
+    # another tree's commit cadence as this one's.
+    "freshness.commit_delta":                   "show_top",
     # "show_top" — chunk C6 (docs/plans/2026-08-26-merges-directives-stop-
     # starting-interpreters.md): both ops receive an already-resolved
     # worktree root and forward it straight through as `brief()`/`apply()`'s
@@ -1718,6 +1739,25 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # cwd) on every call.
     "baton_assemble.brief":                      "show_top",
     "baton_assemble.apply":                      "show_top",
+    # "show_top" — C5 (docs/plans/2026-09-11-the-lessons-pipeline-drains-
+    # without-a-ha.md): both ops receive an already-resolved worktree root
+    # and forward it straight through as `brief()`/`apply()`'s own
+    # `repo_root=` keyword; the outbox drain, age-sweep, and run-stamp
+    # sentinel they read/write are genuinely per-worktree. "none" would
+    # drop the resolved root and silently fall back to each function's own
+    # `resolve_repo_root()`-shaped default on every call.
+    "learn_lessons_pipeline.brief":               "show_top",
+    "learn_lessons_pipeline.apply":                "show_top",
+    # "show_top" — C9 (docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md):
+    # each handler's own `repo_root` arrives already resolved and is forwarded
+    # straight through as a path-resolution base for its own params paths
+    # (`lessons_dir`/`manifest`/`split_dir`); the `coordinator/bin` scripts
+    # these ops load are ENGINE-provisioned and resolved independently via
+    # `resolve_cli_script_root()`, never against `repo_root`. Same reasoning
+    # as the `learn_lessons_pipeline.*` pair immediately above.
+    "lessons.extract":                            "show_top",
+    "lessons.verify_extraction":                  "show_top",
+    "doctrine.surface_split_regenerate":          "show_top",
     # fleet.mode_set / fleet.mode_show — "none", and exact rather than defaulted: the
     # record these ops read and write lives under `_settings_home.settings_home()`, which
     # session/fleet_mode.py resolves with no repo input at all. Neither handler accepts

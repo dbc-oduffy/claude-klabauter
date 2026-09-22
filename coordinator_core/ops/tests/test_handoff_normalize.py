@@ -360,7 +360,7 @@ def test_batch_sweep_never_stamps_minted_by_on_unrelated_handoffs(tmp_path, monk
     # return {"github": "dbc-example-operator"}, this test fails exactly as intended.
     monkeypatch.setattr(core, "sessions_dir", lambda cwd=None: str(tmp_path / "repo" / ".git" / "coordinator-sessions"))
     monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-sweep-never-stamps")
-    # Review: coordinator:code-reviewer c71df2b9 (P1) -- this module does not
+    # This module does not
     # import `resolve_operating_person` today (that is the fix), so
     # `raising=False` creates the attribute for the duration of this test
     # only. This closes the vacuous-test gap: the autouse HOME-quarantine

@@ -118,7 +118,7 @@ def test_continued_with_dangling_continued_into_still_blocks_and_states_it(tmp_p
 
 
 def test_continued_with_missing_continued_into_still_blocks_and_states_it(tmp_path: Path):
-    # Review: coordinator:code-reviewer, 2026-09-03, Finding 1 — a
+    # A
     # `deployment_state: continued` record with continued_into missing
     # entirely must still route to the gate (positive assertion the gate
     # fires), not fall through to the ordinary live-pickup path.
@@ -190,3 +190,22 @@ def test_ordinary_in_flight_baton_is_unaffected_by_the_gate(tmp_path: Path):
     assert "j-supersession" not in jp_ids
     assert "supersession" not in d["gates"]
     assert d["directives"] != []
+
+
+@pytest.mark.parametrize("terminal_state", ["closed", "abandoned"])
+def test_a_successorless_terminal_baton_blocks_coast_and_takes_no_claim(tmp_path: Path, terminal_state: str):
+    # `closed`/`abandoned` have no successor to redirect to, and `_claim`
+    # refuses them at apply — a `clear` coast here dispatches a doomed claim.
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _write_handoff(repo, "finished.md", f"deployment_state: {terminal_state}\n")
+
+    result = pa.brief("state/handoffs/finished.md", repo_root=repo, claim_at_brief=True)
+    d = result.decision_object
+
+    assert d["gates"]["coast"]["verdict"] == "blocked"
+    assert "j-terminal" in [jp["id"] for jp in d["judgment_points"]]
+    assert d["directives"] == []
+    claim_dir = repo / ".git" / "coordinator-sessions"
+    if claim_dir.exists():
+        assert list(claim_dir.rglob("*finished*")) == []

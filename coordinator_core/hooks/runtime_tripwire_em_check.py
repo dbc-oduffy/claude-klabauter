@@ -147,7 +147,7 @@ _HOOKS_JSON_STALE_REFERENCE_LINE = (
 )
 
 
-# Review: overengineering-reviewer (Kira) — this module carried a third
+# This module carried a third
 # in-repo copy of `_resolve_subagent_identity`, difflib-identical to
 # `postuse_advisory_dispatch._resolve_subagent_identity`; now imported from
 # there (see top of module), matching how `stop_dispatch.py` (same
@@ -179,7 +179,7 @@ def _ensure_cursor_dir(cursor_dir: str) -> bool:
 # same semantic the source script's own `_resolve_git_dir_no_commondir` hand-
 # rolled: never following the `commondir` indirection, since HEAD is
 # per-worktree state).
-# Review: overengineering-reviewer (Kira) — delegated to the shared
+# Delegated to the shared
 # `resolve_git_dir` rather than re-deriving the `.git`-file-vs-directory
 # indirection by hand, matching the sibling C4 chunk
 # (`watchdog_undischarged_next_move.py`), which made and documented the same

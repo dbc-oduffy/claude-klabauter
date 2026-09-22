@@ -34,7 +34,6 @@ from coordinator_core.ops.fleet.memo_draft import (
     _BODY_PLACEHOLDER,
     _MODE,
     REJECTION_CLASS_AMBIGUOUS_RECEIVER,
-    REJECTION_CLASS_PUBLISH_TARGET,
     REJECTION_CLASS_REGISTRY_ERROR,
     REJECTION_CLASS_UNKNOWN_RECEIVER,
     _classify_receiver_for_draft,
@@ -576,27 +575,27 @@ class TestClassifyReceiver:
         assert result["exit_code"] == 0
         assert (sender / ".coordinator-local" / "memo-outbox" / "false-flag.md").exists()
 
-    def test_publish_target_rejected_no_file_written(self, tmp_path, monkeypatch, caplog):
-        """(b) classify_receiver: True + publish-target `to` -> fail loud, no write."""
+    def test_publish_target_to_is_rerouted_to_its_owner(self, tmp_path, monkeypatch):
+        """(b) classify_receiver: True + publish-mirror `to` -> the draft is written
+        addressed to the mirror's owner, never to the mirror."""
         claude_home = _make_claude_home(
-            tmp_path, mirror_owners={"coordinator_claude": "claude-central-em"},
+            tmp_path, mirror_owners={"deep_research_claude": "example-retrieval-repo-em"},
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         sender = _make_sender_git_repo(tmp_path)
         common_dir = sender / ".git"
-        with caplog.at_level("ERROR"):
-            result = _run(_memo_draft(
-                _base_params(
-                    dry_run=False, topic="mirror-test", to="coordinator-claude-em",
-                    classify_receiver=True,
-                ),
-                repo_root=common_dir,
-            ))
-        assert result["exit_code"] == 1
-        assert "PUBLISH-TARGET" in caplog.text
-        assert "claude-central-em" in caplog.text
-        assert not (sender / ".coordinator-local" / "memo-outbox" / "mirror-test.md").exists()
+        result = _run(_memo_draft(
+            _base_params(
+                dry_run=False, topic="mirror-test", to="deep-research-claude-em",
+                classify_receiver=True,
+            ),
+            repo_root=common_dir,
+        ))
+        assert result["exit_code"] == 0
+        draft = (sender / ".coordinator-local" / "memo-outbox" / "mirror-test.md").read_text(encoding="utf-8")
+        assert "\nto: \"example-retrieval-repo-em\"\n" in draft
+        assert "deep-research-claude-em" not in draft
 
     def test_unknown_receiver_rejected_with_nearest_match(self, tmp_path, monkeypatch, caplog):
         """(c) classify_receiver: True + genuinely unresolvable `to` (no candidate
@@ -780,27 +779,6 @@ def _assert_base_envelope_unchanged(result: dict) -> None:
 
 
 class TestRejectionClass:
-    def test_publish_target_rejection_class(self, tmp_path, monkeypatch, caplog):
-        """(a) publish-target rejection -> rejection_class="publish_target_rejected"."""
-        claude_home = _make_claude_home(
-            tmp_path, mirror_owners={"coordinator_claude": "claude-central-em"},
-        )
-        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
-
-        sender = _make_sender_git_repo(tmp_path)
-        common_dir = sender / ".git"
-        with caplog.at_level("ERROR"):
-            result = _run(_memo_draft(
-                _base_params(
-                    dry_run=False, topic="mirror-rc-test", to="coordinator-claude-em",
-                    classify_receiver=True,
-                ),
-                repo_root=common_dir,
-            ))
-        assert result["rejection_class"] == REJECTION_CLASS_PUBLISH_TARGET
-        assert set(result.keys()) == _BASE_ENVELOPE_KEYS | {"rejection_class"}
-        _assert_base_envelope_unchanged(result)
-
     def test_unknown_receiver_rejection_class(self, tmp_path, monkeypatch, caplog):
         """(b) unknown-receiver rejection -> rejection_class="unknown_receiver".
 
@@ -1073,7 +1051,7 @@ class TestInReplyToDraft:
 # ===========================================================================
 # 5b. space / supersedes — shared validation with memo.send (2026-07-28)
 #
-# Review: code-reviewer (Finding 2, slice 1) — memo.draft duplicated
+# memo.draft duplicated
 # memo_send's space/supersedes validation with no direct unit test of its
 # own (only exercised incidentally, via happy-path overrides, in
 # test_memo_compose.py::TestCarriedDraftFields). These tests exercise the

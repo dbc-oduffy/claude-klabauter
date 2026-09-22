@@ -156,13 +156,6 @@ class TestBlockEmHandEditPendingReviewIntegration:
 
 
 class TestBlockPriorityLedgerEdit:
-    @pytest.mark.pending_fix(
-        reason=(
-            "state/bug-backlog/2026-08-06-priority-ledger-advisory-is-swallowed-"
-            "by-7d2cb865e06f.yaml -- red on purpose, pinning the live "
-            "slot-swallow rather than padding around it."
-        )
-    )
     def test_former_deny_now_advises_through_engine(self, monkeypatch):
         monkeypatch.delenv(block_priority_ledger_edit._OVERRIDE_ENV_VAR, raising=False)
         # A bare "priority: urgent\n" body -- the real trigger shape, no

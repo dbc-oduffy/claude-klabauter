@@ -357,7 +357,7 @@ class TestBlockShape:
 class TestCrossMachineAggregation:
     """cross-machine shard aggregation: collect() reads ALL per-machine shards and merges them.
 
-    Review: code-reviewer (S4-F6) — the multi-machine path is the expected production shape
+    The multi-machine path is the expected production shape
     (one shard per machine per repo). A regression where collect() only reads one shard, or
     hardcodes a machine slug, would silently drop data from other machines.
     """

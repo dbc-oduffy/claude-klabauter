@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -42,7 +43,7 @@ _REAL_ENGINE_TOKEN = client.engine_token
 def _short_warm_runtime_base(monkeypatch: pytest.MonkeyPatch):
     """Overrides the suite-wide HOME quarantine's `warm-runtime-base`
     (`coordinator_core/conftest.py::_quarantine_real_home`) with a short,
-    real on-disk root under `/tmp`.
+    real on-disk root under `/tmp` on POSIX.
 
     The quarantine's own path (`.../pytest-of-<user>/pytest-N/home-
     quarantineNN/warm-runtime-base`) is already 90+ bytes deep on macOS
@@ -55,10 +56,17 @@ def _short_warm_runtime_base(monkeypatch: pytest.MonkeyPatch):
     Same fix as `test_election_posix.py::short_runtime_base` (committed
     b4e300c8f1); duplicated here rather than lifted into a shared
     `conftest.py` because this dispatch's scope is this file only.
+
+    `/tmp` does not exist as a drive-relative root on Windows, and named
+    pipes have no `sun_path` equivalent to protect against there -- so on
+    `os.name == "nt"` this falls back to the platform default temp root
+    (the quarantine's own `warm-runtime-base` is already short enough),
+    same guard as `conftest.py::_quarantine_real_home` uses for the
+    suite-wide base.
     """
     from coordinator_core.warm import breadcrumb
 
-    base = Path(tempfile.mkdtemp(prefix="wrb-", dir="/tmp"))
+    base = Path(tempfile.mkdtemp(prefix="wrb-", dir=None if os.name == "nt" else "/tmp"))
     try:
         monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(base))
         yield base
@@ -268,7 +276,7 @@ def _drive_one_cold_dispatch(monkeypatch: pytest.MonkeyPatch, exc: Exception) ->
 
     monkeypatch.setattr(skew, "compute_client_token", _raise)
     monkeypatch.setattr(client, "engine_token", _REAL_ENGINE_TOKEN)
-    monkeypatch.setattr(client, "_try_warm_dispatch_inner", lambda msg: client.engine_token() and None)
+    monkeypatch.setattr(client, "_try_warm_dispatch_inner", lambda msg, *a: client.engine_token() and None)
     assert client.try_warm_dispatch(_MSG) is None
 
 
@@ -371,7 +379,7 @@ def test_transient_warm_miss_records_no_cold_reason(monkeypatch: pytest.MonkeyPa
     home makes that path exceed `sun_path` on macOS -- a genuinely permanent
     condition that would be recorded before any transport stub was reached.
     The subject here is the classification, not the transport."""
-    monkeypatch.setattr(client, "_try_warm_dispatch_inner", lambda msg: None)
+    monkeypatch.setattr(client, "_try_warm_dispatch_inner", lambda msg, *a: None)
 
     assert client.try_warm_dispatch(_MSG) is None
     assert client.last_cold_reason() is None
@@ -490,6 +498,26 @@ def test_read_deadline_expiry_goes_cold(monkeypatch: pytest.MonkeyPatch) -> None
     assert client.try_warm_dispatch(_MSG) is None
 
 
+def test_caller_read_deadline_bounds_a_compute_only_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`read_deadline_secs` is how `_wait_for_warm_boot` charges an attempt's
+    read against its own bound. For a compute-only op it bounds the whole
+    read: expiry is a miss, returned inside the caller's budget."""
+    import threading
+    import time
+
+    class _StuckPipe(_FakePipe):
+        def readline(self):
+            threading.Event().wait(30)
+            return b'{"jsonrpc":"2.0","id":1,"result":{}}\n'
+
+    monkeypatch.setattr(client, "_open_pipe", lambda pipe: _StuckPipe())
+    t0 = time.monotonic()
+    assert client.try_warm_dispatch(_MSG, read_deadline_secs=0.05) is None
+    assert time.monotonic() - t0 < client.READ_DEADLINE_SECS
+
+
 # --- delivered mutations never go cold and never re-send -------------------
 # The 2026-08-19 defect: a `git commit` outran the 2s liveness deadline, the
 # client went cold, and the cold engine re-ran the op -- committing nothing,
@@ -567,6 +595,27 @@ def test_delivered_mutation_that_never_answers_is_indeterminate_not_cold(
     _assert_indeterminate(client.try_warm_dispatch(_MUTATING_MSG))
 
 
+def test_caller_read_deadline_never_cuts_a_delivered_mutation_short(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A caller's lowered read deadline shortens only the liveness probe; the
+    delivered mutation still waits out its own transport deadline and returns
+    the real answer. Cutting it at the caller's bound would mint an
+    indeterminate for an op that was merely slow."""
+    import threading
+
+    class _SlowPipe(_FakePipe):
+        def readline(self):
+            threading.Event().wait(0.20)
+            return b'{"jsonrpc":"2.0","id":1,"result":{"committed":true}}\n'
+
+    monkeypatch.setattr(client, "MUTATION_READ_DEADLINE_SECS", 5.0)
+    monkeypatch.setattr(client, "_open_pipe", lambda pipe: _SlowPipe())
+
+    response = client.try_warm_dispatch(_MUTATING_MSG, read_deadline_secs=0.02)
+    assert response == {"jsonrpc": "2.0", "id": 1, "result": {"committed": True}}
+
+
 def test_broken_pipe_after_delivery_is_not_resent_for_a_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -621,6 +670,27 @@ def test_zero_byte_close_still_goes_cold_for_a_mutation(
     assert client.try_warm_dispatch(_MUTATING_MSG) is None
 
 
+def test_zero_byte_close_after_the_probe_is_indeterminate_for_a_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The residual of (e). An unserviced connection closes at once; a close
+    that arrives after the liveness probe expired came from a server that held
+    the delivered mutation, so it may have landed. Going cold there re-runs it
+    and pays a second full read that no caller ceiling covers."""
+    import threading
+
+    class _LateClosePipe(_FakePipe):
+        def readline(self):
+            threading.Event().wait(0.10)
+            return b""
+
+    monkeypatch.setattr(client, "READ_DEADLINE_SECS", 0.02)
+    monkeypatch.setattr(client, "MUTATION_READ_DEADLINE_SECS", 5.0)
+    monkeypatch.setattr(client, "_open_pipe", lambda pipe: _LateClosePipe())
+
+    _assert_indeterminate(client.try_warm_dispatch(_MUTATING_MSG))
+
+
 def test_malformed_response_is_indeterminate_for_a_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -650,17 +720,44 @@ def test_mutation_deadline_tracks_ipc_timeout_for_not_a_flat_constant(
     """Reviewer finding (sidecar dcf219af, SLICE 1): a flat
     `MUTATION_READ_DEADLINE_SECS` outlives the CALLER's own kill ceiling for
     every mutating op except `ceremony.scoped_git_commit`, because the
-    ceiling is `ipc._timeout_for(op) + MARGIN` and every other op resolves
+    ceiling is `ipc`'s per-op resolution + MARGIN and every other op resolves
     to `ipc`'s ~30s default. `_mutation_deadline_for` must derive from that
-    same function, not the flat constant, whenever the constant is at its
-    untouched default."""
+    per-op resolution, not the flat constant, whenever the constant is at its
+    untouched default.
+
+    The derivation source is `ipc.mutation_read_deadline_for`, NOT
+    `ipc._timeout_for`: the latter applies the `ceremony.*` performance clamp,
+    which made this deadline equal to `READ_DEADLINE_SECS` and the mutation
+    extension zero-length for every op that commits."""
     import coordinator_core.ipc as ipc
 
-    monkeypatch.setattr(ipc, "_timeout_for", lambda method: 7.0)
+    monkeypatch.setattr(ipc, "mutation_read_deadline_for", lambda method, msg=None: 7.0)
     assert client._mutation_deadline_for("some.mutating.op") == 7.0
 
-    monkeypatch.setattr(ipc, "_timeout_for", lambda method: 150.0)
+    monkeypatch.setattr(ipc, "mutation_read_deadline_for", lambda method, msg=None: 150.0)
     assert client._mutation_deadline_for("ceremony.scoped_git_commit") == 150.0
+
+
+def test_a_ceremony_mutation_gets_a_nonzero_extension_past_the_liveness_probe():
+    """THE DEFECT THIS GUARDS. The mutation extension at the call site waits
+    `mutation_deadline - READ_DEADLINE_SECS`. While this deadline came from
+    `ipc._timeout_for`, the `ceremony.*` clamp made it exactly
+    `CEREMONY_BUDGET_SECS` -- the same 2.0 as `READ_DEADLINE_SECS` -- so the
+    extension was `max(0.0, 0.0)` and waited ZERO seconds for every op that
+    commits, while a non-ceremony mutation got the full intended extension.
+
+    Asserted against the REAL derivation, not a monkeypatched one: the bug was
+    that the real values coincided, so a test that stubs the source cannot see
+    it. No specific number is pinned -- only that a committing op is given
+    strictly more time to answer than the liveness probe allows, which is the
+    property the whole mutation-extension mechanism exists to provide."""
+    for op in ("ceremony.commit_v2", "ceremony.close", "ceremony.scoped_git_commit"):
+        deadline = client._mutation_deadline_for(op)
+        assert deadline > client.READ_DEADLINE_SECS, (
+            f"{op}: mutation deadline {deadline}s does not exceed the "
+            f"{client.READ_DEADLINE_SECS}s liveness probe, so the extension "
+            "waits zero seconds and a delivered commit is abandoned"
+        )
 
 
 def test_mutation_deadline_derivation_does_not_outwait_the_ops_own_budget(
@@ -669,7 +766,10 @@ def test_mutation_deadline_derivation_does_not_outwait_the_ops_own_budget(
     """A mutating op with a short (default-sized) engine budget must not
     wait past it -- the whole point of deriving per-op rather than using a
     flat 120s that outlives the caller's own ~40s kill ceiling for every op
-    but the one the original incident concerned."""
+    but the one the original incident concerned.
+
+    Derivation source is `ipc.mutation_read_deadline_for` -- the unclamped
+    per-op resolution. See the sibling test above."""
     import threading
 
     import coordinator_core.ipc as ipc
@@ -679,7 +779,7 @@ def test_mutation_deadline_derivation_does_not_outwait_the_ops_own_budget(
             threading.Event().wait(30)
             return b'{"jsonrpc":"2.0","id":1,"result":{}}\n'
 
-    monkeypatch.setattr(ipc, "_timeout_for", lambda method: 0.1)
+    monkeypatch.setattr(ipc, "mutation_read_deadline_for", lambda method, msg=None: 0.1)
     monkeypatch.setattr(client, "READ_DEADLINE_SECS", 0.02)
     monkeypatch.setattr(client, "_open_pipe", lambda pipe: _StuckPipe())
 
@@ -826,7 +926,7 @@ def test_socket_path_too_long_is_a_permanent_reason_not_a_transient_miss(
         "socket path is 168 bytes, over the 100-byte sun_path budget: '/very/long/faketoken.sock'"
     )
     monkeypatch.setattr(
-        client, "_try_warm_dispatch_inner", lambda msg: (_ for _ in ()).throw(exc)
+        client, "_try_warm_dispatch_inner", lambda msg, *a: (_ for _ in ()).throw(exc)
     )
 
     assert client.try_warm_dispatch(_MSG) is None
@@ -845,7 +945,7 @@ def test_other_preamble_failures_stay_transient(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(
         client,
         "_try_warm_dispatch_inner",
-        lambda msg: (_ for _ in ()).throw(RuntimeError("something unforeseen")),
+        lambda msg, *a: (_ for _ in ()).throw(RuntimeError("something unforeseen")),
     )
 
     assert client.try_warm_dispatch(_MSG) is None

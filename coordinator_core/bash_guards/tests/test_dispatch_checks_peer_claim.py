@@ -19,6 +19,8 @@ this suite actually exercises the budget the way production does.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.bash_guards._message_size import MESSAGE_PROSE_CAP_BYTES
 from coordinator_core.session.scope import OwnerFact
@@ -444,6 +446,11 @@ class TestOwnerNameProvenanceNote:
         assert "stored session uuid" not in note.lower()
         assert "orphan" not in note.lower()
 
+    # Spawns a real external `git` process; runs at cadence gates, not
+    # per-commit. Spawn ratchet:
+    # coordinator_core/tests/test_no_new_spawning_tests.py
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
     def test_deny_and_warn_templates_carry_the_warning(self, monkeypatch, tmp_path):
         """The three call sites that render ``owner_sentence`` into a
         human-facing message (the CONTESTED strict-mode deny, the plain
@@ -451,56 +458,127 @@ class TestOwnerNameProvenanceNote:
         include the provenance warning when a name resolves -- pinning
         the note's *existence* is not enough; it must reach the reader.
 
-        KNOWN WEAK (2026-09-02): the three templates below are COPIES of
-        the shipped strings, not reads of them, so this assertion cannot
-        fail if a call site in ``dispatch_checks`` drops ``%s`` for the
+        FIXED (2026-09-20, backlog row 2026-09-02-the-provenance-note-pin-
+        copies-the-message): this used to build all three messages as
+        string-literal copies of the shipped templates, so it could not
+        fail if a call site in ``dispatch_checks`` dropped ``%s`` for the
         note -- the vacuous-pin shape ``state/lessons/2026-08-19-a-
-        suppressor-pin-can-pass-vacuously.md`` was written about. Backlog
-        row: 2026-09-02-the-provenance-note-pin-copies-the-message. The
-        copies are kept in sync by hand until then; the contested one was
-        updated with the message fix that names two causes."""
-        fact = OwnerFact(
-            owner=REAL_SID,
-            liveness="live",
-            claim_source="session",
-            writer_name=REAL_NAME,
-        )
-        owner_sentence = dispatch_checks._format_owner_sentence(fact, {})
-        note = dispatch_checks._owner_name_provenance_note(owner_sentence)
-        assert note
+        suppressor-pin-can-pass-vacuously.md`` was written about. This
+        drives the real deny/warn text through ``check_validate_commit``
+        end to end (via ``bash_dispatch.evaluate_payload_json``, the same
+        entry point ``test_check_validate_commit.py``'s strict-mode suite
+        uses) over a real git repo, a peer session's live claim, and this
+        session's own staged deletion -- the shipped templates are read,
+        never re-typed."""
+        import json
+        import subprocess
+        from datetime import datetime, timezone
 
-        contested_msg = (
-            "BLOCKED (strict scope): %s is claimed by BOTH "
-            "this session and %s, and a live peer's claim "
-            "wins — recording it again will not clear this."
-            "%s\n\n"
-            "Unstage it (git restore --staged %s). Two "
-            "causes: this session's write was recorded "
-            "under the wrong id, or a peer commit landed "
-            "in this file after this session's last read "
-            "and this write discarded it. "
-            "git log --oneline -3 -- %s tells you which."
-            % ("foo.py", owner_sentence, note, "foo.py", "foo.py")
-        )
-        assert "provenance" in contested_msg.lower()
+        from coordinator_core.bash_guards import dispatch as bash_dispatch
+        from coordinator_core.session import core, touch_record
+        from coordinator_core.win_portability import no_console_creationflags
 
-        plain_msg = (
-            "BLOCKED (strict scope): %s is staged but not in "
-            "this session's touch list — owned by %s.%s\n\n"
-            "Unstage it (git restore --staged %s) or, if it "
-            "genuinely belongs to this session's work, record it "
-            "as touched first."
-            % ("foo.py", owner_sentence, note, "foo.py")
-        )
-        assert "provenance" in plain_msg.lower()
+        def _git(root: str, *args: str) -> None:
+            subprocess.run(
+                ["git", *args],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                **no_console_creationflags(),
+            )
 
-        warn_msg = (
-            "SCOPE: %s is staged but not in this session's touch "
-            "list — likely owned by %s. Strict mode would block "
-            "this commit.%s"
-            % ("foo.py", owner_sentence, note)
+        def _init_repo(root_path: Path) -> str:
+            root = str(root_path)
+            _git(root, "init", "-q")
+            _git(root, "config", "user.email", "t@example.com")
+            _git(root, "config", "user.name", "Test")
+            (root_path / "README.md").write_text("init\n", encoding="utf-8")
+            _git(root, "add", "README.md")
+            _git(root, "commit", "-q", "-m", "init")
+            return root
+
+        def _push_started_at_to_future(root: str, sid: str) -> None:
+            sdir = Path(root) / ".git" / "coordinator-sessions" / sid
+            future = datetime.fromtimestamp(
+                datetime.now(timezone.utc).timestamp() + 3600, tz=timezone.utc
+            )
+            (sdir / "started_at").write_text(
+                future.strftime("%Y-%m-%dT%H:%M:%SZ"), encoding="utf-8"
+            )
+
+        def _claim(root: str, sid: str, path: str, name=None) -> None:
+            sdir = Path(root) / ".git" / "coordinator-sessions" / sid
+            sdir.mkdir(parents=True, exist_ok=True)
+            touch_record.append_event(
+                touch_record.sink_path(sdir),
+                session_id=sid,
+                agent_id=None,
+                verb=touch_record.VERB_TOUCH,
+                path=path,
+                name=name,
+            )
+
+        def _em_payload(root: str, sid: str, command: str) -> str:
+            return json.dumps({
+                "tool_name": "Bash",
+                "tool_input": {"command": command},
+                "session_id": sid,
+                "cwd": root,
+            })
+
+        root = _init_repo(tmp_path)
+        sid, other_sid = "my-sess", "other-sess"
+        assert core.init(sid, cwd=root)
+        assert core.init(other_sid, cwd=root)
+        _push_started_at_to_future(root, sid)
+
+        (tmp_path / "sibling.txt").write_text("owned by sibling\n", encoding="utf-8")
+        _git(root, "add", "sibling.txt")
+        _git(root, "commit", "-q", "-m", "seed sibling.txt")
+
+        # Peer's live claim carries a resolvable writer name, so the
+        # rendered owner_sentence actually names someone and the
+        # provenance note fires -- the case the deleted test targeted.
+        _claim(root, other_sid, "sibling.txt", name=REAL_NAME)
+        _git(root, "rm", "-q", "sibling.txt")
+
+        # Plain strict-mode deny: this session never claimed the path.
+        monkeypatch.setenv("COORDINATOR_SCOPE_STRICT", "1")
+        result = bash_dispatch.evaluate_payload_json(
+            _em_payload(root, sid, 'git commit -m "rm sibling"')
         )
-        assert "provenance" in warn_msg.lower()
+        assert result is not None
+        out = result["hookSpecificOutput"]
+        assert out["permissionDecision"] == "deny"
+        assert "owned by" in out["permissionDecisionReason"]
+        assert "provenance" in out["permissionDecisionReason"].lower()
+
+        # Warn-only advisory: same shape, strict mode switched off.
+        monkeypatch.delenv("COORDINATOR_SCOPE_STRICT", raising=False)
+        monkeypatch.setenv("COORDINATOR_SCOPE_STRICT_OFF", "1")
+        result = bash_dispatch.evaluate_payload_json(
+            _em_payload(root, sid, 'git commit -m "rm sibling"')
+        )
+        assert result is not None
+        out = result["hookSpecificOutput"]
+        assert out["permissionDecision"] == "allow"
+        assert "Strict mode would block" in out["additionalContext"]
+        assert "provenance" in out["additionalContext"].lower()
+
+        # Contested strict-mode deny: this session ALSO claims the same
+        # path, so it lands in the CONTESTED branch instead of the plain
+        # owned-by-another-session one.
+        monkeypatch.delenv("COORDINATOR_SCOPE_STRICT_OFF", raising=False)
+        monkeypatch.setenv("COORDINATOR_SCOPE_STRICT", "1")
+        _claim(root, sid, "sibling.txt")
+        result = bash_dispatch.evaluate_payload_json(
+            _em_payload(root, sid, 'git commit -m "rm sibling"')
+        )
+        assert result is not None
+        out = result["hookSpecificOutput"]
+        assert out["permissionDecision"] == "deny"
+        assert "claimed by BOTH" in out["permissionDecisionReason"]
+        assert "provenance" in out["permissionDecisionReason"].lower()
 
 
 class TestLivenessBasisYieldsToName:

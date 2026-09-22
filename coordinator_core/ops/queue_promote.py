@@ -73,6 +73,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core._content_root_primitive import FLAT_CONTENT_ROOT_MARKER
 from coordinator_core.frontmatter.schema_validate import describe as _describe_schema
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
@@ -101,6 +102,44 @@ class _DoeUnresolvable(RuntimeError):
     fail-loud-to-None contract for the DoE-side rung chain).
     Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC13
     """
+
+
+class _OssMirrorWriteRefused(_DoeUnresolvable):
+    """Raised when the resolved DoE-claude root is actually the OSS publish
+    mirror, not the DoE-claude working tree (claude-klabauter#39).
+
+    The 2026-09-19 fleet learn-lessons run wrote 370 duplicate outbox
+    entries into ``/root/coordinator-claude`` (untracked) because the
+    container's machine-local registry resolved ``repos.doe_claude`` to the
+    OSS publish mirror instead of the real DoE-claude working tree. Doctrine
+    (DoE-claude ``CLAUDE.md``): the OSS mirror is a publish target, never a
+    working tree — it authors no handoffs/plans/lessons and must never
+    receive an outbox entry.
+
+    Subclasses ``_DoeUnresolvable`` so the existing WARN+skip degrade in
+    ``_queue_promote_handler`` (AC6: exit 0, ``{skipped: True, reason: ...}``)
+    covers this case too, without a second except-clause — a resolved-but-
+    unusable root degrades the same way an unresolvable one does.
+    """
+
+
+def _is_oss_publish_mirror(root: str) -> bool:
+    """True if `root` carries the OSS publish-mirror marketplace marker
+    (``.claude-plugin/plugin.json``) — the SAME marker
+    ``coordinator_core._content_root_primitive.FLAT_CONTENT_ROOT_MARKER``
+    and ``coordinator_doe_root.py``'s own flat-layout/marketplace-cache/
+    plugin-root rungs already use to recognize a marketplace-clone/OSS-mirror
+    layout. Reused rather than a second hand-rolled probe
+    (claude-klabauter#39 asks for exactly this reuse).
+
+    Never raises: an unusable ``root`` (empty, not a string-like path) is
+    treated as "not a mirror" — the caller's own resolution already
+    validated `root` is non-empty before this is called.
+    """
+    try:
+        return os.path.isfile(os.path.join(root, *FLAT_CONTENT_ROOT_MARKER))
+    except (TypeError, ValueError):
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -132,12 +171,18 @@ def _outbox_root_override() -> "str | None":
     return override
 
 
-def _outbox_root() -> str:
+def _outbox_root(doe_root: Optional[str] = None) -> str:
     """Return the lessons-outbox directory path.
 
     Resolution:
         1. ``LESSON_PROMOTE_OUTBOX_ROOT`` env var (test isolation).
-        2. ``<doe_root>/state/lessons-outbox/`` via ``coordinator_doe_root()`` — the
+        2. ``<doe_root>/state/lessons-outbox/`` for a caller-resolved ``doe_root``
+           param — the CLI resolves the root once (honouring the CALLER's
+           ``DOE_ROOT``) and validates ``--target-wiki`` against that same root, so
+           the write must land there too (claude-klabauter#33). Read as a param,
+           never from this process's env: under the warm engine that env belongs
+           to whichever session spawned the server.
+        3. ``<doe_root>/state/lessons-outbox/`` via ``coordinator_doe_root()`` — the
            lessons-outbox is central state owned by DoE-claude (the central lessons
            repo), NOT claude-klabauter. Matches the documented CLI oracle contract
            (``coordinator-lesson-promote``'s ``_outbox_root()``, which resolves via
@@ -145,6 +190,8 @@ def _outbox_root() -> str:
 
     Raises:
         _DoeUnresolvable — when the DoE-claude root is unresolvable and no env override.
+        _OssMirrorWriteRefused (a _DoeUnresolvable subclass) — when the resolved root
+            is the OSS publish mirror, not a working tree (claude-klabauter#39).
 
     Negative-spec: DOES NOT fall back to cwd-relative state/ when the DoE root is
     unresolvable — that silent fallback was the landmine closed by stop-the-rot C12,
@@ -156,10 +203,18 @@ def _outbox_root() -> str:
     override = _outbox_root_override()
     if override:
         return override
-    doe = coordinator_doe_root()
+    doe = doe_root or coordinator_doe_root()
     if doe is None:
         raise _DoeUnresolvable(
             "repos.doe_claude not set in machine-local registry and REPO_DOE_CLAUDE env var not set"
+        )
+    if _is_oss_publish_mirror(doe):
+        source = "caller-resolved doe_root param" if doe_root else "repos.doe_claude machine-local registry key"
+        raise _OssMirrorWriteRefused(
+            f"refusing to write lessons-outbox into {doe!r}: found the OSS publish-mirror "
+            f"marker .claude-plugin/plugin.json there (resolved via {source}) — the OSS "
+            "mirror is a publish target, never a working tree, and must never receive an "
+            "outbox entry (claude-klabauter#39)"
         )
     return os.path.join(doe, "state", "lessons-outbox")
 
@@ -293,7 +348,7 @@ def _content_digest(fields: dict) -> str:
     NO disk read — computed entirely from in-hand params (DR-213 D4; op remains
     write-always / additive-create, not a dedup pre-check).
     """
-    # Review: code-reviewer — derive emit_order from fields.keys() minus provenance
+    # Derive emit_order from fields.keys() minus provenance
     # (id/created) rather than a hardcoded literal list, so a future field added to
     # promote_lesson's fields dict (line ~502) participates automatically instead of
     # silently dropping out of the digest (Finding 5). fields is built in fixed
@@ -301,7 +356,7 @@ def _content_digest(fields: dict) -> str:
     # is deterministic across calls.
     emit_order = [k for k in fields if k not in ("id", "created")]
 
-    # Review: code-reviewer — hand-joined "key=value" pipe strings had no delimiter
+    # hand-joined "key=value" pipe strings had no delimiter
     # escaping; free-text fields (body, title, etc.) containing '|' or '=' could collide
     # two distinct entries onto one digest. Structured JSON serialization handles
     # internal escaping so no field value can inject a false separator (Finding 1).
@@ -354,6 +409,7 @@ def promote_lesson(
     caller_worktree: Optional[Path] = None,
     entry_id: Optional[str] = None,
     created: Optional[str] = None,
+    doe_root: Optional[str] = None,
 ) -> dict:
     """Write a lessons-outbox YAML entry.
 
@@ -371,6 +427,7 @@ def promote_lesson(
                           path routing since outbox is always central claude-klabauter state).
         entry_id     — uuid4 string; if None, a fresh uuid is generated.
         created      — ISO timestamp; if None, now(utc) is generated.
+        doe_root     — caller-resolved DoE root; see ``_outbox_root``.
 
     Returns:
         {out_path: str, entry_id: str, from_repo: str, change_kind: str, target_wiki: str}
@@ -397,7 +454,7 @@ def promote_lesson(
             from_repo = "unknown-sender-em"
 
     # Resolve outbox root (_DoeUnresolvable propagates to caller).
-    outbox = _outbox_root()
+    outbox = _outbox_root(doe_root)
     os.makedirs(outbox, exist_ok=True)
 
     # Build fields in fixed insertion order (byte-parity with lesson-promote._write_entry).
@@ -480,7 +537,8 @@ def _queue_promote_handler(
         target_wiki  (str) — central wiki path this lesson targets.
 
     Optional params:
-        scope_tags (list or comma-separated str), evidence (str), from_repo (str).
+        scope_tags (list or comma-separated str), evidence (str), from_repo (str),
+        doe_root (str — the caller's resolved DoE root; see ``_outbox_root``).
 
     Returns:
         {out_path: str, entry_id: str, from_repo: str, change_kind: str, target_wiki: str}
@@ -511,6 +569,7 @@ def _queue_promote_handler(
             evidence=evidence,
             from_repo=params.get("from_repo"),
             caller_worktree=caller_worktree,
+            doe_root=params.get("doe_root") or None,
         )
     except _DoeUnresolvable as exc:
         # AC6: graceful-degrade on unresolvable DoE-claude root — WARN + skip, exit 0.

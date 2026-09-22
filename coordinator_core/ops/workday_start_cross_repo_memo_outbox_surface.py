@@ -131,7 +131,7 @@ def _resolve_draft_paths(repo_root_arg: str) -> Optional[List[str]]:
     favour of this shared union so the dual-root merge has one
     implementation, not three.
 
-    Review: overengineering-reviewer (Kira), 2026-09-03 — third divergent
+    Third divergent
     dual-root merge policy landed in the same session the other two were
     consolidated into `memo_draft.merged_outbox_drafts`.
     """

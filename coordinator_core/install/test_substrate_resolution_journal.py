@@ -80,7 +80,7 @@ def test_clause_indices_point_at_the_declared_shaped_clauses():
         )
 
 
-# Review: coordinator:code-reviewer (2026-08-06, rcpt-R3-writer-wiring) — the
+# The
 # type-only assertion above cannot catch pointing at the WRONG ShapedClause
 # (e.g. index 12 resolving to some other shaped clause than "orphan sweep").
 # Each constant's own comment names the clause it is meant to reach

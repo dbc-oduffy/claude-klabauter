@@ -304,7 +304,7 @@ def classify_gate(
     rather than silently discarded — the same axis
     `review_brightline_gate.py`'s `_from_handoff_main` propagated end-to-end
     (that entry point was removed 2026-08-19, state/kill-ledger.md K-007).
-    Review: code-reviewer — Finding 3 (P2): this caller previously discarded
+    This caller previously discarded
     the shared walker's `scan_errors` entirely (`_scan_errors` throwaway),
     making a possibly-incomplete scan indistinguishable from a complete one
     to every downstream consumer of `classify_gate`'s output.

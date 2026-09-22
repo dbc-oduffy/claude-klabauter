@@ -42,9 +42,11 @@ Negative-spec:
       regex.
     - Does NOT mutate frontmatter directly. `apply_dispositions()` delegates
       every write IN-PROCESS to `coordinator_core.archive_stamp`'s tested
-      functions — `cs_unclaim_handoff` on the release arm, `cs_ship_handoff`
+      functions — `cs_unclaim_handoff` on the release arm, `_cs_ship_handoff_core`
       alone on the reclaim arm — preserving the single-writer invariant
-      without reimplementing it.
+      without reimplementing it. The core (not the public `cs_ship_handoff`
+      int wrapper) is used so the reclaim arm can read the `retained` flag
+      the transition op computes, rather than losing it at the int boundary.
     - Does NOT register a JSON-RPC op — both callers import this module
       in-process (the `reap_orphaned_agent_dirs` shape), so there is
       nothing to dispatch over IPC and no eager-module-list entry is owed.
@@ -67,13 +69,13 @@ from coordinator_core.frontmatter.primitives import (
     split_frontmatter,
 )
 from coordinator_core.archive_stamp import (
-    cs_ship_handoff,
+    _cs_ship_handoff_core,
     cs_unclaim_handoff,
 )
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.ceremony.records_query import query_records
 from coordinator_core.ops.handoff_children import has_live_children_many
-from coordinator_core.session.liveness import session_live
+from coordinator_core.session.liveness import session_live, session_verdict
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -95,6 +97,7 @@ _VERDICT_RELEASE = "release"
 _VERDICT_RECLAIM_SHIPPED = "reclaim_shipped"
 _VERDICT_SKIP_LIVE_CHILDREN = "skip_live_children"
 _VERDICT_SKIP_GOVERNED_PLAN = "skip_governed_plan_implemented"
+_VERDICT_SKIP_CONTINUED = "skip_continued_into"
 
 
 @dataclass
@@ -110,6 +113,7 @@ class HandoffRecord:
     kind: Optional[str]
     deliverable_id: Optional[str]
     handoff_id: Optional[str]
+    continued_into: Optional[str]
 
 
 @dataclass
@@ -190,6 +194,7 @@ def _build_corpus(handoffs_dir: Path) -> List[HandoffRecord]:
                 kind=read_fm_field_unquoted(fm, "kind"),
                 deliverable_id=read_fm_field_unquoted(fm, "deliverable_id"),
                 handoff_id=read_fm_field_unquoted(fm, "handoff_id"),
+                continued_into=read_fm_field_unquoted(fm, "continued_into"),
             )
         )
     return records
@@ -363,6 +368,33 @@ def _best_shipped_sha(candidates: List[str], sha_ct: Dict[str, int]) -> str:
     return best_sha
 
 
+def _release_liveness_basis(holder: str, repo_root: Path) -> str:
+    """The deciding arm behind a RELEASE verdict, for the disposition detail.
+
+    2026-08-22 backlog (`the-crash-orphan-reaper-released-a-live-holder-s-
+    baton`): a live holder's claim was released with only a bare `park_note`
+    on disk naming the (wrongly) dead holder — no record of WHICH liveness
+    arm produced the verdict, so the false-dead diagnosis had to be
+    reconstructed after the fact from an already-gone reaping process, for
+    the second documented round of this bug class. `session_live` (the
+    boolean this module's dead-detection already calls) carries none of
+    that — `session_verdict` is the SAME per-id derivation with the basis
+    attached (`liveness.py::_verdict_for_sdir`), so this costs no second
+    liveness computation, only a second (already-O(1)) call for the
+    candidates this module is about to mutate. Never used for the dead/live
+    SPLIT itself (`session_live` still decides that, unchanged) — this is
+    read-only instrumentation on an already-dead candidate.
+
+    Falls back to `"unknown"` when `session_verdict` returns `None` (no
+    session dir, no registry record — the boundary case `session_live`
+    itself reads as dead via the same missing-sdir arm).
+    """
+    verdict = session_verdict(holder, cwd=str(repo_root))
+    if verdict is None:
+        return "unknown"
+    return verdict[1]
+
+
 # ---------------------------------------------------------------------------
 # survey() — the return-data call both callers consume
 # ---------------------------------------------------------------------------
@@ -389,6 +421,32 @@ def survey(repo_root: Path, *, handoffs_dir: Optional[Path] = None) -> SurveyRes
     if not dead:
         return SurveyResult(0, 0, [])
 
+    # 2026-09-11 backlog (`the-in-flight-reaper-releases-a-baton-th`): a
+    # claim that already carries `continued_into` has been superseded --
+    # its successor is (or will be) in the pool on its own, so releasing
+    # THIS one back to `ready_to_fire` double-lists the deliverable. Caught
+    # here, ahead of the live-children batch call, so a continued claim
+    # costs neither that call nor the governed-plan/ship-check machinery
+    # below (pay-for-use, same convention as the governed-plan precheck).
+    dispositions: List[Disposition] = []
+    still_dead: List[HandoffRecord] = []
+    for r in dead:
+        if r.continued_into:
+            dispositions.append(
+                Disposition(
+                    str(r.path),
+                    r.holder,
+                    _VERDICT_SKIP_CONTINUED,
+                    f"continued_into {r.continued_into!r} already names a successor "
+                    "-- releasing would double-list the deliverable",
+                )
+            )
+            continue
+        still_dead.append(r)
+    dead = still_dead
+    if not dead:
+        return SurveyResult(0, 0, dispositions)
+
     common_dir = git_common_dir(repo_root)
     live_children = asyncio.run(
         has_live_children_many([str(r.resolved_path) for r in dead], common_dir)
@@ -399,7 +457,6 @@ def survey(repo_root: Path, *, handoffs_dir: Optional[Path] = None) -> SurveyRes
         dead_holders_seen[r.holder] = dead_holders_seen.get(r.holder, 0) + 1
 
     pending: List[HandoffRecord] = []
-    dispositions: List[Disposition] = []
     for r in dead:
         exit_code = live_children.get(str(r.resolved_path), 2)
         if exit_code != 1:
@@ -490,7 +547,8 @@ def survey(repo_root: Path, *, handoffs_dir: Optional[Path] = None) -> SurveyRes
                     str(r.path),
                     r.holder,
                     _VERDICT_RELEASE,
-                    f"holder {r.holder} is dead with no resolvable shipped commit",
+                    f"holder {r.holder} is dead with no resolvable shipped commit "
+                    f"(deciding arm: {_release_liveness_basis(r.holder, repo_root)})",
                 )
             )
 
@@ -502,22 +560,24 @@ def survey(repo_root: Path, *, handoffs_dir: Optional[Path] = None) -> SurveyRes
 # ---------------------------------------------------------------------------
 
 
-def apply_dispositions(dispositions: List[Disposition]) -> "tuple[List[str], List[str]]":
+def apply_dispositions(
+    dispositions: List[Disposition],
+) -> "tuple[List[str], List[str], List[str]]":
     """Perform every mutating disposition by calling `coordinator_core.archive_stamp`'s
     tested verbs IN-PROCESS — `release` -> `cs_unclaim_handoff`, `reclaim_shipped` ->
-    `cs_ship_handoff` ALONE. A skip verdict performs no write.
+    `_cs_ship_handoff_core` ALONE. A skip verdict performs no write.
 
-    Negative-spec: does NOT call `stamp_shipped_in` before `cs_ship_handoff` on the
-    reclaim arm. `cs_ship_handoff` composes `handoff.archive_transition` mode
-    `stamp_only`, whose documented ordering is guard-first-then-stamp-then-flip and
-    whose own docstring names its purpose as closing "the incoherent half-state
+    Negative-spec: does NOT call `stamp_shipped_in` before `_cs_ship_handoff_core` on
+    the reclaim arm. `_cs_ship_handoff_core` composes `handoff.archive_transition`
+    mode `stamp_only`, whose documented ordering is guard-first-then-stamp-then-flip
+    and whose own docstring names its purpose as closing "the incoherent half-state
     (shipped_in present while deployment_state stays in_flight) a standalone
     stamp_shipped_in() call could otherwise leave behind." A standalone pre-stamp
     ahead of that guard reintroduces exactly that half-state: on a guard-retained or
-    indeterminate/fail-closed handoff, `cs_ship_handoff` returns 0 (retention is never
-    an error) having flipped nothing, so the pre-stamp is left in place on an
-    unclaimed, still-in_flight handoff and the reap still reports it under `applied`.
-    `cs_ship_handoff(path, sha=...)` alone already derives `kind="ship-commit"`
+    indeterminate/fail-closed handoff, `_cs_ship_handoff_core` returns `(0, True)`
+    (retention is never an error) having flipped nothing, so the pre-stamp would be
+    left in place on an unclaimed, still-in_flight handoff.
+    `_cs_ship_handoff_core(path, sha=...)` alone already derives `kind="ship-commit"`
     internally when a non-empty `sha` is supplied
     (`handoff_archive_transition._handler`), so the pre-stamp buys nothing.
 
@@ -529,12 +589,18 @@ def apply_dispositions(dispositions: List[Disposition]) -> "tuple[List[str], Lis
     the same cost: process creation, not the work. These are the same functions the
     CLI's own verbs dispatch to, so delegation is preserved and the spawn is not.
 
-    Returns `(applied_paths, failed_details)`. `len(applied) + len(failed)` is
-    expected to be LESS than `len(dispositions)` whenever skip verdicts
-    (`_VERDICT_SKIP_LIVE_CHILDREN` / `_VERDICT_SKIP_GOVERNED_PLAN`) are present —
-    a skip performs no write and is not accounted in either list.
+    Returns `(applied_paths, retained_paths, failed_details)`. `applied` holds only
+    paths that actually landed a write (an unclaim, or a genuine ship stamp+flip);
+    `retained` holds reclaim-shipped rows the live-children guard left untouched
+    (`_cs_ship_handoff_core` returned `(0, True)`) — still claimed and in_flight,
+    not resolved, so a caller must not count it toward "N fewer stranded claims".
+    `len(applied) + len(retained) + len(failed)` is expected to be LESS than
+    `len(dispositions)` whenever skip verdicts (`_VERDICT_SKIP_LIVE_CHILDREN` /
+    `_VERDICT_SKIP_GOVERNED_PLAN`) are present — a skip performs no write and is not
+    accounted in any of the three lists.
     """
     applied: List[str] = []
+    retained: List[str] = []
     failed: List[str] = []
     for d in dispositions:
         if d.verdict == _VERDICT_RELEASE:
@@ -549,12 +615,14 @@ def apply_dispositions(dispositions: List[Disposition]) -> "tuple[List[str], Lis
                 failed.append(f"{d.path}: unclaim-handoff failed: rc={rc}")
         elif d.verdict == _VERDICT_RECLAIM_SHIPPED:
             try:
-                rc = cs_ship_handoff(d.path, sha=d.sha or None)
+                rc, was_retained = _cs_ship_handoff_core(d.path, sha=d.sha or None)
             except Exception as exc:  # noqa: BLE001
                 failed.append(f"{d.path}: ship-handoff raised: {exc}")
                 continue
-            if rc == 0:
-                applied.append(d.path)
-            else:
+            if rc != 0:
                 failed.append(f"{d.path}: ship-handoff failed: rc={rc}")
-    return applied, failed
+            elif was_retained:
+                retained.append(d.path)
+            else:
+                applied.append(d.path)
+    return applied, retained, failed

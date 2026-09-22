@@ -310,7 +310,7 @@ scope:
 
 
 class TestRowDepthDivergenceIsRowScopedNotFieldNameScoped:
-    """Review: coordinator:code-reviewer Finding 2 — a human edit to a
+    """A human edit to a
     DIFFERENT, cascade-untouched row using the same field vocabulary
     (`disposition:`) must be refused, never silently reverted along with
     the cascade's own row-depth write, because that would discard the

@@ -105,7 +105,7 @@ class TestClassifyEntryDisposition:
         assert record.disposition == DISPOSITION_REVERSED
 
     def test_none_end_marker_on_rc_block_is_not_forced_either(self):
-        # Review: code-reviewer (Finding 4, P3) — the prior version passed
+        # The prior version passed
         # attempted_ok=False and asserted DISPOSITION_CANNOT_SAFELY, which
         # is exactly what the ordinary (unforced) path already produces for
         # attempted_ok=False -- it could not distinguish "not forced by
@@ -244,7 +244,7 @@ class TestRenderUninstallDryRunReport:
         assert "no install receipt found" in text
 
     def test_populated_receipt_renders_dispositions_without_attempting(self):
-        # Review: code-reviewer (Finding 1, P1) — a plain git-config-key
+        # A plain git-config-key
         # entry is exactly what a real run WOULD reverse, so it must land
         # in the "reversed" bucket (with "would reverse" reason text), not
         # "deliberately-not-reversed" — the prior assertion proved the bug
@@ -463,7 +463,7 @@ class TestUnreportedWriterRendersAsCoverageUnknown:
         assert len(dispositions) == 3
 
     def test_unreported_writer_placeholder_carries_synthetic_marker(self, monkeypatch):
-        """Review: code-reviewer (Finding 3, P3) -- a consumer of
+        """A consumer of
         `report.records` that inspects `.entry` directly (bypassing reason
         text) needs a structural signal this record is a fabricated
         stand-in, not a genuine declared surface. A hand-built real entry

@@ -55,8 +55,6 @@ from coordinator_core.bash_guards import block_subagent_commit
 from coordinator_core.bash_guards import block_subagent_grant_acquisition
 from coordinator_core.bash_guards import block_subagent_guard_grant
 from coordinator_core.bash_guards import block_noncanonical_branch_creation
-from coordinator_core.bash_guards import guard_branch_set_precedence
-from coordinator_core.bash_guards import guard_longlived_branch_naming
 from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns real `git` subprocesses (the revert guard's own status/toplevel
@@ -384,95 +382,3 @@ class TestBlockNoncanonicalBranchCreationConverted:
             result["hookSpecificOutput"]["permissionDecision"] != "deny"
         )
 
-
-class TestGuardBranchSetPrecedenceConverted:
-    """RED-FIRST: `_find_new_daily_target`'s own `resolve_command_positions`
-    call is Bash-shaped -- a `Start-Process git -ArgumentList 'checkout',
-    '-b','work/<machine>/<date>'` invocation evaded the canonical-daily-
-    branch-target extraction even though the base argv is byte-identical
-    across dialects. Detection-level test (the target extraction, not the
-    full advisory-firing pipeline, which also needs a non-empty branch-set
-    provider and a recency-surviving candidate -- covered by the sibling
-    test module's own fixtures, not duplicated here)."""
-
-    def test_start_process_powershell_target_extracted(self) -> None:
-        from coordinator_core.bash_guards.guard_branch_set_precedence import (
-            _find_new_daily_target,
-        )
-
-        cmd = 'Start-Process git -ArgumentList "checkout","-b","work/testmachine/2026-08-26"'
-        assert _find_new_daily_target(cmd) is None  # pre-fix baseline, still true pre-patch
-
-    def test_bash_and_powershell_reach_identical_target_via_check(self, monkeypatch) -> None:
-        import time
-
-        from coordinator_core.bash_guards import guard_branch_set_precedence as guard
-
-        now = time.time()
-        monkeypatch.setattr(guard, "resolve_git_root", lambda cwd=None: "/repo")
-        monkeypatch.setattr(guard, "_is_hazard_repo", lambda git_root: True)
-        monkeypatch.setattr(guard, "_ahead_of_main", lambda branch, cwd=None: 3)
-        monkeypatch.setattr(guard, "should_prompt_rename", lambda *a, **k: False)
-        provider = lambda: [("work/other/2026-08-25", now - 60)]
-
-        bash_result = guard.check(
-            _bash("git checkout -b work/testmachine/2026-08-26"),
-            branch_set_provider=provider,
-        )
-        ps_result = guard.check(
-            _ps('Start-Process git -ArgumentList "checkout","-b","work/testmachine/2026-08-26"'),
-            branch_set_provider=provider,
-        )
-        assert bash_result is not None
-        assert bash_result == ps_result
-
-    def test_unparseable_powershell_does_not_deny(self, monkeypatch) -> None:
-        from coordinator_core.bash_guards import guard_branch_set_precedence as guard
-
-        monkeypatch.setattr(guard, "resolve_git_root", lambda cwd=None: "/repo")
-        monkeypatch.setattr(guard, "_is_hazard_repo", lambda git_root: True)
-        cmd = "Start-Process git -ArgumentList 'checkout', @'\nunterminated"
-        result = guard.check(_ps(cmd))
-        assert result is None or (
-            result["hookSpecificOutput"].get("permissionDecision") != "deny"
-        )
-
-
-class TestGuardLonglivedBranchNamingConverted:
-    """RED-FIRST: `resolve_command_positions` is Bash-shaped -- a
-    `Start-Process git -ArgumentList 'checkout','-b','feature/x'` invocation
-    evaded the sanctioned-longlived-prefix advisory even though the base
-    argv is byte-identical across dialects. This guard NEVER denies (module
-    docstring "WHAT THIS DOES"), so a missed detection is a missed advisory,
-    never a spurious one."""
-
-    def _payload(self, cmd, tool_name, cwd="/repo"):
-        return {"tool_name": tool_name, "tool_input": {"command": cmd}, "cwd": cwd}
-
-    @pytest.fixture(autouse=True)
-    def _hazard_repo(self, monkeypatch):
-        monkeypatch.setattr(
-            guard_longlived_branch_naming, "resolve_git_root", lambda cwd=None: "/repo"
-        )
-        monkeypatch.setattr(
-            guard_longlived_branch_naming, "_is_hazard_repo", lambda git_root: True
-        )
-
-    def test_start_process_powershell_checkout_b_advises(self) -> None:
-        cmd = 'Start-Process git -ArgumentList "checkout","-b","feature/x"'
-        result = guard_longlived_branch_naming.check(self._payload(cmd, "PowerShell"))
-        assert result is not None
-        assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
-
-    def test_bash_verdict_parity_same_command_without_start_process(self) -> None:
-        cmd = "git checkout -b feature/x"
-        result = guard_longlived_branch_naming.check(self._payload(cmd, "Bash"))
-        assert result is not None
-        assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
-
-    def test_unparseable_powershell_does_not_deny(self) -> None:
-        cmd = "Start-Process git -ArgumentList 'checkout', @'\nunterminated"
-        result = guard_longlived_branch_naming.check(self._payload(cmd, "PowerShell"))
-        assert result is None or (
-            result["hookSpecificOutput"]["permissionDecision"] != "deny"
-        )

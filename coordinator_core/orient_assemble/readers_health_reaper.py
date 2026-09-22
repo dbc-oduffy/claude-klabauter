@@ -88,6 +88,7 @@ from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
     build_judgment_point,
 )
+from coordinator_core.ops.invoke_from_argv import _ensure_bin_dir_importable
 from coordinator_core.ops.reap_in_flight_claims import survey as _reap_survey
 from coordinator_core.orient_assemble.reader_result import ReaderResult
 
@@ -124,6 +125,15 @@ def _load_module(name: str, path: Path):
     spec.loader.exec_module(module)
     return module
 
+
+# The loaded CLI's subcommands `import lib` to reach `coordinator/bin/lib`,
+# which resolves only when `coordinator/bin` is already on `sys.path`. The two
+# sanctioned entry paths each arrange that for themselves -- a directly-run
+# script gets its own dir as `sys.path[0]`, and the warm door calls this same
+# function -- but loading the CLI by file location is neither, so without this
+# the subcommands raise `ModuleNotFoundError: No module named 'lib'` whenever
+# no unrelated caller happened to have set the path up first.
+_ensure_bin_dir_importable()
 
 _health_probes = _load_module("workday_start_health_probes", _HEALTH_PROBES_PATH)
 _cmd_claude_klabauter_bin_sentinel = _health_probes.cmd_claude_klabauter_bin_sentinel
@@ -322,10 +332,19 @@ def _read_reaper_dry_run(repo_root: str | None = None) -> ReaderResult:
     orientation assemble for the session. `survey()` walks ~2000 corpus files
     on a box running dozens of concurrent sessions that write handoffs, so a
     file vanishing mid-scan is an ordinary event, not a defect. An advisory
-    reader going quiet is the correct failure; orientation dying is not."""
+    reader going quiet is the correct failure; orientation dying is not.
+
+    NEGATIVE SPEC -- the clause is `OSError`, not bare `Exception`, and must
+    not widen back. `survey()` no longer spawns, so the vanishing-file race
+    this absorbs surfaces as `OSError` and nothing else; a `TypeError` or an
+    `AttributeError` out of it is a defect in the survey, and swallowing one
+    here reports a broken reader as a clean box for every session on the
+    day-cadence path. A bare clause here already hid
+    `ModuleNotFoundError: No module named 'lib'` -- a real, reproducible
+    bootstrap defect in a sibling reader -- behind a silent empty result."""
     try:
         result = _reap_survey(repo_root if repo_root is not None else _CLAUDE_KLABAUTER_ROOT)
-    except Exception:  # noqa: BLE001 - see negative-spec below
+    except OSError:
         return ReaderResult()
     would_release = result.would_release
     would_reclaim = result.would_reclaim

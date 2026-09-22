@@ -89,7 +89,7 @@ class TestAnswersByMarkersNotByCount:
         published-subset claim, the same way a small marked one earns no
         fault. No count threshold exists to tune.
 
-        Review: overengineering-reviewer (Kira, pass 2, finding N3) -- the
+        The
         companion tiny-corpus arm was removed. After the F1 collapse the count
         is computed only INSIDE the already-answered published branch, so no
         code path can branch on it: the no-threshold rule holds by construction

@@ -327,7 +327,7 @@ def test_show_prefix_failure_is_not_memoized(tmp_path, monkeypatch):
 
 
 def test_real_git_never_emits_empty_stdout_on_success_except_show_prefix(tmp_path):
-    # Review: pins the blast-radius claim itself (P3a) -- that
+    # pins the blast-radius claim itself (P3a) -- that
     # `--show-toplevel`/`--git-dir`/`--git-common-dir`/`--absolute-git-dir`/
     # `--is-inside-work-tree` are the ONLY forms this module's fix leaves
     # genuinely untouched, because real `git` never returns rc=0 with empty
@@ -339,7 +339,7 @@ def test_real_git_never_emits_empty_stdout_on_success_except_show_prefix(tmp_pat
     # these forms would fail this test instead of silently regressing the
     # "safe to change" premise `show_prefix()`'s docstring rests on.
     #
-    # Review: code-reviewer (F9) -- the original version of this test covered
+    # The original version of this test covered
     # only the three walk-backed forms, omitting `--absolute-git-dir` and
     # `--is-inside-work-tree`, the two forms that spawn on EVERY call (not
     # just as a walk fallback) and are therefore the most exposed to the
@@ -381,7 +381,7 @@ def test_real_git_never_emits_empty_stdout_on_success_except_show_prefix(tmp_pat
 
 
 def test_show_toplevel_spawn_fallback_matches_path_format_absolute(tmp_path):
-    # Review: code-reviewer (P1) -- `show_toplevel()`'s spawn fallback (real
+    # `show_toplevel()`'s spawn fallback (real
     # git, only reached when the walk finds no `.git`) omits
     # `--path-format=absolute`, unlike the pre-conversion call sites in
     # `session_hierarchy_derive.py`/`session_hierarchy_query.py`, which
@@ -419,7 +419,7 @@ def test_show_toplevel_spawn_fallback_matches_path_format_absolute(tmp_path):
 
 
 def test_git_common_dir_empty_on_success_does_not_return_resolved_cwd(tmp_path, monkeypatch):
-    # Review: code-reviewer (F8, P2) -- P3(a)'s originally requested test:
+    # 's originally requested test:
     # fake rc=0 with empty stdout for `--git-common-dir` and assert
     # `git_common_dir()` does NOT return the resolved cwd. Unlike
     # test_real_git_never_emits_empty_stdout_on_success_except_show_prefix
@@ -444,7 +444,7 @@ def test_git_common_dir_empty_on_success_does_not_return_resolved_cwd(tmp_path, 
 
 
 def test_show_prefix_at_real_git_toplevel_returns_empty_string(tmp_path):
-    # Review: the four tests above this one all mock `subprocess.run`
+    # the four tests above this one all mock `subprocess.run`
     # against a synthetic `.git` directory -- nothing exercises real `git`
     # at a real toplevel, which is the exact scenario this module's fix
     # exists for. This test runs `git init` and calls into the seam

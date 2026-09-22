@@ -109,6 +109,8 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from coordinator_core.session.claimed_write import append_claimed_line
+
 #: Named hot-path ops this census tracks (baton candidate axis: "per-
 #: invocation cost of anything on the commit/session hot path"). A fixed,
 #: reviewable list rather than "every op seen" so the series stays
@@ -279,8 +281,7 @@ def _append_row(series_path: Path, row: dict) -> None:
     try:
         os.makedirs(series_path.parent, exist_ok=True)
         line = json.dumps(row, separators=(",", ":")) + "\n"
-        with open(series_path, "a", encoding="utf-8", newline="\n") as fh:
-            fh.write(line)
+        append_claimed_line(series_path, line.encode("utf-8"))
     except OSError:
         pass
 

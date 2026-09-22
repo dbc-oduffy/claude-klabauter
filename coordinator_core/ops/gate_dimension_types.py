@@ -189,7 +189,7 @@ def _check_types(
     # branch above). This branch is the tool-broke case, reported as
     # UNAVAILABLE, never FAIL -- a broken tool run must never masquerade as
     # "found type errors").
-    # Review: coordinator:code-reviewer wsc-B-dimensions — comment described
+    # Comment described
     # a rc==1 subprocess-layer-failure path that cannot occur as written
     # (_run_mypy returns -1, not 1, on timeout/OSError).
     last_err = err or out or f"mypy exited {rc} with no output"

@@ -1313,7 +1313,7 @@ def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
         UnicodeDecodeError,
         IndexError,
         ValueError,
-        # Review: code-reviewer — Finding 2: a cyclic/over-deep REF_DELTA
+        # A cyclic/over-deep REF_DELTA
         # chain (not depth-guarded like the direct OFS_DELTA recursion —
         # see `_MAX_DELTA_DEPTH`) would otherwise propagate an uncaught
         # RecursionError past this "Never raises" chokepoint.
@@ -1736,7 +1736,7 @@ def _is_under_archive_dir(path: Path, repo_root: Path) -> bool:
     that was passed directly rather than discovered by search."""
     if not _is_relative(path, repo_root):
         return False
-    # Review: code-reviewer Finding 4 — pre-existing site left off the
+    # pre-existing site left off the
     # shared rel_id helper when this module's other 12 sites were converted.
     rel = rel_id(path, repo_root)
     return any(rel == d or rel.startswith(d + "/") for d in ARCHIVE_DIRS)
@@ -1982,7 +1982,7 @@ def _reanchor_repo_relative(artifact_path: str, repo_root: Path) -> Optional[Pat
     segments = artifact_path.lstrip("/").split("/")
     if len(segments) >= 2 and segments[0] == basename:
         candidate = repo_root.joinpath(*segments[1:])
-        # Review: code-reviewer — routed through _literal_hit (not a bare
+        # Routed through _literal_hit (not a bare
         # is_file()) for consistency with the three call sites inside
         # resolve_artifact's main chain; a caller no longer has to re-check
         # this function's return value for a Win32 trailing-dot/space
@@ -2489,6 +2489,21 @@ def _claim_grant_denied_live_reason(
     # EM is meant to act on.
     holder_display = holder_sid or "an unidentified session"
 
+    if basis == "harness-registry-elsewhere":
+        header = f"held by {holder_display} — live in another repo"
+        clauses = []
+        if age_sec is not None:
+            clauses.append(f"last activity {age_sec}s ago")
+        if recent_paths:
+            clauses.append(f"last touched {recent_paths[0]}")
+            if scope_overlap is True:
+                clauses.append("intersects this handoff's scope")
+            elif scope_overlap is False:
+                clauses.append("does not intersect this handoff's scope")
+        if clauses:
+            return header + ", " + ", ".join(clauses)
+        return header
+
     if basis in ("stable-pid", "harness-registry"):
         header = f"held by {holder_display} — live ({basis})"
         clauses = []
@@ -2618,7 +2633,7 @@ def reply_obligation_at_open(fm: dict[str, Any]) -> Optional[str]:
     # purpose: a new memo kind landing in the schema then defaults to owing a
     # reply, which is the safe direction. A membership test would silently
     # excuse it.
-    # Review: overengineering-reviewer — `_REPLY_OWED_KINDS` frozenset had
+    # `_REPLY_OWED_KINDS` frozenset had
     # zero readers and its own comment argued against ever using a
     # membership test; deleted per "delete on sight".
     if fm.get("kind") == "fyi":
@@ -2727,7 +2742,7 @@ def _adopt_into_baton(
                     kwargs["intent"] = f"(from summary) {summary}"
 
     try:
-        # Review: reviewer(wsc-slice-5) — now_iso() must be called inside this
+        # now_iso() must be called inside this
         # try/except, not while building kwargs above, so a future non-trivial
         # now_iso() can never raise uncaught into brief()'s claim path.
         kwargs["closed_at"] = _session_core.now_iso()
@@ -2763,7 +2778,6 @@ def acquire_brief_claim(
          "liveness_basis": <the session.liveness basis behind "basis", or None>,
          "liveness_live": <the session_verdict boolean behind "basis", or None
                   when no verdict was available (see "holder-absent") --
-                  Review: coordinator:code-reviewer nit. Surfaced alongside
                   "liveness_basis" so an incident-report reader can tell a
                   confirmed-dead "stable-pid" record from a "stable-pid"
                   record that structurally DISAGREED (live=True, folded into
@@ -2872,7 +2886,7 @@ def acquire_brief_claim(
             except Exception:
                 verdict = None
             if verdict is not None:
-                # Review: staff-eng F1 — the live boolean (slot 0) must be
+                # The live boolean (slot 0) must be
                 # consulted, not just the basis string (slot 1). `session_live`
                 # (which `claim_artifact`'s takeover actually acted on) and
                 # `session_verdict` (computed here, for the label only) are
@@ -3666,7 +3680,6 @@ def compute_baton_unification_verdict(
         elif unstamped_skipped:
             no_unify_reason = "unstamped-role-skipped"
         elif unreadable_skipped:
-            # Review: coordinator:code-reviewer ab96d9461a4ded513 Finding 1 —
             # unreadable_skipped was threaded into the returned dict but the
             # reason/message ladder fell through to "nothing-inheritable"
             # when it was the sole skip reason, silently matching the
@@ -4324,7 +4337,7 @@ def compute_sender_reachability(sent_by: Optional[str]) -> dict[str, Any]:
     if outcome == "own_session":
         message = "This memo was sent by this same session — a self-receipt, not a reply target."
     elif outcome == "reachable":
-        # Review: coordinator:code-reviewer — `result.address` already
+        # `result.address` already
         # carries the answer from the one `resolve_address` call above;
         # calling `resolve_advisory_address` here was a second, independent
         # live registry scan for data already in hand (one-snapshot
@@ -4926,7 +4939,7 @@ def build_handoff_directives(
             "id": "d2",
             "cli": "archive-stamp-cli",
             "args": ["claim-handoff", artifact_path],
-            # Review: code-reviewer — Finding 4: every brief() call site overwrites
+            # Every brief() call site overwrites
             # this default explicitly, so an un-reassigned case now degrades to
             # "unconditional" (visible) rather than a stale "j1" literal that may
             # not even be in scope. Matches build_memo_directives's default.
@@ -4942,11 +4955,12 @@ def build_handoff_directives(
 #: (mirrors `ops/memo_transition.py::_action`'s own enum: accepted/partial/
 #: declined). Not every `_KIND_DISPOSITIONS` entry that resolves
 #: `d-action-memo` (C8 BUILD (3)) appears here: `fyi`/`ack-nil`,
-#: `consult`/`reply-short`, `consult`/`reply-long`, and `proposal`/`negotiate`
-#: also resolve `d-action-memo` but are deliberately absent from this map —
-#: none of nil-impact / replying-in-place / negotiating is an
-#: accepted/partial/declined outcome, so each takes `_build_action_memo_
-#: args`'s `--actioned-note`-only path instead of a `--decision` mapping.
+#: `consult`/`reply-short`, `consult`/`reply-long`, `bug`/`confirmed-owned`,
+#: and `bug`/`not-a-bug` also resolve `d-action-memo` but are deliberately
+#: absent from this map — none of nil-impact / replying-in-place /
+#: already-owned-elsewhere / not-actually-a-bug is an accepted/partial/
+#: declined outcome, so each takes `_build_action_memo_args`'s
+#: `--actioned-note`-only path instead of a `--decision` mapping.
 #: Every disposition that keeps `resolves: []` needs no entry here
 #: (`d-action-memo` never fires for it). `accept-escalate-to-sizing` maps to
 #: `partial` (the memo itself is only partially actioned in-line; the sizing
@@ -4983,7 +4997,95 @@ _MEMO_ACTION_DECISION_MAP: dict[tuple[str, str], str] = {
     # loud at dispatch.
     ("fyi", "fold-into-plan"): "accepted",
     ("proposal", "fold-into-plan"): "accepted",
+    # `bug`/`fixed` is an ACCEPTED outcome — the fix is the action, and
+    # routing it through `--decision accepted` is what makes `realized_by`
+    # (the fix commit's SHA) required, mirroring `fyi`/`surgical-fix` and
+    # `ask`/`accept-mechanical-direct` above. `bug`/`confirmed-owned` and
+    # `bug`/`not-a-bug` are deliberately absent (see the class comment
+    # above this map).
+    ("bug", "fixed"): "accepted",
 }
+
+
+#: AC5 (T3) — `bug`/`confirmed-owned`'s `actioned_note` names an owner
+#: pointer, not a free-text rationale (unlike every other actioned-note-only
+#: disposition above) — its own `guidance` string requires "the pointer
+#: itself", not merely an assertion it exists. New mechanism, not new data:
+#: nothing before this validated that a supplied content value resolves to
+#: a real on-disk artifact. Three shapes, per the disposition's own
+#: guidance text: a bug-backlog entry path (a bare repo-relative
+#: filesystem path), a `<path>#<chunk-id>` plan-chunk pointer, or a bare
+#: named baton id (searched via `handoff_id` in `state/handoffs/`
+#: frontmatter — never resolved as a path at all). Classification is
+#: shape-driven, never a directory allowlist: a `#` names a plan-chunk
+#: pointer; a `/` or a file suffix (with no `#`) names a bug-backlog entry
+#: path; anything else is a bare baton id.
+class ConfirmedOwnedPointerUnresolved(ValueError):
+    """Fail-loud raised when a `bug`/`confirmed-owned` `actioned_note`
+    pointer does not resolve against the repo tree — same fail-loud class
+    `_build_action_memo_args` already raises above (the decision-mapped +
+    `actioned_note` conflict) rather than a new exception hierarchy."""
+
+
+def _confirmed_owned_pointer_kind(pointer: str) -> str:
+    """Classifies an `actioned_note` pointer into one of the three shapes
+    `bug`/`confirmed-owned` names. Order matters: a `#` is checked first
+    since a plan-chunk pointer's path half may itself carry a `/` or a
+    `.md` suffix, which would otherwise misclassify it as a bare
+    bug-backlog path."""
+    if "#" in pointer:
+        return "plan-chunk"
+    if "/" in pointer or Path(pointer).suffix:
+        return "backlog-path"
+    return "baton-id"
+
+
+def _confirmed_owned_pointer_resolves(pointer: str, repo_root: Path) -> bool:
+    """Single filesystem stat/read per shape (DR-344 F9 budget: no git
+    spawn, spiked against the <500ms end-to-end / <200ms single-process
+    bar every op on this path holds to) — a bug-backlog path or a
+    plan-chunk pointer's file half is one `is_file`/`read_text` call; a
+    baton id's `state/handoffs/` search is inherent to "search via
+    `handoff_id`", named as such in this task's own spec, not an
+    unbounded scan of the whole tree."""
+    kind = _confirmed_owned_pointer_kind(pointer)
+    if kind == "backlog-path":
+        try:
+            resolved = assert_in_repo_root(Path(pointer), repo_root)
+        except OutOfRepoPath:
+            return False
+        return resolved.is_file()
+    if kind == "plan-chunk":
+        path_part, _, chunk_id = pointer.partition("#")
+        if not path_part or not chunk_id:
+            return False
+        try:
+            resolved = assert_in_repo_root(Path(path_part), repo_root)
+        except OutOfRepoPath:
+            return False
+        if not resolved.is_file():
+            return False
+        try:
+            text = resolved.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return False
+        return f"id: {chunk_id}" in text
+    # baton-id: search `state/handoffs/` frontmatter for a matching
+    # `handoff_id` — never resolved as a path.
+    handoffs_dir = repo_root / "state" / "handoffs"
+    if not handoffs_dir.is_dir():
+        return False
+    for candidate in handoffs_dir.glob("*.md"):
+        try:
+            text = candidate.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        split = split_frontmatter(text)
+        if split is None:
+            continue
+        if read_fm_field_unquoted(split.fm_text, "handoff_id") == pointer:
+            return True
+    return False
 
 
 def _build_action_memo_args(artifact_path: str, kind_resolved: str, decisions: dict[str, Any]) -> list[str]:
@@ -5053,6 +5155,26 @@ def _build_action_memo_args(artifact_path: str, kind_resolved: str, decisions: d
         # `ack-nil`'s guidance text tells the EM to supply it.
         actioned_note = jkind.get("actioned_note")
         if actioned_note:
+            # AC5 (T3): `bug`/`confirmed-owned`'s `actioned_note` is an
+            # owner pointer, not a rationale — fail loud rather than let a
+            # dead/absent/typo'd pointer through unnoticed. Every other
+            # actioned-note-only disposition (ack-nil, not-a-bug,
+            # needs-info, reply-short/long, fold-into-plan) stays free-text,
+            # unvalidated, by design — this check is narrowly `bug`/
+            # `confirmed-owned`, not a general actioned_note gate.
+            if kind_resolved == "bug" and disposition == "confirmed-owned":
+                repo_root = resolve_repo_root()
+                if repo_root is not None and not _confirmed_owned_pointer_resolves(
+                    actioned_note, repo_root
+                ):
+                    raise ConfirmedOwnedPointerUnresolved(
+                        f"_build_action_memo_args: bug/confirmed-owned actioned_note "
+                        f"{actioned_note!r} does not resolve against the repo tree "
+                        f"(checked as a bug-backlog path, a <path>#<chunk-id> plan-chunk "
+                        f"pointer, and a state/handoffs/ handoff_id) — point it at the "
+                        f"artifact that already owns this report, not merely assert it "
+                        f"exists."
+                    )
             args += ["--actioned-note", actioned_note]
     distill_fate = jkind.get("distill_fate")
     if distill_fate:
@@ -5610,7 +5732,7 @@ def compute_gate_check_recommendation(blockers: list[dict[str, Any]]) -> dict[st
             "rationale": f"Every blocked_by id resolved terminal: {named}.",
         }
 
-    # Review: code-reviewer — Finding 3: `scan_incomplete` blockers fold
+    # `scan_incomplete` blockers fold
     # into `non_terminal` (failing closed is correct — an unreadable
     # record must not read as cleared), but they are not a confirmed-open
     # fact the way a genuinely `not resolved`/non-terminal blocker is.
@@ -5651,7 +5773,7 @@ def compute_gate_check_recommendation(blockers: list[dict[str, Any]]) -> dict[st
 #: strands unread if answered "cleared" without `gate-recheck` also
 #: recording the clearance (Piece A) — naming them here is what converts
 #: the silent orphaning the memo describes into a visible one.
-# Review: staff-eng — replaced the obsolete/factually-wrong version (it
+# Replaced the obsolete/factually-wrong version (it
 # described gate-recheck as needing a manual follow-on pass and as the
 # owner of retiring blocked_by; neither is true post-Piece-A).
 _JGATE_CLEARED_GUIDANCE = (
@@ -5915,7 +6037,7 @@ def build_gate_recheck_directive(artifact_path: str) -> dict[str, Any]:
 #: entries, never on a `recommendation` object, which the shared seam
 #: (`contract/decision_object/judgment.py`) restricts to
 #: `disposition`/`rationale` only).
-# Review: overengineering-reviewer — this guidance and its comment were
+# This guidance and its comment were
 # duplicated byte-for-byte across the `proposal` and `fyi` "fold-into-plan"
 # entries below; hoisted to one constant so drift between the two copies is
 # no longer possible.
@@ -6121,20 +6243,6 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
             ),
         },
         {
-            "value": "negotiate",
-            "resolves": ["d-action-memo"],
-            "guidance": (
-                "Neither adopt nor decline outright — counter-propose a modified shape "
-                "and record the counter in `actioned_note` (or reply body) for the "
-                "sender to react to. Actioning this disposition requires `actioned_note` "
-                "(the counter, or a pointer to it): `d-action-memo` resolves via the "
-                "`--actioned-note` path (no `--decision`, since negotiating is not an "
-                "accepted/partial/declined outcome), and `cs_action_memo` fails loud if "
-                "neither `--decision` nor `--actioned-note` is supplied — so state the "
-                "counter, however brief, rather than leaving `actioned_note` empty."
-            ),
-        },
-        {
             # `fold-into-plan` (2026-07-27 memo, PM-directed): guidance
             # hoisted to `_FOLD_INTO_PLAN_GUIDANCE`, shared verbatim with the
             # `fyi` entry below (Review: overengineering-reviewer — this was
@@ -6143,6 +6251,66 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
             "value": "fold-into-plan",
             "resolves": ["d-action-memo"],
             "guidance": _FOLD_INTO_PLAN_GUIDANCE,
+        },
+    ],
+    "bug": [
+        {
+            "value": "fixed",
+            "resolves": ["d-action-memo"],
+            "guidance": (
+                "The report is real and this repo owns it — land the fix and action "
+                "the memo with its SHA. Same premise-verification and live-claim-holder "
+                "checks as an `ask` accept apply before landing. This disposition maps "
+                "to `--decision accepted`, which requires `realized_by` (the SHA of the "
+                "commit that lands the fix) alongside `decision_note`; `cs_action_memo` "
+                "fails loud without it."
+            ),
+        },
+        {
+            "value": "confirmed-owned",
+            "resolves": ["d-action-memo"],
+            "guidance": (
+                "The report is real, but the work is already tracked elsewhere — point "
+                "`actioned_note` at the artifact that already owns it (a bug-backlog "
+                "entry path, a plan-chunk pointer, or a named baton id), not merely "
+                "assert that it exists. Actioning this disposition requires "
+                "`actioned_note` (the pointer itself): `d-action-memo` resolves via the "
+                "`--actioned-note` path (no `--decision`, since already-owned-elsewhere "
+                "is not an accepted/partial/declined outcome), and `cs_action_memo` "
+                "fails loud if neither `--decision` nor `--actioned-note` is supplied — "
+                "so state the pointer, however brief, rather than leaving "
+                "`actioned_note` empty."
+            ),
+        },
+        {
+            "value": "not-a-bug",
+            "resolves": ["d-action-memo"],
+            "guidance": (
+                "After checking the report against current disk/git state, the behavior "
+                "described is correct, or the report doesn't reproduce — record what was "
+                "checked and what was found in `actioned_note`, not just the verdict. "
+                "Actioning this disposition requires `actioned_note` (the check "
+                "performed and its result): `d-action-memo` resolves via the "
+                "`--actioned-note` path (no `--decision`, since not-a-bug is not an "
+                "accepted/partial/declined outcome), and `cs_action_memo` fails loud if "
+                "neither `--decision` nor `--actioned-note` is supplied — so state what "
+                "was checked, however brief, rather than leaving `actioned_note` empty."
+            ),
+        },
+        {
+            # Work still owed: the report can't be triaged from the memo
+            # alone, so this stays `resolves: []` — halting at
+            # `d-action-memo` is correct, not a defect. Deliberately narrower
+            # than the other three: a single question back to the reporter,
+            # not a peer disposal path.
+            "value": "needs-info",
+            "resolves": [],
+            "guidance": (
+                "The report can't be triaged without one more fact from the reporter — "
+                "ask that single question and stop there; this is a narrow escape hatch, "
+                "not an equal fourth option to fixed/confirmed-owned/not-a-bug. Do not "
+                "use it to ask the reporter to justify why the report was filed."
+            ),
         },
     ],
     "fyi": [
@@ -6240,8 +6408,8 @@ def _required_content_keys(kind: str, disposition: str) -> tuple[str, ...]:
     """The `--decisions` content keys `memo_transition.py` requires for this
     `(kind, disposition)` pair, derived from `_MEMO_ACTION_DECISION_MAP` +
     `_DECISION_REQUIRED_CONTENT_KEYS` rather than a second parallel table —
-    a disposition absent from `_MEMO_ACTION_DECISION_MAP` (every
-    `consult`/`proposal negotiate`/nil-impact `fyi` disposition, none of
+    a disposition absent from `_MEMO_ACTION_DECISION_MAP` (every `consult`,
+    nil-impact `fyi`, and already-owned/not-a-bug `bug` disposition, none of
     which take `--decision` at all) has no mapped decision and therefore no
     required content key."""
     decision_value = _MEMO_ACTION_DECISION_MAP.get((kind, disposition))
@@ -6267,8 +6435,9 @@ def _dispositions_with_required_keys(kind: str) -> list[dict[str, Any]]:
 _KIND_QUESTIONS: dict[str, str] = {
     "ask": "ask: Accept mechanical-direct / Accept escalate-to-sizing / Decline / Surface-to-PM?",
     "consult": "consult: Reply short (goes in actioned_note) / Reply long (## EM Response heading, actioned_note points at it)?",
-    "proposal": "proposal: Adopt / Decline / Negotiate?",
+    "proposal": "proposal: Adopt / Decline?",
     "fyi": "fyi impact: nil / plan-invalidated / surgical-fix / product-decision / ambiguous?",
+    "bug": "bug: Fixed / Confirmed-owned / Not-a-bug / Needs-info?",
 }
 
 
@@ -6440,7 +6609,7 @@ def build_completeness_checklist(fm: dict[str, Any], artifact_path: str) -> dict
     # ordering as its own evidence field (contract § computed-skills.md
     # "Restart-gated hoist/partition (fixed ordering rule)"), independent of
     # `directives[]`'s parallel ordering above.
-    # Review: code-reviewer — Finding 5: `probe` is duplicated here rather
+    # `probe` is duplicated here rather
     # than replaced with an index back into `items[]` intentionally — batches
     # is self-contained ordering evidence, requiring no cross-referencing by
     # consumers.
@@ -6653,7 +6822,7 @@ def _artifact_is_a_plan(artifact_path: str) -> bool:
     no-pointer condition without satisfying the premise, which is the shape
     that fell through -- see the `else` arm there for what it cost.
     """
-    # Review: coordinator:code-reviewer — `str.lstrip("./")` strips a
+    # `str.lstrip("./")` strips a
     # character SET, not a literal prefix: a traversal-shaped input like
     # "../../docs/plans/x.md" has every leading "." and "/" collapsed away
     # to "docs/plans/x.md" and is wrongly classified as an in-tree plan.

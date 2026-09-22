@@ -299,7 +299,7 @@ TEST_EXTRA = "test"
 
 # The [project.optional-dependencies] key holding the non-Python symbol
 # extraction extra. Named once for actual parity with TEST_EXTRA above —
-# Review: code-reviewer 2026-08-08 (P3) — print_symbols_extra_hint previously
+# print_symbols_extra_hint previously
 # hardcoded the literal "symbols" three times while its docstring claimed
 # "same discipline as TEST_EXTRA above," which was untrue until this constant
 # existed.
@@ -478,7 +478,7 @@ def resolve_python() -> str:
     already have failed on `from __future__ import annotations` syntax before
     reaching here on truly ancient interpreters, but not on 3.x < 3.11).
 
-    Review: code-reviewer 2026-07-21 Finding 1 (P1) — a found candidate is
+    A found candidate is
     re-exec'd into via `os.execvp` BEFORE returning, not merely returned by
     name: the host process is still the original sub-3.11 interpreter at this
     point, and `derive_deps` below does `import tomllib` (3.11+ stdlib-only)
@@ -617,7 +617,7 @@ def derive_deps(pyproject_path: Path, extra: str | None = None) -> tuple[list[st
 def deps_importable(interpreter: str, import_names: list[str]) -> bool:
     """True iff every name in `import_names` imports cleanly under `interpreter`.
 
-    Review: code-reviewer 2026-07-21 Finding 4 (P1) — `timeout=` added to the
+    `timeout=` added to the
     cross-interpreter probe. `interpreter` can be a bare `python3`/`python`
     name resolved via the Finding-1 fallback path (a Windows App-Execution-
     Alias stub / non-executable shim), the same category `_python_version_ok`
@@ -1230,7 +1230,7 @@ def provision_deps(
     from coordinator_core._settings_home import settings_home
     from coordinator_core.install.ensure_venv import venv_python_path
 
-    # Review: code-reviewer 2026-07-21 Finding 6 (P2) — settings_home()
+    # settings_home()
     # resolves through `CLAUDE_HOME`/`Path.home()`, and `Path.home()` raises
     # `RuntimeError` when neither `HOME` (POSIX) nor `USERPROFILE` (Windows)
     # is resolvable. Fail loud with an actionable message instead of a bare
@@ -1688,7 +1688,7 @@ def _is_publish_mirror(path: Path) -> bool:
 #: does not exist, and `scripts/setup.py` aborted with exit 90 on every run. A
 #: one-file probe makes a sibling repo's ordinary retirement into our outage; the
 #: any-of set is the fix, so keep it plural.
-# Review: code-reviewer 2026-08-07 Finding 5 (P3) — split into distinctive
+# Split into distinctive
 # vs generic markers rather than one flat `any(...)` tuple. `commands/`,
 # `hooks/`, `skills/` are common-enough directory names that any ONE of them
 # existing under an arbitrary `coordinator/` subdirectory (not necessarily a
@@ -1755,7 +1755,7 @@ def _coordinator_root_from_settings_home() -> "Path | None":
     hard-dep gate has to walk the SOURCE checkout. The two being different
     places on the same machine is the normal case, not a misconfiguration.
     """
-    # Review: code-reviewer 2026-08-07 Finding 4 (P2) — narrowed from a bare
+    # Narrowed from a bare
     # `except Exception` so a broken resolution-machinery failure (an
     # ImportError on `coordinator_core._settings_home`, or `settings_home()`
     # itself misconfigured) surfaces instead of looking identical to "no
@@ -1807,7 +1807,7 @@ def _coordinator_root_from_doe_root_pointer() -> "Path | None":
     rung is the shared pointer read (sentinel + legacy fallback) placed ahead
     of both, not a reordering of the two `da7cd333a` already ordered.
 
-    Review: staff-eng 2026-08-08 MINOR-4 — the ordering was previously
+    The ordering was previously
     justified as "setup.py runs before a registry is necessarily populated on
     a fresh box," but nothing in THIS installer ever writes the
     `.doe-root` sentinel either (checked every install-chain step:
@@ -1895,7 +1895,7 @@ def _coordinator_root_from_registry() -> "Path | None":
     provisioned (same discipline as `_resolve_plugin_root_for_machine_local`
     above).
 
-    Review: staff-eng 2026-08-08 MINOR-6 — this was the only rung with no
+    This was the only rung with no
     failure path: a corrupt/unreadable machine-local registry file, or a
     `settings_home()` RuntimeError under a HOME-stripped environment, would
     propagate out of this best-effort rung and abort the whole installer
@@ -1971,7 +1971,7 @@ def _resolve_coordinator_claude_root(repo_root: Path, args: Args) -> tuple[Path,
     (now honesty-gated, see below). Shared by `check_coordinator_claude_dep`
     and `register_claude_klabauter_root` so both resolve the SAME candidate root
     regardless of whether the (hard) dep-check ran (e.g. --skip-dep-check) —
-    Review: code-reviewer 2026-07-21 Finding 3 (P1), extracted so
+    code-reviewer 2026-07-21 Finding 3 (P1), extracted so
     `register_claude_klabauter_root` can resolve a plugin_root for
     `resolve_machine_local_cli` without duplicating this ladder.
 
@@ -2023,7 +2023,7 @@ def _resolve_coordinator_claude_root(repo_root: Path, args: Args) -> tuple[Path,
     already fails loud with an actionable git-clone remediation whenever
     `_looks_like_coordinator_claude_source(coord_path)` is False, which an
     unresolved guess always is."""
-    # Review: staff-eng 2026-08-08 MINOR-5 — the three lower rungs used to be
+    # The three lower rungs used to be
     # evaluated eagerly, unconditionally, ahead of the flag/env override
     # check below. Each can print an [ADVISORY] to stderr, and this function
     # is called 4x per run, so an operator who passed --coordinator-root
@@ -2560,7 +2560,7 @@ def register_claude_klabauter_root(
     state/memo-outbox/sent/working-repos-adopted-count-confirmed-12-not-13.md
     for why `repos.claude_klabauter` alone is not the working-repo signal.
     """
-    # Review: code-reviewer 2026-07-21 Finding 3 (P1) — resolved via the
+    # Resolved via the
     # canonical, Windows-hardened `resolve_machine_local_cli` (which knows to
     # prefer a `templates/bin/_machine_local.py` python shim, and to avoid the
     # extension-less `bin/machine-local` shim on Windows, WinError 193)
@@ -2604,7 +2604,7 @@ def register_claude_klabauter_root(
     discovered_klabauter: str | None = None
     identity = resolve_repo_identity(repo_root)
     if identity == "claude-klabauter":
-        # Review: staff-eng 2026-08-16 C8 Finding 13 — "installing
+        # "installing
         # klabauter targets main" rests on an
         # UNSTATED assumption -- that a fresh clone is checked out on the
         # remote default (`main`). Nothing here inspects the clone's
@@ -2640,7 +2640,7 @@ def register_claude_klabauter_root(
         if discovered_klabauter:
             key_values["engine.target"] = "candidate"
             key_values["repos.claude_klabauter"] = discovered_klabauter
-            # Review: staff-eng 2026-08-16 C8 Finding 2 — only declare a
+            # Only declare a
             # track_ref for a tree that IS this
             # box's registered publish mirror -- a track_ref written for
             # an undiscovered/mismatched mirror is a dangling declaration
@@ -3416,7 +3416,7 @@ def install_lfs_pre_push_gate(repo_root: Path, args: Args) -> None:
     interpreter start (§ The brightline — an interpreter start ahead of
     warmth is break-class).
 
-    Review: code-reviewer P2 — the hooks directory is resolved via
+    The hooks directory is resolved via
     `git rev-parse --git-path hooks` (one subprocess, cold install path
     only), not hardcoded as `.git/hooks`, so a repo with `core.hooksPath`
     set gets the gate written where git actually reads it. Falls back to
@@ -3435,7 +3435,7 @@ def install_lfs_pre_push_gate(repo_root: Path, args: Args) -> None:
         print("[ADVISORY] no .git directory at the repo root — skipping LFS pre-push gate.")
         return
 
-    # Review: code-reviewer P2 — resolve the ACTUAL hooks directory via
+    # Resolve the ACTUAL hooks directory via
     # `git rev-parse --git-path hooks` rather than hardcoding `.git/hooks`.
     # A repo with `core.hooksPath` set writes the gate somewhere git never
     # reads, so the installer reports success while the vendor shim keeps
@@ -3785,7 +3785,7 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
     env["CLAUDE_KLABAUTER_ROOT"] = str(claude_klabauter_root_resolved)
     env["COORDINATOR_ENGINE_ROOT"] = str(claude_klabauter_root_resolved)
 
-    # Review: code-reviewer 2026-08-07 Finding 2 (P2) — mirror
+    # Mirror
     # install_precommit_hook's try/except-around-subprocess.run shape so a
     # child-spawn failure (transient engine_py unavailability, OSError/
     # PermissionError, a locked/broken interpreter path on Windows)
@@ -3825,7 +3825,7 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
         # Non-fatal: setup must still complete even if this step failed.
         return
 
-    # Review: code-reviewer 2026-08-07 Finding 3 (P2) — a 0 exit code alone
+    # A 0 exit code alone
     # doesn't prove a forwarder actually landed on disk (the exact
     # "verifier reporting success while looking at nothing" shape this
     # commit exists to fix); cheaply confirm settings-home/bin actually
@@ -3999,7 +3999,7 @@ def install_claude_doe_launcher_chain(repo_root: Path, engine_py: str, claude_kl
             continue
 
         output = (proc.stdout + proc.stderr).strip()
-        # Review: coordinatorcode-reviewer-7ca32c22 — `gen-doe-root-pointer.py
+        # `gen-doe-root-pointer.py
         # --graceful-skip-unresolved` exits 0 on a genuine skip (repos.doe_claude
         # not yet resolved), so returncode alone can't distinguish "wrote it"
         # from "gave up". Detect the `<label>: skipped` contract row and treat
@@ -4176,6 +4176,76 @@ def ensure_percolate_identity(settings_home_path: Path, repo_root: Path) -> tupl
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(_percolate_identity_template(hints), encoding="utf-8", newline="\n")
     return target, "created"
+
+
+def install_precompiled_bytecode(claude_klabauter_root_resolved: Path, args: Args) -> None:
+    """Best-effort install-chain step: byte-compiles `coordinator_core` so the
+    first invocation after install does not pay compilation cost cold.
+
+    Root-cause fix, 2026-09-20 (DR-344 breach on a cloud container). This
+    step existed only in the maximalist chain (`/coordinator:setup`,
+    `coordinator_core.install.maximalist` Step 6b) — never in THIS
+    standalone installer, which is what a cloud dispatch container actually
+    runs. A tree installed that way carries no `__pycache__`, so every cold
+    invocation compiles the whole import graph before doing any work.
+
+    Measured, not assumed: `state/audits/doe-script-arrivals/W2-C9.yaml`
+    recorded `mise-prep-run` at 627ms on a 4-core Linux container against a
+    200ms bar, versus 22.5ms on macOS. Reproduced here by holding everything
+    else equal and varying only the bytecode cache — same CLI, same box:
+    106ms with `__pycache__` present, 415ms with an empty one, a 3.9x factor
+    on 24 cores that comfortably reaches the container's figure on 4. Import
+    weight was the secondary term, not the dominant one.
+
+    Same failure shape as this file's own `install_bin_forwarders` docstring
+    records: a step the maximalist chain has and the standalone installer
+    lacks, so a box whose only "install" is `scripts/setup.py` silently never
+    gets it. Advisory, never fatal — a compile failure must not abort an
+    otherwise working install — and skipped under `--check`/`--register-only`
+    alongside the other post-registration steps.
+    """
+    print()
+    print("--- Install: precompile coordinator_core bytecode ---")
+
+    if str(claude_klabauter_root_resolved) not in sys.path:
+        sys.path.insert(0, str(claude_klabauter_root_resolved))
+    try:
+        from coordinator_core.install.maximalist import (
+            _compileall_interpreters,
+            _run_compileall,
+        )
+    except ImportError as exc:
+        print(f"[ADVISORY] cannot import the compileall leg — skipping precompile: {exc}", file=sys.stderr)
+        return
+
+    pkg_root = claude_klabauter_root_resolved / "coordinator_core"
+    if not pkg_root.is_dir():
+        print(f"[ADVISORY] {pkg_root} not found — skipping precompile.", file=sys.stderr)
+        return
+
+    try:
+        interpreters = _compileall_interpreters(args.allow_venv_fallback)
+    except (ImportError, OSError) as exc:
+        print(f"[ADVISORY] could not resolve a precompile interpreter: {exc}", file=sys.stderr)
+        return
+    if not interpreters:
+        print("[ADVISORY] no interpreter resolved to precompile under — skipping.", file=sys.stderr)
+        return
+
+    for interp in interpreters:
+        try:
+            proc = _run_compileall(interp, pkg_root)
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            print(f"[ADVISORY] precompile failed under {interp} — continuing: {exc}", file=sys.stderr)
+            continue
+        if proc.returncode != 0:
+            print(
+                f"[ADVISORY] precompile failed under {interp} (exit {proc.returncode}) — continuing: "
+                f"{(proc.stderr or '').strip()[:200]}",
+                file=sys.stderr,
+            )
+            continue
+        print(f"PASS [precompile] {pkg_root} byte-compiled under {interp}.")
 
 
 def install_percolate_identity(repo_root: Path, claude_klabauter_root_resolved: Path) -> None:
@@ -4630,6 +4700,7 @@ def main(argv: list[str]) -> int:
         install_precommit_hook(repo_root, engine_py, args.agent_mode)
         install_lfs_pre_push_gate(repo_root, args)
         install_percolate_identity(repo_root, claude_klabauter_root_resolved)
+        install_precompiled_bytecode(claude_klabauter_root_resolved, args)
         install_machine_identity(repo_root, claude_klabauter_root_resolved, args)
         install_host_sampler_task(repo_root, claude_klabauter_root_resolved)
         install_fleet_shared_environment(repo_root, claude_klabauter_root_resolved, args)

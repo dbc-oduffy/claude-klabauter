@@ -202,7 +202,7 @@ def test_ac1_skill_name_with_triple_quote_does_not_break_out_of_docstring():
 
 
 def test_ac1_skill_name_with_trailing_backslash_before_quotes_does_not_break_out_of_docstring():
-    """Review: coordinator:code-reviewer (P3) — the prior payload here
+    """The prior payload here
     (letter, backslash, letter "b", newline, letter "c") is not a regression
     test: the backslash-then-"b" is a valid Python escape (backspace) and a
     bare newline inside a triple-quoted string is always legal, so this test
@@ -224,7 +224,7 @@ def test_ac1_skill_name_with_trailing_backslash_before_quotes_does_not_break_out
 
 
 def test_ac1_skill_name_with_nul_byte_rejected_fail_loud():
-    """Review: coordinator:code-reviewer (P2) — a NUL byte in skill_name
+    """A NUL byte in skill_name
     used to pass through all three `.replace()` calls unchanged and land
     verbatim in the emitted text, which CPython's ast.parse()/compile()
     always refuses (embedded NUL is never valid source, regardless of
@@ -234,7 +234,7 @@ def test_ac1_skill_name_with_nul_byte_rejected_fail_loud():
 
 
 def test_ac1_skill_name_with_cr_crlf_and_unicode_line_separators_renders_single_line():
-    """Review: coordinator:code-reviewer (P2) — _docstring_safe's own
+    """_docstring_safe's own
     docstring claims it "neutralizes newlines so the header always renders
     as a single visual line"; a bare CR, CRLF, or the Unicode line
     separators U+2028/U+2029 used to survive unescaped, each rendering as a
@@ -252,7 +252,7 @@ def test_ac1_skill_name_with_cr_crlf_and_unicode_line_separators_renders_single_
 
 
 def test_ac1_skill_name_with_named_and_numeric_escape_shapes_still_parses():
-    """Review: coordinator:code-reviewer (P3) — pins the escaping ORDER
+    """Pins the escaping ORDER
     (double every backslash first, then neutralize quote runs) that the
     reviewer hand-verified neutralizes `\\N{...}`/`\\x41`/`\\uXXXX`-shaped
     input as a structural side effect: doubling backslashes first means a

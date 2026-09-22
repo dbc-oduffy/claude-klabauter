@@ -156,7 +156,7 @@ def list_paths(state_root_override: Optional[str] = None) -> List[str]:
     state_root = _resolve_state_root(state_root_override)
     if not state_root:
         raise ReviewTrailListError(
-            # Review: overengineering-reviewer — _PROG named a shell script this
+            # _PROG named a shell script this
             # workstream deleted (list-review-trail-records.sh); the sole caller
             # catches ReviewTrailListError and never reads the message.
             "cwd is not a git repo and COORDINATOR_ROOT is not set — "

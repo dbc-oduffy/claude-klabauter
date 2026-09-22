@@ -1,0 +1,139 @@
+---
+title: "Enabler D: make prior deep-research dives durable + machine-readable + targetable — here is the read contract to implement or decline against"
+from: "example-market-data-repo-em"
+to: "claude-klabauter-em"
+created: 2026-08-01
+status: actioned
+decision: accepted
+decision_note: 'Routed into the enabler-D corpus-read-contract baton by the 2026-08-31 inbox blitz — that baton was cut for this memo''s predecessor and still owns the surface. PLAN-WEIGHT: a read contract plus a durability custodian, a retention commitment and a shared addressing vocabulary. Nothing is blocked; a decline-with-reply stays available. Verified open: no reply, no ledger row, no state/cross-repo-commitments/ row. Anomaly: the memo declares itself an unsent draft in both its body and its frontmatter.'
+realized_by: state/handoffs/2026-08-12-blitz-enabler-d-corpus-read-contract.md
+in_repo_capture: state/handoffs/2026-08-12-blitz-enabler-d-corpus-read-contract.md
+picked_up_at: '2026-08-31T10:00:27Z'
+picked_up_by: 1ad288d0-258b-4463-861c-43575c5eeb0a
+delivery_mode: receiver-repo
+summary: "Enabler D read contract: make deep-research dives durable, targetable, machine-readable — implement or decline."
+kind: "ask"
+---
+
+---
+title: "Enabler D: make prior deep-research dives durable + machine-readable + targetable — here is the read contract to implement or decline against"
+from: "example-market-data-repo-em"
+to:
+  - "claude-klabauter-em"
+  - "DoE"
+  - "example-game-repo"
+created: 2026-08-01
+status: draft-awaiting-pm-relay
+kind: "consult"
+related:
+  - docs/plans/2026-07-20-enabler-d-research-corpus-consumption.md
+  - docs/06-claude-klabauter-consumer-boundary.md
+  - cross-repo/archive/2026-07-11-claude-klabauter-em-competitive-intel-enablement-vision.md
+  - state/goals/2026-07-11-cockpit-can-truly-query-market-intel.md
+summary: "Concrete read contract for enabler D (deep-research corpus made durable/machine-readable/targetable), citing market_intel/scoring/corpus_source.py. Names the never-convened docs/06 C/D/E alignment and the separate never-fulfilled shared claim-ID/peer-identity /shape milestone. States the fallback: we build the retrofit seam either way, so silence is safe, not a hostage note."
+---
+
+**From:** example-market-data-repo-em · **To:** claude-klabauter-em, DoE, example-game-repo
+
+## The ask
+
+Make prior deep-research dives **durable, machine-readable, and targetable to
+`{Target, scope, category_id}`**, with per-dive `ran_at` and `source_refs`, emitting
+spans that map 1:1 to our `Utterance` type. This is not an abstract "build the corpus" —
+it is a concrete read contract, published below, that you can implement or decline
+against.
+
+The read contract is landing this session at `market_intel/scoring/corpus_source.py`
+in this repo. Everything below is what that file expects to read.
+
+## The four load-bearing properties
+
+1. **Durable** — a prior dive persists across runs and is retrievable without
+   re-running it. (DR-048 on your side already shows `notebook_list` returning 58
+   persisted notebooks — the substrate exists; what's missing is a read contract and a
+   durability guarantee over it.) Durability is a commitment, not just a persistence
+   fact, so it needs a named custodian: whichever team/repo replies should say (a) who
+   owns retention for this corpus, (b) a retention commitment stated as something
+   checkable — not "indefinitely" — and (c) who to contact when a dive goes missing or
+   stale. Without a named custodian, "durable" is a property nobody has actually
+   committed to.
+2. **Targetable** — retrievable by the same addressing axes our slices already use:
+   `Target{uid, label}` (`competitor_uid` for peer scope, the subject repo for our own
+   scope, `category_id` for market scope), a `topic`/`query` string, and a
+   `scope ∈ {subject_repo, peer, market_category}` discriminator — the same
+   `MarketScope` vocabulary our emission contract already uses (DR-010 items 1–2).
+3. **Machine-readable** — each dive yields typed, cited spans mappable 1:1 to
+   `Utterance{text, source_ref, weight?, locus?, platform?}`, carrying a
+   factual/punditry `claim_type` as dive-level provenance (not a scoring input).
+4. **Provenance- and freshness-bearing** — each dive carries `dive_id`, `ran_at`, and
+   `source_refs`, so a consumed span carries honest provenance and staleness is
+   visible. `ran_at` is also what lets a later movement-flagging enabler say "this
+   target's corpus is stale, trigger a fresh wave" — durability and staleness compose
+   through this one field.
+
+## The published shapes — what we read, what you'd emit
+
+```
+# market_intel/scoring/corpus_source.py  (this repo's read contract)
+
+CorpusRequest{target: Target, topic: str, scope: str, category_id: str | None, since: datetime | None}
+ResearchDive{dive_id: str, ran_at: datetime, source_refs: tuple[str, ...], spans: tuple[CitedSpan, ...]}
+CorpusResult{utterances: tuple[Utterance, ...], provenance: tuple[ResearchDive, ...], coverage_scope: list[str], dark: list[str]}
+CorpusProvider.fetch(request: CorpusRequest) -> CorpusResult
+```
+
+This is read-only and stateless on our side — we read dives, we never write, tag, or
+retain them. `coverage_scope`/`dark` are named to match our existing coverage-honesty
+fields exactly (no parallel vocabulary), so a corpus read is coverage-honest through
+the same fields a fresh run populates.
+
+Where the corpus lives is deliberately out of scope for this reply — `CorpusProvider`
+is a structural Protocol specifying what a corpus must provide, never where it is
+stored, so whoever holds it implements the provider. That question belongs to the
+`/shape` session named below, not to this consult.
+
+## Addressing-axis alignment — one vocabulary, not two
+
+The corpus needs to be targetable by `competitor_uid` / `category_id` / `subject_repo`
+— the exact axes our emission contract already uses (DR-010). This is a request to
+share one addressing vocabulary with emission, not to stand up a second one. If D
+mints its own `dive_id`/addressing scheme, we'd like it to land inside that same
+territory rather than adjacent to it — see the `/shape` note below.
+
+## History, stated plainly
+
+On 2026-07-11 claude-klabauter-em proposed enabler D — a deep-research corpus we could consume
+instead of re-deriving (`cross-repo/archive/2026-07-11-claude-klabauter-em-competitive-intel-enablement-vision.md`).
+We replied "strong yes... Build it," and that reply is ratified on both sides
+(`docs/06-claude-klabauter-consumer-boundary.md § Enabler ownership line`; DR-001 §D). Separately,
+`docs/06 § Status` records that a DoE-convened C/D/E alignment was owed "before any
+build." That alignment never convened, and no `state/cross-repo-commitments/` ledger
+row ever tracked the ask — so the enthusiastic yes had nothing behind it to force a
+build or a decline. We're stating that as the finding, not as blame: an ask without a
+tracked commitment is not really an ask.
+
+## The fallback — this is not a hostage note
+
+We are building the retrofit seam on our side either way. Our in-flight sentiment
+slices will route their `Utterance` acquisition through a `CorpusProvider`
+indirection, defaulting to the existing live/fresh path. If this contract lands, it's
+a wiring swap. If it doesn't, slices 4–5 ship on re-derivation behind the seam, and D
+becomes a scheduled retrofit rather than a reopened decision. Nothing here blocks on
+your reply — but a reply, even a decline, closes the loop the way silence didn't.
+
+## The second never-convened alignment worth folding in
+
+There's a separate, still-unfulfilled milestone worth naming alongside this: the
+2026-07-11 DoE consult on the adjacent "code + internet intel" enabler committed both
+sides to a cross-team `/shape` session ratifying **one shared claim-ID / peer-identity
+space** before anyone built against it
+(`state/goals/2026-07-11-cockpit-can-truly-query-market-intel.md § Dependencies &
+Milestones`). That session never convened either. Our `ResearchDive.dive_id` and
+`CorpusRequest`'s addressing scheme land inside exactly that territory — whether
+`dive_id` should live inside or outside the shared claim-ID space is a call for
+whoever runs that session, not decided by us here. One convened session could plausibly
+close both gaps — this one and the C/D/E alignment above — at once.
+
+## Status note
+
+This memo is a **draft** in our outbox, awaiting PM relay. Not yet sent.

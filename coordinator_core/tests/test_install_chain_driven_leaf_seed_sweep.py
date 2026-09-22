@@ -177,7 +177,7 @@ def test_driven_leaf_seed_sweep_pickup(tmp_path: Path, monkeypatch: pytest.Monke
     template_text = template_path.read_text(encoding="utf-8")
     sweep_block = _extract_bash_block(template_text, _INSTALL_LEG_MARKER)
 
-    # Review: coordinator:code-reviewer — resolve the REAL rendezvous through
+    # Resolve the REAL rendezvous through
     # the same seam (`settings_home()`) the production seed/sweep code
     # honors, while HOME/CLAUDE_HOME/COORDINATOR_SETTINGS_HOME still carry the
     # developer's real values (the `real_home` opt-out). A hardcoded

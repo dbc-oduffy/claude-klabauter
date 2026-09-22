@@ -158,7 +158,7 @@ def _read_started_at(common_dir: Path, sid: str) -> str | None:
 # ---------------------------------------------------------------------------
 # Core git helper — defined here (before _scan_session_scratch) so callers-before-
 # helpers ordering is restored.  Session-specific git helpers follow after the scan.
-# Review: code-reviewer F7 — moved _git_run above _scan_session_scratch.
+# Moved _git_run above _scan_session_scratch.
 # ---------------------------------------------------------------------------
 
 
@@ -227,7 +227,7 @@ def _scan_session_scratch(
     worktree_root: Path,
     started_at: str | None,
 ) -> int | None:
-    # Review: code-reviewer F2 — sid parameter removed; function scans tasks/
+    # the Game Dev Reviewer parameter removed; function scans tasks/
     # unconditionally (all untracked post-started_at files, regardless of session
     # authorship) — sid presence contradicted this intent and was never used.
     """Count untracked scratch files under tasks/ authored after the session started_at.
@@ -252,7 +252,7 @@ def _scan_session_scratch(
     Exclusions applied (deterministic, rule-based — stays D per D/J boundary):
       1. Keep-list basenames: todo.md, plan.md, completion-log.md (feature-scoped artifacts).
       2. *.plan.md endswith-match; .completion substring-match (all positions).
-         Review: code-reviewer F3 — code uses 'in name' (any position), not suffix-only.
+         Code uses 'in name' (any position), not suffix-only.
       3. Git-tracked files (only UNTRACKED paths count as transient scratch).
 
     Namespace: tasks/ only (concrete, machine-enumerable session-scratch namespace).
@@ -297,7 +297,7 @@ def _scan_session_scratch(
         )
         return None
 
-    # Review: code-reviewer Finding 2 — .rglob("*") silently swallows
+    # .rglob("*") silently swallows
     # PermissionError while walking subdirectories (verified: a chmod-0o000
     # dir under it yields nothing, no exception raised), the same dead-guard
     # shape fixed elsewhere in this module (_scan_open_memos → iterdir(),

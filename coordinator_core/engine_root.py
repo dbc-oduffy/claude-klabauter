@@ -45,7 +45,7 @@ Negative-spec:
       from a long-lived process (e.g. a future op) where implicit env mutation on
       import-time-adjacent calls would be a surprising side effect. Callers that need
       the shell's idempotency-gate behavior opt in explicitly.
-      Review: code-reviewer — this note previously recorded a deliberate
+      This note previously recorded a deliberate
       ASYMMETRY against `coordinator_core.ops.coordinator_doe_root`, which did
       export `REPO_DOE_CLAUDE` to os.environ on every successful resolution to
       mirror ITS bash oracle's `export`. That asymmetry was retired on
@@ -353,7 +353,7 @@ def _load_shim() -> types.ModuleType:
         )
     spec = importlib.util.spec_from_file_location("_claude_klabauter_root_gate_shim", _SHIM_PATH)
     if spec is None or spec.loader is None:
-        # Review: code-reviewer — a bare `assert` here is stripped under
+        # A bare `assert` here is stripped under
         # `python -O`/PYTHONOPTIMIZE, degrading this fail-loud check to an
         # unguarded AttributeError two lines below; an explicit raise
         # survives an optimized run.
@@ -439,7 +439,7 @@ def _registry_mtime_pair(ml_dir: Path) -> Tuple[float, float, float]:
     `-1.0` for a missing file — cheap staleness key for the gate memo below.
     Never raises.
 
-    Review: code-reviewer — the `.claude-klabauter-live-root` sentinel mtime is included
+    The `.claude-klabauter-live-root` sentinel mtime is included
     because the full-gate branch's `_resolve_claude_klabauter_root` falls back to
     reading that sentinel when the registry key is absent; omitting it meant
     a mid-process edit to the sentinel could not invalidate the memo. A

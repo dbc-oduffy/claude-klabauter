@@ -126,7 +126,7 @@ def _project_row(goal_id: str, record: dict, *, default_repo: str = "") -> dict:
     row = {
         "goal_id": goal_id,
         "text": record.get("text", ""),
-        # Review: code-reviewer — must match the filter's own default_repo
+        # Must match the filter's own default_repo
         # (collect_open_day_goals's `record.get("repo", default_repo) != repo`)
         # so a legacy no-repo row scoped in via a non-empty default_repo is
         # projected back with the repo it was actually matched under, not "".
@@ -229,7 +229,7 @@ class GoalCloseDayLostSupersession(RuntimeError):
 class GoalCloseDayRootUnreadable(RuntimeError):
     """Raised when ``central_state_root`` could not be scanned on the write leg.
 
-    Review: code-reviewer — ``before.unreadable_error`` was previously never
+    ``before.unreadable_error`` was previously never
     inspected, so an unscannable root surfaced only incidentally as the generic
     "no open in-scope wire row" ``ValueError`` from the ``missing`` check below,
     misdiagnosing a permission/IO problem as a caller-supplied-bad-goal_id
@@ -317,7 +317,7 @@ def close_day_goals(
 
     before = read_and_collapse(Path(central_state_root), default_repo=default_repo)
     if before.unreadable_error is not None:
-        # Review: code-reviewer — checked explicitly rather than left to the
+        # Checked explicitly rather than left to the
         # incidental "every requested goal_id lands in `missing`" path below,
         # which reported a misdiagnostic "no open in-scope wire row" message.
         raise GoalCloseDayRootUnreadable(
@@ -335,7 +335,7 @@ def close_day_goals(
         if record.get("coordinator_root_path", ".") != coordinator_root_path:
             continue
         if not _row_is_open(record):
-            # Review: code-reviewer — a decision naming an already-done/dropped
+            # A decision naming an already-done/dropped
             # goal_id must NOT resolve to a source row; re-appending it would
             # silently overwrite the terminal status already on the wire via
             # the latest-wins collapse, rewriting the exact audit history the
@@ -446,7 +446,7 @@ def _goal_close_day(params: dict, repo_root: Optional[Path] = None) -> dict:
         params.get("repo") or ctx.repo_name,
         coordinator_root_path=params.get("coordinator_root_path", "."),
         today=params.get("today"),
-        # Review: code-reviewer — matches sections/goals.py:74's convention so a
+        # Matches sections/goals.py:74's convention so a
         # legacy no-repo row is attributed to the current repo instead of
         # silently falling out of scope via the "" != repo filter.
         default_repo=ctx.repo_name,
@@ -505,7 +505,7 @@ def _goal_close_day_apply(params: dict, repo_root: Optional[Path] = None) -> dic
         params.get("repo") or ctx.repo_name,
         params.get("decisions") or {},
         coordinator_root_path=params.get("coordinator_root_path", "."),
-        # Review: code-reviewer — matches sections/goals.py:74's convention; see
+        # Matches sections/goals.py:74's convention; see
         # goal.close_day's handler above for the same fix.
         default_repo=ctx.repo_name,
     )

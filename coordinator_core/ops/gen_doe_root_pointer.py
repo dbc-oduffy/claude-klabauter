@@ -423,7 +423,7 @@ def main(argv: List[str]) -> int:
                 print(f"doe_root_pointer: check: {pointer_file} up to date (no-op)")
                 return 0
 
-        # Review: code-reviewer (2026-07-17 Finding 1, ported from gen_claude_doe_launcher.py:247-249)
+        # code-reviewer (2026-07-17 Finding 1, ported from gen_claude_doe_launcher.py:247-249)
         # — hardcoded POSIX "/tmp" fallback crashed --check-only on real Windows (no TMPDIR there).
         # tempfile.gettempdir() resolves TMPDIR/TEMP/TMP per-platform.
         fd, tmp_path = tempfile.mkstemp(prefix="gen-doe-root-pointer.", dir=tempfile.gettempdir())

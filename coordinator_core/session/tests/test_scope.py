@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -100,7 +101,7 @@ def _agent_claim(agent_dir, *paths, owner_sid=None):
 
 
 def _make_repo(tmp_path):
-    # Review: staff-eng F12 — check=True on every fixture-setup git call: a
+    # check=True on every fixture-setup git call: a
     # silent fixture-setup failure (e.g. a misconfigured test-runner git)
     # must not masquerade as a passing test exercising an empty/unstaged
     # repo; fail loud at setup instead.
@@ -457,9 +458,75 @@ class TestTouchNormalization:
         assert result == "src/new.py"
         assert not scope._is_absolute(result)
 
+    def test_normalize_touch_path_unc_path_now_reaches_normalization_arms(
+        self, tmp_path, monkeypatch
+    ):
+        """Regression for bug-backlog
+        2026-08-08-ordinary-unc-paths-are-not-recognized-as-8b10c7e23d11.
+
+        For an unresolvable UNC share (the routine case -- the share is
+        outside this repo), the RETURNED value (``None``) is identical
+        before and after this fix: pre-fix, the old ``_ABSOLUTE_RE`` never
+        matched the path, so it fell through to the relative-arm dialect
+        fold, whose backslash-to-forward-slash canonicalization already
+        produced a leading-``/`` form the OLD regex's bare-``/`` alternative
+        caught, giving the same fail-open ``None``. Asserting on the return
+        value alone does not demonstrate this fix does anything -- what
+        actually changes is which code path the value comes FROM: pre-fix
+        the path is classified relative and never reaches ``ls-files``;
+        post-fix it is classified absolute and DOES reach it, the same
+        normalization arm every other absolute form (POSIX, drive-letter)
+        already goes through. Proven here via a ``_git_run`` spy, both with
+        the current (fixed) regex and with the old regex monkeypatched back
+        in, rather than via the return value.
+
+        Whether the ``ls-files``/``relpath`` arms compute the CORRECT
+        relative path for a UNC path that genuinely resolves inside a
+        UNC-rooted worktree is NOT exercised here, or anywhere in this
+        suite: this dev/test box is POSIX, where ``os.path`` (``posixpath``)
+        never treats a backslash as a separator, so a backslash-form UNC
+        path cannot exercise real path-component resolution on this
+        platform regardless of ``_ABSOLUTE_RE`` -- only on Windows does
+        ``os.path`` become ``ntpath``, whose ``splitdrive``/``realpath``/
+        ``relpath`` have documented native UNC support. Naming this
+        REASONED-AND-SOUND rather than claiming an execution this platform
+        cannot produce follows the same convention this module already uses
+        for the ``ascii_safe`` clause's macOS NFD/NFC claim above."""
+        repo = _make_repo(tmp_path)
+        unc = "\\\\server\\share\\xyz.py"  # abs-path-ok: synthetic UNC literal exercising the predicate, not a real machine path
+
+        calls: list = []
+        real_git_run = scope._git_run
+
+        def _spy(args, cwd=None):
+            calls.append(args)
+            return real_git_run(args, cwd)
+
+        monkeypatch.setattr(scope, "_git_run", _spy)
+
+        assert scope._is_absolute(unc) is True
+        assert scope.normalize_touch_path(unc, cwd=str(repo)) is None
+        assert any("ls-files" in c for c in calls), (
+            "a UNC path recognized as absolute must reach the ls-files "
+            "normalization arm, the same as any other absolute form"
+        )
+
+        calls.clear()
+        monkeypatch.setattr(scope, "_ABSOLUTE_RE", re.compile(r"^(?:/|[A-Za-z]:)"))
+        assert scope._is_absolute(unc) is False
+        assert scope.normalize_touch_path(unc, cwd=str(repo)) is None
+        assert calls == [], (
+            "pre-fix (old _ABSOLUTE_RE), a UNC path was never classified "
+            "absolute, so it never reached ls-files at all -- the fail-open "
+            "None came entirely from the relative-arm dialect fold instead"
+        )
+
     def test_is_absolute_predicate(self):
         assert scope._is_absolute("/etc/passwd") is True
         assert scope._is_absolute("C:/Users/x") is True  # abs-path-ok: synthetic drive-letter literal exercising the predicate, not a real machine path
+        assert scope._is_absolute("\\\\server\\share\\file.txt") is True  # abs-path-ok: synthetic UNC literal exercising the predicate, not a real machine path
+        assert scope._is_absolute("\\\\?\\C:\\foo") is False  # abs-path-ok: synthetic extended-length literal exercising the predicate, not a real machine path
+        assert scope._is_absolute("\\\\?\\UNC\\server\\share") is False  # abs-path-ok: synthetic extended-length UNC literal exercising the predicate, not a real machine path
         assert scope._is_absolute("src/foo.py") is False
         assert scope._is_absolute("") is False
 
@@ -631,15 +698,18 @@ class TestNormalizeTouchPathSpawnCount:
         of (named in C2a's brief). The regression this test protects (a
         non-benign ``ls-files`` failure must still arm the latch) is now
         exercised via a guard-INeligible, still-IN-worktree input (a
-        directory-shaped path, which fails ``_clause_not_a_directory`` and
-        always falls through to the unchanged ``ls-files``-first body) so the
+        non-ASCII-named path, which fails ``_clause_ascii_safe`` and always
+        falls through to the unchanged ``ls-files``-first body) so the
         ``ls-files`` mock is actually reached AND the failure is not
         classified benign (an out-of-worktree path would be classified
         benign via ``_path_is_outside_worktree`` regardless of the mocked
-        ``ls-files`` failure, which would make this regression untestable)."""
+        ``ls-files`` failure, which would make this regression untestable).
+        A directory-shaped path no longer reaches ``ls-files`` at all here
+        (bug-backlog ``2026-08-08-a-directory-shaped-input-to-normalize-to-
+        3779939b507e``, fixed), so it can no longer serve as this test's
+        guard-ineligible vehicle."""
         repo = _make_repo(tmp_path)
-        target = repo / "src"
-        target.mkdir()
+        target = repo / "café.md"
 
         def _broken_ls_files(args, cwd=None):
             return scope.GitResult(returncode=128, stdout="", stderr="fatal: index corrupt", timed_out=False)
@@ -810,14 +880,12 @@ class TestFastArmGuardClausesPinned:
         """Clause (``not_a_directory``, plan brief's "clause 2") — a
         directory-shaped ``fpath``: ``realpath(dir) == abspath(dir)`` so
         clause 1 passes, and the candidate is a non-empty ASCII repo-relative
-        string, so only this clause declines. NOTE the pre-existing defect
-        filed at ``2026-08-08-a-directory-shaped-input-to-normalize-to-
-        3779939b507e`` -- ``git ls-files -- <dir>`` lists everything under
-        it and the fallback keeps only ``lines[0]``, an unrelated sibling
-        file. The call-site assertion below is therefore DELIBERATELY
-        WEAKENED to "the fallback was taken" (spawn count), NOT "the return
-        value is correct" -- do not strengthen this without first fixing
-        that filed defect."""
+        string, so only this clause declines, routing to the ``ls-files``
+        fallback arm. That fallback arm carries its own directory guard (the
+        defect filed at ``2026-08-08-a-directory-shaped-input-to-normalize-
+        to-3779939b507e``, fixed): it now short-circuits to the ``None``
+        fail-open skip signal before ever spawning ``ls-files``, rather than
+        keeping ``ls-files``'s ``lines[0]`` (an unrelated sibling file)."""
         repo = _make_repo(tmp_path)
         (repo / "src").mkdir()
         (repo / "src" / "a.py").write_text("y")
@@ -834,8 +902,29 @@ class TestFastArmGuardClausesPinned:
         monkeypatch.undo()
 
         calls = _spawn_spy(monkeypatch)
-        scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
-        assert calls["git_run"] >= 1  # fallback was taken -- see defect note above
+        result = scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
+        assert result is None
+        assert calls["git_run"] == 0  # directory guard declines before spawning ls-files
+
+    def test_directory_shaped_absolute_input_does_not_record_sibling_file(
+        self, tmp_path
+    ):
+        """Regression for bug-backlog ``2026-08-08-a-directory-shaped-input-
+        to-normalize-to-3779939b507e``: the ``ls-files`` fallback arm, taken
+        with no ``root`` supplied (a genuine root-less caller shape, e.g.
+        ``relocate_touched_path`` -- NOT :func:`classify_touch_entry`, whose
+        own call site always passes a truthy ``root`` and instead reaches
+        this same arm because ``_clause_not_a_directory`` declines the fast
+        arm for a directory-shaped input), must not resolve a
+        directory-shaped ``fpath`` to the first tracked file under it."""
+        repo = _make_repo(tmp_path)
+        (repo / "d").mkdir()
+        (repo / "d" / "a.txt").write_text("y")
+        subprocess.run(["git", "add", "d/a.txt"], cwd=str(repo), check=True, **no_console_passthrough_kwargs())
+        subprocess.run(["git", "commit", "-m", "add d/a.txt"], cwd=str(repo), check=True, **no_console_passthrough_kwargs())
+        target = repo / "d"
+
+        assert scope.normalize_touch_path(str(target), cwd=str(repo)) is None
 
     def test_clause5_root_is_worktree_root_pinned_declining(self, tmp_path, monkeypatch):
         """Clause 5 (``root_is_worktree_root``) — ``root`` is a real,
@@ -1043,6 +1132,20 @@ class TestNormalizeTouchPathDifferential:
             target.unlink(missing_ok=True)
 
     def test_directory_shaped(self, tmp_path, pre_c1_scope):
+        """The one class in this table where ``old`` and ``new`` are
+        EXPECTED TO DIVERGE, not agree: bug-backlog ``2026-08-08-a-
+        directory-shaped-input-to-normalize-to-3779939b507e`` (fixed by this
+        change) is exactly the defect this input class exercises. ``old``
+        (the unedited pre-guard implementation loaded from a historical
+        commit, unaffected by this fix) still reproduces it -- ``git
+        ls-files -- <dir>`` lists every file under the directory and the arm
+        keeps ``lines[0]`` unconditionally, so ``old`` resolves to the
+        unrelated sibling file ``src/a.py``. ``new`` carries the fix's
+        directory guard and returns ``None`` (the fail-open skip signal)
+        instead, per ``_clause_not_a_directory``/the ``ls-files`` arm's own
+        ``os.path.isdir`` check. Mirrors ``test_symlink_or_junction_
+        traversed``'s pattern of documenting a legitimate old/new
+        divergence rather than asserting blind equality."""
         repo = _make_repo(tmp_path)
         (repo / "src").mkdir()
         (repo / "src" / "a.py").write_text("y")
@@ -1051,7 +1154,8 @@ class TestNormalizeTouchPathDifferential:
         target = repo / "src"
         old = pre_c1_scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
         new = scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
-        assert new == old
+        assert old == "src/a.py"  # the defect's own historical symptom, pinned
+        assert new is None
 
     def test_non_ascii_tracked(self, tmp_path, pre_c1_scope):
         repo = _make_repo(tmp_path)
@@ -2022,7 +2126,7 @@ class TestC0AgentDirJsonlOnlyUnion:
         representation in the record dialect first; do not restore it by
         reviving a second reader for a dialect nothing writes.
 
-        Review: code-reviewer P1 — the rewrite pinned `orphans`/`skipped`
+        The rewrite pinned `orphans`/`skipped`
         membership but never pinned `result.indeterminate`, which is the one
         field that decides whether this orphan is safe to fold into an
         adoption allow-list (`orphans - skipped`, see `ScopeResult.orphans`'s
@@ -2343,7 +2447,7 @@ class TestComputeScopeLiveness:
             lambda cwd=None: frozenset({"bystander"}),
         )
         dead_result = scope.compute_scope("bystander", cwd=str(repo))
-        # Review: staff-eng F3 — pin the SPECIFIC disposition rather than
+        # Pin the SPECIFIC disposition rather than
         # the my_scope-or-orphans disjunction that used to stand in here.
         # "bystander" never touched this path (it is not in bystander's own
         # touched.txt), so once the dead em-owner's claim stops contesting
@@ -2484,7 +2588,7 @@ class TestComputeScopeLiveness:
     def test_git_dirty_scan_failure_disables_prune_and_liveness_live_peer_still_skips(
         self, tmp_path, monkeypatch
     ):
-        """Review: staff-eng F0 regression test. Both `_git_output` calls
+        """staff-eng F0 regression test. Both `_git_output` calls
         that populate `dirty_files_set` return None on failure and are
         swallowed by `or ""` -- an empty dirty set previously read as
         "every peer claim is stale", pruning EVERY peer claim including a
@@ -2515,7 +2619,7 @@ class TestComputeScopeLiveness:
     def test_self_liveness_canary_disables_gating_when_own_sid_missing(
         self, tmp_path, monkeypatch
     ):
-        """Review: staff-eng F1 regression test. `live_ids` non-empty but
+        """staff-eng F1 regression test. `live_ids` non-empty but
         missing THIS session's own sid, while this session's own dir
         exists on disk, is treated as an unreliable enumeration (not "I am
         dead") -- gating disables and the pre-existing unconditional
@@ -2541,7 +2645,7 @@ class TestComputeScopeLiveness:
     def test_dead_peer_untouched_dirty_file_becomes_orphan_not_silently_owned(
         self, tmp_path, monkeypatch
     ):
-        """Review: staff-eng F6 regression test, pinning the orphan-
+        """staff-eng F6 regression test, pinning the orphan-
         disposition change referenced by compute_scope's own docstring: a
         dirty path claimed ONLY by a now-dead peer, and never touched by
         THIS session, used to read as "owned" (excluded from orphans)
@@ -2568,7 +2672,7 @@ class TestComputeScopeLiveness:
     def test_real_live_session_ids_no_monkeypatch_dead_peer_claim_releases(
         self, tmp_path
     ):
-        """Review: staff-eng F3 — one no-monkeypatch integration test
+        """One no-monkeypatch integration test
         routing through the REAL `liveness.live_session_ids`, per
         `state/lessons/2026-07-12-mock-the-bridge-tests-can-t-catch-vacuou-
         5146e5a025e5.yaml`: every other test in this class stubs
@@ -2589,7 +2693,7 @@ class TestComputeScopeLiveness:
         (P1). Do NOT edit this test to pass — its redness is the correct,
         documented state.
 
-        Review: coordinator:code-reviewer P3 — this docstring previously
+        This docstring previously
         named `TestReleaseCommittedClaims::
         test_b1_stale_peer_claim_on_a_clean_path_releases` as pinning B1's
         release-path deliverable separately; that test no longer exists
@@ -2701,7 +2805,7 @@ class TestComputeScopeLiveness:
     def test_undetermined_liveness_abandoned_peer_claim_still_withheld(
         self, tmp_path, monkeypatch
     ):
-        """Review: coordinator:code-reviewer P1 (coordinatorcode-reviewer-
+        """
         1da5144e.md), Step 3 site. `live_ids is None` (undetermined
         liveness) must NEVER reach `session_abandoned` — a peer whose dir
         reads abandoned while liveness itself could not be resolved must
@@ -2748,7 +2852,7 @@ class TestComputeScopeLiveness:
     def test_undetermined_liveness_abandoned_peer_agent_claim_still_withheld(
         self, tmp_path, monkeypatch
     ):
-        """Review: coordinator:code-reviewer P1 (coordinatorcode-reviewer-
+        """
         1da5144e.md), Step 3b site -- the sub-agent-claim twin of the test
         above, keyed on the back-pointed owning `em_sid` rather than a
         direct session claim. Same shape: `live_session_ids` stubbed empty
@@ -3557,7 +3661,7 @@ class TestAC8DefensiveHistoricalNormalization:
     def test_asymmetric_multi_level_peer_poisoning_does_not_silently_drop_live_claim(
         self, tmp_path, monkeypatch
     ):
-        """Review: code-reviewer Finding 1 (sidecar
+        """
         coordinatorcode-reviewer-359b224b.md) — the asymmetric case the
         symmetric-drop argument missed: THIS session's own candidate for a
         real in-tree file is clean, while a LIVE peer's entry for the SAME
@@ -3742,6 +3846,29 @@ class TestClassifyTouchEntry:
         repo = _make_repo(tmp_path)
         key = scope.normalize_peer_claim_key("../foo.py", repo)
         assert key == "foo.py"
+
+    def test_absolute_tracked_entry_takes_zero_spawn_fast_arm(
+        self, tmp_path, monkeypatch
+    ):
+        """Regression for the per-item ``git ls-files`` spawn on the
+        ``compute_scope`` candidate-normalization path (bug-backlog
+        2026-08-25-compute-scope-costs-1198ms-over-34-ls-files-spawns.yaml):
+        `classify_touch_entry` calls `normalize_touch_path` with `cwd` but
+        without `root`, so the zero-spawn fast arm
+        (`TestNormalizeTouchPathSpawnCount`, `_touch_path_fast_arm_eligible`)
+        never engages here even though `worktree_root` IS the worktree root
+        this call already has in hand — every absolute entry pays a real
+        `git ls-files` spawn instead of the zero-spawn candidate the fast arm
+        exists to provide. Passing `worktree_root` through as `root` too
+        lets an eligible absolute, in-worktree entry resolve via the fast
+        arm."""
+        repo = _make_repo(tmp_path)
+        calls = _spawn_spy(monkeypatch)
+        target = repo / "README.md"
+        outcome = scope.classify_touch_entry(str(target), repo)
+        assert outcome.entry_class == "absolute_rescued"
+        assert outcome.new_value == "README.md"
+        assert calls == {"git_run": 0, "git_root": 0}
 
 
 class TestClassifyTouchEntryAC1EndToEnd:
@@ -4491,7 +4618,7 @@ class TestReleaseCommittedClaims:
         assert "cycle.py" not in projection2.claims
 
     def test_renamed_path_is_releasable(self, tmp_path):
-        """Review: code-reviewer Finding 3 -- a real `git mv` + commit must
+        """A real `git mv` + commit must
         release cleanly through the RENAMED (new) path. Retained post PM
         ruling 2026-08-26 as a plain releasability pin: there is no more
         worktree-cleanliness check to spuriously fail via the old name --
@@ -4582,6 +4709,65 @@ class TestReleaseCommittedClaims:
 
         scope.release_committed_claims("s-rel10", ["untouched.py"], cwd=str(repo))
         assert record.stat().st_mtime_ns == mtime_before
+
+
+class TestReleaseAllCommittedClaims:
+    """Pins `release_all_committed_claims` (bug-backlog `2026-08-19-
+    completed-but-alive-session-holds-touche-27e0ba000d69`): a
+    workstream-complete close route that releases only its own commit's
+    `stage_paths` leaves every OTHER path the session ever touched
+    permanently `T`-claimed once the session has no future commit left to
+    release it with. `release_all_committed_claims` must retire the
+    session's WHOLE held claim surface, not a caller-named subset."""
+
+    def test_releases_every_claimed_path_not_just_the_named_subset(self, tmp_path):
+        """The bug row itself: a `stage_paths`-scoped release leaves a
+        touched-but-unstaged path (`scratch.md`) permanently claimed once
+        the narrow release has already run; the full release must still
+        retire it."""
+        repo = _make_repo(tmp_path)
+        core.init("s-relall1", cwd=str(repo))
+        (repo / "committed.py").write_text("x")
+        (repo / "scratch.md").write_text("y")
+        scope.touch("s-relall1", "committed.py", cwd=str(repo))
+        scope.touch("s-relall1", "scratch.md", cwd=str(repo))
+
+        # The narrow, stage_paths-scoped release this bug names: a session
+        # closing with a final commit that covers only ONE of its two
+        # touched paths.
+        scope.release_committed_claims("s-relall1", ["committed.py"], cwd=str(repo))
+
+        record = _sdir(repo, "s-relall1") / "touch-record.jsonl"
+        projection = touch_record.project_live_claims(record, cwd=str(repo))
+        assert "committed.py" not in projection.claims
+        assert "scratch.md" in projection.claims  # the defect this fix closes
+
+        scope.release_all_committed_claims("s-relall1", cwd=str(repo))
+
+        projection = touch_record.project_live_claims(record, cwd=str(repo))
+        assert "scratch.md" not in projection.claims
+        assert "committed.py" not in projection.claims
+
+    def test_no_claims_is_a_no_op(self, tmp_path):
+        """A session with an initialized record but zero `T`-claims must
+        not raise -- the empty-claim-set case is as legitimate a "nothing
+        to release" as `test_ac10_no_op_release_performs_no_write`'s
+        never-claimed-path case above."""
+        repo = _make_repo(tmp_path)
+        core.init("s-relall2", cwd=str(repo))
+
+        # Must not raise on a session with nothing claimed.
+        scope.release_all_committed_claims("s-relall2", cwd=str(repo))
+
+    def test_falsy_sid_is_a_no_op(self, tmp_path):
+        """No session dir is resolvable for an empty sid -- must degrade to
+        a no-op rather than guessing at authorship, the same posture
+        `_release_committed_path_claims`'s falsy-`session_id` skip takes
+        one layer up."""
+        repo = _make_repo(tmp_path)
+
+        # No session dir resolvable for an empty sid -- must not raise.
+        scope.release_all_committed_claims("", cwd=str(repo))
 
 
 class TestCrossDialectClaimCancellation:

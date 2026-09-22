@@ -12,8 +12,10 @@ same-repo sibling import, and there is nothing on the other side of a
 process boundary to resolve or arm.
 
 Op contract (matches `hooks.preuse_write_dispatch`, this row's own sibling):
-`params` is the flat PreToolUse payload dict (`tool_name`, `tool_input`,
-`session_id`, `cwd`, `agent_id`, …) — the SAME shape
+the PreToolUse payload (`tool_name`, `tool_input`, `session_id`, `cwd`,
+`agent_id`, …) reaches this handler in either of the two shapes callers send —
+wrapped as `params["payload"]` by both engine doors, flat by the cold chain —
+and `_envelope.payload_of` reads both. That payload is the SAME shape
 `evaluate_payload_json`'s raw-JSON-string parameter decodes to, so this
 handler's only reshaping is one `json.dumps` re-serialisation (the chain's
 own documented parse-once contract; mirrors
@@ -66,7 +68,7 @@ from __future__ import annotations
 
 import json
 
-from coordinator_core.hooks._envelope import no_advisory
+from coordinator_core.hooks._envelope import no_advisory, payload_of
 from coordinator_core.ipc import register_op
 
 
@@ -75,12 +77,22 @@ async def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Bash|PowerShell) op: run the full bash-guard chain against
     this payload and return its verdict.
 
-    `params` is the flat PreToolUse payload as received. `repo_root` is
-    accepted (the handler signature contract) and unused — the chain derives
-    `cwd` from the payload itself, exactly as every cold invocation always
-    has.
+    `params` is the JSON-RPC params dict; the PreToolUse payload is
+    `params["payload"]`, the shape `warm/hook_http.py :: payload_from_event`
+    builds and which BOTH doors send (`hook_http.build_request` and
+    `coordinator/bin/hook-run.py`). `repo_root` is accepted (the handler
+    signature contract) and unused — the chain derives `cwd` from the payload
+    itself, exactly as every cold invocation always has.
+
+    See `_envelope.payload_of` for why the two shapes must be normalised
+    here rather than assumed: reading the wrong one fails open (silent
+    ALLOW), never a visible error.
+
+    NEGATIVE SPEC: never refuse the flat shape -- the cold DoE guard chain
+    sends it, and must keep reaching the same verdict the doors do.
     """
-    if not isinstance(params, dict):
+    params = payload_of(params)
+    if not params:
         return no_advisory()
 
     try:

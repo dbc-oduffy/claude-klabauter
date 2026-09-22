@@ -36,7 +36,7 @@ pytestmark = [
 
 
 def _git(cwd, *args, **kwargs):
-    # Review: code-reviewer Finding 3 -- caller kwargs win over the helper's
+    # Caller kwargs win over the helper's
     # own suppression instead of colliding on a shared key (e.g. creationflags).
     run_kwargs = {**no_console_creationflags(), **kwargs}
     return subprocess.run(
@@ -93,7 +93,7 @@ def test_not_a_git_repo(tmp_path):
 
 
 def test_clean_tree_is_noop(tmp_path, capsys):
-    # Review: code-reviewer (Finding 5) -- locks the "stdout is always empty, messages
+    # Locks the "stdout is always empty, messages
     # on stderr only" contract; a future print(...) without file=sys.stderr would show
     # up on stdout and this test would catch it.
     d = _new_repo(tmp_path)
@@ -227,14 +227,14 @@ def test_phantom_dirty_entry_cleared_or_skipped(tmp_path, capsys):
     assert "phantom.txt" not in _staged_names(d)
     assert "realB.txt" in _worktree_diff_names(d)
     assert _rev_parse(d, ":sibB.txt") == sib_staged_before
-    # Review: code-reviewer (Finding 5) -- the refreshed-phantom success path is the
+    # The refreshed-phantom success path is the
     # other case the dispatch brief called out for the stdout-empty contract.
     captured = capsys.readouterr()
     assert captured.out == ""
 
 
 def test_leading_dash_filename_add_pathspec_safe(tmp_path):
-    """Review: code-reviewer (Finding 6) -- `_git_add_pathspec_from_stdin`'s docstring
+    """`_git_add_pathspec_from_stdin`'s docstring
     documents "safe for leading-dash / space-containing names" (the NUL-safe
     pathspec-from-stdin approach can't be misparsed as a git flag) but no existing test
     exercised a leading-dash name; this directly locks that hazard against the helper
@@ -251,7 +251,7 @@ def test_leading_dash_filename_add_pathspec_safe(tmp_path):
 
 
 def test_git_add_refresh_failure_exits_1(tmp_path, monkeypatch):
-    """Review: code-reviewer (Finding 3) -- no existing test drove
+    """No existing test drove
     `_git_add_pathspec_from_stdin` to return False (the documented `git add
     --ignore-errors` refresh-failure exit-1 branch). A genuine EOL phantom can't be
     manufactured cross-platform (see test_phantom_dirty_entry_cleared_or_skipped), so
@@ -284,7 +284,7 @@ def test_git_add_refresh_failure_exits_1(tmp_path, monkeypatch):
     ],
 )
 def test_first_probe_failure_exits_1(tmp_path, monkeypatch, helper_name, expected_snippet):
-    """Review: code-reviewer (Finding 4) -- no test exercised any of the `git diff`/
+    """No test exercised any of the `git diff`/
     `git ls-files` subprocess-failure exit-1 branches; this covers the two first-pass
     probes (snapshot 1 `git diff` and `git ls-files -m`)."""
     d = _new_repo(tmp_path)
@@ -301,7 +301,7 @@ def test_first_probe_failure_exits_1(tmp_path, monkeypatch, helper_name, expecte
 
 
 def test_second_diff_probe_failure_exits_1(tmp_path, monkeypatch):
-    """Review: code-reviewer (Finding 4) -- covers the third exit-1 branch: the
+    """Covers the third exit-1 branch: the
     re-confirmation `git diff` (snapshot 2) taken immediately before staging."""
     d = _new_repo(tmp_path)
     _lf(d / "phantom.txt")

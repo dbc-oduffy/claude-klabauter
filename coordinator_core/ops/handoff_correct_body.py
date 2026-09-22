@@ -666,7 +666,7 @@ async def _handler(
         # a path it read back from a prior archive-follow response). Detect
         # that case from the resolved root rather than assuming "is_file()
         # true here always means live".
-        # Review: staff-eng chain-review F1 — a bare `Path.relative_to` here
+        # A bare `Path.relative_to` here
         # drops `contained_path`'s Windows extended-length-prefix (`\\?\`)
         # defence: `resolve()` adds that prefix to one operand and not the
         # other on a real Windows host with a long path, `relative_to` raises
@@ -865,7 +865,7 @@ async def _handler(
         # desynced/empty; a live ledger claim by a DIFFERENT session still
         # fails this comparison and falls through to the author/neither arms
         # exactly as a mismatched `claimed_by` always did.
-        # Review: staff-eng chain-review F3 — the author arm already runs
+        # The author arm already runs
         # `_is_sentinel_or_malformed_session`; without the same check here a
         # scaffold/sentinel holder value (`none`/`null`/`PLACEHOLDER`, live
         # corpus shapes) is a skeleton key any caller can match by setting

@@ -285,7 +285,7 @@ def test_generated_windows_siblings_not_inventoried_as_independent_oracles(tmp_p
 
 
 def test_known_old_path_extensions_parity_with_fleet_reachability() -> None:
-    """Review: code-reviewer (Finding 4, nit) -- drift-visibility pin for
+    """drift-visibility pin for
     `_KNOWN_OLD_PATH_EXTENSIONS`'s intentional, documented divergence from
     `fleet_reachability._KNOWN_ORACLE_EXTENSIONS` (see this module's own
     comment above `_KNOWN_OLD_PATH_EXTENSIONS` for why the two hand-kept
@@ -304,7 +304,7 @@ def test_known_old_path_extensions_parity_with_fleet_reachability() -> None:
 
 
 def test_external_old_repo_entry_does_not_dispose_future_disappearance(tmp_path: Path) -> None:
-    """Review: code-reviewer (Finding 1, P1) -- regression for the
+    """Regression for the
     "vaccination" bug: a ledger entry recording a DIFFERENT repo's
     relocation INTO claude-klabauter (`old_repo` != claude-klabauter's own self id) must NOT
     silently explain away a later, unrelated disappearance of a

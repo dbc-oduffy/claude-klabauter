@@ -130,7 +130,7 @@ def split_frontmatter(text: str) -> FrontmatterSplit | None:
     text = text.replace('\r\n', '\n')
 
     preamble = ''
-    # Review: code-reviewer — F3: JS uses /^---\s*\n/ so `---yaml` is rejected; tighten to regex
+    # JS uses /^---\s*\n/ so `---yaml` is rejected; tighten to regex
     if not re.match(r'^---[ \t]*\n', text):
         m = _PREAMBLE_RE.match(text)
         if not m:
@@ -303,7 +303,7 @@ def _split_trailing_comment(raw: str) -> tuple[str, str]:
         quoted_end = 0
 
     tail = raw[quoted_end:]
-    # Review: code-reviewer — Finding 1 (P1): a glued `#` (data, not comment-
+    # A glued `#` (data, not comment-
     # eligible) used to make this function give up entirely via a bare
     # `return raw, ''`, so a LATER, genuinely space-preceded `#` starting a
     # real comment was never found (`abc#def  # real comment` dropped the
@@ -960,7 +960,7 @@ def insert_fm_field_raw(fm: str, key: str, raw_value: str, after_key: str | None
     ``insert_fm_field``'s anchored/append-only line-ending discipline
     exactly — only the value's construction differs.
 
-    Review: coordinator:code-reviewer — the insert branch of
+    The insert branch of
     ``coordinator-doc-new::_mutate_sizing_reverse_edge`` used to call
     ``insert_fm_field`` with a raw unquoted path, so a first-time scaffold
     left ``plan:`` bare while a re-run (replace branch, which already used a
@@ -1015,7 +1015,7 @@ def remove_fm_field(fm: str, key: str) -> str:
 
     Spec backlink: coordinator/bin/memo-transition.js:126-132 (removeFmField).
     """
-    # Review: code-reviewer — F1: block-scalar guard mirrors replace_fm_field.
+    # block-scalar guard mirrors replace_fm_field.
     # Removing only the key line of a block-scalar orphans indented continuation
     # lines, silently corrupting the frontmatter.
     current = read_fm_field(fm, key)

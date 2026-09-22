@@ -285,7 +285,7 @@ def rewrite_file(
 
     if changed:
         new_content = "".join(new_lines)
-        # Review: code-reviewer P2 — atomic write (mkstemp sibling + os.replace,
+        # Atomic write (mkstemp sibling + os.replace,
         # same idiom as coordinator_core.locked_write.locked_rmw) rather than a
         # plain open(..., "w") over the live path. This rewriter mutates real
         # docs/plans/*.md corpus files in place; a kill mid-write must never

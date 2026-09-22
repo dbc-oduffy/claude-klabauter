@@ -131,7 +131,7 @@ class TestYamlEditIsLowerFriction:
 
 
 class TestMultiEditJustificationScopeIsWholeCall:
-    """Review: code-reviewer P2 -- `_gather_new_content()` joins every edit's
+    """`_gather_new_content()` joins every edit's
     `new_string` for a MultiEdit call, so a `justification:` line attached to
     one edit satisfies the escape for a co-occurring, unrelated, unjustified
     entry in the SAME call. This is a documented, KEPT trade (module

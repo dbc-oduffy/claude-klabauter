@@ -115,6 +115,18 @@ chose a one-time recorded derivation ("one derivation, recorded, consumed")
 for a retiring workstream. This module diverges deliberately: the ratchet
 here is a STANDING, per-surface, continuously-enforced watermark living in
 the ledger C7a already reads, not a one-time snapshot.
+
+DEPENDENCY DIRECTION (stated explicitly, C7b): the per-heading ADMISSION
+PREDICATE -- which heading of a governed surface may change, and why -- is
+C7a's `_claude_md_ledger.py`, and it reads DoE-owned working data (the
+`state/audits/*-classification.md` disposition rows), so it stays
+DoE-resident. This module never grows an admission predicate of its own; it
+only re-implements the WATERMARK GRAMMAR (a byte total plus a reason) that
+same ledger file already carries, read as plain text with no cross-repo
+Python import (see REJECTED above). Hosting the admission predicate itself
+engine-side (here) would invert that direction -- claude-klabauter would then depend
+on DoE-authored working data as an input to a control-plane decision, the
+opposite of the tri-plane's DoE-authors/claude-klabauter-consumes layering.
 """
 
 from __future__ import annotations

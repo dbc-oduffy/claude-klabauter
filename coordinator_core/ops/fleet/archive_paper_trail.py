@@ -234,7 +234,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
         # Nothing git-tracks in an empty workdir tree — remove the leftover
         # dir tree (if any) so a later call sees src as genuinely gone, and
         # report a non-mutating no-op (there was nothing to archive).
-        # Review: code-reviewer (F3) — a single flat src.rmdir() fails with
+        # A single flat src.rmdir() fails with
         # OSError whenever src contains empty nested subdirectories (dir not
         # empty), silently stranding src forever across every subsequent
         # call. Mirror the success-path cleanup below: remove nested empty

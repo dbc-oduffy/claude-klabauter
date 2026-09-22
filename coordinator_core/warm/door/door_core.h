@@ -280,32 +280,43 @@ int door_argv_declares_params_stdin(int argc, const char *const *argv);
  * would then no longer be honest about. */
 int door_basename_declares_stdin_read(const char *basename);
 
+/* Appends the top-level `hook_event_name` string of the hook payload `json`
+ * to `out` (caller `buf_init`s first), NUL-terminated. Returns 0 when the
+ * payload is not an object or carries no such string. */
+int door_hook_event_name(const char *json, size_t len, buf_t *out);
+
+/* Builds `hook_http.unreachable_response`'s shape -- exit-0 body, no
+ * `permissionDecision`, a `systemMessage` for the operator and, for a named
+ * event other than `SessionEnd` (which rejects it), a nested
+ * `hookSpecificOutput` carrying that event name and `additionalContext` for
+ * the model -- into `out` (caller `buf_init`s first), with a trailing
+ * newline. `event_name` NULL or empty -> the `systemMessage` alone, since a
+ * wrong `hookEventName` fails the harness's validation. Returns 1 on success.
+ *
+ * WHAT HOOK MODE EMITS WHEN THE ENGINE IS DOWN: no cold entrypoint, a cold
+ * leg that could not start, exited nonzero or wrote nothing. An unreachable
+ * engine PASSES LOUDLY, never denies -- these guards are ergonomics, and a
+ * deny here walled off every Bash call on the box (DoE-claude
+ * coordinator/docs/wiki/coordinator-tripwires/an-unreachable-engine-passes-
+ * loudly-never-denies.md). Loud, so an unrun guard never reads as one that
+ * passed. Built here so the two doors cannot drift. */
+int build_hook_pass_loudly_envelope(buf_t *out, const char *reason, const char *event_name);
+
 /* Builds `{"hookSpecificOutput":{"hookEventName":"PreToolUse",
  * "permissionDecision":"deny","permissionDecisionReason":"<reason>"}}`
  * into `out` (which the caller must `buf_init` first), appending a
  * trailing newline. Returns 1 on success.
  *
- * THE HOOK-MODE FAIL-CLOSED DISPOSITION. `door.c`'s and `door_posix.c`'s
- * shipped safety property is "on any doubt, fall through to the cold
- * Python entrypoint" (see either file's own module docstring) -- exactly
- * right for an ordinary op invocation, exactly wrong for a guard: a hook
- * that falls through has not been consulted, and for a PreToolUse hook
- * the fall-through cost is an interpreter start on every Bash call, the
- * very thing the door exists to avoid. A caller that declared hook mode
- * (`DOOR_STDIN_MODE_HOOK_VALUE`) gets THIS envelope at every point that
- * would otherwise fall through, instead -- the same
- * `{"hookSpecificOutput":...}` shape every Bash guard in this repo already
- * authors for a deny verdict (e.g.
- * `coordinator_core/bash_guards/block_approval_sentinel_creation.py`),
- * with a reason naming the door so a transcript reader can tell which
- * layer refused.
+ * USED NOW ONLY FOR A PAYLOAD FAULT: stdin over the bound, unreadable, or
+ * no memory to hold it. That is not the engine being down -- the payload
+ * itself cannot be carried to any guard, warm or cold. Engine-down gets
+ * `build_hook_pass_loudly_envelope` above.
  *
- * DR-367 ("cold fall-through succeeds, loudly") is NOT reversed by this.
- * Its own non-license clause already excludes a warm server that is
- * reachable and answers no -- a hook whose endpoint is dead (unreachable)
- * is the case DR-367 never covered, and denying is the correct answer for
- * it precisely because a caller that declared hook mode asked to be
- * guarded, not merely dispatched. */
+ * Same `{"hookSpecificOutput":...}` shape every Bash guard in this repo
+ * authors for a deny (e.g.
+ * `coordinator_core/bash_guards/block_approval_sentinel_creation.py`), with
+ * a reason naming the door so a transcript reader can tell which layer
+ * refused. */
 int build_hook_deny_envelope(buf_t *out, const char *reason);
 
 /* =========================================================================

@@ -51,22 +51,31 @@ def _write_sidecar(
     receipt_session_id: str | None = None,
     key: str = "review_receipt",
     name: str = "coordinatorcode-reviewer.abc123.md",
+    agent_id: str = "a0c4e2ed8b92a39d4",
+    completion_session_id: str | None = None,
 ) -> Path:
     """Write a reviewer sidecar carrying a receipt block, shaped exactly as
     `provision_report._receipt_block` renders it (four single-quoted scalars
-    under one key)."""
+    under one key). `completion_session_id` set (even to a mismatching
+    value) also splices a `review_completion:` block; omitted means none."""
     share = root / "state" / "subagent-share" / session_id
     share.mkdir(parents=True, exist_ok=True)
     path = share / name
+    completion_block = (
+        f"review_completion:\n  session_id: '{completion_session_id}'\n"
+        if completion_session_id is not None
+        else ""
+    )
     path.write_text(
         "---\n"
         f"agent_type: '{agent_type}'\n"
         f"{key}:\n"
         f"  session_id: '{receipt_session_id if receipt_session_id is not None else session_id}'\n"
-        "  agent_id: 'a0c4e2ed8b92a39d4'\n"
+        f"  agent_id: '{agent_id}'\n"
         f"  agent_type: '{agent_type}'\n"
         f"  stamped_at: '{stamped_at}'\n"
-        "---\n"
+        + completion_block
+        + "---\n"
         "\n" + body,
         encoding="utf-8",
     )
@@ -279,9 +288,9 @@ def test_reads_each_session_directory_once(tmp_path: Path, monkeypatch) -> None:
     calls: list[str] = []
     real = mod._counting_receipt_stamps
 
-    def counting(share_dir, session_id):
+    def counting(parsed_sidecars, session_id, summary):
         calls.append(session_id)
-        return real(share_dir, session_id)
+        return real(parsed_sidecars, session_id, summary)
 
     monkeypatch.setattr(mod, "_counting_receipt_stamps", counting)
     mod.receipt_credited_shas(
@@ -347,3 +356,262 @@ def test_multiple_session_id_trailers_are_rejected_not_split(tmp_path: Path) -> 
         tmp_path, [(_SHA_A, "2026-08-28T11:00:00+00:00", joined)]
     )
     assert credited == set()
+
+
+def test_completion_stamped_filled_receipt_credits(tmp_path: Path) -> None:
+    """AC: a completion-stamped receipt with a filled body credits -- the
+    clock is unchanged."""
+    _write_sidecar(
+        tmp_path,
+        _SESSION,
+        stamped_at="2026-08-28T12:00:00+00:00",
+        completion_session_id=_SESSION,
+    )
+    credited = receipt_credited_shas(
+        tmp_path, [(_SHA_A, "2026-08-28T11:00:00+00:00", _SESSION)]
+    )
+    assert credited == {_SHA_A}
+
+
+def test_receipt_without_completion_does_not_credit_when_session_has_one(
+    tmp_path: Path,
+) -> None:
+    """AC: in a session holding ANY completion block, a receipt WITHOUT one
+    does not credit, even with a filled body."""
+    _write_sidecar(
+        tmp_path,
+        _SESSION,
+        stamped_at="2026-08-28T12:00:00+00:00",
+        completion_session_id=_SESSION,
+        name="completed.md",
+    )
+    _write_sidecar(
+        tmp_path,
+        _SESSION,
+        stamped_at="2026-08-28T13:00:00+00:00",
+        name="no-completion.md",
+    )
+    credited = receipt_credited_shas(
+        tmp_path, [(_SHA_A, "2026-08-28T11:30:00+00:00", _SESSION)]
+    )
+    # The completed receipt alone still credits at its own stamp.
+    assert credited == {_SHA_A}
+    credited_only_the_uncompleted_window = receipt_credited_shas(
+        tmp_path, [(_SHA_A, "2026-08-28T12:30:00+00:00", _SESSION)]
+    )
+    assert credited_only_the_uncompleted_window == set()
+
+
+def test_pipeline_twin_writer_live_credits_at_run_report_stamp(tmp_path: Path) -> None:
+    """AC: writer live -- a completion-stamped, unfilled run-report (agent_id
+    set) beside a filled `agent_id: ''` sidecar of the same receipt
+    agent_type with no completion credits, at the run-report's `stamped_at`.
+    The twin does not credit on its own."""
+    _write_sidecar(
+        tmp_path,
+        _SESSION,
+        stamped_at="2026-08-28T12:00:00+00:00",
+        completion_session_id=_SESSION,
+        body="   \n",
+        name="run-report.md",
+    )
+    _write_sidecar(
+        tmp_path,
+        _SESSION,
+        stamped_at="2026-08-28T09:00:00+00:00",
+        agent_id="",
+        name="findings-twin.md",
+        body="## Findings\n\nA real finding written by the twin.\n",
+    )
+    credited = receipt_credited_shas(
+        tmp_path, [(_SHA_A, "2026-08-28T11:30:00+00:00", _SESSION)]
+    )
+    assert credited == {_SHA_A}
+
+    # The twin's own stamp is earlier and carries no completion -- it must
+    # not credit anything on its own.
+    twin_only_credit = receipt_credited_shas(
+        tmp_path, [(_SHA_A, "2026-08-28T08:30:00+00:00", _SESSION)]
+    )
+    # SHA_A predates both the twin (no completion, so irrelevant on its own)
+    # and the run-report's stamp, so it is still credited by the run-report.
+    assert twin_only_credit == {_SHA_A}
+
+
+def test_pipeline_twin_of_a_different_agent_type_does_not_credit(tmp_path: Path) -> None:
+    """AC: the same pair with the twin of a DIFFERENT agent_type does not
+    credit."""
+    _write_sidecar(
+        tmp_path,
+        _SESSION,
+        stamped_at="2026-08-28T12:00:00+00:00",
+        completion_session_id=_SESSION,
+        body="   \n",
+        agent_type="code-reviewer",
+        name="run-report.md",
+    )
+    _write_sidecar(
+        tmp_path,
+        _SESSION,
+        stamped_at="2026-08-28T09:00:00+00:00",
+        agent_id="",
+        agent_type="staff-eng-reviewer",
+        name="findings-twin.md",
+        body="## Findings\n\nA real finding written by the twin.\n",
+    )
+    credited = receipt_credited_shas(
+        tmp_path, [(_SHA_A, "2026-08-28T11:30:00+00:00", _SESSION)]
+    )
+    assert credited == set()
+
+
+def test_pipeline_twin_unfilled_does_not_credit(tmp_path: Path) -> None:
+    """AC: the same pair with the twin unfilled does not credit."""
+    _write_sidecar(
+        tmp_path,
+        _SESSION,
+        stamped_at="2026-08-28T12:00:00+00:00",
+        completion_session_id=_SESSION,
+        body="   \n",
+        name="run-report.md",
+    )
+    _write_sidecar(
+        tmp_path,
+        _SESSION,
+        stamped_at="2026-08-28T09:00:00+00:00",
+        agent_id="",
+        name="findings-twin.md",
+        body="   \n",
+    )
+    credited = receipt_credited_shas(
+        tmp_path, [(_SHA_A, "2026-08-28T11:30:00+00:00", _SESSION)]
+    )
+    assert credited == set()
+
+
+def test_completion_stamped_unfilled_run_report_with_no_twin_does_not_credit(
+    tmp_path: Path,
+) -> None:
+    """AC: a completion-stamped, unfilled run-report with no twin does not
+    credit."""
+    _write_sidecar(
+        tmp_path,
+        _SESSION,
+        stamped_at="2026-08-28T12:00:00+00:00",
+        completion_session_id=_SESSION,
+        body="   \n",
+    )
+    credited = receipt_credited_shas(
+        tmp_path, [(_SHA_A, "2026-08-28T11:00:00+00:00", _SESSION)]
+    )
+    assert credited == set()
+
+
+def test_pipeline_twin_writer_not_live_only_the_filled_twin_credits(
+    tmp_path: Path,
+) -> None:
+    """AC: writer not live -- the filled twin credits and the unfilled
+    run-report does not (no completion block anywhere in the session)."""
+    _write_sidecar(
+        tmp_path,
+        _SESSION,
+        stamped_at="2026-08-28T12:00:00+00:00",
+        body="   \n",
+        name="run-report.md",
+    )
+    _write_sidecar(
+        tmp_path,
+        _SESSION,
+        stamped_at="2026-08-28T09:00:00+00:00",
+        agent_id="",
+        name="findings-twin.md",
+        body="## Findings\n\nA real finding written by the twin.\n",
+    )
+    credited = receipt_credited_shas(
+        tmp_path, [(_SHA_A, "2026-08-28T08:30:00+00:00", _SESSION)]
+    )
+    assert credited == {_SHA_A}
+
+    not_credited = receipt_credited_shas(
+        tmp_path, [(_SHA_A, "2026-08-28T09:30:00+00:00", _SESSION)]
+    )
+    assert not_credited == set()
+
+
+def test_no_completion_block_filled_receipt_credits_untouched_scaffold_does_not(
+    tmp_path: Path,
+) -> None:
+    """AC: in a session holding none, a filled receipt credits and an
+    untouched scaffold does not."""
+    _write_sidecar(
+        tmp_path,
+        _SESSION,
+        stamped_at="2026-08-28T12:00:00+00:00",
+        name="filled.md",
+    )
+    _write_sidecar(
+        tmp_path,
+        _SESSION,
+        stamped_at="2026-08-28T13:00:00+00:00",
+        body="   \n",
+        name="scaffold.md",
+    )
+    credited = receipt_credited_shas(
+        tmp_path, [(_SHA_A, "2026-08-28T11:30:00+00:00", _SESSION)]
+    )
+    assert credited == {_SHA_A}
+
+
+def test_cross_root_completion_flag_is_a_single_session_value(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """AC: a fixture with a completion-stamped receipt under one share root
+    and a completion-less filled receipt for the same session under the
+    OTHER share root -- the second does NOT credit. Pins
+    `session_has_completion` as a single cross-root value, aggregated in
+    `receipt_credited_shas` before either root's sidecars are read."""
+    import coordinator_core.review_trail.receipt_credit as mod
+
+    alt_root = tmp_path / "alt-machinery"
+    monkeypatch.setattr(
+        mod,
+        "_share_roots",
+        lambda repo_root: [
+            str(Path(repo_root) / "state" / "subagent-share"),
+            str(alt_root / "state" / "subagent-share"),
+        ],
+    )
+
+    # Primary root: completion-stamped, filled run-report -- credits on its
+    # own.
+    _write_sidecar(
+        tmp_path,
+        _SESSION,
+        stamped_at="2026-08-28T12:00:00+00:00",
+        completion_session_id=_SESSION,
+        name="run-report.md",
+    )
+    # Alt root: completion-less, filled receipt of the same session -- must
+    # NOT credit on its own once the session (aggregated across BOTH roots)
+    # holds a completion block.
+    _write_sidecar(
+        alt_root,
+        _SESSION,
+        stamped_at="2026-08-28T13:00:00+00:00",
+        name="other-root-filled.md",
+    )
+
+    # At the alt-root receipt's own (later) stamp: if `session_has_completion`
+    # disagreed between roots, the alt-root receipt would credit here on its
+    # own content. It must not.
+    credited = receipt_credited_shas(
+        tmp_path, [(_SHA_A, "2026-08-28T12:30:00+00:00", _SESSION)]
+    )
+    assert credited == set()
+
+    # The primary root's completion-stamped, filled receipt still credits at
+    # its own (earlier) stamp.
+    credited_at_run_report_stamp = receipt_credited_shas(
+        tmp_path, [(_SHA_A, "2026-08-28T11:30:00+00:00", _SESSION)]
+    )
+    assert credited_at_run_report_stamp == {_SHA_A}

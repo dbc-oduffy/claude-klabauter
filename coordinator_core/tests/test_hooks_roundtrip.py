@@ -251,7 +251,7 @@ def test_foreground_dispatch_empty_tool_input_denies() -> None:
     _assert_deny(result, "PreToolUse")
 
 
-# Review: code-reviewer — Finding 1: non-empty tool_input missing `prompt` is not a safe
+# non-empty tool_input missing `prompt` is not a safe
 # rewrite target (updatedInput REPLACES the whole argument object); must fall back to deny
 # rather than dispatch a subagent with no instructions.
 def test_foreground_dispatch_tool_input_missing_prompt_denies() -> None:
@@ -559,7 +559,7 @@ def test_sonnet_research_advisory_shape_correct() -> None:
     assert hso["hookEventName"] == "PreToolUse"
 
 
-# Review: code-reviewer (Finding 5) — _deep_research_plugin_dir()'s content-root
+# _deep_research_plugin_dir()'s content-root
 # resolution branches (success, unresolvable, and the raise-degrades path) were
 # previously unexercised by an assertion: the _handler tests above call through to
 # the real resolver on whatever machine runs the suite rather than proving the
@@ -846,7 +846,7 @@ def test_postuse_merge_contract_both_fire() -> None:
         # Write a small transcript with a model field so Phase 2 detects the model
         transcript.write_text('{"model": "claude-sonnet-4-5", "role": "assistant", "content": "hi"}\n')
 
-        # Review: code-reviewer (B-F3) — use tempfile.gettempdir() matching the handler's path.
+        # Use tempfile.gettempdir() matching the handler's path.
         compaction_sentinel = os.path.join(
             tempfile.gettempdir(), f"compaction-occurred-{test_sid}"
         )
@@ -890,7 +890,7 @@ def test_postuse_merge_contract_both_fire() -> None:
     assert hso["hookEventName"] == "PostToolUse"
     assert "additionalContext" in hso
     context = hso["additionalContext"]
-    # Review: code-reviewer (B-F4) — strengthen from 'or' to separate asserts that verify
+    # Strengthen from 'or' to separate asserts that verify
     # BOTH sub-checks fired AND the blank-line separator merge contract is honoured.
     assert "COMPACTION" in context
     assert mock_rt in context
@@ -920,7 +920,7 @@ def test_postuse_result_shape_is_post_advisory_when_fires() -> None:
 def test_em_code_dispatch_nudge_ok_sentinel_suppresses(tmp_path) -> None:
     """Bypass 3: coordinator-dispatch-nudge-ok-{sid} sentinel present → no_advisory.
 
-    Review: code-reviewer (B-F5) — covers the production suppression path for
+    Covers the production suppression path for
     authorized inline runs; a regression in sentinel-path construction would cause
     the nudge to fire on every authorized inline run.
     """
@@ -941,7 +941,7 @@ def test_em_code_dispatch_nudge_ok_sentinel_suppresses(tmp_path) -> None:
 def test_em_code_dispatch_autonomous_sentinel_suppresses(tmp_path) -> None:
     """Bypass 4: autonomous-run-{sid} sentinel present → no_advisory.
 
-    Review: code-reviewer (B-F5) — covers the autonomous-run suppression path;
+    Covers the autonomous-run suppression path;
     a regression here would cause the nudge to fire on every autonomous-mode run.
     """
     import tempfile
@@ -965,7 +965,7 @@ def test_em_code_dispatch_autonomous_sentinel_suppresses(tmp_path) -> None:
 def test_unauthorized_handoff_command_tag_in_transcript_suppresses(tmp_path) -> None:
     """Authoring-skill <command-name> tag in transcript → no_advisory (suppressed).
 
-    Review: code-reviewer (B-F6) — covers _authoring_skill_active_sync check 1
+    Covers _authoring_skill_active_sync check 1
     (command-name tag match). Untested regression would cause nudge to fire on
     every legitimate /handoff invocation.
     """
@@ -985,7 +985,7 @@ def test_unauthorized_handoff_command_tag_in_transcript_suppresses(tmp_path) -> 
 def test_unauthorized_handoff_coordinator_skill_in_tail_suppresses(tmp_path) -> None:
     """coordinator:handoff skill invocation in transcript tail → no_advisory (suppressed).
 
-    Review: code-reviewer (B-F6) — covers _authoring_skill_active_sync check 2
+    Covers _authoring_skill_active_sync check 2
     (generous-tail regex). Tests the SIGPIPE-avoidance in-memory-read path.
     """
     from coordinator_core.hooks.nudge_unauthorized_handoff import _handler

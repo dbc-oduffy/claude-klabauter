@@ -749,7 +749,7 @@ class TestJudgmentHaltIgnoresRecommendation:
 # never trusting a cached decision object. claim_grant remains the one
 # input this module explicitly re-resolves via a dedicated closure, but the
 # *general* rule (never trust a stale snapshot) holds for j1 too.
-# Review: code-reviewer — reworded to describe the actual mechanism after
+# Reworded to describe the actual mechanism after
 # revalidate_at_dispatch was retired for j1 (Finding 1).
 # ---------------------------------------------------------------------------
 
@@ -1711,7 +1711,7 @@ class TestGateRecheckVerbDispatch:
             ),
         )
 
-        # Review: staff-eng finding 6 — pin that the raised message is useful,
+        # Pin that the raised message is useful,
         # not merely that a RuntimeError happened.
         with pytest.raises(RuntimeError, match="gate_evidence.*not 'freed'"):
             pa_apply._dispatch_archive_stamp_cli(
@@ -1770,7 +1770,7 @@ class TestGateRecheckOrderingBeforeClaim:
         text = hp.read_text(encoding="utf-8")
         assert "deployment_state: awaiting_gate" in text
 
-    # Review: coordinator:code-reviewer — `build_gate_recheck_directive`'s
+    # `build_gate_recheck_directive`'s
     # docstring asserts both drop-recovery arms are safe (idempotent no-op)
     # after gate-recheck lands but `d2` (claim-handoff) then fails. Neither
     # arm was exercised anywhere in this diff; these two tests force that
@@ -1846,7 +1846,7 @@ class TestGateRecheckOrderingBeforeClaim:
         )
 
         assert rerun_exit_code == pa_apply.APPLY_EXIT_OK
-        # Review: coordinator:code-reviewer / review-integrator — the
+        # The
         # docstring's claim is that a re-run hits `_gate_recheck`'s own
         # already-`ready_to_fire` no-op arm. That is NOT what happens: by
         # the second `apply`, `deployment_state` is already `ready_to_fire`
@@ -1890,7 +1890,7 @@ class TestGateRecheckOrderingBeforeClaim:
         assert exit_code == pa_apply.APPLY_EXIT_PARTIAL_MUTATION
         assert report["landed"] == ["d1"]
         assert "d2" not in report["landed"]
-        # Review: staff-eng finding 2 regression surface — the refusal reason
+        # The refusal reason
         # must reach the report, not just stderr.
         assert report["failed_directive"] == "d-gate-recheck"
         assert "gate_evidence" in report["error"]

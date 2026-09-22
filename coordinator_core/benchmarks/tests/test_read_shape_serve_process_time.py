@@ -25,11 +25,10 @@ today regardless of this plan; the read branch adds only a `basename` call and
 a set-membership check on top of a classification that already ran. Measuring
 that delta would measure a number that is near zero by construction.
 
-Method, both legs: min-of-N `time.process_time()` around a direct in-process
-call, one untimed warm-up first (matches
-`coordinator_core.hooks.tests.test_cater_subagent_start_budget`'s own
-established shape for a hot-path Python-level budget -- no subprocess is
-needed to time Python code timing itself). The fork-side comparison
+Method, both legs: `coordinator_core.benchmarks.process_time.in_process_time_ms`,
+the shared batch-amortised in-process primitive (C6, docs/plans/2026-09-11-
+perf-ratchets-measure-process-time-not-t.md) -- no subprocess is needed to
+time Python code timing itself. The fork-side comparison
 (`test_serve_cost_stays_far_under_the_fork_it_replaces_at_the_render_cap`)
 additionally spawns a REAL `cat` through the resolved POSIX shell via
 `coordinator_core.benchmarks.process_time.batched_process_time_ms` -- the same
@@ -66,8 +65,7 @@ half.md, chunk C9 (AC9).
 from __future__ import annotations
 
 import os
-import time
-from typing import Callable, List
+from typing import Callable
 
 import pytest
 
@@ -75,17 +73,11 @@ from coordinator_core.benchmarks.process_time import (
     IS_DARWIN,
     IS_WINDOWS,
     batched_process_time_ms,
+    in_process_time_ms,
 )
 from coordinator_core.search.answer import answer
 from coordinator_core.search.engine import MAX_RENDER_BYTES
 from coordinator_core.search.tests._posix_shell import POSIX_SHELL, requires_posix_shell
-
-K_SAMPLES = 15
-"""Min-of-N in-process sample count -- matches
-`test_cater_subagent_start_budget.py`'s own established convention for a
-direct-call Python-level budget (no subprocess, so no scheduler-tick
-quantisation to amortise; min-of-N instead smooths run-to-run jitter from
-this shared, loaded box -- see CLAUDE.md § Load norm)."""
 
 K_SUBPROCESS = 20
 """Matches `bash_dispatch_probe.K_INVOCATIONS` -- the amortisation factor
@@ -110,17 +102,14 @@ def _require_supported_platform() -> None:
         )
 
 
-def _min_process_time_ms(fn: Callable[[], object], k: int = K_SAMPLES) -> float:
-    """Min-of-N `time.process_time()` around one direct, in-process call to
-    `fn`, with a single untimed warm-up first (absorbs any first-call-only
-    cost, e.g. a lazily-imported dependency) -- see module docstring."""
-    fn()  # warm-up, untimed
-    samples: List[float] = []
-    for _ in range(k):
-        start = time.process_time()
-        fn()
-        samples.append((time.process_time() - start) * 1000.0)
-    return min(samples)
+def _min_process_time_ms(fn: Callable[[], object]) -> float:
+    """Batch-amortised in-process CPU time for one direct call to `fn`, via
+    the shared `in_process_time_ms` primitive (C6) -- retains this module's
+    own call-site name/shape (a bare per-call ms float) while delegating
+    the actual measurement to the adaptive-window primitive rather than a
+    per-call min-of-N sample, which can read 0.0 below the process-time
+    tick (see module docstring)."""
+    return in_process_time_ms(fn)["process_time_ms"]
 
 
 def _write(path: str, data: bytes) -> None:

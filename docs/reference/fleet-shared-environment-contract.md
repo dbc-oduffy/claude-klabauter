@@ -454,6 +454,34 @@ any time — it flags every binding that is either `stale_path` (registered path
 registered while the environment was absent). Nothing is silently broken; everything flagged is
 reported by name.
 
+## A disagreement-keyed guard is blind to the party with no opinion
+
+<!-- PROVENANCE: state/lessons/2026-08-31-a-check-keyed-on-disagreement-is-blind-to-the-silent-victim.yaml -->
+
+A warm server resolves `COORDINATOR_SETTINGS_HOME` once at spawn. The `-32008` refuse-on-mismatch
+guard compares a caller's stamped claim against the server's own resolution and refuses when they
+disagree — this looks like closure, but it is not. `settings_home_claim.caller_claim()` stamps a
+claim ONLY when the caller explicitly set the variable; absence (every ordinary invocation on every
+box) is deliberately not a mismatch, or two default-resolving processes with different HOMEs would
+refuse each other. So the refusal protects the caller who HAS an opinion and cannot see the caller
+who has none. Composed with two more facts — the warm endpoint is keyed on `(user SID, engine-clone
+hash, engine-token)` and NOT on the settings home, so a caller gets whichever server is already
+listening for its clone; and `settings_home_child_env` never overwrites an inherited value, so an
+override propagates down a whole process tree — the result is that a server spawned from any tree
+carrying an override serves every subsequent ordinary caller (who stamped no claim and therefore
+can never be refused) against a settings home that caller never named, silently and with no error.
+
+**The transferable rule: a guard keyed on disagreement selects its victims by their inability to
+observe it.** The party harmed is precisely the party with nothing configured, so it cannot detect
+the harm, cannot opt out, and will never file the report that would surface it — such a defect
+cannot be found by the usual route of someone noticing. When designing or reviewing any check that
+compares a caller-supplied value against a server-side one, ask explicitly what happens when the
+caller supplies NOTHING; "absence is not a mismatch" is usually the right call for traffic and is
+simultaneously where the silent half of this defect class lives. A shipped mismatch-refusal
+mitigation invites the reading "the hazard is closed, what remains is only performance" — that
+reading can be wrong even after careful review, since this defect presents as nothing to a careful
+reader, not only to its victims.
+
 ## Migration paths for the other hard interpreter-path pins (AC11)
 
 Naming the migration path is in scope here; performing it in any of these repos' own trees is not —

@@ -575,14 +575,18 @@ def _classify_sync(common_dir: Path, param_sid: Optional[str], environ: dict) ->
         return _result("claimed", True)
 
     # Detector A — archived handoff naming this session as claim holder, with
-    # the well-formed-handoff predecessor guard; first (sorted) hit wins.
+    # the well-formed-handoff predecessor guard; LAST (sorted) hit wins — a
+    # chain_id that claimed more than one predecessor handoff over its
+    # lifetime is classified off its most recent claim (sorted filenames are
+    # date-prefixed, so last-sorted is most-recent), never the alphabetically
+    # first one (2026-08-08 bug-backlog: an alphabetically-earlier "closed"
+    # record used to outrank a later "continued" one for the same session).
     arch_hit: Optional[Path] = None
     for candidate in _scan_claimed_by_session(
         worktree / "archive" / "handoffs", sid, common_dir
     ):
         if _has_predecessor_field(candidate):
             arch_hit = candidate
-            break
     if arch_hit is not None:
         evidence["detector"] = "archive_claim_stamp"
 

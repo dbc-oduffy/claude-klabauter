@@ -104,6 +104,7 @@ from coordinator_core.housekeeping.terminal import (
 )
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import git_common_dir, main_worktree_root
+from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.ops.fleet import archive_actioned_memos
 from coordinator_core.ops.fleet._common import Move, archive_and_commit, handoff_archive_dest
 from coordinator_core.ops.fleet.archive_terminal_handoffs import _dirty_handoff_relpaths
@@ -282,14 +283,21 @@ def run(
     # folding the memo family into this cycle needs from HERE is its own
     # candidate relpaths, unioned into the SINGLE dirty-check call below, so
     # the memo family never triggers a second `git status` spawn.
+    # Resolved through the same named resolver `archive_actioned_memos`'s own
+    # candidate/dest resolution uses -- migration-aware (`state/cross-repo/`
+    # vs legacy `cross-repo/`), never the retired `INBOX_RELDIR` literal (see
+    # state/bug-backlog/2026-09-03-cycle-py-fallback-pathspec-still-hardcodes-
+    # the-legacy-cross-repo-inbox-literal.yaml).
+    memo_inbox_dir = Path(memo_corpus_root(str(worktree_root))) / "inbox"
+
     memo_scan_error: Optional[str] = None
     try:
         memo_candidate_paths = archive_actioned_memos.collect_inbox_memo_paths(worktree_root)
     except OSError as exc:
         memo_candidate_paths = []
-        inbox_dir = worktree_root / archive_actioned_memos.INBOX_RELDIR
+        inbox_dir = memo_inbox_dir
         memo_scan_error = f"{inbox_dir}: {exc}"
-        # Review: coordinator:code-reviewer F1 -- the op's own `inbox_paths=None`
+        # The op's own `inbox_paths=None`
         # path logs + records a `scan_errors` entry when the inbox can't be
         # enumerated; this caller degraded to `[]` silently, so a permission
         # problem on the inbox directory was indistinguishable from a
@@ -306,7 +314,10 @@ def run(
     dirty_rels = _dirty_handoff_relpaths(
         worktree_root,
         sorted(set(candidate_rels) | set(memo_candidate_rels)),
-        fallback_pathspecs=("state/handoffs", archive_actioned_memos.INBOX_RELDIR),
+        fallback_pathspecs=(
+            "state/handoffs",
+            memo_inbox_dir.relative_to(worktree_root).as_posix(),
+        ),
     )
     def _retained(path: Path, record: Dict[str, Any]) -> bool:
         """Every ground on which a terminal record is NOT this sweep's to
@@ -334,7 +345,7 @@ def run(
         Move(
             src=entry.path,
             dst=handoff_archive_dest(worktree_root, entry.path),
-            # Review: coordinator:code-reviewer F1 -- `Move.candidate_id` is
+            # `Move.candidate_id` is
             # the wire "id" field throughout the result envelope
             # (`ops/fleet/_common.py:677-678,710`); `wire_paths.rel_id`'s own
             # docstring names the native-separator `str(relative_to())` form
@@ -387,7 +398,7 @@ def run(
     # combined batch never calls into the seam at all (nothing to move,
     # nothing to commit — a zero-length batch is not a degenerate call to
     # make, it is simply not a call).
-    # Review: overengineering-reviewer F4 — `archive_terminal_batch` was a
+    # `archive_terminal_batch` was a
     # single-caller passthrough (empty-check + one asyncio.run) after the
     # Move-prebuild moved into run(); inlined here, function and its three
     # tests deleted.
@@ -406,7 +417,7 @@ def run(
     archived = [item["id"] for item in acted if item["id"] in handoff_move_ids]
     failed = [item for item in failed if item["id"] in handoff_move_ids]
 
-    # Review: coordinator:code-reviewer F4 -- gating `revalidate` on `acted`
+    # Gating `revalidate` on `acted`
     # meant a quiet cycle (this cycle moved nothing) never called it at all,
     # so archive drift from a peer process or a manual git operation between
     # cycles was never detected and the stale cache never rewritten.

@@ -299,7 +299,7 @@ def _classify_p4_segment(rest: List[str]) -> Optional[str]:
     if verb == "revert":
         return None if ("-a" in args or "-c" in args) else "unrecognized p4 verb form (default-deny)"
     if verb == "change":
-        # Review: coordinator-code-reviewer F2 -- was unconditionally
+        # Was unconditionally
         # allowed, letting `p4 change -d <CL>` (delete a pending
         # changelist) and `p4 change -f` (force-edit a changelist's
         # owner/description) through unconstrained, unlike every sibling
@@ -386,7 +386,7 @@ def _classify_segment(tokens: List[str]) -> Optional[str]:
             return _classify_git_segment(inner[1:])
         return None
 
-    # Review: coordinator-code-reviewer F1 -- a `-c`/`-Command`/
+    # A `-c`/`-Command`/
     # `-EncodedCommand` interpreter head is treated as an unparseable
     # invocation (conservative arm) ONLY when the inner string plausibly
     # names a surface this fence governs -- same "governed mention" gate

@@ -34,6 +34,15 @@ CONFINEMENT_DENY_NAMES = [
     "no-verify",
     "destructive-git-orphan",
     "destructive-rm",
+    # Arrived live with main's 1d033e514f (C2, docs/plans/2026-09-02-a-write-
+    # that-discards-what-you-never-saw.md) and sits here, between
+    # `destructive-rm` and `destructive-git-clean`, because that is its
+    # registration position in `_build_guard_chain` -- this list is ordered,
+    # not alphabetical. CONFINEMENT_DENY is the band it registers with: it is
+    # a hard-deny leg that refuses a whole-file write over content the
+    # session never read, which is the same irreversible-loss posture as its
+    # neighbours here, not an advisory.
+    "stale-write",
     "destructive-git-clean",
     "destructive-git-revert",
     "blanket-git-add",
@@ -81,7 +90,7 @@ CONFINEMENT_DENY_NAMES = [
 # registration comment: those return allow+rewrite, which would make its
 # search-answering seam unreachable if registered after them).
 ADVISORY_REWRITE_NAMES = [
-    # Review: staff-eng, Finding 0 (2026-08-05) -- the advisory floor's
+    # The advisory floor's
     # non-hard-deny leg. Registered immediately after `check-raw-pid-
     # liveness` (the last CONFINEMENT_DENY guard) and before `offer-git-c`,
     # so it is the first ADVISORY_REWRITE entry in physical chain order.
@@ -139,11 +148,6 @@ ADVISORY_REWRITE_NAMES = [
     # (same physical chain position, dispatch.py). Same "never denies"
     # shape as its neighbor, so this band, not PLATFORM_CONDITIONED_DENY.
     "powershell-via-bash-guard",
-    # docs/plans/2026-08-01-branch-creation-seam-guards.md, chunk C5/C7 --
-    # both advisory-only, registered adjacent to grep-via-bash-guard, ahead
-    # of the two remaining PLATFORM_CONDITIONED_DENY guards below.
-    "branch-set-precedence",
-    "longlived-branch-naming",
     # docs/plans/2026-08-02-write-confinement-guards.md (DoE-claude), chunk
     # C4 -- the Bash-surface cross-repo write-confinement speed bump.
     # `ADVISORY_REWRITE`, deliberately NOT `CONFINEMENT_DENY`: the blanket-

@@ -80,6 +80,7 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import yaml
@@ -93,6 +94,7 @@ from coordinator_core.dag import (
     scan_repo_handoff_corpus,
     walk_forward,
 )
+from coordinator_core.ops.emit.context import resolve_repo_name
 from coordinator_core.state_root import StateRootError, coordinator_state_root
 
 __all__ = ["resolve_priority", "load_priority_ledger", "PriorityResolveCache"]
@@ -219,19 +221,44 @@ def load_priority_ledger(state_root: Optional[str] = None) -> Dict[str, dict]:
 # node_id_fn so ledger lookups key on the SAME target_id it emits — this
 # default exists so the resolver is usable standalone / in tests, not as a
 # second source of truth for handoff_id shape.
+#
+# *repo_name* MUST be the SAME owner-qualified slug ``resolve_repo_name``
+# produces (e.g. ``dbc-oduffy/claude-klabauter``, not the bare basename
+# ``claude-klabauter``) — the one canonical producer every other repo-name
+# consumer in this codebase reads, ``_derive_handoff_id`` (sections/
+# handoffs.py) included. Re-deriving a bare basename here would key this
+# fallback on a different repo identity than the rest of the emission
+# pipeline uses for the SAME (repo, basename) pair.
 # ---------------------------------------------------------------------------
 
 
-def _default_node_id(meta: dict, node_path: str, repo_root: Optional[str]) -> Optional[str]:
+def _default_node_id(meta: dict, node_path: str, repo_name: Optional[str]) -> Optional[str]:
     authored = meta.get("handoff_id")
     if authored:
         return str(authored)
     basename = os.path.basename(node_path)
-    if repo_root:
-        repo_name = os.path.basename(os.path.normpath(repo_root))
-        if repo_name:
-            return f"{repo_name}:{basename}"
+    if repo_name:
+        return f"{repo_name}:{basename}"
     return basename
+
+
+def _resolve_default_repo_name(repo_root: Optional[str]) -> Optional[str]:
+    """Resolve the owner-qualified repo slug for ``_default_node_id``'s fallback.
+
+    Delegates to ``resolve_repo_name`` (the sole canonical producer) rather
+    than re-deriving a basename, so this fallback cannot drift from
+    ``_derive_handoff_id``'s own repo-qualification. ``resolve_repo_name``
+    raises only when *repo_root* itself is underivable (None / not a
+    directory) — treated as "no repo qualifier available" here, matching
+    this function's pre-existing graceful-degradation posture rather than
+    propagating a fatal error out of a best-effort default.
+    """
+    if not repo_root:
+        return None
+    try:
+        return resolve_repo_name(Path(repo_root))
+    except RuntimeError:
+        return None
 
 
 NodeIdFn = Callable[[dict, str], Optional[str]]
@@ -574,8 +601,12 @@ def resolve_priority(
         parent_map = _build_parent_map(nodes, resolved_handoff_dir, resolved_repo_root)
 
     if node_id_fn is None:
+        # Resolved ONCE per resolve_priority() call (not per node visited) —
+        # resolve_repo_name spawns a git subprocess; _default_node_id is
+        # invoked once per ancestor node during the predecessor-spine walk.
+        default_repo_name = _resolve_default_repo_name(resolved_repo_root)
         node_id_fn = lambda meta, path: _default_node_id(  # noqa: E731
-            meta, path, resolved_repo_root
+            meta, path, default_repo_name
         )
 
     if ledger_entries is None:

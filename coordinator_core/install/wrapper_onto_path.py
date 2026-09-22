@@ -12,7 +12,12 @@ never shells to a copy/mkdir/chmod binary.
 
 Contract (op-classification manifest row `install-wrapper-onto-path`):
     params: {wrapper_src: str, check_only: bool}
-        -> {installed_path: str, modified: bool, on_path: bool}
+        -> {installed_path: str, modified: bool, on_path: bool, warning: str (optional)}
+    `warning` is present iff `on_path` is False -- `installed_path` was
+    resolved (and, off `check_only`, written) to a directory the caller
+    cannot run it from without a PATH change; a bare `on_path: false` field
+    was found to go unactioned by every caller of this op, so a
+    non-`on_path` reader now gets an explicit, non-ignorable signal too.
 
 Design:
     - Target dir is resolved natively per-platform (`_default_wrapper_bin_dir`),
@@ -98,6 +103,21 @@ def _default_wrapper_bin_dir() -> Path:
     return Path.home().joinpath(*_POSIX_BIN_RELATIVE)
 
 
+def _on_path_warning(target_dir: Path) -> str:
+    """Actionable text for a resolved-but-off-PATH target dir.
+
+    Paired with an `on_path: False` response field: the field alone was
+    found to be a signal no caller acted on (state/bug-backlog/2026-08-30-
+    wrapper-onto-path-installs-to-a-windows-240282f16634.yaml), so this
+    names the directory and the consequence explicitly rather than leaving
+    the caller to infer it from a bare boolean.
+    """
+    return (
+        f"{target_dir} is not on PATH -- the installed wrapper will not run "
+        "from a bare shell until this directory is added to PATH"
+    )
+
+
 def _on_path(target_dir: Path) -> bool:
     """Whether *target_dir* is a member of the current process's PATH.
 
@@ -146,9 +166,9 @@ def _install_wrapper_onto_path(params: dict, repo_root: Optional[Path] = None) -
         check_only (bool, default False) -- report what would happen without
             writing anything.
 
-    Returns {installed_path, modified, on_path} (see module docstring), or
-    {"error": <str>} when wrapper_src is missing/empty or does not resolve to
-    an existing file.
+    Returns {installed_path, modified, on_path, warning?} (see module
+    docstring), or {"error": <str>} when wrapper_src is missing/empty or does
+    not resolve to an existing file.
     """
     wrapper_src = params.get("wrapper_src")
     if not wrapper_src or not isinstance(wrapper_src, str):
@@ -165,11 +185,14 @@ def _install_wrapper_onto_path(params: dict, repo_root: Optional[Path] = None) -
     on_path = _on_path(target_dir)
 
     if check_only:
-        return {
+        result = {
             "installed_path": str(installed_path),
             "modified": False,
             "on_path": on_path,
         }
+        if not on_path:
+            result["warning"] = _on_path_warning(target_dir)
+        return result
 
     modified = _install_one(src, installed_path)
 
@@ -184,11 +207,14 @@ def _install_wrapper_onto_path(params: dict, repo_root: Optional[Path] = None) -
         [WriteSurfaceEntry(kind="file-path", path=str(installed_path))],
     )
 
-    return {
+    result = {
         "installed_path": str(installed_path),
         "modified": modified,
         "on_path": on_path,
     }
+    if not on_path:
+        result["warning"] = _on_path_warning(target_dir)
+    return result
 
 
 WRITE_SURFACE = WriteSurfaceDeclaration(

@@ -14,7 +14,7 @@ grep of DoE's INSTALL.md prose.
 
 Mechanism (uses `coordinator.lib.percolate.targets.parse_portable_rows`, the
 same shared parser `test_post_transform_projection_parses.py` calls --
-Review: overengineering-reviewer -- rather than each test module keeping its
+Rather than each test module keeping its
 own field-indexed copy):
 
   1. Parse every row of `setup/publish-targets.portable` into

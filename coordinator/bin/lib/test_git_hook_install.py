@@ -476,7 +476,6 @@ def test_post_commit_never_carries_the_no_session_gate():
 # `.exe` fallback makes a lie.
 # ---------------------------------------------------------------------------
 #
-# Review: overengineering-reviewer Finding 4 residual (state/bug-backlog/
 # 2026-08-30-auto-push-main-and-two-launcher-referenc-2d703797edb5.yaml) --
 # the exemplar script name below was "coordinator-auto-push", a script
 # `_append_block` no longer generates a shim for (`ensure_post_commit_hook`
@@ -549,8 +548,8 @@ def test_append_block_emits_no_shell_errors_when_nothing_resolves(tmp_path, monk
     `command not found` here means the block called a helper it never emitted."""
     # `_append_block` bakes `_resolve_claude_klabauter_bin_sh`/`_resolve_klabauter_bin_sh`
     # candidates read live off THIS machine's `machine-local` registry / published
-    # engine mirror. On a box with a real claude-klabauter/klabauter checkout registered
-    # (this container has one under /root/klabauter), that candidate is a real,
+    # engine mirror. On a box with a real engine-repo or mirror checkout
+    # registered, that candidate is a real,
     # readable script -- `_have_py` finds it and `$_T` resolves for real, which
     # is exactly what this test exists to prove CANNOT happen. Pinned absent so
     # "nothing resolves" is actually nothing, on every box.
@@ -635,23 +634,24 @@ def test_append_block_msys_normalisation_actually_transforms_the_path():
     result = subprocess.run([sh, "-c", script], capture_output=True, text=True)
 
     assert result.returncode == 0, result.stderr
-    # LOWERCASE `c:`, and that is correct. The expansion is pure parameter
-    # substitution -- it relocates the drive letter, it does not upcase it,
-    # and Windows drive letters are case-insensitive so `c:/` resolves
-    # identically to `C:/` for the native python.exe this exists to feed.
-    # Asserted explicitly because BOTH emitters' comments say "-> C:/Users/..."
-    # (corrected 2026-08-31): a reader who trusts that wording writes exactly
-    # this test and watches it fail on a fix that is working.
+    # A LOWERCASE drive letter, and that is correct. The expansion is pure
+    # parameter substitution -- it relocates the drive letter, it does not
+    # upcase it, and Windows drive letters are case-insensitive so either case
+    # resolves identically for the native python.exe this exists to feed.
+    # Asserted explicitly because BOTH emitters' comments spell the converted
+    # form with an UPPERCASE drive letter (corrected 2026-08-31): a reader who
+    # trusts that wording writes exactly this test and watches it fail on a fix
+    # that is working.
     assert result.stdout == "c:/Users/someone/bin/tool", (
         f"expansion produced {result.stdout!r}, not the relocated drive form"
     )
 
 
 def test_append_block_msys_normalisation_leaves_a_windows_path_alone():
-    """A path that is already `C:/...` must pass through untouched -- the
+    """A path that is already `<drive>:/...` must pass through untouched -- the
     `case` arm matches a SINGLE-character first segment (`/?/`), so `/c/x`
-    converts and `C:/x` does not re-enter. Pins that the guard is not merely
-    absent-on-Windows but inert there."""
+    converts and `<drive>:/x` does not re-enter. Pins that the guard is not
+    merely absent-on-Windows but inert there."""
     sh = _sh()
     if not sh:
         import pytest
@@ -920,8 +920,8 @@ def test_pair_fixture_goes_red_without_the_native_probe(tmp_path, monkeypatch):
     # Same environment leak as `test_append_block_emits_no_shell_errors_when_
     # nothing_resolves`: with the native probe stripped, `_native "$_fwd"`
     # errors "not found" and the chain falls through past the (now-unguarded)
-    # native image to `SCRIPT`/`_T` resolution. On a box with a real claude-klabauter/
-    # klabauter checkout registered, the engine-repo-bin candidate is a real,
+    # native image to `SCRIPT`/`_T` resolution. On a box with a real engine-repo
+    # or mirror checkout registered, the engine-repo-bin candidate is a real,
     # readable python script -- the fallback silently resolves to IT instead
     # of failing loudly, masking the very incident this control exists to
     # reproduce. Pinned absent so the control reproduces on every box.

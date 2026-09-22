@@ -303,15 +303,26 @@ EXPECTED_UNVERIFIABLE_COUNTS: Dict[str, int] = {
     # -m flag), a form `_probe_python_dash_c` does not attempt to run --
     # honestly UNVERIFIABLE rather than guessed at in either direction.
     "block_reviewer_bash_outside_allowlist": 1,
-    # `block_approval_sentinel_creation`'s REASON_DIRECT message (guard-
-    # message-size discipline, this dispatch) was trimmed to 2 real,
-    # resolvable `git <query-subcommand>` forms (`status`/`log`) to fit
-    # `MESSAGE_PROSE_CAP_BYTES` -- both EXECUTED for real in `probe_command`'s
-    # throwaway (non-git) tmp dir and fail with "fatal: not a git
-    # repository": genuinely ambiguous, not dead, per this module's own
-    # UNVERIFIABLE contract. Was 10 (`grep` bare + 9 `git` forms) before the
-    # message-size trim; shrinking is the honest direction of travel.
-    "block_approval_sentinel_creation": 2,
+    # `block_approval_sentinel_creation`'s REASON_DIRECT message names 10
+    # forms: bare `grep` plus the 9 read-only `git <query-subcommand>`
+    # forms (`status`/`diff`/`log`/`show`/`ls-files`/`rev-parse`/
+    # `describe`/`check-ignore`/`check-attr`). The pre-merge trim on this
+    # branch (message-size discipline) that cut the message to 2 forms
+    # (`status`/`log`) did not survive the 2026-09-20 origin/main merge --
+    # the merged `block_approval_sentinel_creation.py` carries the
+    # untrimmed 10-form message, so 10 is what the merged tree actually
+    # produces. All 10 grade UNVERIFIABLE not because the alternatives are
+    # genuinely ambiguous -- `git status` etc. are plainly live commands --
+    # but because `probe_command` executes each argv in a bare
+    # `tempfile.mkdtemp()` cwd with no `.git`, so every `git` subcommand
+    # exits 128 "fatal: not a git repository" and `grep` (no stdin/args)
+    # exits 2 on usage. That is the probe being blind in a non-git cwd, not
+    # a genuine verdict on the alternatives; a `git init -q` in that
+    # throwaway cwd when argv[0] is `git` would grade nine of these LIVE
+    # and move this count toward 2. That probe fix belongs to
+    # `_alternative_liveness.py`, not to this test file -- out of scope
+    # here.
+    "block_approval_sentinel_creation": 10,
     # Same trim, same reason, same new count as the row above:
     # `block_fleet_delegation_creation`'s REASON_DIRECT copy was also cut to
     # `git status`/`git log` to fit the prose cap. Was 10 before the trim.
@@ -420,20 +431,21 @@ EXPECTED_LIVE_FLOORS: Dict[str, int] = {
     "guard_inprocess_search": 2,
     "guard_multiprobe_banner": 1,
     "guard_plumbing_and_loops": 1,
-    # docs/plans/2026-08-01-branch-creation-seam-guards.md, chunk C2.
-    "guard_branch_set_precedence": 1,
     # docs/plans/2026-08-01-branch-creation-seam-guards.md, chunk C7 (this
-    # C2-divergence closeout): both C1's deny and C7's advisory now render
-    # a CONCRETE canonical-branch example (`git checkout work/<real
-    # machine>/<real date>`, resolved via `coordinator_core.machine_
-    # resolver.compute_machine` + `daily_day.local_day`, never a
+    # C2-divergence closeout): C1's deny now renders a CONCRETE
+    # canonical-branch example (`git checkout work/<real machine>/<real
+    # date>`, resolved via `coordinator_core.machine_resolver.
+    # compute_machine` + `daily_day.local_day`, never a
     # `work/<machine>/<date>` template) -- a real, invocable `git checkout
     # <branch>` command that classifies LIVE via `probe_command`'s
     # mutating-git-subcommand `--help` leg. This is the ratchet moving
     # from EXPECTED_UNVERIFIABLE_COUNTS (removed above) to here, exactly
-    # as the C2 comment this replaces anticipated.
+    # as the C2 comment this replaces anticipated. `guard_branch_set_
+    # precedence` and `guard_longlived_branch_naming` (C5/C7's advisory
+    # guards) were deleted 2026-09-19 (docs/plans/2026-08-21-the-advisory-
+    # band-gets-smaller-cheaper-and-honest.md, C6); their rows leave this
+    # dict rather than being replaced.
     "block_noncanonical_branch_creation": 1,
-    "guard_longlived_branch_naming": 1,
 }
 
 

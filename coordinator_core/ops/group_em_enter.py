@@ -224,7 +224,18 @@ def _run_roster_and_excluded(
     `roster_excluded` (its strict complement) -- never a second, independent
     classification pass (module docstring; AC 7a's one-classification-pass
     budget). Admission is read off `read_pass.is_admitted`, the single
-    predicate definition -- never re-spelled here (AC 7c)."""
+    predicate definition -- never re-spelled here (AC 7c).
+
+    `agents is None` means the shared enumeration leg already failed (the
+    caller's own `fetch_live_agents(..., raise_on_failure=True,
+    raise_on_empty_snapshot=True)` raised and was caught). This must return
+    the failure here rather than pass `None` through to `build_roster`:
+    `read_pass.build_roster` treats `agents=None` as "not yet fetched" and
+    re-fetches internally with its own default, non-raising flags -- which
+    would quietly re-run into the same outage and answer `[]`, exactly the
+    empty-fleet-for-an-outage collapse this leg exists to refuse."""
+    if agents is None:
+        return None, None, "enumeration-leg-failed"
     try:
         classified = group_em_read_pass.build_roster(
             repo_root, agents=agents, caller_session_id_value=caller_session_id
@@ -433,7 +444,7 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
     # Legs that accept a caller-supplied clock (`watch_heartbeat.read_liveness`)
     # are passed this exact value; no second clock is struck anywhere below.
     now_epoch = time.time()
-    # Review: overengineering-reviewer finding 3 -- was a literal copy of the
+    # Was a literal copy of the
     # fromtimestamp/strftime expression; now the shared seam.
     result["as_of"] = group_em_watch_heartbeat.iso_instant(now_epoch)
 
@@ -467,7 +478,9 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
     # bill the box twice for the same read and let the two legs disagree about
     # who exists within a single tick.
     try:
-        agents: Optional[list] = group_em_read_pass.fetch_live_agents(Path(target_root))
+        agents: Optional[list] = group_em_read_pass.fetch_live_agents(
+            Path(target_root), raise_on_failure=True, raise_on_empty_snapshot=True
+        )
     except Exception:  # noqa: BLE001
         agents = None
 

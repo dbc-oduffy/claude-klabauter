@@ -301,7 +301,7 @@ def _evaluate(cmd: str) -> Optional[str]:
         if not seg_tokens:
             continue
 
-        # Review: code-reviewer -- Finding 2 (P2, 2026-07-28): scanning
+        # 2026-07-28): scanning
         # every token in the segment for the first `git`-basename match
         # (the pre-fix behavior here) treats a non-command-position
         # MENTION of "git" (an argument to another command, e.g. `echo git
@@ -548,7 +548,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # independently contains a real `git worktree add` invocation outside
     # the heredoc, still denies.
     #
-    # Review: coordinator:code-reviewer (Finding 2, guard-message-size-
     # discipline) -- the deny-reason display below no longer echoes the raw
     # `cmd` at all (message-size compression dropped that line and the
     # `_deny_reason` parameter that carried it); it names only the resolved

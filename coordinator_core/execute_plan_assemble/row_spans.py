@@ -318,7 +318,7 @@ def _measure_row_content_indent(
     longer re-dumped and a row's real indent may be whatever a human (or a
     different emitter) left there.
 
-    Review: code-reviewer -- F4: `content_indent = dash_indent + 2` was
+    `content_indent = dash_indent + 2` was
     assumed, not measured, so a non-default child-key indent made every
     key read as absent and both stamp lines landed at the wrong indent.
 
@@ -418,7 +418,7 @@ def _stamp_rows_in_body(
 
         dash_line = lines[start]
         dash_indent = len(dash_line) - len(dash_line.lstrip(" \t"))
-        # Review: code-reviewer -- F4: measure the row's actual sibling-key
+        # Measure the row's actual sibling-key
         # indent instead of assuming yaml.safe_dump's `dash_indent + 2`
         # default, which this fix exists to stop imposing on the file.
         content_indent = _measure_row_content_indent(lines, start, end, dash_indent)

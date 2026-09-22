@@ -158,7 +158,7 @@ def main(argv: List[str]) -> int:
         return 0
 
     if not argv or argv[0] != "check" or len(argv) != 2:
-        # Review: coordinatorcode-reviewer-6b7a876d — reject trailing argv
+        # Reject trailing argv
         # (e.g. a stale --override-reason) rather than silently swallowing it.
         print(f"{_PROG}: usage: {_PROG} check <handoff-path>", file=sys.stderr)
         return 2

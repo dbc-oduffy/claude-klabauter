@@ -58,7 +58,7 @@ WHY THE RECEIPT BLOCK AND NOT THE DISPOSITIONS BLOCK. `## Integrator
 Dispositions` is the other candidate surface and it is the wrong one, for two
 independent reasons.
 
-Review: coordinator-code-reviewer, 2026-09-11 — the first reason below
+The first reason below
 described `ops/append_integrator_dispositions.py` as it stood before commit
 1b44e2138c and is now stale prose, corrected here rather than left to drift:
 `already_dispositioned=True` no longer means the call declined to write a
@@ -130,10 +130,20 @@ Negative-spec:
       exactly the per-call git cost the resident store was built to remove.
     - Does NOT credit a commit whose session id is absent, unparseable, or
       names a session with no counting receipt. Absence is never credit.
-    - Does NOT accept a receipt on a blank sidecar. A receipt is stamped at
-      DISPATCH, before the reviewer runs, so "dispatched then died" and
-      "reviewed" are distinguishable only by the body being non-blank —
-      the same AC5 rule `_compute_review_receipt_gate` enforces.
+    - Does NOT accept a bare receipt on its own once its session holds a
+      `review_completion:` block anywhere: a receipt is stamped at DISPATCH,
+      before the reviewer runs, so a session with any completion evidence
+      requires the SAME sidecar (or its `agent_id: ''` findings twin, same
+      session + receipt `agent_type`) to also carry a session-matching
+      `review_completion:` block, plus authored content in one of the two.
+      In a session with no completion evidence at all (the writer never ran
+      there) a filled body is still sufficient on its own -- the fallback
+      `_compute_review_receipt_gate` also applies.
+      Residual: the twin join is by (session, receipt `agent_type`), not by
+      `agent_id` -- no surface here stamps one for the findings twin -- so
+      two same-type reviewers in one session, one silent and one that wrote
+      the twin, both count. See plan section "Risks and named residuals",
+      "The twin join is by type, not by id."
     - Does NOT treat `integrator_receipt:` as review evidence. That block
       records that findings were applied, which is a separate fact; a
       review whose findings needed no application is still a review.
@@ -142,6 +152,7 @@ Negative-spec:
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
@@ -186,62 +197,178 @@ def _parse_timestamp(value: object) -> Optional[datetime]:
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
-def _counting_receipt_stamps(share_dir: Path, session_id: str) -> List[datetime]:
-    """Every `stamped_at` on a COUNTING reviewer receipt in this session's
-    sidecar directory, oldest-first.
+def _bare_agent_type(agent_type: object) -> Optional[str]:
+    """`agent_type` namespace-stripped (`coordinator:code-reviewer` ->
+    `code-reviewer`), or None if `agent_type` is not a string. Dispatch
+    writes the namespaced form; the vocabulary and the twin-type join both
+    key on the bare name."""
+    if not isinstance(agent_type, str):
+        return None
+    return agent_type.rpartition(":")[2] if ":" in agent_type else agent_type
 
-    A receipt counts on the same four conditions
+
+@dataclass(frozen=True)
+class _SessionSummary:
+    """The completion-writer state for one session, computed once across
+    every extant share-root directory -- see `receipt_credited_shas`. Never
+    per-directory: a twin under one root must be able to lend content to a
+    run-report under the other, and `session_has_completion` must not
+    disagree between a session's pre- and post-relocation halves."""
+
+    session_has_completion: bool
+    #: Bare (namespace-stripped) receipt `agent_type`s for which a
+    #: session-matching, `agent_id: ''`, completion-less, filled findings
+    #: twin sidecar exists (the shape `provision-sidecar.py` writes).
+    filled_twin_types: frozenset
+
+
+def _has_own_completion(frontmatter: Dict, session_id: str) -> bool:
+    """True iff `frontmatter` carries a `review_completion:` dict whose
+    `session_id` matches `session_id`."""
+    completion = frontmatter.get("review_completion")
+    return isinstance(completion, dict) and completion.get("session_id") == session_id
+
+
+def _parsed_session_sidecars(
+    share_dirs: Iterable[Path], session_id: str
+) -> List[Tuple[Dict, str]]:
+    """Every `(frontmatter, full_text)` pair this session's sidecars parse
+    to, across every share-root directory in `share_dirs`. One read pass,
+    reused by both the session summary and the per-directory stamp
+    collection below.
+
+    Never raises. An unreadable sidecar, undecodable bytes, or a
+    frontmatter block that will not parse is skipped, not fatal -- same
+    contract as the rest of this module."""
+    from coordinator_core.frontmatter.schema_validate import parse_frontmatter
+
+    parsed_sidecars: List[Tuple[Dict, str]] = []
+    for share_dir in share_dirs:
+        session_dir = share_dir / session_id
+        if not session_dir.is_dir():
+            continue
+        for sidecar in sorted(session_dir.glob("*.md")):
+            try:
+                text = sidecar.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            try:
+                parsed = parse_frontmatter(text)
+            except Exception:
+                continue
+            frontmatter = parsed.get("frontmatter")
+            if not isinstance(frontmatter, dict):
+                continue
+            parsed_sidecars.append((frontmatter, text))
+    return parsed_sidecars
+
+
+def _compute_session_summary(
+    parsed_sidecars: List[Tuple[Dict, str]], session_id: str
+) -> _SessionSummary:
+    """The session summary the module docstring names: whether ANY sidecar
+    carries a session-matching `review_completion` block, plus the set of
+    receipt `agent_type`s for which a filled, completion-less, `agent_id: ''`
+    findings twin exists for this session (`provision-sidecar.py`'s shape,
+    census row 2)."""
+    from coordinator_core.subagent_sandbox.detect_unfilled_sidecar import is_unfilled_body
+
+    session_has_completion = False
+    filled_twin_types: Set[str] = set()
+
+    for frontmatter, text in parsed_sidecars:
+        if _has_own_completion(frontmatter, session_id):
+            session_has_completion = True
+
+    for frontmatter, text in parsed_sidecars:
+        if _has_own_completion(frontmatter, session_id):
+            continue
+        receipt = frontmatter.get(_RECEIPT_KEY)
+        if not isinstance(receipt, dict):
+            continue
+        if receipt.get("session_id") != session_id:
+            continue
+        if receipt.get("agent_id") != "":
+            continue
+        bare = _bare_agent_type(receipt.get("agent_type"))
+        if bare is None:
+            continue
+        if is_unfilled_body(text):
+            continue
+        filled_twin_types.add(bare)
+
+    return _SessionSummary(
+        session_has_completion=session_has_completion,
+        filled_twin_types=frozenset(filled_twin_types),
+    )
+
+
+def _receipt_counts(
+    frontmatter: Dict, text: str, session_id: str, summary: _SessionSummary
+) -> bool:
+    """Whether ONE sidecar's session-matching, correctly-typed
+    `review_receipt` counts, replacing the old bare body-blank check.
+
+    Writer live (`summary.session_has_completion`): counts iff this sidecar
+    itself carries a session-matching `review_completion` AND authored
+    content exists for its receipt agent -- either this sidecar's own body
+    is filled, or its receipt `agent_type` is in `summary.filled_twin_types`
+    (a twin lending content it authored under the same session + type). A
+    twin without its own completion block never counts here on its own; it
+    only ever lends content to a completed run-report.
+
+    Writer not live: falls back to the content test alone -- the session the
+    completion writer never ran in (history, a publish lag, or a
+    SubagentStop that did not fire)."""
+    from coordinator_core.subagent_sandbox.detect_unfilled_sidecar import is_unfilled_body
+
+    if summary.session_has_completion:
+        if not _has_own_completion(frontmatter, session_id):
+            return False
+        if not is_unfilled_body(text):
+            return True
+        receipt = frontmatter.get(_RECEIPT_KEY)
+        bare = _bare_agent_type(receipt.get("agent_type")) if isinstance(receipt, dict) else None
+        return bare is not None and bare in summary.filled_twin_types
+
+    return not is_unfilled_body(text)
+
+
+def _counting_receipt_stamps(
+    parsed_sidecars: List[Tuple[Dict, str]], session_id: str, summary: _SessionSummary
+) -> List[datetime]:
+    """Every `stamped_at` on a COUNTING reviewer receipt among
+    `parsed_sidecars` (this session's sidecars, already parsed once across
+    every extant share-root directory), oldest-first.
+
+    A receipt counts on the same conditions
     `workstream_complete._compute_review_receipt_gate` applies, minus its
     baton claim window (which is a property of a close ceremony, not of a
-    commit): the block exists, its `session_id` matches the directory it was
-    found in, its namespace-stripped `agent_type` names a
-    `reviewer_vocabulary.DELEGATE_REVIEWERS` member, and the sidecar body is
-    non-blank.
+    commit): the block exists, its `session_id` matches, its
+    namespace-stripped `agent_type` names a
+    `reviewer_vocabulary.DELEGATE_REVIEWERS` member, and `_receipt_counts`
+    (the completion/content predicate this module now applies in place of a
+    bare body-blank check) is True.
 
     Never raises. An unreadable sidecar, undecodable bytes, or a frontmatter
-    block that will not parse is skipped, not fatal: this runs inside a gate
-    whose other credit source already succeeded, and one corrupt sidecar must
-    not convert a coverage answer into a crash.
+    block that will not parse was already skipped when `parsed_sidecars` was
+    built; this function itself never touches the filesystem.
     """
-    from coordinator_core.frontmatter.schema_validate import parse_frontmatter
     from coordinator_core.reviewer_vocabulary import DELEGATE_REVIEWERS
 
-    session_dir = share_dir / session_id
-    if not session_dir.is_dir():
-        return []
-
     stamps: List[datetime] = []
-    for sidecar in sorted(session_dir.glob("*.md")):
-        try:
-            text = sidecar.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        try:
-            parsed = parse_frontmatter(text)
-        except Exception:
-            continue
-
-        frontmatter = parsed.get("frontmatter")
-        body = parsed.get("body")
-        if not isinstance(frontmatter, dict):
-            continue
-
+    for frontmatter, text in parsed_sidecars:
         receipt = frontmatter.get(_RECEIPT_KEY)
         if not isinstance(receipt, dict):
             continue
         if receipt.get("session_id") != session_id:
             continue
 
-        agent_type = receipt.get("agent_type")
-        if not isinstance(agent_type, str):
-            continue
-        bare = agent_type.rpartition(":")[2] if ":" in agent_type else agent_type
-        if bare not in DELEGATE_REVIEWERS:
+        bare = _bare_agent_type(receipt.get("agent_type"))
+        if bare is None or bare not in DELEGATE_REVIEWERS:
             continue
 
-        # A receipt is stamped at dispatch, before the reviewer writes
-        # anything. A blank body is therefore an ABORTED review, not a pass.
-        if not isinstance(body, str) or not body.strip():
+        if not _receipt_counts(frontmatter, text, session_id, summary):
             continue
 
         stamped_at = _parse_timestamp(receipt.get("stamped_at"))
@@ -292,10 +419,18 @@ def receipt_credited_shas(
             continue
 
         if session_id not in stamps_by_session:
-            stamps = []
-            for share_dir in share_dirs:
-                stamps.extend(_counting_receipt_stamps(share_dir, session_id))
-            stamps_by_session[session_id] = sorted(stamps)
+            # The session summary (both `session_has_completion` and
+            # `filled_twin_types`) is computed ONCE here, across every
+            # extant share-root directory -- never per-directory -- so it
+            # cannot disagree between a session's pre- and post-relocation
+            # halves, and a twin under one root can lend to a run-report
+            # under the other. `receipt_credited_shas` already aggregates
+            # `share_dirs` this same way before reading anything from it.
+            parsed_sidecars = _parsed_session_sidecars(share_dirs, session_id)
+            summary = _compute_session_summary(parsed_sidecars, session_id)
+            stamps_by_session[session_id] = sorted(
+                _counting_receipt_stamps(parsed_sidecars, session_id, summary)
+            )
         stamps = stamps_by_session[session_id]
         if not stamps:
             continue

@@ -257,7 +257,7 @@ class TestReadOnlyTargetAllows(_ReadOnlyFixture):
 
 
 class TestExplicitTimeout(_ReadOnlyFixture):
-    """Review: coordinator-code-reviewer F3 -- both spawns now pass an
+    """Both spawns now pass an
     explicit `timeout=` rather than relying on the implicit default."""
 
     def test_fstat_and_edit_pass_explicit_timeout(self, monkeypatch, tmp_path, identity):

@@ -3240,7 +3240,6 @@ def _has_coordinator_safe_commit(cmd: str, *, legs: Optional[Set[str]] = None) -
     match (nothing precedes ``evil-`` to anchor a path-separator boundary
     before the literal name).
     """
-    # Review: coordinator:code-reviewer (B-commit-matchers Finding 3, nit) --
     # this call is NOT confirmed redundant despite check()'s outer
     # `_normalize_windows_argv0_head_path_with_spaces` pass: that outer pass
     # runs once, on the TOP-LEVEL `cmd_for_scan`, but `_wrapped_shell_c_
@@ -3313,7 +3312,6 @@ _COMMITTING_OP_NAMES = frozenset(
         "memo.send",
         # "ceremony.wsc_tail" REMOVED (ceremony.wsc_tail kill, 2026-08-23) --
         # the op is deleted and no longer registered.
-        # Review: coordinator:code-reviewer (B-commit-matchers Finding 1, P0,
         # confirmed live by fleet.archive_shipped_handoffs landing commit
         # d9282543f this session) -- six more registered, directly-invocable
         # committing ops verified against source, none containing the
@@ -3327,7 +3325,6 @@ _COMMITTING_OP_NAMES = frozenset(
         "fleet.archive_release_accumulator",  # fleet/archive_release_accumulator.py -- archive_and_commit(...)
         "fleet.reap_unintegrated_findings",  # fleet/reap_unintegrated_findings.py -- rm_and_commit(...)
         "fleet.reap_integrated_findings",   # fleet/reap_integrated_findings.py -- rm_and_commit(...)
-        # Review: coordinator:review-integrator sibling sweep (same finding,
         # same session) -- the reviewer's own six did not exhaust the ops
         # tree; a fresh grep for every registered op whose handler calls
         # archive_and_commit(/rm_and_commit(/commit_scoped( (or delegates to
@@ -5765,7 +5762,7 @@ def _pathspec_tokens_before_redirection(tokens: List[str]) -> List[str]:
     false cause, and an in-repo redirect target could have padded the
     inspected pathspec with a path the commit never touched.
 
-    Review: coordinator:code-reviewer -- this previously `break`ed at the
+    This previously `break`ed at the
     first redirection-shaped token and discarded every token after it, so
     ``-- a.py 2>&1 b.py`` (a real path trailing a mid-pathspec redirect)
     dropped ``b.py`` from the guard's own ownership check entirely (the

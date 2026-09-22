@@ -299,7 +299,7 @@ def _reconcile(worktree_root: Path, dry_run: bool) -> tuple[list, list, list]:
     acted: list = []
     skipped: list = []
 
-    # Review: overengineering-reviewer (Kira) — was a verbatim copy of
+    # Was a verbatim copy of
     # memo_list_outbox's dual-root merge; now the shared implementation.
     for path in merged_outbox_drafts(worktree_root):
         disposition, status, note = _classify(path, archived=(sent_dir / path.name).exists())
@@ -386,7 +386,7 @@ def _memo_reconcile_outbox(params: dict, repo_root: Optional[Path] = None) -> di
     if repo_root is None:
         return build_setup_error_result(
             _MODE, dry_run,
-            # Review: coordinator:code-reviewer — error named the retired write root; corrected to canonical.
+            # Error named the retired write root; corrected to canonical.
             "memo.reconcile_outbox: no repo_root supplied — this op reconciles "
             "the CALLING repo's own .coordinator-local/memo-outbox/ and requires a resolved "
             "worktree (common_dir-keyed op).",

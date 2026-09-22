@@ -22,7 +22,7 @@ from coordinator_core.ops.emit.priority_resolve import (
     resolve_priority,
 )
 
-# Review: coordinator:code-reviewer — Finding 1: _write_node/_ledger extracted to conftest.py
+# _write_node/_ledger extracted to conftest.py
 # (shared across the five priority-ledger test modules that used a byte-for-byte copy).
 from coordinator_core.ops.emit.tests.conftest import _ledger, _write_node  # noqa: F401
 
@@ -217,6 +217,32 @@ def test_forked_from_is_not_traversed(node_dir: Path):
     # L's own predecessor is none (spinoff-shaped); forked_from must not be
     # walked, so K's urgent priority is never seen.
     assert result == {"effective_priority": None, "origin": "none", "source_id": None}
+
+
+# ---------------------------------------------------------------------------
+# Default node_id_fn fallback (no authored handoff_id, no explicit node_id_fn
+# passed) must key on the SAME owner-qualified repo slug resolve_repo_name
+# produces -- not a re-derived bare basename -- or an ancestor lookup against
+# a ledger entry authored against the canonical slug silently misses.
+# ---------------------------------------------------------------------------
+
+
+def test_default_node_id_fallback_uses_canonical_repo_slug(node_dir: Path, monkeypatch):
+    monkeypatch.setattr(
+        "coordinator_core.ops.emit.priority_resolve.resolve_repo_name",
+        lambda repo_root: "dbc-oduffy/claude-klabauter",
+    )
+
+    _write_node(node_dir, "A.md", predecessor=None)
+    c_path = _write_node(node_dir, "C.md", handoff_id="C_id", predecessor="A.md")
+
+    ledger = _ledger(**{"dbc-oduffy/claude-klabauter:A.md": "urgent"})
+
+    result = resolve_priority(str(c_path), "C_id", ledger_entries=ledger)
+
+    assert result["effective_priority"] == "urgent"
+    assert result["origin"] == "inherited"
+    assert result["source_id"] == "dbc-oduffy/claude-klabauter:A.md"
 
 
 # ---------------------------------------------------------------------------

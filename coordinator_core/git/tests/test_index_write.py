@@ -6,7 +6,10 @@ agree the worktree is clean? Every assertion here runs `git` as the oracle --
 this is not a test of our own parser against our own writer.
 """
 
+import os
 import subprocess
+import time
+
 import pytest
 
 from coordinator_core.git import index_write
@@ -99,6 +102,31 @@ def test_lock_is_refused_never_stolen(tmp_path):
     (repo / ".git" / "index.lock").write_bytes(b"")
     with pytest.raises(index_write.IndexWriteLockBusy):
         index_write.splice_index(repo, {"seed.txt": index_write.ABSENT})
+
+
+def test_orphaned_stale_lock_is_reaped_before_the_splice(tmp_path, monkeypatch):
+    """An orphaned `index.lock` old and stable enough to be a crash residue,
+    not a live peer write, self-heals: `splice_index` reaps it and lands the
+    write, rather than raising `IndexWriteLockBusy` forever.
+
+    state/bug-backlog/2026-08-12-scoped-git-commit-is-not-a-raw-git-invoc-
+    f4fff3a626fa.yaml's divergence: the in-process splice never presents as
+    a `git` argv, so the PreToolUse reap guard can never match it -- this
+    module has to self-heal on its own, same as the CLI wrapper already does.
+    """
+    repo = _repo(tmp_path)
+    monkeypatch.setenv("COORDINATOR_LOCK_REAP_NO_SLEEP", "1")
+    monkeypatch.chdir(repo)
+    (repo / "seed.txt").unlink()
+    lock = repo / ".git" / "index.lock"
+    lock.write_bytes(b"")
+    stale = time.time() - 300
+    os.utime(lock, (stale, stale))
+
+    index_write.splice_index(repo, {"seed.txt": index_write.ABSENT})
+
+    assert not lock.exists()
+    assert _status(repo).strip() == "D  seed.txt", _status(repo)
 
 
 def test_absolute_key_refused_before_writing(tmp_path):

@@ -51,7 +51,13 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.ipc as ipc
-import coordinator_core.ops  # noqa: F401 — populates _REGISTRY (queue.append / queue.promote)
+# The two ops these tests drive, imported by name. A bare `import
+# coordinator_core.ops` registered every op until the package went lazy-only
+# (2026-08-22); since then it registers none, and both real-handler tests
+# below failed on their own import guard -- leaving the declared-write
+# channel with no end-to-end coverage at all.
+import coordinator_core.ops.queue_append  # noqa: F401 -- registers queue.append
+import coordinator_core.ops.queue_promote  # noqa: F401 -- registers queue.promote
 from coordinator_core.ipc import dispatch_message, _REGISTRY, _SCOPE_TOUCH_PATHS_KEY
 from coordinator_core.session import core, scope, liveness, touch_record
 from coordinator_core.ops.session.safe_commit_offer import compute_offer
@@ -562,6 +568,13 @@ def test_real_queue_append_write_lands_in_compute_offer_safe_paths(tmp_path, mon
     offer = compute_offer("sid-13", cwd=str(repo))
     assert rel in offer["safe_paths"], (rel, offer)
     assert rel not in offer["orphans"]
+
+    # A declared write is a WRITE. Recorded kind-less, it rendered as
+    # "unknown-kind" in `who-claims-path` and kept the unknown population --
+    # which is supposed to mean "predates the axis" -- refilling from live code.
+    sink = touch_record.sink_path(core.session_dir("sid-13", str(repo)))
+    recorded = touch_record.project_live_claims(sink, cwd=str(repo)).claims
+    assert recorded[rel].kind == touch_record.KIND_WRITE, recorded.get(rel)
 
 
 # ---------------------------------------------------------------------------

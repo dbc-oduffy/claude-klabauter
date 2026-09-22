@@ -342,7 +342,7 @@ def _build_baton_frontmatter(
     for logical_name in ("origin_session", "origin_handoff", "origin_handoff_id", "origin_plan_id"):
         value = provenance.get(logical_name)
         fm = insert_fm_field(fm, logical_name, value)
-    # Review: code-reviewer — reuse handoff_author_fork's array-serialization
+    # Reuse handoff_author_fork's array-serialization
     # helper instead of hand-rolling the null/[]/[a, b] three-way branch, so
     # the two modules can't silently drift on this convention.
     fm = _append_fm_array_field(fm, "origin_goal_id", provenance.get("origin_goal_id"))
@@ -483,10 +483,10 @@ async def _handler(
     # param rather than through coordinator-doc-new, so it does not inherit
     # C1's scaffolder-side emission. Append the canonical block when the
     # composed body doesn't already carry one — never duplicate it.
-    # Review: code-reviewer 49e8b242 P2 — was frontmatter.body_blocks._compile_heading_re,
+    # Was frontmatter.body_blocks._compile_heading_re,
     # which near-missed the parser's own grammar; now the canonical detector shared
     # with the parser and every other detection site.
-    # Review: code-reviewer 49e8b242 P3 — aligned empty-body handling with
+    # Aligned empty-body handling with
     # handoff_author_fork.py's shape (no leading blank lines when body is empty).
     if not SESSION_LEDGER_HEADING_RE.search(body):
         ledger_block = "\n".join(SESSION_LEDGER_BLOCK_LINES)
@@ -507,7 +507,7 @@ async def _handler(
     except HandoffArchivedTwinError as exc:
         return _err(str(exc))
 
-    # Review: code-reviewer (F2) — resolved once, in this function's own scope, so
+    # Resolved once, in this function's own scope, so
     # a queue-scaffolded baton authored while a plan is claimed carries that plan's
     # deliverable_id instead of always minting a fresh one (DR-207 DD#1 second door).
     carried_deliverable_id = _resolve_claimed_plan_deliverable_id(worktree_root)

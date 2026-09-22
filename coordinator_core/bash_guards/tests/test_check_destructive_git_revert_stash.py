@@ -148,7 +148,7 @@ class TestBareStashSweepingPeerTrackedEdits:
 
 
 class TestWindowsExeStashRealEntrypoint:
-    """Review: code-reviewer -- Finding 3 (P2, 2026-07-28): the Windows-exe
+    """2026-07-28): the Windows-exe
     stash regression coverage in `TestCommandReallyInvokes` below asserts
     only the private `_command_really_invokes` corroboration helper, never
     `check_destructive_git_revert` itself -- the function `dispatch.py`

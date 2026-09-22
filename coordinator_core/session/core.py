@@ -539,10 +539,9 @@ def ensure_session(
     Negative-spec:
         - Does NOT lock. ``init`` is an idempotent CREATE here, never a
           read-modify-write, so it cannot clobber a concurrent writer's
-          ``last_activity`` stamp -- the same bounded exception
-          ``hooks/session_heartbeat._bootstrap_meta`` already relies on. Do not
-          add a locking scheme on this path; it is on the hook hot path and the
-          race it would close does not exist.
+          ``last_activity`` stamp. Do not add a locking scheme on this path;
+          it is on the hook hot path and the race it would close does not
+          exist.
         - Does NOT repair an existing ``meta.json`` that is unreadable,
           non-JSON, or not a dict. ``update_meta_field`` still returns False for
           those cases and the caller still handles it.
@@ -628,7 +627,7 @@ def pid_alive(pid) -> bool:
     has no such notion (it reports True for any visible-but-unowned PID),
     so on POSIX we shell out to the same ``os.kill(pid, 0)`` primitive
     bash uses to preserve that EPERM-is-dead parity exactly.
-    Review: code-reviewer P2 — psutil.pid_exists() and the prior
+    psutil.pid_exists() and the prior
     PermissionError->True branch both diverged from bash's kill-0-as-dead
     EPERM handling.
 
@@ -669,7 +668,7 @@ def pid_alive(pid) -> bool:
 
 
 class _WinLivenessAmbiguous(Exception):
-    """Review: code-reviewer P2 — ``psutil.Process.create_time()`` raised
+    """``psutil.Process.create_time()`` raised
     something other than ``NoSuchProcess`` (``AccessDenied``, ``ZombieProcess``,
     etc.): the QUERY failed, not necessarily the process. Signalled distinctly
     from "definitely dead" so ``stable_pid_alive`` can fail toward ALIVE
@@ -803,7 +802,7 @@ def stable_pid_alive(pid, stored_lstart: str = "", stored_start_epoch: str = "")
     try:
         now_epoch_val = _win_create_time_epoch(pid_int)
     except _WinLivenessAmbiguous:
-        # Review: code-reviewer P2 — an ambiguous psutil query failure
+        # An ambiguous psutil query failure
         # (AccessDenied, ZombieProcess, ...) is NOT the same as
         # NoSuchProcess: the process may well be alive, only the query
         # failed. Fail toward ALIVE, never collapse into DEAD (the
@@ -929,7 +928,7 @@ def read_meta_field(sdir: str, field: str) -> str:
     ``""``). Booleans need an explicit branch: ``jq -r`` prints lowercase
     ``true``/``false``, whereas Python's ``str(True)`` is ``"True"`` —
     without this branch the two diverge on any boolean meta field.
-    Review: code-reviewer P2 — docstring previously claimed non-string
+    Docstring previously claimed non-string
     values return "", contradicting the (jq-parity-correct) implementation;
     fixed the one real divergence (boolean casing) and corrected the doc.
     """
@@ -1484,7 +1483,7 @@ def attributable_session_id_with_source(
     # first: the label loop must walk the same precedence order the value
     # was actually resolved through, or the label could name a lower-tier
     # source that merely happens to hold the same string.
-    # Review: coordinator:code-reviewer — grepped coordinator_core/ and
+    # Grepped coordinator_core/ and
     # coordinator/bin/ for a cold caller opening session_identity_override;
     # none found (only warm/entry_seam.py opens it, on the warm path).
     # Corrected from a prior claim of an "assemble CLIs" cold caller.
@@ -1701,7 +1700,7 @@ def _find_windows_claude_ancestor(
             try:
                 parent_pid = proc.ppid()
             except (_ps.NoSuchProcess, _ps.AccessDenied, _ps.ZombieProcess) as ppid_exc:
-                # Review: coordinator:code-reviewer P2 — the skip branch's
+                # The skip branch's
                 # ppid() failure must stay distinct from an ordinary
                 # no-parent miss, matching the main (non-skip) path below.
                 return None, f"walk-miss:rung-unreadable:{type(ppid_exc).__name__}:{depth}"
@@ -1718,7 +1717,7 @@ def _find_windows_claude_ancestor(
             try:
                 match = (pid, proc.create_time())
             except (_ps.NoSuchProcess, _ps.AccessDenied, _ps.ZombieProcess) as exc:
-                # Review: coordinator:code-reviewer P3 — preserve any
+                # Preserve any
                 # accumulated skip annotations even when the hit rung's
                 # create_time() itself raises, so the miss reason stays as
                 # legible as the hit would have been.
@@ -1775,7 +1774,7 @@ def _resolve_claude_pid_from_env() -> "tuple[Optional[tuple[int, float]], str]":
     var) is rejected here, before ``psutil.Process(pid)`` — not left to
     depend on a caller-side blanket ``except Exception`` for safety.
 
-    Review: code-reviewer P3 — subject to the SAME PID-reuse/TOCTOU window
+    Subject to the SAME PID-reuse/TOCTOU window
     ``_find_windows_claude_ancestor`` already has (the name-read and the
     ``create_time()`` read below are two separate ``try`` blocks, so the
     PID could theoretically be recycled between them): no wider a window
@@ -2001,7 +2000,7 @@ def init(
                 found_pid, ppid_ct = match
                 stable_pid = str(found_pid)
                 epoch_i = int(ppid_ct)
-                # Review: code-reviewer nit — mirror the POSIX branch's `!= 0`
+                # Mirror the POSIX branch's `!= 0`
                 # guard (`0` is lstart_to_epoch's "parse failed" sentinel; a
                 # real process birth at the Unix epoch is impossible).
                 stable_pid_start_epoch = str(epoch_i) if epoch_i != 0 else ""
@@ -2105,6 +2104,29 @@ def init(
         except Exception:
             stable_pid_capture = "posix-parent-miss:unknown"
 
+    # meta.json has no write site for the session's display `name`, so a
+    # reader asking it that question gets a schemaless, confidently-answered
+    # null forever, rather than an absent key it would think to question.
+    # Resolved the same way `archive_stamp._record_claimant_identity_best_
+    # effort` resolves `claimed_by_name` -- `harness_registry.self_record()`,
+    # the O(1) leg (one registry-record `read_text`, no `glob`, no spawn),
+    # trust-checked against `session_id` so a warm-served call never stamps
+    # an uninvolved live peer's name onto this session's record (the same
+    # ambient-environment hazard that function's own docstring documents).
+    resolved_name = ""
+    try:
+        from coordinator_core.session import harness_registry
+
+        parsed_registry = harness_registry.self_record()
+    except Exception:  # noqa: BLE001 -- best-effort; a registry read failure never blocks init()
+        parsed_registry = None
+    if (
+        parsed_registry is not None
+        and parsed_registry[0] == session_id
+        and parsed_registry[1].name
+    ):
+        resolved_name = parsed_registry[1].name
+
     meta_path = sdir / "meta.json"
     if meta_path.is_file():
         # Refresh path: pid/last_activity/branch/stable_pid*/
@@ -2126,6 +2148,8 @@ def init(
             "branch": branch,
             "stable_pid_capture": stable_pid_capture,
         }
+        if resolved_name:
+            refresh_fields["name"] = resolved_name
         if stable_pid:
             refresh_fields["stable_pid"] = stable_pid
             # POSIX stopped WRITING stable_pid_lstart 2026-07-27 (ps-to-
@@ -2146,6 +2170,7 @@ def init(
             "pid": str(pid),
             "last_activity": now,
             "goal": goal or "",
+            "name": resolved_name,
             "stable_pid_capture": stable_pid_capture,
         }
         if stable_pid:

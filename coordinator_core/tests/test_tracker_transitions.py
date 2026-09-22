@@ -482,7 +482,7 @@ def test_ac2_direct_tier_reopen_cascade_still_stamps_applied_at(repo_root):
 
 
 # ---------------------------------------------------------------------------
-# Review: coordinator:code-reviewer, P1 — `_find_existing_by_address` scans
+# `_find_existing_by_address` scans
 # the SAME shared shard `tracker_entities.py` writes into (and this
 # module's own `kind: "snapshot"` events land in), and neither shape
 # carries `item_id`/`axis`/`to_state`. This regression fixture writes one
@@ -540,7 +540,7 @@ def test_mixed_shard_entity_and_snapshot_events_do_not_crash_transition_dedup(
 
 
 # ---------------------------------------------------------------------------
-# Review: coordinator:code-reviewer, P3 — `_emit_batch`'s partial-dedup
+# `_emit_batch`'s partial-dedup
 # branch (an existing-match resolved alongside a genuinely-new payload in
 # the SAME batch) has no current production caller (`reopen_cascade` always
 # passes `source_observation_id=None`, which never dedups), so it is
@@ -1380,3 +1380,123 @@ def test_evidence_is_copied_in_rather_than_aliased():
     assert event["evidence"]["probe"]["probe_result"] == "pass"
     assert event["evidence"]["probe"]["notes"] == ["one"]
     assert "added_later" not in event["evidence"]
+
+
+# ---------------------------------------------------------------------------
+# Suggest-tier events are visible to their own dedup scan (2026-09-21 fix):
+# a stored `suggest`-tier event must dedupe against itself on replay, and a
+# later `auto`-tier upgrade of the same evidence sha must mint a genuinely
+# new event rather than colliding with — or silently resolving to — the
+# stored suggest event.
+# ---------------------------------------------------------------------------
+
+
+def test_suggest_tier_event_dedupes_against_itself_on_replay(repo_root):
+    """Before the fix, `_emit`'s pre-append scan read `tracker_store.
+    read_events`, which filters out the null-`applied_at` suggest event by
+    design — so the dedup check never finds it, and the replay mints the
+    SAME id a second time (minting is content-addressed, no nonce), which
+    then collides with the already-stored row on
+    `TrackerStoreDuplicateIdError` at append time instead of resolving to a
+    no-op re-observation."""
+    first = tt.emit_transition(
+        "item-suggest-replay",
+        "code_complete",
+        "asserted",
+        actor="auto",
+        evidence={"sha": "sha-replay"},
+        tier="suggest",
+        source_observation_id="obs-replay",
+        repo_root=repo_root,
+    )
+    second = tt.emit_transition(
+        "item-suggest-replay",
+        "code_complete",
+        "asserted",
+        actor="auto",
+        evidence={"sha": "sha-replay"},
+        tier="suggest",
+        source_observation_id="obs-replay",
+        repo_root=repo_root,
+    )
+
+    assert first["applied_at"] is None
+    assert second["id"] == first["id"]
+
+    raw_lines = [
+        line
+        for line in tracker_store.shard_path(repo_root)
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    assert len(raw_lines) == 1
+
+
+def test_auto_tier_upgrade_of_suggest_tier_event_appends_a_distinct_event(
+    repo_root,
+):
+    """The ordinary branch-then-merge lifecycle: a `suggest`-tier assert
+    while unmerged, then an `auto`-tier assert of the SAME evidence sha
+    once reachable. Before the fix, the assert-arm of
+    `_code_complete_dedup_key` addressed on `(generation, evidence_sha)`
+    alone — no `tier` term — so the auto-tier payload minted/dedup-checked
+    under the IDENTICAL address as the already-stored suggest event, either
+    colliding on `TrackerStoreDuplicateIdError` (mint collision) or, once
+    the dedup scan alone was widened, resolving to the stored suggest event
+    instead of appending — permanently blocking the auto-tier upgrade."""
+    suggest = tt.emit_transition(
+        "item-suggest-upgrade",
+        "code_complete",
+        "asserted",
+        actor="auto",
+        evidence={"sha": "sha-upgrade"},
+        tier="suggest",
+        source_observation_id="obs-upgrade",
+        repo_root=repo_root,
+    )
+    auto = tt.emit_transition(
+        "item-suggest-upgrade",
+        "code_complete",
+        "asserted",
+        actor="auto",
+        evidence={"sha": "sha-upgrade"},
+        tier="auto",
+        source_observation_id="obs-upgrade",
+        repo_root=repo_root,
+    )
+
+    assert suggest["applied_at"] is None
+    assert auto["applied_at"] == auto["observed_at"]
+    assert auto["id"] != suggest["id"]
+
+    raw_lines = [
+        line
+        for line in tracker_store.shard_path(repo_root)
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    assert len(raw_lines) == 2
+
+    # Replaying the auto-tier observation must still dedupe against the
+    # auto event, not mint a third row.
+    auto_replay = tt.emit_transition(
+        "item-suggest-upgrade",
+        "code_complete",
+        "asserted",
+        actor="auto",
+        evidence={"sha": "sha-upgrade"},
+        tier="auto",
+        source_observation_id="obs-upgrade",
+        repo_root=repo_root,
+    )
+    assert auto_replay["id"] == auto["id"]
+    raw_lines_after_replay = [
+        line
+        for line in tracker_store.shard_path(repo_root)
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    assert len(raw_lines_after_replay) == 2

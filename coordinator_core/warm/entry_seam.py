@@ -193,7 +193,14 @@ def collecting_diagnostics(into: Optional[List[str]] = None) -> Iterator[List[st
 # treated as "no carried identity" on this axis, never mirrored into
 # `os.environ` where every ambient reader downstream would trust it.
 # ---------------------------------------------------------------------------
-from coordinator_core.warm.env_forwarding import BORROW, CALLER, FORWARDING_SET, OVERRIDE, REFUSE
+from coordinator_core.warm.env_forwarding import (
+    BORROW,
+    CALLER,
+    FORWARDING_SET,
+    OVERRIDE,
+    REFUSE,
+    is_caller_prefixed,
+)
 
 _ENV_LOWER_TIER_SESSION_NAMES = ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID")
 _ENV_TOP_TIER_SESSION_NAME = "COORDINATOR_SESSION_ID"
@@ -253,7 +260,7 @@ def _session_id_from_env(env: Optional[Mapping[str, str]]) -> Optional[str]:
 
 
 @contextlib.contextmanager
-# Review: overengineering-reviewer (finding 5) -- `caller_pid`'s `= None`
+# `caller_pid`'s `= None`
 # default was unreachable (one private call site, positional) and
 # inconsistent with its siblings, neither of which defaults.
 def _environ_identity_borrow(
@@ -319,9 +326,15 @@ def _environ_identity_borrow(
 
     from coordinator_core.session.core import _UUID_RE
 
+    env = env or {}
     saved = {name: os.environ.get(name) for name in _ENV_BORROWED_NAMES}
+    saved.update({name: value for name, value in os.environ.items() if is_caller_prefixed(name)})
+    carried_prefixed = {
+        name: value
+        for name, value in env.items()
+        if is_caller_prefixed(name) and isinstance(value, str) and value
+    }
     try:
-        env = env or {}
 
         # REFUSE branch (isolated-only mirror -- see docstring above for why
         # this is not the refusal itself). ABSENT FROM `env` ENTIRELY is
@@ -338,6 +351,10 @@ def _environ_identity_borrow(
             if isinstance(value, str) and value and os.path.isabs(value):
                 os.environ[name] = value
             else:
+                emit_diagnostic(
+                    f"{name} override rejected (not an absolute path): {value!r} -- "
+                    "falling back to the server's own value"
+                )
                 os.environ.pop(name, None)
 
         # OVERRIDE branch (session-id precedence triple, unchanged UUID gate).
@@ -378,12 +395,23 @@ def _environ_identity_borrow(
             else:
                 os.environ.pop(name, None)
 
+        # PREFIX branch (`env_forwarding.CALLER_PREFIXES`, the per-session
+        # guard overrides) -- CALLER terms for a name set not known in
+        # advance: every server-side name under a prefix pops, then exactly
+        # the carried ones bind. An override this worker inherited from its
+        # spawner must never read as this caller's.
+        for name in [n for n in os.environ if is_caller_prefixed(n)]:
+            os.environ.pop(name, None)
+        os.environ.update(carried_prefixed)
+
         if caller_pid is not None and caller_pid.isdigit():
             os.environ[_ENV_CLAUDE_PID_NAME] = caller_pid
         else:
             os.environ.pop(_ENV_CLAUDE_PID_NAME, None)
         yield
     finally:
+        for name in [n for n in os.environ if is_caller_prefixed(n) and n not in saved]:
+            os.environ.pop(name, None)
         for name, value in saved.items():
             if value is None:
                 os.environ.pop(name, None)
@@ -550,14 +578,23 @@ def per_request_state(
     # (`session.core._UUID_RE`) -- not re-validated here, so an out-of-shape
     # candidate is silently treated as "no override" exactly as it always
     # was, with no duplicated gate to drift out of sync with that one.
+    diagnostics_scope: "contextlib.AbstractContextManager[object]"
+    if diagnostics is None:
+        diagnostics_scope = contextlib.nullcontext()
+    else:
+        diagnostics_scope = collecting_diagnostics(diagnostics)
+
+    # `diagnostics_scope` opens BEFORE `_environ_identity_borrow`, not after:
+    # that borrow's own pre-yield body (where a malformed REFUSE claim calls
+    # `emit_diagnostic`) runs at __enter__ time, ahead of any context manager
+    # nested inside it -- a diagnostics sink opened only around the `yield`
+    # would still be unset while the borrow's own body executes, silently
+    # dropping exactly the diagnostic this axis exists to carry.
     with warm_scope, session_identity_override(_session_id_from_env(merged_env)):
-        with _environ_identity_borrow(merged_env, isolated, caller_pid):
-            with collecting(into) as declared:
-                if diagnostics is None:
+        with diagnostics_scope:
+            with _environ_identity_borrow(merged_env, isolated, caller_pid):
+                with collecting(into) as declared:
                     yield declared
-                else:
-                    with collecting_diagnostics(diagnostics):
-                        yield declared
 
 
 

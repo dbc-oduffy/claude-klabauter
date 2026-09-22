@@ -95,7 +95,7 @@ _PROG = "coordinator-fold-execution-record"
 
 _DATE_PREFIX_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}-")
 _SLUG_VALID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
-# Review: code-reviewer — re.ASCII constrains \s to the same [\t\n\x0b\f\r ]
+# re.ASCII constrains \s to the same [\t\n\x0b\f\r ]
 # class as bash's POSIX [[:space:]], matching the oracle rather than Python's
 # default Unicode-whitespace superset (e.g. NEL, LINE/PARAGRAPH SEPARATOR).
 _CHUNKS_SECTION_ENTER_RE = re.compile(r"^##\s+Chunks", re.ASCII)
@@ -135,7 +135,7 @@ def _parse_chunk_ac_map(plan_text: str) -> Dict[str, str]:
     subsection headings, returning {lowercased chunk-id: trimmed AC label}."""
     chunk_ac_map: Dict[str, str] = {}
     in_chunks_section = False
-    # Review: code-reviewer — str.splitlines() treats a wider set of Unicode
+    # str.splitlines() treats a wider set of Unicode
     # characters as line boundaries (e.g. NEL, LINE/PARAGRAPH SEPARATOR) than
     # bash's `while IFS= read -r line` (splits on \n only). split("\n") mirrors
     # the oracle's newline-only semantics.
@@ -213,7 +213,7 @@ def _trim_blank_lines(lines: List[str]) -> List[str]:
 def _is_trivial_observation(obs_body: str) -> bool:
     """True if `obs_body` is empty/whitespace-only or one of the oracle's
     recognized trivial tokens (n/a, none, em-dash, hyphen)."""
-    # Review: code-reviewer — sibling of the :92-94 \s-regex finding: mirrors
+    # Sibling of the :92-94 \s-regex finding: mirrors
     # the oracle's `${obs_body//[[:space:]]/}` (ASCII-only ${space} class), not
     # Python's default Unicode-whitespace \s.
     trimmed = re.sub(r"\s+", "", obs_body, flags=re.ASCII)
@@ -248,7 +248,7 @@ def _collect_sidecar_files(subagent_share_dir: str, plan_slug: str) -> List[str]
         except OSError:
             continue
         for file_entry in file_entries:
-            # Review: code-reviewer — fnmatch.fnmatch() case-normalizes via
+            # fnmatch.fnmatch() case-normalizes via
             # os.path.normcase() (no-op on POSIX, but case-insensitive on Windows),
             # diverging from the oracle's always-case-sensitive `find -name`.
             # fnmatchcase() forces byte-consistent matching on every platform.
@@ -367,7 +367,7 @@ def main(argv: List[str]) -> int:
             continue
         try:
             with open(sidecar, "r", encoding="utf-8", errors="replace") as fh:
-                # Review: code-reviewer — split("\n") only, mirroring the
+                # split("\n") only, mirroring the
                 # oracle's newline-only line-splitting (see _parse_chunk_ac_map).
                 lines = fh.read().split("\n")
         except OSError:

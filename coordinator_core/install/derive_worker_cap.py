@@ -109,7 +109,7 @@ def apply_cap_to_command(command: str, cap: int) -> str:
     if match is None:
         return command
 
-    # Review: code-reviewer P2 (integrator follow-up) -- rewrite EVERY unquoted
+    # Rewrite EVERY unquoted
     # occurrence, not just the first: argparse is last-wins, so rewriting only
     # the first leaves `--maxprocesses=7 --maxprocesses=9` running at 9 and
     # the ceiling silently defeated. Quote-awareness is what makes replace-all
@@ -154,7 +154,7 @@ def cap_command_for_this_box(command: str) -> Tuple[str, Optional[int]]:
     try:
         cap = derive_cap()
     except Exception as exc:
-        # Review: code-reviewer P2 — stay broad (an unexpected exception type
+        # Stay broad (an unexpected exception type
         # is exactly the case FALL_BACK exists to survive; narrowing to
         # psutil's own types would take the fast tier offline on the host
         # least able to afford it if a *coding* defect ever raised here

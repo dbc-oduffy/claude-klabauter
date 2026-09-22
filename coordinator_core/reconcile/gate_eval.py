@@ -2669,7 +2669,7 @@ def evaluate_gate_triage(
         "gate_evidence_legs": [],
     }
 
-    # Review: eng-director/the Director of Engineering, Finding 1 — `consult_prose_gates=False`
+    # `consult_prose_gates=False`
     # suppresses this branch entirely so a prose scaffold placeholder never
     # parks a readiness verdict; every other caller keeps the default `True`
     # and this line is a no-op for them.
@@ -2695,7 +2695,7 @@ def evaluate_gate_triage(
             ],
         }
 
-    # Review: eng-director/the Director of Engineering, Finding 1 — `consult_prose_gates=False`
+    # `consult_prose_gates=False`
     # suppresses the DR-259 demoted-dominance branch below as well, so an
     # empty `blocked_by` plus a gate NOTE (never a gate) does not read as
     # `indeterminate`. Default `True` leaves this branch reachable exactly
@@ -3124,6 +3124,53 @@ def derive_readiness(
     # status == "review-due": a prompt for a human recheck, never auto-
     # promoted — see rule above.
     return {"deployment_state": None, "pickup_ready": None, "basis": BASIS_REVIEW_DUE}
+
+
+#: The exact `--gated-predicate` reason strings `coordinator-doc-new` writes
+#: to `blocking_notes` for a DR-173-parked baton (session_baton_promote.py's
+#: `gate_reason` ternary, the ONLY producer of this text) — DR-173's gate has
+#: no `blocked_by` graph node to name, so these three strings are the sole
+#: on-disk signature of "parked because category/summary were unfilled at
+#: promote time", never a general-purpose blocking_notes value.
+DR173_GATED_PREDICATE_TEXTS = (
+    "category and summary are unfilled placeholders",
+    "category is an unfilled placeholder",
+    "summary is an unfilled placeholder",
+)
+
+
+def is_dr173_parked(handoff: Dict[str, Any]) -> bool:
+    """True iff `handoff` carries DR-173's parked signature: an EMPTY
+    `blocked_by` (the gate has no graph node to name — see
+    `session_baton_promote._scaffold_via_doc_new`'s own docstring for why
+    forcing one is forbidden) alongside a `blocking_notes` naming one of
+    `DR173_GATED_PREDICATE_TEXTS`.
+
+    Deliberately does NOT read `deployment_state` — a caller wired after a
+    verb that has already re-stamped it (e.g. `handoff_transition`'s
+    unclaim/repark, both of which hardcode `ready_to_fire` before their own
+    TIGHTEN-ONLY recheck) would find the ORIGINAL `awaiting_gate` already
+    gone by the time this runs, while `blocked_by`/`blocking_notes` are
+    untouched by every one of those verbs — those two fields are this
+    signature's only reliable carriers.
+
+    A pure structural read of frontmatter the caller already holds — never
+    consults the corpus, never calls `evaluate_gate_triage` — so this is not
+    a second `required_fields_empty` predicate inside `derive_readiness`
+    itself (the eng-director review's Finding 3b rejected exactly that); it
+    recognises DR-173's ALREADY-WRITTEN output shape for a caller that must
+    not clobber it, never re-derives whether a baton SHOULD be gated.
+    """
+    if handoff.get("blocked_by"):
+        return False
+    notes = handoff.get("blocking_notes")
+    if not isinstance(notes, str):
+        return False
+    # Substring, not exact-match: coordinator-doc-new JOINS an accompanying
+    # --gate-note onto the DR-173 reason with "; " (session_baton_promote.py
+    # `gate_reason` + coordinator-doc-new's `_notes` join), so the on-disk
+    # text can carry the ratified predicate PLUS unrelated advisory prose.
+    return any(text in notes for text in DR173_GATED_PREDICATE_TEXTS)
 
 
 def derive_readiness_batch(

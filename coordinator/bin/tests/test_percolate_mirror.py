@@ -363,6 +363,10 @@ class _TimeoutLockCtx:
         return False
 
 
+@pytest.mark.deliberate_wall_clock(
+    reason="deny-at-once: the lock-busy path must return immediately rather than poll or block, "
+    "a behaviour only wall clock can observe"
+)
 def test_percolate_mirror_denies_fast_on_contended_repo_root(tmp_path, monkeypatch, capsys):
     """Third leg (brief's own numbering): a row's `repo_root` held by a peer
     round refuses in well under a second and names that row's destination

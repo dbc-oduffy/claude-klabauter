@@ -66,7 +66,7 @@ def _git_rev_parse(parent: Path, flag: str):
     """Run `git rev-parse <flag>` in *parent* via the shared Windows-safe
     `git_native._git()` helper (list argv, no shell — CC-1).
 
-    Review: code-reviewer (F2, 2026-07-22) — this previously spawned a raw
+    This previously spawned a raw
     ad hoc `subprocess.run(["git", "-C", ...])` with neither
     `creationflags=CREATE_NO_WINDOW` nor `stdin=subprocess.DEVNULL`,
     reintroducing the console-popup / interactive-hang risk `git_native.py`

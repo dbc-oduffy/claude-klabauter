@@ -454,7 +454,7 @@ def test_three_and_four_field_rows_get_no_candidate_restatements_field(root):
 
 
 def test_empty_pin_field_before_change_kind_fails_loud(root):
-    # Review: code-reviewer — Finding 1/2. An empty 4th field with a populated 5th field
+    # An empty 4th field with a populated 5th field
     # must fail loud (exit 1, no output) rather than silently misparsing change_kind into
     # pin_raw and dropping it — the pre-fix behaviour emitted a spurious "malformed 4th-
     # column pin" NOTE instead of a clean, correctly-diagnosed error.

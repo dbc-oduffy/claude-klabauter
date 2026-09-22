@@ -350,7 +350,7 @@ def test_fnm_step_clause_uses_stated_reason_escape_hatch():
     assert entry.effect == "write"
     assert "brew install fnm" in entry.reason
     assert "fnm.vercel.app" in entry.reason
-    # Review: coordinator:code-reviewer — restored (P2): undisclosed
+    # Restored (P2): undisclosed
     # removal, unrelated to C4's stated scope; substrate.py's fnm reason
     # text still contains both substrings verbatim.
     assert "_refuse_machine_mutation" in entry.reason

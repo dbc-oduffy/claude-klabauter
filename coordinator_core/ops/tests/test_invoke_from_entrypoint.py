@@ -174,3 +174,52 @@ def test_cwd_is_restored_even_when_the_entrypoint_fails_closed():
             "entrypoint": "definitely-not-a-real-coordinator-bin-cli",
         })
     assert os.getcwd() == before
+
+
+# ---------------------------------------------------------------------------
+# (f) suite-running verbs are refused to the pool, before anything loads
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "entrypoint, argv",
+    [
+        ("workday-complete-assemble", ["apply", "--brief", "x.json"]),
+        ("workday-complete-args-and-validate", ["run-step1"]),
+    ],
+)
+def test_a_suite_running_verb_is_refused_undispatched(entrypoint, argv, monkeypatch):
+    """Served warm, step1 held a pool worker for the suite mutex wait plus the
+    suite, past the door's 30s deadline -- -32004 every time, the pool starved
+    by concurrent close ceremonies. The refusal must carry the -32007 code the
+    door reads as provably undispatched, and nothing may load first."""
+    from coordinator_core import ipc
+    from coordinator_core.ops import invoke_from_argv
+
+    def _must_not_load(*_a, **_k):
+        raise AssertionError("the entrypoint loaded before the refusal")
+
+    monkeypatch.setattr(invoke_from_argv, "_load_entrypoint_main", _must_not_load)
+
+    with pytest.raises(invoke_from_argv.EntrypointNotWarmLoadableError) as excinfo:
+        _invoke_from_argv({"argv": argv, "cwd": _PROJECT_ROOT, "entrypoint": entrypoint})
+
+    assert ipc._handler_exception_error(excinfo.value)["code"] == ipc.ENTRYPOINT_NOT_WARM_LOADABLE_ERROR
+
+
+def test_the_same_entrypoints_other_verbs_still_serve_warm(monkeypatch):
+    from coordinator_core.ops import invoke_from_argv
+
+    loaded = []
+    monkeypatch.setattr(
+        invoke_from_argv,
+        "_load_entrypoint_main",
+        lambda _s, name: (loaded.append(name), lambda *_a: 0)[1],
+    )
+
+    result = _invoke_from_argv(
+        {"argv": ["brief", "--json"], "cwd": _PROJECT_ROOT, "entrypoint": "workday-complete-assemble"}
+    )
+
+    assert result["exit_code"] == 0
+    assert loaded == ["workday-complete-assemble"]

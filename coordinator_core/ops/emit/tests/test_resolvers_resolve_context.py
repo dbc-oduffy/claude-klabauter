@@ -143,7 +143,7 @@ class TestResolveContextLegacyNoArg:
             ctx = resolve_context()
 
         # Verify resolve_context() returned a real EmitContext, not just a truthy object.
-        # Review: code-reviewer (Slice-4 F10) — ctx is not None is too weak; check structural fields.
+        # Ctx is not None is too weak; check structural fields.
         assert hasattr(ctx, "central_state_root"), "resolve_context() must return an EmitContext with central_state_root"
         assert hasattr(ctx, "repo_name"), "resolve_context() must return an EmitContext with repo_name"
 
@@ -169,7 +169,7 @@ class TestParamlessCallersImportCleanly:
     def test_goal_append_imports(self) -> None:
         """goal_append.py imports cleanly — resolve_context() is param-less there."""
         import coordinator_core.ops.goal_append as ga  # noqa: F401
-        # Review: code-reviewer (Slice-4 F8) — 'or True' was vacuously always-true; assert real callable.
+        # 'or True' was vacuously always-true; assert real callable.
         assert callable(getattr(ga, "append_goal", None)), (
             "goal_append module must expose a callable append_goal"
         )
@@ -177,7 +177,7 @@ class TestParamlessCallersImportCleanly:
     def test_recorder_imports(self) -> None:
         """recorder.py imports cleanly — resolve_context() is param-less there."""
         import coordinator_core.ops.emit.recorder as rec  # noqa: F401
-        # Review: code-reviewer (Slice-4 F8) — 'or True' was vacuously always-true; assert real callable.
+        # 'or True' was vacuously always-true; assert real callable.
         assert callable(getattr(rec, "record", None)), (
             "recorder module must expose a callable record function"
         )

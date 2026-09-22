@@ -3,7 +3,7 @@ coverage for the three independently-authored `claude-machine-local.{sh,ps1}`
 consumer templates plus the Python wrapper's `_settings_home()`.
 
 Spec backlink: docs/plans/2026-05-20-portable-code-substrate.md §5.2/§5.3
-Review: code-reviewer — F4, no automated ladder-parity test existed for the
+No automated ladder-parity test existed for the
 `.sh`/`.ps1` templates; only the Python wrapper's ladder was regression-tested
 (test_claude_machine_local.py's `test_settings_home_*` trio). Finding 1 and
 Finding 2 in the same review are concrete instances of the drift-undetected
@@ -171,7 +171,7 @@ def _derive_settings_home(reader_path: str) -> str:
     the separator on the compare side for the same reason.
     """
     normalized = reader_path.replace("\\", "/")
-    # Review: code-reviewer (Finding 2, this slice) -- a captured reader_path
+    # A captured reader_path
     # with fewer than two path components after normalization (e.g. a shim
     # quoting bug that only captured a bare filename) used to fall through to
     # a silent `posixpath.dirname` x2 -> "" -- the exact failure shape the
@@ -207,7 +207,7 @@ def _same_home(resolved: str, expected: str) -> bool:
 
 
 def test_derive_settings_home_normalizes_unc_reader_path():
-    # Review: code-reviewer (Finding 3, this slice) -- a direct unit test of
+    # A direct unit test of
     # _derive_settings_home against a UNC-rooted reader path
     # (`\\server\share\...`), not exercised by either subprocess round-trip
     # above. The blanket `\` -> `/` replace turns the UNC path into

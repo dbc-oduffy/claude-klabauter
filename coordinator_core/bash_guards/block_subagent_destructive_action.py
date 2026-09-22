@@ -3057,10 +3057,13 @@ def _build_reason(
             "this guard. Fix forward, or surface a genuine need to the EM."
         )
     return (
-        "BLOCKED: destructive git/rm/chmod -R blocked for subagents.\n\n"
-        f"  Denied: {deny_kind}\n"
-        f"  Cmd:    {cmd_safe}\n\n"
-        "Speed bump, not a boundary. Fix forward or ask the EM."
+        "BLOCKED: destructive git/rm/chmod-chown -R at the shell surface for\n"
+        "subagents -- not a capability boundary, an interpreter can still\n"
+        "reach git.\n\n"
+        f"  Denied:   {deny_kind}\n"
+        f"  Command:  {cmd_safe}\n\n"
+        "Fix forward, or surface it to the EM. No subagent-reachable override\n"
+        "exists."
     )
 
 
@@ -3243,8 +3246,9 @@ def _log_fail_open(
         parts = " ".join(f"{k}={v!r}" for k, v in fields.items())
         line = f"[{timestamp}] FAIL-OPEN {parts}\n"
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(log_path, "a", encoding="utf-8", newline="\n") as fh:
-            fh.write(line)
+        from coordinator_core.session.claimed_write import append_claimed_line  # noqa: PLC0415 -- deferred: guard hot path
+
+        append_claimed_line(log_path, line.encode("utf-8"))
     except Exception:  # noqa: BLE001 -- observability must never raise into check()
         pass
 

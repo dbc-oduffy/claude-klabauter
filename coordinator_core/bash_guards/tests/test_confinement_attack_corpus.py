@@ -509,7 +509,6 @@ def test_advisory_rewrite_attack_corpus(guard_name, shape_name, tmp_path, monkey
     ADVISORY_REWRITE. Asserts `"advisory"`, not `"deny"` -- these guards no
     longer hard-deny anything by design; a plain silent `"allow"` (no
     envelope) on any evasion shape is the regression this proves against.
-    Review: coordinator:code-reviewer sidecar
     coordinatorcode-reviewer-caf5fbe1.md, P1 finding.
     """
     decide, base_cmd = _ADVISORY_GUARD_SETUP[guard_name](tmp_path, monkeypatch)

@@ -196,6 +196,75 @@ class TestHandoffBranch:
         # matching live session, so the claim is stale, not a collision.
         assert result.exit_code == pa.EXIT_OK
 
+    def test_bare_single_artifact_brief_takes_over_a_stale_claim(self, tmp_path, monkeypatch):
+        """Baseline for the `--no-claim` carve-out below: a bare, single-
+        artifact `brief` (the CLI's default `brief_multi` path, `claim_at_
+        brief=True`) still performs the brief-stage takeover of a dead
+        holder's claim today — this is the behaviour `--no-claim` exists to
+        let an inspection-only caller opt out of, not a change to it."""
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "my-test-sid")
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+        claim_dir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / "h1.md"
+        claim_dir.mkdir(parents=True)
+        (claim_dir / "session_id").write_text("dead-peer-sid\n", encoding="utf-8")
+        (claim_dir / "claimed_at").write_text("2026-01-01T00:00:00Z\n", encoding="utf-8")
+
+        results = pb.brief_multi("state/handoffs/h1.md", repo_root=repo)
+
+        assert (claim_dir / "session_id").read_text(encoding="utf-8").strip() == "my-test-sid"
+        assert results[0].decision_object["gates"]["claim_reclaim"]["holder"] == "dead-peer-sid"
+
+    def test_no_claim_flag_leaves_a_stale_claim_untouched(self, tmp_path, monkeypatch):
+        """The read-only-inspection defect (state/bug-backlog/2026-08-18-
+        pickup-assemble-brief-takes-over-a-stale-claim-4e91c7d38a05.yaml):
+        `brief_multi(..., no_claim=True)` — wired from the CLI's `--no-claim`
+        — must leave a dead holder's claim in place rather than taking it
+        over, while still surfacing the stale-claim verdict in `gates.
+        claim_grant` so an inspecting caller learns the claim is takeable
+        without the read itself taking it."""
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "my-test-sid")
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+        claim_dir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / "h1.md"
+        claim_dir.mkdir(parents=True)
+        (claim_dir / "session_id").write_text("dead-peer-sid\n", encoding="utf-8")
+        (claim_dir / "claimed_at").write_text("2026-01-01T00:00:00Z\n", encoding="utf-8")
+
+        results = pb.brief_multi("state/handoffs/h1.md", repo_root=repo, no_claim=True)
+
+        assert (claim_dir / "session_id").read_text(encoding="utf-8").strip() == "dead-peer-sid"
+        decision_object = results[0].decision_object
+        assert "claim_reclaim" not in decision_object["gates"]
+        claim_grant = decision_object["gates"]["claim_grant"]
+        assert claim_grant["holder"] == "dead-peer-sid"
+        assert claim_grant["verdict"] == "granted-with-warning"
+
+    def test_cli_no_claim_flag_is_accepted_and_wired(self, tmp_path, monkeypatch, capsys):
+        """End-to-end through `pickup_brief.main()`'s own argv parser — the
+        actual CLI surface callers invoke — rather than only the in-process
+        `brief_multi` kwarg: `pickup-assemble brief <artifact> --no-claim`
+        must not be rejected as an unrecognized argument, and stdout must
+        stay a single parseable JSON document."""
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "my-test-sid")
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+        claim_dir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / "h1.md"
+        claim_dir.mkdir(parents=True)
+        (claim_dir / "session_id").write_text("dead-peer-sid\n", encoding="utf-8")
+        (claim_dir / "claimed_at").write_text("2026-01-01T00:00:00Z\n", encoding="utf-8")
+        monkeypatch.chdir(repo)
+
+        exit_code = pb.main(["brief", "state/handoffs/h1.md", "--no-claim"])
+
+        assert exit_code == pa.EXIT_OK
+        assert (claim_dir / "session_id").read_text(encoding="utf-8").strip() == "dead-peer-sid"
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["gates"]["claim_grant"]["holder"] == "dead-peer-sid"
+
 
 class TestSpinoffBranch:
     def test_spinoff_classified_via_kind_field(self, tmp_path):
@@ -2990,7 +3059,7 @@ class TestBriefKindDispatchJudgment:
     """Defect 4 — M3 kind-dispatch must surface a judgment_points entry,
     never resolve silently to a bare claim."""
 
-    def test_proposal_memo_surfaces_adopt_decline_negotiate(self, tmp_path):
+    def test_proposal_memo_surfaces_adopt_decline_fold_into_plan(self, tmp_path):
         repo = tmp_path / "repo"
         _init_repo(repo)
         path = repo / "cross-repo" / "inbox" / "m1.md"
@@ -3014,8 +3083,35 @@ class TestBriefKindDispatchJudgment:
         kind_jp = next(jp for jp in obj["judgment_points"] if jp["id"] == "j-kind")
         values = {d["value"] for d in kind_jp["dispositions"]}
         # `fold-into-plan` (a66b3da7c5, PM-directed 2026-07-27 memo) added a
-        # fourth `proposal` disposition alongside the original three.
-        assert values == {"adopt", "decline", "negotiate", "fold-into-plan"}
+        # third `proposal` disposition alongside adopt/decline; `negotiate`
+        # retired (cross-repo memos bug-kind dispositions plan, 2026-09-07 —
+        # peer EMs stop negotiating with each other).
+        assert values == {"adopt", "decline", "fold-into-plan"}
+
+    def test_bug_memo_surfaces_fixed_confirmed_owned_not_a_bug_needs_info(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        path = repo / "cross-repo" / "inbox" / "m1.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fm = (
+            "kind: bug\n"
+            "status: open\n"
+            "from: sender-session\n"
+            "summary: A test bug report.\n"
+            "created: 2026-01-01\n"
+        )
+        path.write_text(f"---\n{fm}---\n\nBody.\n", encoding="utf-8")
+        _git(repo, "add", str(path.relative_to(repo)))
+        _git(repo, "commit", "-m", "add m1")
+
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        obj = result.decision_object
+        assert obj["artifact"]["kind_resolved"] == "bug"
+        kind_jp = next(jp for jp in obj["judgment_points"] if jp["id"] == "j-kind")
+        values = {d["value"] for d in kind_jp["dispositions"]}
+        assert values == {"fixed", "confirmed-owned", "not-a-bug", "needs-info"}
 
     def test_absent_kind_defaults_to_ask(self, tmp_path):
         repo = tmp_path / "repo"
@@ -3281,7 +3377,7 @@ class TestBriefLiveClaimRevalidateJudgmentPoint:
         # `TestRevalidateHonorsProceed` below).
         assert jp["revalidate_at_dispatch"] is False
 
-    # Review: code-reviewer — Finding 1: the sibling of the test above —
+    # The sibling of the test above —
     # `claim_grant.verdict == "granted"` (self-claim) must SKIP the early
     # bail entirely and reach normal directive computation, rather than
     # only re-confirming the unchanged `denied` branch survives.
@@ -4330,7 +4426,7 @@ class TestExecutionStampMatchCanonicalRecipeParity:
         assert gate["computed_sha"] != own_body_sha
 
     def test_handoff_with_stale_mirrored_sha_still_targets_the_plans_own_sha(self, tmp_path):
-        """Review: code-reviewer — Finding 2: strengthens the mirrored-stamp
+        """Strengthens the mirrored-stamp
         regression above by making the handoff's own `execution_authorized_sha`
         deliberately WRONG/stale (not merely equal-and-unobserved) relative to
         the plan's own field. If the fix were reading the handoff's own field
@@ -5804,7 +5900,13 @@ class TestMemoTerminalDirectivesC8:
         `fold-into-plan` (a66b3da7c5, "pickup: fold-into-plan lands on both
         kinds, and re-plan stops forbidding the edit that carries the
         finding" — PM-directed 2026-07-27 memo) is receiver-done on both
-        `fyi` and `proposal`: it resolves `d-action-memo` on both kinds."""
+        `fyi` and `proposal`: it resolves `d-action-memo` on both kinds.
+
+        `proposal`/`negotiate` retired and `bug` added (cross-repo memos
+        bug-kind dispositions plan, 2026-09-07) — both `("proposal",
+        "fold-into-plan")` and `("fyi", "fold-into-plan")` were
+        pre-existing unclassified entries this test closes alongside the
+        rest of this change, not new ones this change introduces."""
         receiver_done = {
             ("ask", "accept-mechanical-direct"),
             ("ask", "accept-escalate-to-sizing"),
@@ -5813,17 +5915,20 @@ class TestMemoTerminalDirectivesC8:
             ("consult", "reply-long"),
             ("proposal", "adopt"),
             ("proposal", "decline"),
-            ("proposal", "negotiate"),
             ("proposal", "fold-into-plan"),
             ("fyi", "ack-nil"),
             ("fyi", "surgical-fix"),
             ("fyi", "fold-into-plan"),
+            ("bug", "fixed"),
+            ("bug", "confirmed-owned"),
+            ("bug", "not-a-bug"),
         }
         work_still_owed = {
             ("ask", "surface-to-PM"),
             ("fyi", "re-plan"),
             ("fyi", "surface-to-PM"),
             ("fyi", "investigate-further"),
+            ("bug", "needs-info"),
         }
 
         all_entries = {
@@ -5967,17 +6072,16 @@ class TestEMContentChannelZoliV2Finding2:
         assert args[args.index("--decision-note") + 1] == "adopted as-is"
 
     def test_actioned_note_lands_for_a_non_decision_mapped_disposition(self):
-        # `proposal`/`negotiate` deliberately stays absent from
+        # `bug`/`not-a-bug` deliberately stays absent from
         # `_MEMO_ACTION_DECISION_MAP` (see the comment above that map) — kept
-        # off `decline` here since `("proposal", "decline")` is now
-        # decision-mapped to `"declined"` (2026-07-25 class-sweep fix) and
-        # would raise on a co-supplied `actioned_note`.
-        decisions = {"j-kind": {"disposition": "negotiate", "actioned_note": "here's a counter-shape"}}
+        # off `decline`-shaped dispositions since those are decision-mapped
+        # to `"declined"` and would raise on a co-supplied `actioned_note`.
+        decisions = {"j-kind": {"disposition": "not-a-bug", "actioned_note": "checked, does not reproduce"}}
 
-        args = pa._build_action_memo_args("cross-repo/inbox/m1.md", "proposal", decisions)
+        args = pa._build_action_memo_args("cross-repo/inbox/m1.md", "bug", decisions)
 
         assert "--actioned-note" in args
-        assert args[args.index("--actioned-note") + 1] == "here's a counter-shape"
+        assert args[args.index("--actioned-note") + 1] == "checked, does not reproduce"
 
     def test_distill_fate_lands_regardless_of_disposition_shape(self):
         decisions = {"j-kind": {"disposition": "decline", "distill_fate": "ephemeral"}}
@@ -6012,6 +6116,109 @@ class TestEMContentChannelZoliV2Finding2:
         args = pa._build_action_memo_args("cross-repo/inbox/m1.md", "proposal", decisions)
 
         assert "--in-repo-capture" not in args
+
+
+class TestConfirmedOwnedPointerFailsLoud:
+    """AC5 (T3) — `bug`/`confirmed-owned`'s `actioned_note` names an owner
+    pointer (a bug-backlog entry path, a `<path>#<chunk-id>` plan-chunk
+    pointer, or a bare named baton id), and `_build_action_memo_args` fails
+    loud (`pa.ConfirmedOwnedPointerUnresolved`) rather than forward a
+    pointer that doesn't resolve. Six cases — absent-pointer and
+    non-resolving-pointer, per shape — not two: a path-only implementation
+    must not pass while leaving baton ids and chunk pointers unvalidated.
+
+    Every case runs inside a real (non-bare) git worktree via `_init_repo`
+    + `monkeypatch.chdir` — `_build_action_memo_args` resolves `repo_root`
+    itself via `resolve_repo_root()` (cwd-relative), so there is no
+    parameter to hand a fake root through directly."""
+
+    def _decisions(self, actioned_note: str) -> dict[str, object]:
+        return {"j-kind": {"disposition": "confirmed-owned", "actioned_note": actioned_note}}
+
+    def test_backlog_path_absent_fails_loud(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        monkeypatch.chdir(repo)
+
+        with pytest.raises(pa.ConfirmedOwnedPointerUnresolved):
+            pa._build_action_memo_args(
+                "cross-repo/inbox/m1.md", "bug", self._decisions("state/bug-backlog/does-not-exist.md")
+            )
+
+    def test_backlog_path_non_resolving_outside_repo_fails_loud(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        monkeypatch.chdir(repo)
+
+        with pytest.raises(pa.ConfirmedOwnedPointerUnresolved):
+            pa._build_action_memo_args(
+                "cross-repo/inbox/m1.md", "bug", self._decisions("../outside-repo.md")
+            )
+
+    def test_plan_chunk_absent_id_fails_loud(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        plan = repo / "docs" / "plans" / "p.md"
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        plan.write_text("```yaml plan-tasks\n- id: T1\n```\n", encoding="utf-8")
+        _git(repo, "add", "docs/plans/p.md")
+        _git(repo, "commit", "-m", "add plan")
+        monkeypatch.chdir(repo)
+
+        with pytest.raises(pa.ConfirmedOwnedPointerUnresolved):
+            pa._build_action_memo_args(
+                "cross-repo/inbox/m1.md", "bug", self._decisions("docs/plans/p.md#T99")
+            )
+
+    def test_plan_chunk_non_resolving_file_missing_fails_loud(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        monkeypatch.chdir(repo)
+
+        with pytest.raises(pa.ConfirmedOwnedPointerUnresolved):
+            pa._build_action_memo_args(
+                "cross-repo/inbox/m1.md", "bug", self._decisions("docs/plans/does-not-exist.md#T1")
+            )
+
+    def test_baton_id_absent_no_match_fails_loud(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        handoffs = repo / "state" / "handoffs"
+        handoffs.mkdir(parents=True, exist_ok=True)
+        (handoffs / "h1.md").write_text(
+            "---\nhandoff_id: some-other-baton\nkind: handoff\n---\n\nBody.\n", encoding="utf-8"
+        )
+        _git(repo, "add", "state/handoffs/h1.md")
+        _git(repo, "commit", "-m", "add handoff")
+        monkeypatch.chdir(repo)
+
+        with pytest.raises(pa.ConfirmedOwnedPointerUnresolved):
+            pa._build_action_memo_args(
+                "cross-repo/inbox/m1.md", "bug", self._decisions("hnd-does-not-exist-baton")
+            )
+
+    def test_baton_id_non_resolving_no_handoffs_dir_fails_loud(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        monkeypatch.chdir(repo)
+
+        with pytest.raises(pa.ConfirmedOwnedPointerUnresolved):
+            pa._build_action_memo_args(
+                "cross-repo/inbox/m1.md", "bug", self._decisions("hnd-does-not-exist-baton")
+            )
+
+    def test_not_a_bug_actioned_note_never_pointer_validated(self, tmp_path, monkeypatch):
+        """Narrow to `bug`/`confirmed-owned` only — every other
+        actioned-note-only disposition (`not-a-bug` here) stays free-text,
+        unvalidated, by design."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        monkeypatch.chdir(repo)
+        decisions = {"j-kind": {"disposition": "not-a-bug", "actioned_note": "does/not/exist.md"}}
+
+        args = pa._build_action_memo_args("cross-repo/inbox/m1.md", "bug", decisions)
+
+        assert "--actioned-note" in args
 
 
 class TestValidateDecisionsShapeAcceptsInRepoCapture:

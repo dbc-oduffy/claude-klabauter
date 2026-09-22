@@ -71,7 +71,7 @@ ALLOWLIST: dict[str, str] = {
 # more-conservative, fail-loud reading) rather than assuming only a safe
 # first line.
 #
-# Review: coordinator:code-reviewer -- what the resolver sees, precisely, as
+# What the resolver sees, precisely, as
 # of this fix: string/f-string literals; `+` and `%` concatenation (for `%`,
 # only the static left operand -- the substitution values on the right are
 # a live interpolation, out of scope by design); ternary (`IfExp`) branches;
@@ -187,7 +187,7 @@ def _resolve_fragments(node: ast.AST | None, scope: _Scope) -> list[str]:
     if node is None:
         return []
 
-    # Review: coordinator:code-reviewer -- the __doc__ classification below
+    # The __doc__ classification below
     # must NOT run on a JoinedStr node itself: `_contains_doc_ref` walks the
     # whole node, so a bare f-string containing a `__doc__` reference (e.g.
     # `f"prefix {__doc__}"`) would short-circuit here and discard the
@@ -217,7 +217,7 @@ def _resolve_fragments(node: ast.AST | None, scope: _Scope) -> list[str]:
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
         return _resolve_fragments(node.left, scope) + _resolve_fragments(node.right, scope)
 
-    # Review: coordinator:code-reviewer -- "...%s" % (x,) still has a fully
+    # "...%s" % (x,) still has a fully
     # static left operand even though the substitution values are dynamic;
     # only the right side (the args tuple/dict) is the live interpolation.
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
@@ -238,7 +238,7 @@ def _resolve_fragments(node: ast.AST | None, scope: _Scope) -> list[str]:
 
 
 def _record_simple_assign(stmt: ast.stmt, scope: _Scope) -> None:
-    # Review: coordinator:code-reviewer -- `msg += "..."` is a fully static
+    # `msg += "..."` is a fully static
     # concatenation when its RHS is static, but was previously invisible
     # since only ast.Assign was matched.
     if isinstance(stmt, ast.AugAssign) and isinstance(stmt.op, ast.Add):
@@ -252,7 +252,7 @@ def _record_simple_assign(stmt: ast.stmt, scope: _Scope) -> None:
     target = stmt.targets[0]
     if not isinstance(target, ast.Name):
         return
-    # Review: coordinator:code-reviewer -- union with any prior recording for
+    # Union with any prior recording for
     # this name rather than overwrite. This resolver has no control-flow
     # analysis (see module docstring), so it cannot know which of two
     # sibling-branch assignments to the same name would actually execute --
@@ -713,7 +713,7 @@ def test_extractor_sees_variable_indirection():
 
 
 def test_extractor_unions_branch_reassignment_of_same_name():
-    # Review: coordinator:code-reviewer -- regression for the P1 overwrite
+    # Regression for the P1 overwrite
     # bug: a name assigned in both arms of an if/else must resolve to BOTH
     # branches' text, not just whichever branch is visited last.
     source = textwrap.dedent(
@@ -732,7 +732,7 @@ def test_extractor_unions_branch_reassignment_of_same_name():
 
 
 def test_extractor_sees_fstring_literal_alongside_doc_reference():
-    # Review: coordinator:code-reviewer -- regression for the P2a short-
+    # Regression for the P2a short-
     # circuit bug: an f-string combining a __doc__ reference with its own
     # static literal segment must resolve both, not just the docstring.
     source = textwrap.dedent(

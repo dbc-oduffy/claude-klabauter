@@ -71,7 +71,7 @@ def test_the_flag_spelling_lives_only_in_shared_core():
         assert match, f"{macro} is not defined in door_core.h -- renamed or removed"
         assert match.group(1) == value
 
-    # Review: overengineering-reviewer -- DOOR_PARAMS_FILE_STDIN_JOINED is
+    # DOOR_PARAMS_FILE_STDIN_JOINED is
     # composed from the two macros above (string-literal concatenation),
     # not a third hand-typed literal, so drift between it and the pair it
     # must match is no longer representable. This row confirms the

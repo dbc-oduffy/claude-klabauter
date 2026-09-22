@@ -86,7 +86,7 @@ _DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-(.+)$")
 _DEFAULT_AGE_THRESHOLD_DAYS = 3
 _ACTIONABLE_KINDS = ("ask", "proposal")
 
-# Review: code-reviewer Finding 3 — handoffs get their own, narrower owning-text
+# Handoffs get their own, narrower owning-text
 # blob because they routinely name-drop a memo's basename in passing prose
 # ("read memo X, noted Y") without actually tracking/owning it. Only a full
 # basename match against handoff bodies counts as ownership (no slug match) —
@@ -190,7 +190,7 @@ def classify_orphan_memos(
             continue
 
         age_days = (today - created_date).days
-        # Review: code-reviewer Finding 7 — a valid-but-absurd future
+        # A valid-but-absurd future
         # `created:` (fat-fingered year) yields negative age_days that would
         # never clear the threshold and read permanently, silently clean.
         # A negative age is itself suspicious operator-authored data, so
@@ -409,7 +409,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     handler is a thin I/O-resolving wrapper, not a second decision point.
 
     `scan_degraded` is True when EITHER the inbox scan (`_read_inbox_memos` —
-    Review: code-reviewer Finding 2) OR the owning-artifact scan
+    code-reviewer Finding 2) OR the owning-artifact scan
     (`_read_owning_text`) could not fully list a candidate directory — an
     unreadable inbox is at least as severe a miss as an unreadable owning
     dir (it can silently suppress the entire detector, not just risk a false

@@ -180,7 +180,7 @@ def test_missing_scaffold_manifest_is_advisory_not_fatal(tmp_path, monkeypatch, 
     bash oracle's separate scaffold-script-not-found prereq check, which was a
     stage-0 fatal precondition on the .sh file itself).
 
-    Review: code-reviewer (Finding 1) -- must also neutralize the rung 2-4
+    Must also neutralize the rung 2-4
     fallback's ambient machine state (real `~/.claude/.doe-root` + machine-local
     registry), or this test silently passes/fails depending on whether the
     executing machine happens to carry a real DoE-claude checkout."""
@@ -217,7 +217,7 @@ def test_missing_scaffold_manifest_is_advisory_not_fatal(tmp_path, monkeypatch, 
 # ---------------------------------------------------------------------------
 # `_resolve_scaffold_manifest_root` — direct unit coverage of the rung ladder
 #
-# Review: code-reviewer (Finding 1/2) -- the two tests above only exercise this
+# The two tests above only exercise this
 # function indirectly and (before this diff) not hermetically. These pin the
 # ladder itself with all ambient rungs neutralized by default: rung-1 hit
 # (fast path, fallback never consulted), rung-1 miss -> rung-2 hit (the actual
@@ -310,6 +310,39 @@ def test_non_git_non_interactive_exits_two_and_writes_nothing(tmp_path, capsys):
     assert rc == 2
     assert "not a git repository" in capsys.readouterr().err
     assert list(target.iterdir()) == []
+
+
+def _claude_home_env(monkeypatch, home):
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("USERPROFILE", raising=False)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+
+
+def test_claude_home_target_is_refused_before_any_stage(tmp_path, monkeypatch, capsys):
+    """The in-process leg of `guard_repo_setup_claude_home_refusal`: that
+    PreToolUse guard never sees this op, so the op refuses on its own. The
+    target is a real git repo, so nothing but this check can refuse it."""
+    home = tmp_path / "home"
+    claude_home = home / ".claude"
+    claude_home.mkdir(parents=True)
+    _init_git(str(claude_home))
+    before = sorted(p.name for p in claude_home.iterdir())
+    _claude_home_env(monkeypatch, home)
+    rc = main(["--root", str(claude_home), "--non-interactive"])
+    assert rc == 1
+    assert "resolves to Claude Home" in capsys.readouterr().err
+    assert sorted(p.name for p in claude_home.iterdir()) == before
+
+
+def test_claude_config_dir_is_claude_home_for_the_refusal(tmp_path, monkeypatch, capsys):
+    config_dir = tmp_path / "custom-claude-config"
+    config_dir.mkdir()
+    _init_git(str(config_dir))
+    _claude_home_env(monkeypatch, tmp_path / "home")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    rc = main(["--root", str(config_dir), "--non-interactive"])
+    assert rc == 1
+    assert "resolves to Claude Home" in capsys.readouterr().err
 
 
 def test_eof_at_git_init_prompt_defaults_to_accept(tmp_path, monkeypatch):
@@ -432,6 +465,51 @@ def test_first_bootstrap_creates_commit(tmp_path):
     assert (target / "state" / "orientation_cache.md").is_file()
 
 
+def test_forced_dirty_tree_commit_does_not_absorb_unrelated_staged_file(tmp_path, monkeypatch):
+    """AMBIENT REPO regression (bug-backlog 2026-08-28-two-bootstrap-ops-bare-
+    commit-into-an-operator-selected-repo.yaml): the Stage 5 commit must carry
+    a pathspec scoped to what THIS bootstrap actually staged, not a bare
+    commit that absorbs whatever else happens to be sitting in the index.
+
+    `unrelated.txt` is pre-staged (`git add`, no commit) before bootstrap
+    runs -- the dirty-tree gate is forced past (the operator's own
+    [Force] path), leaving `unrelated.txt` staged but otherwise unchanged, so
+    Stage 5's own untracked/modified re-derivation never re-discovers it
+    (`git diff --name-only` only reports unstaged changes). A bare commit
+    would still absorb it via the index; a pathspec'd commit must not.
+    """
+    target = tmp_path / "target"
+    target.mkdir()
+    _init_git(str(target))
+    _baseline_commit(str(target))
+
+    with open(target / "unrelated.txt", "w", encoding="utf-8") as fh:
+        fh.write("someone else's staged work\n")
+    subprocess.run(
+        ["git", "-C", str(target), "add", "--", "unrelated.txt"],
+        check=True, timeout=30, **no_console_passthrough_kwargs(),
+    )
+
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "y")
+
+    rc = main(["--root", str(target)])
+    assert rc == 0
+    assert _commit_subject(str(target)) == "chore(coordinator): bootstrap"
+
+    committed_paths = subprocess.run(
+        ["git", "-C", str(target), "show", "--name-only", "--format=", "HEAD"],
+        capture_output=True, text=True, timeout=30, **no_console_creationflags(),
+    ).stdout.splitlines()
+    assert "unrelated.txt" not in committed_paths
+    assert "state/orientation_cache.md" in committed_paths
+
+    still_staged = subprocess.run(
+        ["git", "-C", str(target), "diff", "--cached", "--name-only"],
+        capture_output=True, text=True, timeout=30, **no_console_creationflags(),
+    ).stdout.splitlines()
+    assert "unrelated.txt" in still_staged
+
+
 def test_second_bootstrap_is_noop_when_nothing_to_stage(tmp_path, capsys):
     target = tmp_path / "target"
     target.mkdir()
@@ -498,7 +576,7 @@ def test_dry_run_scaffold_failure_is_advisory_not_propagated(tmp_path, monkeypat
     advisory (caught + logged), matching install.maximalist's Step 7 handling
     of the identical call. This test locks in the NEW contract.
 
-    Review: code-reviewer (Finding 1) -- same ambient-state neutralization as
+    Same ambient-state neutralization as
     test_missing_scaffold_manifest_is_advisory_not_fatal above; without it the
     rung 2-4 fallback can find a real manifest via this machine's actual
     `~/.claude/.doe-root`, making the manifest-genuinely-missing case

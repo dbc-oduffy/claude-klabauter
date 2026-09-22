@@ -248,18 +248,25 @@ def test_dangling_and_missing_peers_both_reported_separately(tmp_path, capsys):
 
 
 def test_ac6_body_prose_citation_never_scanned(capsys):
-    """AC6, the load-bearing negative: docs/plans/2026-08-06-windows-hot-path-
-    less-work-per-interpreter.md cites a nonexistent state/sizings/ path in
-    BODY prose (as evidence the citation was never written for a superseded
-    ask), while its frontmatter carries no sizing_object key at all. This op
-    must pass on the real corpus containing that plan — a text-scanning
-    implementation would fire on it and make it unwriteable."""
+    """AC6, the load-bearing negative: docs/plans/2026-08-06-plan-sizing-
+    citation-gate.md cites a nonexistent state/sizings/ path in BODY prose (as
+    evidence the citation was never written for a superseded ask), while its
+    frontmatter carries no resolving sizing_object. This op must pass on the
+    real corpus containing that plan — a text-scanning implementation would
+    fire on it and make it unwriteable.
+
+    The fixture is this gate's OWN plan, chosen because a fixture that names
+    another plan is a fixture that goes red when that plan is archived: the
+    original named windows-hot-path-less-work-per-interpreter.md, which moved
+    to archive/specs/ and took this test with it. The gate's own plan cannot
+    leave docs/plans/ while the gate it specifies is still live.
+    """
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
     target = os.path.join(
         repo_root,
         "docs",
         "plans",
-        "2026-08-06-windows-hot-path-less-work-per-interpreter.md",
+        "2026-08-06-plan-sizing-citation-gate.md",
     )
     assert os.path.isfile(target), "fixture plan must exist in the real corpus"
     with open(target, "r", encoding="utf-8") as fh:

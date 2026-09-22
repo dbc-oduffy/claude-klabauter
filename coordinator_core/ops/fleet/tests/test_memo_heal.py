@@ -293,7 +293,7 @@ def test_a_memo_git_checked_out_as_crlf_is_still_adopted(tmp_path):
 
 
 def test_ref_illegal_filename_is_refused_without_poisoning_the_other_candidates(tmp_path):
-    # Review: code-reviewer F1 -- an on-disk inbox filename is untrusted
+    # An on-disk inbox filename is untrusted
     # input to the ref namespace. A single ref-illegal filename in the
     # SAME batch as a legitimate candidate must not fail the whole
     # `update-ref --stdin` transaction; it must be refused on its own and
@@ -449,7 +449,7 @@ def test_refused_transaction_is_reported_without_retrying(tmp_path, monkeypatch)
 
     def _always_refuse(cwd, commands):
         calls["n"] += 1
-        # Review: code-reviewer F4 -- pin the boundary contract mechanically:
+        # Pin the boundary contract mechanically:
         # `update_refs_stdin` is documented as `Sequence[Tuple[str, str, str]]`,
         # not the formatted-string shape an intermediate commit in this
         # slice's own history briefly regressed to (Finding 3).
@@ -466,7 +466,7 @@ def test_refused_transaction_is_reported_without_retrying(tmp_path, monkeypatch)
 
 
 # ---------------------------------------------------------------------------
-# Review: apm A1 (EM-adjudicated) -- a restore re-keys its anchor: restore
+# apm A1 (EM-adjudicated) -- a restore re-keys its anchor: restore
 # -> receiver deletes the restored memo and commits -> heal twice. The memo
 # must not be restored a second time, and its anchor must be gone.
 # ---------------------------------------------------------------------------

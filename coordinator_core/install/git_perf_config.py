@@ -115,7 +115,7 @@ def apply(repo: Path, *, dry_run: bool = False) -> List[str]:
     Idempotent by construction: a second call finds the value already correct
     and reports `ok`, changing nothing.
     """
-    # Review: coordinator:overengineering-reviewer -- this was a loop over a
+    # This was a loop over a
     # one-entry SETTINGS dict, but the entry's real behaviour (the fs-probe gate
     # and the index-extension step below) was reached by two literal
     # key == "core.untrackedCache" checks inside the loop body, so the
@@ -124,7 +124,7 @@ def apply(repo: Path, *, dry_run: bool = False) -> List[str]:
     key, wanted = "core.untrackedCache", "true"
     report: List[str] = []
     current_result = run_git(["config", "--get", key], cwd=str(repo))
-    # Review: integrator sweep -- an unread current value (timeout/missing
+    # An unread current value (timeout/missing
     # git) must not be folded into "unset", which the branch below treats as
     # license to write. That would let a peer's deliberately differing value
     # (the negative spec's own "never overwritten" case) get clobbered simply
@@ -240,7 +240,7 @@ def _apply_maintenance_keys(repo: Path, *, dry_run: bool = False) -> List[str]:
     report: List[str] = []
     for key, wanted in _MAINTENANCE_KEYS:
         current_result = run_git(["config", "--get", key], cwd=str(repo))
-        # Review: integrator sweep -- same "unread is not unset" gap as
+        # Same "unread is not unset" gap as
         # `apply()` above: a timeout must not license the write branch below.
         if current_result.timed_out or current_result.returncode == 127:
             report.append(
@@ -462,7 +462,7 @@ def apply_fleet(bin_dir: Path, *, dry_run: bool = False) -> List[str]:
             report.append(f"missing  {key} -> {root} (registry entry unreachable, not a git repo)")
             continue
         if kind == "error":
-            # Review: coordinator:code-reviewer -- classify_target() is not
+            # classify_target() is not
             # wrapped by apply()'s own returncode handling for a raise from
             # subprocess.run itself (e.g. FileNotFoundError if git is absent
             # from PATH). Isolated per-repo (inside iter_fleet_worktrees) so
@@ -488,7 +488,7 @@ def apply_fleet(bin_dir: Path, *, dry_run: bool = False) -> List[str]:
     return report
 
 
-# Review: coordinator:overengineering-reviewer -- dropped the `main()` /
+# Dropped the `main()` /
 # `__main__` CLI entrypoint. Its two real callers (scripts/setup.py::
 # apply_git_perf_config and maximalist.py Step 3.5a.1c) both import and call
 # apply()/apply_fleet() in-process; nothing names an operator invoking

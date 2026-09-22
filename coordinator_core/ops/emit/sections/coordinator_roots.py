@@ -71,7 +71,7 @@ def _local_fs_provenance(ctx: EmitContext, repo: str) -> dict:
 def _local_fs_record(ctx: EmitContext, repo: str, last_activity_at: str) -> dict:
     """Assemble one CoordinatorRoot record from local-filesystem data only (local_fs).
 
-    Review: code-reviewer — Finding 6 (2026-07-14 entity_anchor slice review) — named
+    Named
     helper so the record shape can't drift across call sites. Now the section's ONLY
     record constructor (PM ruling 2026-07-29 retired the ``gh``-backed sibling).
     """
@@ -146,7 +146,7 @@ def _parse_working_repos(path: Path) -> list[tuple[str, str]]:
 def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
     """Build the CoordinatorRoots array (element [0] = emitting repo R, then the fleet when working-repos.yaml is present).
 
-    Review: code-reviewer (S3-F2) — stale "local meta-repo" attribution corrected. Post-cutover,
+    Stale "local meta-repo" attribution corrected. Post-cutover,
     element [0] is the EMITTING repo (claude-klabauter when claude-klabauter is emitting, ~/.claude
     when ~/.claude is emitting). The old phrasing was only accurate for meta-repo snapshots.
 

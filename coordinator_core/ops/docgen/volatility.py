@@ -115,7 +115,7 @@ REDACTED_TOKEN = "<REDACTED>"
 MINT_FIELDS: frozenset[str] = frozenset({"deliverable_id", "branch"})
 
 # Volatility mechanism 3: no carry path, always minted/derived fresh.
-# Review: code-reviewer — "run_id" (audit-record's run_id_placeholder field,
+# "run_id" (audit-record's run_id_placeholder field,
 # date-derived via _today() with no CLI carry path) was a real registry gap,
 # previously patched only in the C6 test's private _LOCAL_EXTRA_REDACT.
 TIME_FIELDS: frozenset[str] = frozenset(

@@ -245,7 +245,7 @@ def run():
 # is the P1 fix's own proof: `doctor.py` does `hooks_json_path.open("w", ...)`
 # (bound-receiver form) and was invisible to `discover_generators` before the
 # `_call_is_write` argument-slicing fix.
-# Review: coordinator:code-reviewer -- P2, the C2-only real-tree check would
+# The C2-only real-tree check would
 # not have caught the P1 defect since doctor.py isn't in the C2 five.
 _OTHER_REAL_WRITERS = (
     "coordinator_core/ops/doctor.py",

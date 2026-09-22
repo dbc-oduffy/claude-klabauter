@@ -121,6 +121,46 @@ def test_null_answers_excluded_from_clustering(tmp_path: Path) -> None:
     assert out == ""
 
 
+def test_elaborated_null_answers_excluded_from_clustering(tmp_path: Path) -> None:
+    """state/bug-backlog/2026-09-06-audience-mismatch-scan-clusters-nothing-
+    5535e3ca6a65.yaml -- an elaborated negative answer ("Nothing
+    significant; brief was self-contained.") must not cluster as a
+    doctrine-shaped gap merely because three independent agents phrased
+    their affirmation similarly. Three near-duplicate elaborated-null
+    answers, sharing enough tokens to cluster under the old bare-phrase-only
+    rule, must still print nothing."""
+    _write_sidecar(tmp_path, "n0.md", "Nothing significant; brief was self-contained.")
+    _write_sidecar(
+        tmp_path, "n1.md", "Nothing significant, the brief was entirely self-contained.",
+    )
+    _write_sidecar(
+        tmp_path, "n2.md", "Nothing significant -- brief was self-contained throughout.",
+    )
+    exit_code, out, _ = _run(tmp_path)
+    assert exit_code == 0
+    assert out == ""
+
+
+def test_null_lead_with_a_named_gap_still_clusters(tmp_path: Path) -> None:
+    """The widened null-lead match must not swallow a genuine gap phrased
+    as "Nothing ... , so I had to ..." -- the gap-indicator rail keeps this
+    one clustering normally."""
+    gap = (
+        "Nothing in the brief mentioned the settings-home forwarder path "
+        "for cross-repo-memo, so I had to grep CLAUDE.md to find it."
+    )
+    gap_paraphrase = (
+        "Nothing in the brief named the settings-home forwarder path, so I "
+        "had to grep CLAUDE.md to find the cross-repo-memo location."
+    )
+    _write_sidecar(tmp_path, "g0.md", gap)
+    _write_sidecar(tmp_path, "g1.md", gap_paraphrase)
+    _write_sidecar(tmp_path, "g2.md", gap)
+    exit_code, out, _ = _run(tmp_path)
+    assert exit_code == 0
+    assert "[audience-mismatch]" in out
+
+
 def test_unrelated_answers_do_not_cluster_together(tmp_path: Path) -> None:
     _write_sidecar(tmp_path, "a1.md", _GAP)
     _write_sidecar(tmp_path, "a2.md", _GAP_PARAPHRASE)

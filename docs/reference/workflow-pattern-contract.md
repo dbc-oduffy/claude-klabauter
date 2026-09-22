@@ -125,6 +125,15 @@ model, not silently inherit the session model (see the model-default
 heuristic below). Treat that as the template convention to copy, not a
 detail to strip out.
 
+## Fan-out to N agents vs. a single-file output surface
+
+A `disk-poll-fanout`-shaped script that dispatches N agents to work in parallel must not have all
+N agents write to one shared output file — N concurrent writers racing one file surface is a
+correctness hazard the pattern itself doesn't protect against; `parallel()`'s barrier collects
+completions, it does not serialize writes. Split the output surface into N sibling files (or
+directories), one per agent, and let the barrier's own collection step (or a follow-on stage) merge
+them, rather than having the agents race a single file directly.
+
 ## Model-default heuristic (WARN)
 
 An `agent()` call with no explicit `model:` key inherits the **session**

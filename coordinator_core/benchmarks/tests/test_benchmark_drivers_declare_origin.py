@@ -161,7 +161,7 @@ _SPAWN_BARE_NAMES = frozenset(
     }
 )
 
-# Review: coordinatorcode-reviewer.a9ee6eb5c87c4b7d7 Finding 2 -- a bare-name
+# A bare-name
 # import (`from subprocess import run`) then a bare `run(...)` call evaded
 # both branches above (no qualifying `.id` in _SPAWN_BARE_NAMES, no
 # `subprocess.` attribute access), letting an allowlisted module grow live
@@ -228,7 +228,7 @@ def module_has_main_entry(tree: ast.Module) -> bool:
     return False
 
 
-# Review: coordinatorcode-reviewer.a9ee6eb5c87c4b7d7 Finding 3 -- matching the
+# Matching the
 # literal string "declare_benchmark_origin" let an aliased import
 # (`from ... import declare_benchmark_origin as d` then `d()`) evade both the
 # forward and inverse call-site checks. Resolve the local bound name(s) per

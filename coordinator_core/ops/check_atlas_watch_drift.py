@@ -112,7 +112,7 @@ def _watch_line(repo_root: Path, systems_dir: Path, base: str) -> str:
             **no_console_creationflags(),
         )
     except subprocess.TimeoutExpired:
-        # Review: code-reviewer — module docstring's "never block a caller
+        # Module docstring's "never block a caller
         # pipeline" contract requires a bound on this per-atlas-page shell-out;
         # an unbounded hang in one .watch.py would otherwise wedge the whole
         # /workday-start ceremony (Finding 1).

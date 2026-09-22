@@ -148,14 +148,74 @@ def test_fixture_repo_manifest_golden(tmp_path, monkeypatch):
     assert "status:superseded" in old_row["reasons"]
 
 
+class _FakeCompletedProcess:
+    def __init__(self, stdout: str, returncode: int = 0):
+        self.stdout = stdout
+        self.returncode = returncode
+
+
+def test_git_log_window_caps_commit_walk(tmp_path, monkeypatch):
+    """The window must carry an explicit ceiling on how many commits `git
+    log` is allowed to walk, independent of GIT_LOG_WINDOW_DAYS -- an active
+    window's output otherwise scales with commits x files-touched-per-commit
+    with no bound (state/bug-backlog measurement: 13.8MB for one 14-day
+    window on a high-churn repo, well over CEREMONY_BUDGET_SECS's realistic
+    git-subprocess throughput)."""
+    captured_argv: list[str] = []
+
+    def _fake_run(argv, **kwargs):
+        captured_argv.extend(argv)
+        lines = []
+        for i in range(uds.GIT_LOG_WINDOW_MAX_COMMITS + 50):
+            lines.append(f"{i:040x}")
+            lines.append(f"file-{i}.py")
+        return _FakeCompletedProcess("\n".join(lines))
+
+    monkeypatch.setattr(uds.subprocess, "run", _fake_run)
+
+    now = _dt.datetime(2026, 7, 23, 12, 0, 0, tzinfo=_dt.timezone.utc)
+    result = uds._phase1_git_log_window(tmp_path, now=now)
+
+    assert f"--max-count={uds.GIT_LOG_WINDOW_MAX_COMMITS}" in captured_argv
+    assert result["commit_count"] <= uds.GIT_LOG_WINDOW_MAX_COMMITS + 50
+    assert result["truncated"] is True
+
+
+def test_git_log_window_reports_untruncated_when_under_cap(tmp_path, monkeypatch):
+    """A window whose walk stays under the ceiling reports `truncated: False`
+    so a consumer can trust `commit_count` as the full window figure."""
+
+    def _fake_run(argv, **kwargs):
+        lines = ["a" * 40, "some/file.py"]
+        return _FakeCompletedProcess("\n".join(lines))
+
+    monkeypatch.setattr(uds.subprocess, "run", _fake_run)
+
+    now = _dt.datetime(2026, 7, 23, 12, 0, 0, tzinfo=_dt.timezone.utc)
+    result = uds._phase1_git_log_window(tmp_path, now=now)
+
+    assert result["commit_count"] == 1
+    assert result["truncated"] is False
+
+
 def test_tracker_reconcile_preview_reports_without_writing(tmp_path, monkeypatch):
     """AC7 preview leg: a stale `N of M` tracker claim, joined to its plan
     via a `**Specs:**`-referenced `docs/plans/*.md` file carrying
     `deliverable_id`, is reported in `tracker_reconcile_preview` — and the
     on-disk tracker is left byte-identical, since this scan is read-only
     (the write goes through `close_out_and_stamp.apply_tracker_
-    reconciliation`, never this op)."""
+    reconciliation`, never this op).
+
+    C1's landing commit also stamps `disposition: coded` / `disposition_ref`
+    onto its own spine row -- the sole surviving evidence path under the
+    disposition_ref-only oracle (`close_out_and_stamp._determine_shipped`,
+    C3 2026-08-21 "the close ceremony stops paying for the join"); a commit
+    subject/`Deliverable-Id` trailer alone no longer counts as shipped
+    evidence."""
     import subprocess
+
+    from coordinator_core.execute_plan_assemble.row_spans import _stamp_rows_in_body
+    from coordinator_core.frontmatter.body_blocks import locate_fenced_block
 
     now = _dt.datetime(2026, 7, 23, 12, 0, 0, tzinfo=_dt.timezone.utc)
     repo_root = _seed_repo(tmp_path, now=now)
@@ -214,6 +274,29 @@ def test_tracker_reconcile_preview_reports_without_writing(tmp_path, monkeypatch
             "Deliverable-Id: dlv-update-docs-scan-fixture-000001",
         ]
     )
+    landing_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+        **no_console_creationflags(),
+    ).stdout.strip()
+
+    plan_text = plan_path.read_text(encoding="utf-8")
+    located = locate_fenced_block(plan_text)
+    start, end = located.span
+    new_body, stamp_error = _stamp_rows_in_body(
+        plan_text[start:end],
+        {"C1": landing_sha},
+        {"C1": "C1: land chunk"},
+    )
+    assert stamp_error is None
+    plan_path.write_text(
+        plan_text[:start] + new_body + plan_text[end:], encoding="utf-8", newline="\n"
+    )
+    _git(["add", plan_rel])
+    _git(["commit", "-q", "-m", "resolve C1"])
 
     tracker_path = repo_root / "docs" / "project-tracker.md"
     stale_text = (
@@ -403,6 +486,7 @@ def test_threshold_constants_are_named_module_constants():
     assert uds.PLANS_PRUNE_AGE_DAYS == 14
     assert uds.CROSSREPO_ARCHIVE_ACTIONED_FLOOR_DAYS == 90
     assert uds.GIT_LOG_WINDOW_DAYS == 14
+    assert uds.GIT_LOG_WINDOW_MAX_COMMITS == 300
     assert uds.TASKS_STATUS_SUPERSEDED == "superseded"
     assert uds.TASKS_UUID_DIR_RE.match("a1b861ef-0b0e-4c1a-9c3d-202607222340")
     assert not uds.TASKS_UUID_DIR_RE.match("not-a-uuid-dir")

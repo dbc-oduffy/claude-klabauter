@@ -40,7 +40,7 @@ from coordinator_core.frontmatter.primitives import (
     serialize_yaml_scalar,
     split_frontmatter,
 )
-# Review: code-reviewer — F4: moved `import datetime` to stdlib group (was after local imports).
+# Moved `import datetime` to stdlib group (was after local imports).
 
 from coordinator_core.frontmatter.schema_validate import (
     _cf_carried_items_shape,
@@ -225,7 +225,7 @@ class TestValidateFrontmatterHappyPath:
 
 
 class TestHandoffIdPlaceholderPatternNarrow:
-    """Review: code-reviewer (Finding 3, P2) — the placeholder-id-minting-guard
+    """The placeholder-id-minting-guard
     narrow (`handoff.schema.json` MAJOR 4.0.0->5.0.0) had no negative-case
     tripwire: nothing asserted a placeholder-shaped id actually fails, or that
     a normal id still passes, so a future accidental widen of the pattern (or
@@ -531,7 +531,7 @@ class TestMinimumKeyword:
         assert _validate_json_schema_node(1, schema, schema, 'field') == []
         assert _validate_json_schema_node(0, schema, schema, 'field') != []
 
-    # Review: code-reviewer (P2, accepted) — restores the integration-level leg
+    # Restores the integration-level leg
     # (validate_frontmatter + a real vendored schema) that the rewrite above
     # lost. research-synthesis.schema.json's `coverage_score` (minimum: 1,
     # maximum: 5) is the vendored `minimum` usage exercised here.
@@ -1598,7 +1598,7 @@ class TestOriginAxisC23SelfReference:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == [], f'Errors: {errors}'
 
-    # Review: code-reviewer — F3: durability test for the _filePath/additionalProperties
+    # Durability test for the _filePath/additionalProperties
     # interaction. The real handoff.schema.json does NOT set additionalProperties: false,
     # so the C2-3 self-reference sentinel (fm['_filePath']) is never exercised under a
     # schema that COULD reject it as an undeclared key. This test uses an inline minimal
@@ -1930,7 +1930,7 @@ class TestOwnerAxisScalar:
     def test_whitespace_only_owner_axis_rejected(self, field):
         """needs: whitespace-only is equally malformed under is_unowned's .trim() semantics.
 
-        Review: code-reviewer — F4: the message must name the whitespace-only
+        The message must name the whitespace-only
         case distinctly (not just reuse "empty string" wording), since a
         visually-non-empty value like '   ' being told it's "an empty string"
         is confusing to the operator who wrote it.
@@ -2237,7 +2237,7 @@ class TestSizingObjectDeliverableSpineFields:
         assert not errors, errors
 
     def test_x_schema_version_at_least_1_8_0(self):
-        # Review: coordinator:code-reviewer c841277a — DoE's cross-repo
+        # DoE's cross-repo
         # parity gate compares shapes ONLY when both sides' x-schema-version
         # are equal; an unequal-version divergence compares nothing and is
         # silent, which is how the deliverable-spine defect went unnoticed.
@@ -4135,6 +4135,79 @@ class TestInferDriftDirection:
     def test_non_json_unrelated_text_is_both(self) -> None:
         assert _infer_drift_direction("not json alpha", "not json beta") == DIRECTION_BOTH
 
+    def test_doe_only_version_bump_with_additive_extending_changes_is_we_are_behind(self) -> None:
+        # Shaped on the real plan-tasks pair (census 2): DoE-only properties,
+        # version 1.14.0 vs 2.0.0, bump-class changed, bump-note extended.
+        # Baton AC: "a one-sided version bump reports BEHIND, never BOTH".
+        local = json.dumps(
+            {
+                "x-schema-version": "1.14.0",
+                "x-bump-class": "additive",
+                "x-bump-note": "added an optional field",
+                "properties": {"a": {"type": "string"}},
+            }
+        )
+        doe = json.dumps(
+            {
+                "x-schema-version": "2.0.0",
+                "x-bump-class": "major",
+                "x-bump-note": "added an optional field, then extended it further",
+                "properties": {"a": {"type": "string"}, "doe_only": {"type": "string"}},
+            }
+        )
+        assert _infer_drift_direction(local, doe) == DIRECTION_WE_BEHIND
+
+    def test_local_only_version_bump_with_additive_extending_changes_is_we_are_ahead(self) -> None:
+        # Mirror image of the BEHIND fixture above: local bumped, local-only property.
+        local = json.dumps(
+            {
+                "x-schema-version": "2.0.0",
+                "x-bump-class": "major",
+                "x-bump-note": "added an optional field, then extended it further",
+                "properties": {"a": {"type": "string"}, "local_only": {"type": "string"}},
+            }
+        )
+        doe = json.dumps(
+            {
+                "x-schema-version": "1.14.0",
+                "x-bump-class": "additive",
+                "x-bump-note": "added an optional field",
+                "properties": {"a": {"type": "string"}},
+            }
+        )
+        assert _infer_drift_direction(local, doe) == DIRECTION_WE_AHEAD
+
+    def test_version_bump_plus_property_only_on_each_side_is_both(self) -> None:
+        # A true two-sided drift stays BOTH even with a one-sided version bump.
+        local = json.dumps(
+            {
+                "x-schema-version": "2.0.0",
+                "properties": {"a": {"type": "string"}, "local_only": {"type": "string"}},
+            }
+        )
+        doe = json.dumps(
+            {
+                "x-schema-version": "1.14.0",
+                "properties": {"a": {"type": "string"}, "doe_only": {"type": "string"}},
+            }
+        )
+        assert _infer_drift_direction(local, doe) == DIRECTION_BOTH
+
+    def test_equal_versions_with_diverged_content_is_unchanged(self) -> None:
+        local = json.dumps(
+            {
+                "x-schema-version": "1.0.0",
+                "properties": {"a": {"type": "string"}, "local_only": {"type": "string"}},
+            }
+        )
+        doe = json.dumps(
+            {
+                "x-schema-version": "1.0.0",
+                "properties": {"a": {"type": "string"}},
+            }
+        )
+        assert _infer_drift_direction(local, doe) == DIRECTION_WE_AHEAD
+
 
 def _advisory_git(repo: Path, *args: str) -> None:
     subprocess.run(
@@ -4914,6 +4987,67 @@ class TestPinnedQueueSchemaDrift:
         )
 
 
+class TestHeadTrackedQueueSchemaDrift:
+    """Gating tamper-check for the vendored schemas `--list` labels HEAD-tracked
+    (absent from `_QUEUE_SCHEMA_PINS`): each must still equal DoE HEAD.
+
+    One test method per schema (not parametrized/aggregate) — a single schema's
+    drift must not be maskable by the other six passing, mirroring
+    `TestPinnedQueueSchemaDrift`. `check_schema_drift` defaults `ref` to
+    `"HEAD"`, matching the governance class `bin/claude-klabauter-revendor-schema.py
+    --list` already declares for these schemas -- there is no pin to name.
+    """
+
+    def test_initiative_matches_doe_head(self):
+        if _DOE_REPO is None or not _DOE_REPO.exists():
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
+        _skip_if_probe_unavailable(
+            check_schema_drift, _SCHEMAS_DIR / 'initiative.schema.json', _DOE_REPO
+        )
+
+    def test_orientation_cache_matches_doe_head(self):
+        if _DOE_REPO is None or not _DOE_REPO.exists():
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
+        _skip_if_probe_unavailable(
+            check_schema_drift, _SCHEMAS_DIR / 'orientation-cache.schema.json', _DOE_REPO
+        )
+
+    def test_roadmap_matches_doe_head(self):
+        if _DOE_REPO is None or not _DOE_REPO.exists():
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
+        _skip_if_probe_unavailable(
+            check_schema_drift, _SCHEMAS_DIR / 'roadmap.schema.json', _DOE_REPO
+        )
+
+    def test_run_report_matches_doe_head(self):
+        if _DOE_REPO is None or not _DOE_REPO.exists():
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
+        _skip_if_probe_unavailable(
+            check_schema_drift, _SCHEMAS_DIR / 'run-report.schema.json', _DOE_REPO
+        )
+
+    def test_sizing_object_matches_doe_head(self):
+        if _DOE_REPO is None or not _DOE_REPO.exists():
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
+        _skip_if_probe_unavailable(
+            check_schema_drift, _SCHEMAS_DIR / 'sizing-object.schema.json', _DOE_REPO
+        )
+
+    def test_workstream_event_matches_doe_head(self):
+        if _DOE_REPO is None or not _DOE_REPO.exists():
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
+        _skip_if_probe_unavailable(
+            check_schema_drift, _SCHEMAS_DIR / 'workstream-event.schema.json', _DOE_REPO
+        )
+
+    def test_workstream_matches_doe_head(self):
+        if _DOE_REPO is None or not _DOE_REPO.exists():
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
+        _skip_if_probe_unavailable(
+            check_schema_drift, _SCHEMAS_DIR / 'workstream.schema.json', _DOE_REPO
+        )
+
+
 class TestAheadPinRegistryRouting:
     """The real consumer of `_QUEUE_SCHEMA_AHEAD_PINS` — routes every entry
     through `check_schema_ahead_of_doe` against the live DoE clone. Trivially
@@ -4922,7 +5056,6 @@ class TestAheadPinRegistryRouting:
     P1-3 identified: the registry used to be read by nothing, so an added
     entry would silently fail to gate.
 
-    Review: eng-director P1-3.
     """
 
     def test_every_ahead_pin_entry_is_routed_and_passes(self):
@@ -4965,7 +5098,6 @@ class TestCheckSchemaAheadOfDoe:
     TestAdvisoryLocalDoeVersions above. Closes the "~199 lines with zero
     tests" gap: one test per failure branch plus the green path.
 
-    Review: eng-director P1-3.
     """
 
     @pytest.fixture()
@@ -5048,7 +5180,7 @@ class TestCheckSchemaAheadOfDoe:
             )
 
     def test_stale_ahead_raises_when_doe_moved_on_a_different_branch(self, fake_doe, tmp_path: Path) -> None:
-        """Review: code-reviewer P3 -- prior coverage only moved DoE on the
+        """Prior coverage only moved DoE on the
         SAME branch. Check 1 explicitly resolves against `git log --all`
         (any local ref), not `HEAD`; this exercises that a second branch
         moving the schema is caught too, not just more commits on the
@@ -5111,7 +5243,7 @@ class TestCheckSchemaAheadOfDoe:
         )
 
     def test_bump_note_append_is_retained(self, fake_doe, tmp_path: Path) -> None:
-        """Review: code-reviewer P1 -- x-bump-note is prose-append, same shape
+        """x-bump-note is prose-append, same shape
         as `description`. Pins the regression: the predicate used to check
         only `path[-1] == 'description'`, so an ahead-bump's own bump-note
         append (the exact case the module comment calls out) failed the
@@ -5146,7 +5278,7 @@ class TestCheckSchemaAheadOfDoe:
             )
 
     def test_exempt_paths_kwarg_honors_caller_supplied_exemption(self, fake_doe, tmp_path: Path) -> None:
-        """Review: code-reviewer P2 -- `exempt_paths` had no direct-call
+        """`exempt_paths` had no direct-call
         coverage; the registry-routing test never exercises a non-default
         value. Proves a caller-supplied path is actually excluded from the
         retention check, not merely unioned by inspection."""
@@ -5284,7 +5416,7 @@ class TestRoundTripValidation:
                 else:
                     fm_lines.append(f'{key}:')
                     for item in value:
-                        # Review: code-reviewer — F12: quote items via serialize_yaml_scalar so
+                        # Quote items via serialize_yaml_scalar so
                         # structural chars (:, #, {, etc.) don't produce malformed YAML.
                         fm_lines.append(f'  - {serialize_yaml_scalar(str(item))}')
             else:
@@ -5637,7 +5769,7 @@ class TestMemoRuleActionedRequiresRealizedBy:
 
 class TestMemoRuleActionTakenRequiresCompanions:
     def test_action_taken_missing_both_fails(self):
-        # Review: code-reviewer — F2: assert both missing companion field names are named
+        # Assert both missing companion field names are named
         # in the error field, so a regression that flags only one of them still fails.
         fm = _valid_memo(status='action_taken')
         errors = validate_memo_cross_fields(fm)
@@ -5666,7 +5798,7 @@ class TestMemoRuleActionTakenRequiresCompanions:
 
 class TestMemoRuleClosedRequiresCompanions:
     def test_closed_missing_all_fails(self):
-        # Review: code-reviewer — F2: assert all three missing companion field names are
+        # Assert all three missing companion field names are
         # named in the errors, so a regression flagging only one or the wrong field fails.
         fm = _valid_memo(status='closed')
         errors = validate_memo_cross_fields(fm)
@@ -5766,7 +5898,7 @@ class TestMemoRuleKindEnum:
         assert not any(e['field'] == 'kind' for e in errors)
 
     def test_valid_kind_bug(self):
-        # Review: overengineering-reviewer — 'bug' was added to _memo_compose
+        # 'bug' was added to _memo_compose
         # and _outbox_frontmatter_rules but not here; a memo drafted with
         # --kind bug passed the sender and was then rejected by this validator.
         fm = _valid_memo(kind='bug')
@@ -5834,7 +5966,7 @@ class TestMemoRuleDispositionSupersededRequiresCompanions:
         assert not any('superseding' in e['field'] for e in errors)
 
 
-# Review: code-reviewer (2026-07-24 D1 slice, P1) — parse_yaml() (the legacy-dialect
+# parse_yaml() (the legacy-dialect
 # YAML *parser*, distinct from _validate_legacy_field/_validate_legacy_yaml_frontmatter
 # below which exercise the field *validator* against hand-built dicts) lost its ONLY
 # standalone coverage when TestLegacyYamlDataLayerGoldenDifferential's node-oracle

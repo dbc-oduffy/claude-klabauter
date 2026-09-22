@@ -83,6 +83,25 @@ class TestCrashDenyMessageIsActionableWithoutBash:
         reason = _reason(_crash_deny("no-verify", ValueError("boom")))
         assert "every" in reason.lower() and "bash" in reason.lower()
 
+    def test_names_a_concurrent_peer_edit_as_a_likely_cause(self):
+        # state/bug-backlog/2026-08-06-bash-guard-dispatcher-fails-closed-
+        # when-36790c5d7a07.yaml: a guard crashed from a NameError raised by
+        # a peer session mid-editing a shared seam module on this repo's
+        # shared tree (standard practice, no worktrees), and the old text
+        # pointed the reader only at "find and fix the crash" in the guard's
+        # own source -- misleading for a transient concurrent-edit race that
+        # a peer's own next edit resolves on its own.
+        reason = _reason(_crash_deny("no-verify", ValueError("boom")))
+        assert "peer" in reason.lower()
+        assert "shared tree" in reason.lower()
+
+    def test_still_states_a_real_guard_bug_remains_possible(self):
+        # The concurrent-edit note is additive, not a replacement: the
+        # existing "bug in the guard" framing must survive alongside it.
+        reason = _reason(_crash_deny("no-verify", ValueError("boom")))
+        assert "bug" in reason.lower()
+        assert "not a policy verdict" in reason.lower()
+
 
 class TestCrashDenyResolutionClass:
     """`resolution_class` (2026-08-05): threads DoE's opaque engine-

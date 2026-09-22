@@ -958,6 +958,20 @@ def _lineage_related_sessions(repo_root: Path, fm: dict[str, Any]) -> frozenset:
     return frozenset(related)
 
 
+def _recovery_banner_text(holder_sid: str) -> str:
+    """`gates.claim_grant.recovery_banner` — the rendered text pickup/
+    SKILL.md's "prepend the recovery banner when present" step prepends.
+    `unclean_prior_holder` alone is a boolean the EM would have to turn into
+    prose by hand; this field is that prose, computed once here rather than
+    reconstructed per pickup
+    (`coordinator_core/fact_contract_gate/dangling_consumer.py`'s registered
+    `recovery banner` phrase resolves against this field's presence)."""
+    return (
+        f"RECOVERY: {holder_sid}'s prior claim on this artifact did not exit "
+        "cleanly — verify on-disk state against the body before resuming."
+    )
+
+
 def compute_claim_grant(
     repo_root: Path, class_: str, basename: str, artifact_path: str,
     cwd: Optional[str] = None, fm: Optional[dict[str, Any]] = None,
@@ -978,6 +992,7 @@ def compute_claim_grant(
             "verdict": "granted", "reason": "no competing claim", "holder": None,
             "holder_live": False, "held_by_self": False, "claim_age_minutes": None,
             "claim_stage": None, "drop_invocation": drop_invocation, "unclean_prior_holder": False,
+            "recovery_banner": None,
         }
 
     if not claims_dir.is_dir():
@@ -1004,10 +1019,26 @@ def compute_claim_grant(
         self_holder = False
 
     if self_holder:
+        fm_claimed_by = fm.get("claimed_by")
+        fm_claimed_by = fm_claimed_by.strip() if isinstance(fm_claimed_by, str) else None
+        if fm_claimed_by and fm_claimed_by != holder_sid:
+            return {
+                "verdict": "granted-with-warning",
+                "reason": (
+                    f"you hold this ({holder_sid}) per the claim registry, but the "
+                    f"artifact's own frontmatter names a different claimed_by "
+                    f"({fm_claimed_by}) — registry and frontmatter have split"
+                ),
+                "holder": holder_sid, "holder_live": True, "held_by_self": True,
+                "claim_age_minutes": None, "claim_stage": stage,
+                "drop_invocation": drop_invocation, "unclean_prior_holder": False,
+                "recovery_banner": None,
+            }
         return {
             "verdict": "granted", "reason": "you already hold this", "holder": holder_sid,
             "holder_live": True, "held_by_self": True, "claim_age_minutes": None,
             "claim_stage": stage, "drop_invocation": drop_invocation, "unclean_prior_holder": False,
+            "recovery_banner": None,
         }
 
     if stage == _claims.CLAIM_STAGE_BRIEF and _claims.brief_lease_expired(claims_dir):
@@ -1021,6 +1052,7 @@ def compute_claim_grant(
             "holder": holder_sid, "holder_live": None, "held_by_self": False,
             "claim_age_minutes": None, "claim_stage": stage,
             "drop_invocation": drop_invocation, "unclean_prior_holder": False,
+            "recovery_banner": None,
         }
 
     holder_live = _claim_holder_live(claims_dir, cwd_str, holder_sid)
@@ -1037,17 +1069,20 @@ def compute_claim_grant(
                 "holder": holder_sid, "holder_live": True, "held_by_self": False,
                 "claim_age_minutes": None, "claim_stage": stage,
                 "drop_invocation": drop_invocation, "unclean_prior_holder": False,
+                "recovery_banner": None,
             }
         return {
             "verdict": "denied", "reason": f"held by {holder_sid} — live", "holder": holder_sid,
             "holder_live": True, "held_by_self": False, "claim_age_minutes": None,
             "claim_stage": stage, "drop_invocation": drop_invocation, "unclean_prior_holder": False,
+            "recovery_banner": None,
         }
 
     return {
         "verdict": "granted-with-warning", "reason": f"held by {holder_sid}; that session is not live",
         "holder": holder_sid, "holder_live": False, "held_by_self": False, "claim_age_minutes": None,
         "claim_stage": stage, "drop_invocation": drop_invocation, "unclean_prior_holder": True,
+        "recovery_banner": _recovery_banner_text(holder_sid),
     }
 
 
@@ -1310,15 +1345,10 @@ def _spawn_status_subset(root: Path, paths: list[str]) -> Optional[list[str]]:
     spawn failure so the caller can fall all the way back."""
     if not paths:
         return []
-    try:
-        proc = subprocess.run(
-            ["git", "status", "--porcelain", "--"] + paths,
-            cwd=str(root), capture_output=True, text=True, timeout=10,
-            **_NO_CONSOLE,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if proc.returncode != 0:
+    from coordinator_core.git.run import run_git
+
+    proc = run_git(["status", "--porcelain", "--"] + paths, cwd=str(root))
+    if not proc.ok:
         return None
     return [line[3:].strip() for line in proc.stdout.splitlines() if len(line) > 3]
 
@@ -1433,15 +1463,10 @@ def _scoped_porcelain_dirty(root: Path, paths: list[str]) -> list[str]:
     `.git/index` stat-cache side effect that would cause)."""
     if not paths:
         return []
-    try:
-        proc = subprocess.run(
-            ["git", "status", "--porcelain", "--"] + paths,
-            cwd=str(root), capture_output=True, text=True, timeout=10,
-            **_NO_CONSOLE,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return []
-    if proc.returncode != 0:
+    from coordinator_core.git.run import run_git
+
+    proc = run_git(["status", "--porcelain", "--"] + paths, cwd=str(root))
+    if not proc.ok:
         return []
     return [line[3:].strip() for line in proc.stdout.splitlines() if len(line) > 3]
 
@@ -1646,6 +1671,45 @@ def compute_supersession_gate(root: Path, artifact_path: str, fm: dict[str, Any]
     }
 
 
+_SUCCESSORLESS_TERMINAL_DEPLOYMENT = frozenset({"closed", "abandoned"})
+
+
+def compute_terminal_gate(artifact_path: str, fm: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """`gates.terminal` — a `closed`/`abandoned` baton has no successor to
+    redirect to and `handoff_transition._claim` refuses it at apply, so it is
+    never a pickup target. `continued` is `compute_supersession_gate`'s and
+    `shipped` is `jshipped`'s; `None` (inert) for every other state."""
+    deployment = fm.get("deployment_state")
+    if deployment not in _SUCCESSORLESS_TERMINAL_DEPLOYMENT:
+        return None
+    jp = _shared_build_judgment_point(
+        None,
+        id="j-terminal",
+        question=(
+            f"{artifact_path} is deployment_state: {deployment} — a finished baton with no "
+            "successor. Mint a new handoff if work remains?"
+        ),
+        evidence=f"deployment_state: {deployment}; closed_reason: {fm.get('closed_reason')!r}",
+        dispositions=[
+            {
+                "value": "stand-down", "resolves": [],
+                "guidance": "Nothing to pick up; the baton already reached its end state.",
+            },
+            {
+                "value": "mint-new-handoff", "resolves": [],
+                "guidance": "Remaining work goes in a new handoff, never a re-armed one.",
+            },
+        ],
+        reason="insufficient-evidence",
+    )
+    return {
+        "gate": {"deployment_state": deployment, "verdict": "blocked"},
+        "judgment_point": jp,
+        "narration": f"{artifact_path} is deployment_state: {deployment} — a terminal record, not a pickup target.",
+        "next_move": "Stand down, or mint a new handoff for any remaining work.",
+    }
+
+
 def compute_coast(
     judgment_points: list[dict[str, Any]],
     claim_grant: Optional[dict[str, Any]] = None,
@@ -1818,15 +1882,10 @@ def _artifact_is_a_plan(artifact_path: str) -> bool:
 
 
 def _read_file_at_revision(repo_root: Path, revision: str, path: str) -> Optional[str]:
-    try:
-        result = subprocess.run(
-            ["git", "show", f"{revision}:{path}"],
-            cwd=str(repo_root), capture_output=True, text=True, timeout=30,
-            **_NO_CONSOLE,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if result.returncode != 0:
+    from coordinator_core.git.run import run_git
+
+    result = run_git(["show", f"{revision}:{path}"], cwd=str(repo_root))
+    if not result.ok:
         return None
     return result.stdout
 
@@ -1837,17 +1896,12 @@ def _find_stamp_commit(repo_root: Path, path: str, stamped_sha: str) -> Optional
     occurrence count of the stamped literal in `path`. Real `git` spawn,
     off the zero-spawn hot path — only reached once an
     `execution_authorized_sha`/pointer is already present."""
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(repo_root), "log", "-1", "--follow", f"-S{stamped_sha}", "--format=%H", "--", path],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            **_NO_CONSOLE,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if result.returncode != 0:
+    from coordinator_core.git.run import run_git
+
+    result = run_git(
+        ["-C", str(repo_root), "log", "-1", "--follow", f"-S{stamped_sha}", "--format=%H", "--", path]
+    )
+    if not result.ok:
         return None
     out = result.stdout.strip()
     return out or None
@@ -1868,15 +1922,10 @@ def _classify_stamp_delta(repo_root: Path, stamp_commit: str, path: str) -> str:
     every changed content line in `stamp_commit..HEAD -- path` must be a
     ratification-line, a `**Status:**` line, or blank to count as
     `bookkeeping`; anything else defaults to `substantive`."""
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(repo_root), "diff", f"{stamp_commit}..HEAD", "--", path],
-            capture_output=True, text=True, timeout=30,
-            **_NO_CONSOLE,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return "substantive"
-    if result.returncode != 0:
+    from coordinator_core.git.run import run_git
+
+    result = run_git(["-C", str(repo_root), "diff", f"{stamp_commit}..HEAD", "--", path])
+    if not result.ok:
         return "substantive"
     saw_change = False
     for line in result.stdout.splitlines():
@@ -2568,7 +2617,7 @@ def build_completeness_checklist(fm: dict[str, Any], artifact_path: str) -> dict
     # ordering as its own evidence field (contract § computed-skills.md
     # "Restart-gated hoist/partition (fixed ordering rule)"), independent of
     # `directives[]`'s parallel ordering above.
-    # Review: code-reviewer — Finding 5: `probe` is duplicated here rather
+    # `probe` is duplicated here rather
     # than replaced with an index back into `items[]` intentionally — batches
     # is self-contained ordering evidence, requiring no cross-referencing by
     # consumers.
@@ -2778,23 +2827,69 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
             ),
         },
         {
-            "value": "negotiate",
-            "resolves": ["d-action-memo"],
-            "guidance": (
-                "Neither adopt nor decline outright — counter-propose a modified shape "
-                "and record the counter in `actioned_note` (or reply body) for the "
-                "sender to react to. Actioning this disposition requires `actioned_note` "
-                "(the counter, or a pointer to it): `d-action-memo` resolves via the "
-                "`--actioned-note` path (no `--decision`, since negotiating is not an "
-                "accepted/partial/declined outcome), and `cs_action_memo` fails loud if "
-                "neither `--decision` nor `--actioned-note` is supplied — so state the "
-                "counter, however brief, rather than leaving `actioned_note` empty."
-            ),
-        },
-        {
             "value": "fold-into-plan",
             "resolves": ["d-action-memo"],
             "guidance": _FOLD_INTO_PLAN_GUIDANCE,
+        },
+    ],
+    "bug": [
+        {
+            "value": "fixed",
+            "resolves": ["d-action-memo"],
+            "guidance": (
+                "The report is real and this repo owns it — land the fix and action "
+                "the memo with its SHA. Same premise-verification and live-claim-holder "
+                "checks as an `ask` accept apply before landing. This disposition maps "
+                "to `--decision accepted`, which requires `realized_by` (the SHA of the "
+                "commit that lands the fix) alongside `decision_note`; `cs_action_memo` "
+                "fails loud without it."
+            ),
+        },
+        {
+            "value": "confirmed-owned",
+            "resolves": ["d-action-memo"],
+            "guidance": (
+                "The report is real, but the work is already tracked elsewhere — point "
+                "`actioned_note` at the artifact that already owns it (a bug-backlog "
+                "entry path, a plan-chunk pointer, or a named baton id), not merely "
+                "assert that it exists. Actioning this disposition requires "
+                "`actioned_note` (the pointer itself): `d-action-memo` resolves via the "
+                "`--actioned-note` path (no `--decision`, since already-owned-elsewhere "
+                "is not an accepted/partial/declined outcome), and `cs_action_memo` "
+                "fails loud if neither `--decision` nor `--actioned-note` is supplied — "
+                "so state the pointer, however brief, rather than leaving "
+                "`actioned_note` empty."
+            ),
+        },
+        {
+            "value": "not-a-bug",
+            "resolves": ["d-action-memo"],
+            "guidance": (
+                "After checking the report against current disk/git state, the behavior "
+                "described is correct, or the report doesn't reproduce — record what was "
+                "checked and what was found in `actioned_note`, not just the verdict. "
+                "Actioning this disposition requires `actioned_note` (the check "
+                "performed and its result): `d-action-memo` resolves via the "
+                "`--actioned-note` path (no `--decision`, since not-a-bug is not an "
+                "accepted/partial/declined outcome), and `cs_action_memo` fails loud if "
+                "neither `--decision` nor `--actioned-note` is supplied — so state what "
+                "was checked, however brief, rather than leaving `actioned_note` empty."
+            ),
+        },
+        {
+            # Work still owed: the report can't be triaged from the memo
+            # alone, so this stays `resolves: []` — halting at
+            # `d-action-memo` is correct, not a defect. Deliberately narrower
+            # than the other three: a single question back to the reporter,
+            # not a peer disposal path.
+            "value": "needs-info",
+            "resolves": [],
+            "guidance": (
+                "The report can't be triaged without one more fact from the reporter — "
+                "ask that single question and stop there; this is a narrow escape hatch, "
+                "not an equal fourth option to fixed/confirmed-owned/not-a-bug. Do not "
+                "use it to ask the reporter to justify why the report was filed."
+            ),
         },
     ],
     "fyi": [
@@ -2872,8 +2967,22 @@ _MEMO_ACTION_DECISION_MAP: dict[tuple[str, str], str] = {
     ("proposal", "adopt"): "accepted",
     ("proposal", "decline"): "declined",
     ("fyi", "surgical-fix"): "accepted",
+    # `fold-into-plan` is an ACCEPTED outcome on both kinds it is offered on:
+    # the fold is the action, and routing it through `--decision accepted`
+    # is what makes `realized_by` (the fold commit's SHA) required, so the
+    # edit is auditable from the memo record and not only from the plan's
+    # history. Without these two rows the disposition resolves
+    # `d-action-memo` with no decision channel and `cs_action_memo` fails
+    # loud at dispatch.
     ("fyi", "fold-into-plan"): "accepted",
     ("proposal", "fold-into-plan"): "accepted",
+    # `bug`/`fixed` is an ACCEPTED outcome — the fix is the action, and
+    # routing it through `--decision accepted` is what makes `realized_by`
+    # (the fix commit's SHA) required, mirroring `fyi`/`surgical-fix` and
+    # `ask`/`accept-mechanical-direct` above. `bug`/`confirmed-owned` and
+    # `bug`/`not-a-bug` are deliberately absent (see the class comment
+    # above this map).
+    ("bug", "fixed"): "accepted",
 }
 
 #: decision value -> required `--decisions` content keys. Ported verbatim.
@@ -2891,8 +3000,9 @@ _NULL_RECOMMENDATION_REASONS = frozenset({"insufficient-evidence", "recommendati
 _KIND_QUESTIONS: dict[str, str] = {
     "ask": "ask: Accept mechanical-direct / Accept escalate-to-sizing / Decline / Surface-to-PM?",
     "consult": "consult: Reply short (goes in actioned_note) / Reply long (## EM Response heading, actioned_note points at it)?",
-    "proposal": "proposal: Adopt / Decline / Negotiate?",
+    "proposal": "proposal: Adopt / Decline?",
     "fyi": "fyi impact: nil / plan-invalidated / surgical-fix / product-decision / ambiguous?",
+    "bug": "bug: Fixed / Confirmed-owned / Not-a-bug / Needs-info?",
 }
 
 #: The terminal `status` values an archived memo may already carry —
@@ -3843,21 +3953,25 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_
         }, EXIT_OK)
 
     if classification in ("handoff", "spinoff"):
-        supersession = compute_supersession_gate(root, display_path, fm)
-        if supersession is not None:
-            jp = supersession["judgment_point"]
-            supersession_judgment_points = [jp]
+        early_gate = compute_supersession_gate(root, display_path, fm)
+        gate_name = "supersession"
+        if early_gate is None:
+            early_gate = compute_terminal_gate(display_path, fm)
+            gate_name = "terminal"
+        if early_gate is not None:
+            jp = early_gate["judgment_point"]
+            early_judgment_points = [jp]
             tree_quiescence = compute_tree_quiescence(root, [])
             return _emit({
                 "artifact": artifact,
                 "gates": {
-                    "supersession": supersession["gate"],
-                    "coast": compute_coast(supersession_judgment_points, tree_quiescence=tree_quiescence),
+                    gate_name: early_gate["gate"],
+                    "coast": compute_coast(early_judgment_points, tree_quiescence=tree_quiescence),
                 },
                 "directives": [],
-                "judgment_points": supersession_judgment_points,
-                "narration": supersession["narration"],
-                "next_move": supersession["next_move"],
+                "judgment_points": early_judgment_points,
+                "narration": early_gate["narration"],
+                "next_move": early_gate["next_move"],
                 "preflight": {"tree_quiescence": tree_quiescence},
             }, EXIT_BUSINESS_FAIL)
 
@@ -3881,16 +3995,23 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_
     scope = fm.get("scope") if isinstance(fm.get("scope"), list) else []
     tree_quiescence = compute_tree_quiescence(root, [str(s) for s in scope])
 
-    if claim["holder"] is not None and claim_grant.get("verdict") != "granted":
+    if (
+        claim["holder"] is not None
+        and claim_grant.get("verdict") != "granted"
+        and not claim_grant.get("held_by_self")
+    ):
         # Live-claim-holder stand-down (HEAD parity, both the handoff/
         # spinoff branch and the memo/handoff parity fix, cross-repo/inbox/
         # 2026-08-17-doe-claude-em-memo-claim-fires-after-the-em-can-
         # already-act.md): a DENIED grant against a live foreign holder
         # halts the brief before the artifact body is worth reading — no
-        # directives, a liveness judgment point as the only offer. Row 2 of
-        # `compute_claim_grant` (`held_by_self`) resolves `granted` for a
-        # same-session re-brief, so this branch is never reached for that
-        # case.
+        # directives, a liveness judgment point as the only offer. A
+        # same-session re-brief is always `held_by_self`, so it never
+        # reaches this stand-down even when `compute_claim_grant` downgrades
+        # it to `granted-with-warning` (registry/frontmatter `claimed_by`
+        # split) — that case falls through to the normal directive-building
+        # path below, where `compute_coast` surfaces the warning as a
+        # non-blocking note instead of a hard lockout.
         live_claim_jp = build_liveness_judgment_point(liveness_fired, "gates.liveness_signal", [])
         live_claim_judgment_points = [jp for jp in (live_claim_jp,) if jp]
         if live_claim_judgment_points:
@@ -4341,10 +4462,11 @@ def split_artifact_args(artifact_arg: str) -> list[str]:
 
 
 def brief_multi(
-    artifact_arg: str, decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] = None
+    artifact_arg: str, decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] = None,
+    no_claim: bool = False,
 ) -> list[BriefResult]:
     paths = split_artifact_args(artifact_arg)
-    claim_at_brief = len(paths) == 1
+    claim_at_brief = len(paths) == 1 and not no_claim
     return [brief(p, decisions, claim_at_brief=claim_at_brief, repo_root=repo_root) for p in paths]
 
 
@@ -4354,7 +4476,7 @@ def brief_multi(
 
 def _usage(prog: str, stream=None) -> int:
     stream = sys.stderr if stream is None else stream
-    print(f"usage: {prog} brief <artifact-path> [--decisions <json> | --decisions-file <path>]", file=stream)
+    print(f"usage: {prog} brief <artifact-path> [--no-claim] [--decisions <json> | --decisions-file <path>]", file=stream)
     print(f"       {prog} apply <artifact-path> [--session-id <id>] [--decisions <json> | --decisions-file <path>]", file=stream)
     print(f"       {prog} drop <artifact-path> [--session-id <id>]", file=stream)
     print(f"       {prog} stamp-check <plan-path>", file=stream)
@@ -4465,6 +4587,7 @@ def main(argv: list[str]) -> int:
     artifact_path = rest[0]
     tail = rest[1:]
     decisions: dict[str, Any] = {}
+    no_claim = False
     conflict = detect_conflicting_payload_channels(tail)
     if conflict is not None:
         print(f"pickup-assemble: {conflict}", file=sys.stderr)
@@ -4472,7 +4595,10 @@ def main(argv: list[str]) -> int:
     i = 0
     while i < len(tail):
         tok = tail[i]
-        if (payload := resolve_json_payload_flag(tail, i)).consumed:
+        if tok == "--no-claim":
+            no_claim = True
+            i += 1
+        elif (payload := resolve_json_payload_flag(tail, i)).consumed:
             if payload.error is not None:
                 print(f"pickup-assemble: {payload.error}", file=sys.stderr)
                 return EXIT_USAGE
@@ -4488,7 +4614,7 @@ def main(argv: list[str]) -> int:
         return EXIT_USAGE
 
     try:
-        results = brief_multi(artifact_path, decisions)
+        results = brief_multi(artifact_path, decisions, no_claim=no_claim)
     except _TransportFailure as exc:
         failure = _emit({
             "error": str(exc), "transport_failure": True,

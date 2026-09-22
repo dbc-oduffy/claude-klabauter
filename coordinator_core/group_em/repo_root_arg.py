@@ -59,7 +59,6 @@ def resolve_repo_root_arg(value: object) -> str:
         raise RepoRootArgError("--repo-root is empty")
 
     raw = value.strip()
-    # Review: coordinator:code-reviewer.a1574022171f8f1cc (P2, accepted) --
     # `os.path.isabs` (ntpath) treats a driveless rooted path (`/foo/bar`) as
     # absolute, then `abspath` resolves it against the PROCESS'S CURRENT
     # DRIVE -- the identical "binds to wherever the process happens to be
@@ -67,7 +66,6 @@ def resolve_repo_root_arg(value: object) -> str:
     # directory. `splitdrive` is the one extra check that closes it: a path
     # this refusal accepts must name both a drive and a root.
     #
-    # Review: coordinator:code-reviewer.a89481390696514f7 (P1, accepted) --
     # the drive requirement is a Windows-only hazard (`ntpath.splitdrive`).
     # On POSIX, `os.path` is `posixpath`, whose `splitdrive` always returns
     # an empty drive -- applying this check unconditionally refused every
@@ -80,7 +78,6 @@ def resolve_repo_root_arg(value: object) -> str:
     require_drive = os.name == "nt"
     if not os.path.isabs(raw) or (require_drive and not drive):
         resolved = os.path.abspath(raw)
-        # Review: coordinator:code-reviewer.a1574022171f8f1cc (P3, accepted) --
         # this message carried a causal explanation after the fact; the
         # register wants one fact plus a terse alternative, WHY stays in this
         # docstring, not the operator-facing line.

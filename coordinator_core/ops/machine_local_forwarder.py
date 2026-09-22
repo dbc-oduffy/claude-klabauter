@@ -52,7 +52,7 @@ def main(argv: list[str]) -> int:
     `return 0` exists only to satisfy the `main(argv) -> int` entrypoint shape and is
     unreachable in practice.
 
-    Review: code-reviewer — Finding 1 (2026-07-22 sidecar): `argv` was previously
+    `argv` was previously
     dead — `forward` read process-global `sys.argv` regardless of what was passed
     in here. Now threaded through explicitly so a caller-constructed `argv` can't
     silently diverge from what actually gets forwarded.

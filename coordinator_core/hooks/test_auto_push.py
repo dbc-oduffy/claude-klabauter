@@ -295,6 +295,22 @@ def test_push_once_spawn_failure_classifies_as_spawn_error(tmp_path, monkeypatch
     assert "FileNotFoundError" in stderr_text
 
 
+def test_classify_error_vanished_temp_pack_is_transient_contention_not_spawn_error():
+    # A sibling session's concurrent repack/gc deleting its own temp pack
+    # mid-push (2026-08-26, 27 rows on work/machine-a/2026-08-18to20) raises
+    # the identical push_once spawn-failure prefix _PAT_SPAWN_ERROR matches,
+    # so without a more specific arm ahead of it this misclassifies as
+    # "spawn-error" -- indistinguishable from a genuinely unresolvable git
+    # executable, and non-retrying.
+    stderr_text = (  # abs-path-ok: fixture stderr text, verbatim from the bug record, not a real path
+        "fatal: git push failed to spawn: FileNotFoundError: [Errno 2] "
+        "No such file or directory: "
+        "'X:\\claude-klabauter\\.git\\objects\\pack\\.tmp-35812-pack-37ef5fe6abc.pack'\n"
+    )
+    assert auto_push.classify_error(stderr_text) == "transient-contention"
+    assert "transient-contention" in auto_push._RETRYABLE_CLASSES
+
+
 def test_push_once_unresolvable_git_never_spawns(tmp_path, monkeypatch):
     # When git is not on PATH at all, push_once must report -- not raise, and
     # not attempt a spawn it already knows will fail with [WinError 2].
@@ -421,7 +437,7 @@ def test_branch_gate(branch, expect_push, expect_message):
         assert message is None
 
 
-# Review: overengineering-reviewer Finding 4 -- the two main()-driven
+# The two main()-driven
 # branch-gate-skip stderr tests retired with main(); branch_gate() itself
 # stays covered by test_branch_gate above.
 
@@ -512,7 +528,7 @@ def test_extract_first_err_empty_stderr():
     assert auto_push.extract_first_err("") == ""
 
 
-# Review: overengineering-reviewer Finding 4 -- main()'s exit-0-always and
+# main()'s exit-0-always and
 # internal-error-logging contract was only exercised end-to-end through
 # main() itself; all five tests retired with it. `log_failure` and
 # `_module_provenance`'s own field-level behavior stay covered by the
@@ -756,7 +772,7 @@ def test_backoff_seconds_gh_transient_unchanged_envelope():
 
 
 
-# Review: overengineering-reviewer Finding 4 -- the branch-gate-skip ->
+# The branch-gate-skip ->
 # run_push_with_retry-never-called assertion was only reachable through
 # main(); retired with it.
 
@@ -819,7 +835,7 @@ def test_cockpit_publish_nonzero_exit_does_not_fail_hook_and_warns(monkeypatch, 
 
 
 
-# Review: overengineering-reviewer Finding 4 -- main()'s --branch-flag
+# main()'s --branch-flag
 # bypass-resolve-and-gate contract was only reachable through main();
 # retired with it (spawn_detached_push, main()'s sole caller of this
 # leg, is itself already gravestoned per C8).
@@ -921,7 +937,7 @@ def test_resolved_git_rides_executable_and_never_argv0(invoke, tmp_path, monkeyp
 
 
 
-# Review: overengineering-reviewer Finding 4 -- auto_push.main(),
+# auto_push.main(),
 # _release_claims_for_head, _push_would_be_a_noop, and _ref_sha are all
 # gravestoned (no production caller since C7 removed the post-commit
 # hook's invocation of this module); their driving tests retired with

@@ -61,7 +61,7 @@ pytestmark = [
 
 @pytest.fixture(autouse=True)
 def _reset_registry_snapshot_cache():
-    # Review: coordinator:code-reviewer P2 — this file exercises
+    # This file exercises
     # session_live/claim_holder_live (via holder_reads_live and the
     # real-registry tests below), which route through liveness's
     # per-process registry-snapshot memoization
@@ -90,7 +90,9 @@ from coordinator_core.pickup_assemble.tests._git_harness import (
 )
 
 
-def _seed_handoff(repo: Path, name: str, *, deployment_state: str = "active") -> Path:
+def _seed_handoff(
+    repo: Path, name: str, *, deployment_state: str = "active", claimed_by: str | None = None
+) -> Path:
     path = repo / "state" / "handoffs" / name
     path.parent.mkdir(parents=True, exist_ok=True)
     fm = (
@@ -101,6 +103,8 @@ def _seed_handoff(repo: Path, name: str, *, deployment_state: str = "active") ->
         'predecessor: "none"\n'
         f"deployment_state: {deployment_state}\n"
     )
+    if claimed_by is not None:
+        fm += f"claimed_by: {claimed_by}\n"
     path.write_text(f"---\n{fm}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
     _git(repo, "add", str(path.relative_to(repo)))
     _git(repo, "commit", "-m", f"add {name}")
@@ -297,6 +301,39 @@ def test_a_live_foreign_holder_denies_a_memo_brief_with_a_standdown(
     assert obj["gates"]["claim"]["holder"] == "sid-first"
     assert obj["gates"]["claim_grant"]["verdict"] == "denied"
     assert obj["gates"]["claim_grant"]["held_by_self"] is False
+
+
+def test_a_self_held_frontmatter_split_warns_without_standing_down(
+    tmp_path, as_session, holder_reads_live
+):
+    """The row's own repro (state/bug-backlog/2026-08-23-claim-grant-never-
+    cross-checks-the-frontmatter-it-was-handed.yaml): the claim REGISTRY
+    still names the rightful holder while the artifact's own frontmatter
+    carries a different `claimed_by` (a hand-appended stamp, or an
+    interrupted reclaim's non-atomic write-through). `compute_claim_grant`
+    downgrades that split from bare `granted` to `granted-with-warning`, but
+    the split must not fall into the live-foreign-holder stand-down above
+    (`test_a_live_foreign_holder_denies_a_memo_brief_with_a_standdown`) — the
+    holder is still this session, so the brief must keep its directives and
+    surface the warning instead of a hard lockout."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "h1.md", claimed_by="sid-foreign")
+    as_session("sid-a")
+    holder_reads_live(True)
+    _write_claim(repo, "handoff", "h1.md", "sid-a", stage="apply", age_minutes=5)
+
+    result = pa.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=False)
+
+    obj = result.decision_object
+    grant = obj["gates"]["claim_grant"]
+    assert grant["verdict"] == "granted-with-warning"
+    assert grant["held_by_self"] is True
+    assert "sid-foreign" in grant["reason"]
+    assert result.exit_code == pa.EXIT_OK
+    assert obj["directives"] != []
+    assert "already claimed by" not in obj["narration"]
+    assert "claim granted with warning" in obj["gates"]["coast"]["notes"][0]
 
 
 def test_a_memo_rebrief_by_the_holder_is_resuming_not_contention(
@@ -523,6 +560,11 @@ def test_unclean_prior_holder_fires_on_a_dead_stale_apply_claim(
     # here, per `compute_claim_grant`'s docstring ("claim_age_minutes is
     # retained ... but is no longer used to resolve verdict").
     assert grant["claim_age_minutes"] is None
+    # pickup/SKILL.md's "prepend the recovery banner when present" step
+    # needs rendered text, not just the boolean — `recovery_banner` is that
+    # text, named after the holder whose claim did not exit cleanly.
+    assert grant["recovery_banner"] is not None
+    assert "sid-dead" in grant["recovery_banner"]
 
 
 def test_unclean_prior_holder_is_false_on_a_clean_pickup(tmp_path):
@@ -539,6 +581,7 @@ def test_unclean_prior_holder_is_false_on_a_clean_pickup(tmp_path):
 
     assert grant["verdict"] == "granted"
     assert grant["unclean_prior_holder"] is False
+    assert grant["recovery_banner"] is None
 
 
 def test_unclean_prior_holder_is_true_even_within_the_former_settling_window(

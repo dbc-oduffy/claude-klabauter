@@ -535,7 +535,7 @@ def _ne_darwin_bash_profile_repair(
     base_content = _ne_strip_managed_block(prior_content) if prior_content else ""
     new_content = base_content + _ne_build_managed_block(recon_source)
 
-    # Review: code-reviewer (Finding 1, A5) — mkstemp creates the temp file at mode
+    # Mkstemp creates the temp file at mode
     # 0600; os.replace swaps the inode without carrying the destination's prior
     # permission bits forward, so a pre-existing 0644 ~/.bash_profile was silently
     # narrowed to 0600 on every successful repair. Preserve the original mode

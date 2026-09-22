@@ -167,7 +167,7 @@ _TIER_ARGV = {
     "weekly": ("maintenance", "run", "--task=pack-refs"),
 }
 
-# Review: overengineering-reviewer -- was a second literal declaration of
+# Was a second literal declaration of
 # `_TIER_ARGV`'s key set, policed only by a sync test. `_TIER_ARGV` is the
 # actual source of truth; this is derived, not restated.
 TIERS = tuple(_TIER_ARGV)
@@ -332,7 +332,7 @@ def sweep_orphan_packs(
 
     # THE ONE WINDOW. Not inside the loop below, and not inside a per-file
     # helper -- see this docstring.
-    # Review: overengineering-reviewer -- `no_sleep` had no caller and no env
+    # `no_sleep` had no caller and no env
     # knob (unlike reap_stale_locks's sibling), so `elif not no_sleep` was a
     # permanently-true guard; `on_wait` is the test seam every sweep test uses.
     if on_wait is not None:
@@ -377,7 +377,7 @@ def defer_reason(repo: Path, git_dir: Path) -> Optional[str]:
     """
     if (git_dir / "index.lock").exists():
         return "index.lock is held -- a peer is mid-commit"
-    # Review: coordinator:code-reviewer (Finding 3) -- a clean, in-progress
+    # A clean, in-progress
     # `cherry-pick --no-commit`/`revert --no-commit` leaves CHERRY_PICK_HEAD/
     # REVERT_HEAD present with a clean index and no unmerged entries, which
     # was invisible to every check here even though it is the same class of
@@ -458,7 +458,7 @@ def run_tier(repo: Path, tier: Optional[str]) -> MaintenanceResult:
         result.errors.append(f"{' '.join(_TIER_ARGV[tier])} failed rc={proc.returncode}: {proc.stderr.strip()}")
         return result
     result.ran = True
-    # Review: coordinator:code-reviewer (Finding 4) -- stamping unconditionally
+    # Stamping unconditionally
     # here made a clean run and a run with a failed prune leg indistinguishable
     # on the liveness store, defeating _stamp's own stated purpose. Gate on
     # `errors` accumulated so far (the prune leg, at this point) so the stamp
@@ -517,7 +517,7 @@ def _report(result: MaintenanceResult) -> None:
         return
     line = f"{_PREFIX}: {result.tier} ran"
     if result.tier == "weekly":
-        # Review: overengineering-reviewer -- `skipped` was maintained at four
+        # `skipped` was maintained at four
         # bookkeeping sites and shown nowhere; this is its production reader.
         line += (
             f"; pruned={result.pruned}; orphan packs reaped={result.orphan_packs_reaped}"
@@ -545,7 +545,7 @@ def main(argv: Sequence[str]) -> int:
 def _git_maintenance(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC `git.maintenance` handler. `params["tier"]` is required.
 
-    Review: overengineering-reviewer -- tier validity was checked a third time
+    Tier validity was checked a third time
     here; `run_tier` already rejects an unknown tier into `result.errors`,
     which this handler already serialises, so the pre-check bought nothing.
     """

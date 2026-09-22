@@ -20,39 +20,14 @@ forcing a guard-name key through it would be new-pattern invention wearing
 a reuse costume -- see this plan's own Anti-scope, "Do not reuse
 `claude_md_budget`'s watermark ledger for per-guard budgets."
 
-Dead-entry enforcement, and why it is two mechanisms, not one:
-`test_confinement_attack_corpus.py`'s `XFAIL_BYPASSES` gets its fail-loud
-property entirely from `pytest.mark.xfail(reason=..., strict=True)` at the
-cell's own parametrize site -- a bypass that gets fixed XPASSes, and a
-strict XPASS is a suite failure. It has no separate "does this guard still
-exist" check. `test_override_route_inventory.py`'s
-`_NO_OVERRIDE_NOTE_ALLOWLIST` is the opposite shape: an explicit
-`test_allowlist_entries_are_actually_registered_guards` diffs the allowlist
-keys against the live guard chain, but never re-measures anything -- it has
-no notion of "does this cell still meet the condition it was exempted
-for." AC6 needs BOTH properties at once (a dead guard name fails, AND a
-cell that no longer exceeds cap fails), so this module combines them
-explicitly rather than picking one precedent and hoping it covers the
-other axis:
-
-1. `test_exemption_guards_are_currently_registered` -- structural, modeled
-   on `_NO_OVERRIDE_NOTE_ALLOWLIST`'s own dead-entry test: every guard name
-   in `GUARD_MESSAGE_EXEMPTIONS` must appear in
-   `dispatch._build_guard_chain()`'s live output.
-2. `test_exemption_cells_still_exceed_cap` -- measurement, modeled on
-   `XFAIL_BYPASSES`'s strict-xfail intent but expressed as a plain
-   assertion (this module has no parametrize site of its own to hang an
-   `xfail` mark on): every entry must also appear in `_EXEMPTION_FIXTURES`,
-   a small fixture map owned alongside the manifest itself, and the guard
-   named must still measure `over_cap=True` (via `_message_size.
-   measure_envelope`, C2's own measurement seam) when invoked through
-   `guard_message_capture.capture_one_guard` (C1's own capture seam) with
-   that fixture. An entry with no matching fixture fails loud -- a manifest
-   entry that names a cell no test can reproduce is exactly the
-   unverifiable parking-lot entry this module exists to prevent.
-
-Both tests pass vacuously while the manifest is empty; they exist to fire
-the moment a future chunk populates either dict.
+An entry's `input_id` must name a `(guard, row_id)` cell that
+`test_guard_message_size.py`'s own `measured_corpus` fixture fires and
+measures once per row (`_measure_all_cells`) -- dead-entry enforcement
+(unknown guard/row-id, or a cell that no longer exceeds cap) is a lookup
+over that SAME corpus-measured population, consumed through
+`test_guard_message_size._stale_exemptions`, not a second firing path
+here. This module carries no test of its own for that reason: it is data
+only.
 """
 
 from __future__ import annotations
@@ -67,6 +42,7 @@ from coordinator_core.bash_guards._message_size import (
     MessageSizeMeasurement,
     measure_envelope,
 )
+from coordinator_core.bash_guards.tests import guard_message_corpus
 from coordinator_core.bash_guards.tests.guard_message_capture import (
     capture_one_guard,
 )
@@ -78,6 +54,17 @@ from coordinator_core.bash_guards.tests.guard_message_capture import (
 #: `_EXEMPTION_FIXTURES` below) the exemption covers -- it is not itself
 #: interpreted by this module beyond dead-entry lookup.
 GUARD_MESSAGE_EXEMPTIONS: Dict[Tuple[str, str], str] = {
+    ("guard-repo-setup-claude-home-refusal", "guard-repo-setup-claude-home-refusal-fire"): (
+        "this text is byte-pinned to DoE-claude's cold `guard-repo-setup-"
+        "claude-home-refusal.py`, whose rendered deny "
+        "`test_folded_guard_transport_parity.py::test_case2_repo_setup_"
+        "claude_home_refusal_parity` compares against this warm port after "
+        "normalization. At 233 bytes it clears the cap by 13, and every "
+        "shorter phrasing this side breaks that parity -- the cold script "
+        "is another repo's surface, so the two cannot be trimmed together "
+        "in one change. Shortening belongs in a cross-repo memo that moves "
+        "both texts at once, not a unilateral trim here."
+    ),
     ("guard-doctrine-surface-bash-write", "guard-doctrine-surface-bash-write-fire"): (
         "the guard's own authored prose is under 100 bytes; the overage is "
         "entirely the wiki-citation absolute path, resolved per-call off "
@@ -141,6 +128,104 @@ GUARD_MESSAGE_EXEMPTIONS: Dict[Tuple[str, str], str] = {
         "if it were backtick-wrapped (`_BACKTICK_RE` never matches across a "
         "newline). `test_guard_grep_via_bash.py` pins this rewrite's exact "
         "bytes; shortening it breaks the alternative it offers."
+    ),
+    ("project_orientation", "fire-always"): (
+        "this is SessionStart context injection (an orientation-cache "
+        "banner), not agent-facing guard advisory prose the duty-of-care "
+        "cap was written for -- grep-verified against `project_orientation."
+        "_handler`: every path (including every per-banner `try` no-op) "
+        "returns `context_only(...)`, never `no_advisory()` "
+        "(`guard_message_corpus.py::test_every_hooks_row_guard_has_a_non_"
+        "firing_control_row`'s own docstring names this module as one of "
+        "the W4 landing-wave exceptions with no reachable silent cell). "
+        "There is no register-trim available: the content is the "
+        "orientation banner itself, not a sentence an author could shorten "
+        "without deleting the orientation it exists to deliver."
+    ),
+    ("sessionstart_dispatch", "fire-composed-legs"): (
+        "a composed SessionStart fan-in, not independently-authored prose: "
+        "its corpus fixture (`_fire_sessionstart_dispatch`) monkeypatches "
+        "its `guard_settings_integrity`/`guard_hooks_kill_switch_detail` "
+        "legs to no-op (`lambda payload: {}`), so this cell's 2644 bytes "
+        "are `project_orientation`'s own 2502-byte fire-always cell "
+        "(immediately above, exempted on the same context-injection "
+        "grounds) plus ~140 bytes of this dispatcher's own join overhead. "
+        "The leg that carries the measurement is `project_orientation`/"
+        "`fire-always`; trimming this cell means trimming that one."
+    ),
+    ("preuse_bash_dispatch", "fire-host-ban"): (
+        "a composed PreToolUse(Bash) dispatcher that runs the full "
+        "bash-guards chain (`evaluate_payload_json`) and returns whatever "
+        "leg fired verbatim -- its corpus fixture (subagent_bash_policy: "
+        "deny, executor agent_id, `ls`) is the identical payload shape "
+        "`guard_host_subagent_bash_ban`'s own `guard-host-subagent-bash-"
+        "ban-fire` row fires, which already carries a written exemption "
+        "above (BASH-band cell, byte-identical text). This is that same "
+        "guard's own message, re-rendered through a different surface -- "
+        "trimming belongs to that entry, not a second one here."
+    ),
+    ("preuse_write_dispatch", "fire-claude-md-grant"): (
+        "a composed PreToolUse(Write) dispatcher that calls `write_guards."
+        "engine.evaluate()` and returns whatever registered write-guard "
+        "fired verbatim -- its corpus fixture (`file_path=\"CLAUDE.md\", "
+        "content=\"x\", agent_id=\"deadbeef0123\"`, no cwd `.git`) is "
+        "byte-identical to `write_guards.check_claude_md_size`'s own "
+        "`_wg_unauthorized_claude_md_fire` fixture, which is "
+        "`block_unauthorized_claude_md_write`'s `fire` row in the "
+        "`directory:write_guards` band. That row carries the measurement; "
+        "this cell is the same write-guard verdict re-rendered through the "
+        "hooks composed door."
+    ),
+    ("guard_host_subagent_bash_ban", "fire-deny-policy"): (
+        "the same guard, same fired text, as the already-exempted BASH-"
+        "band entry above keyed `(\"guard-host-subagent-bash-ban\", "
+        "\"guard-host-subagent-bash-ban-fire\")` -- this is the identical "
+        "deny reached through the `directory:hooks` proxy band (this "
+        "corpus's own hooks-row fixture for the guard), not a second, "
+        "independently-authored message. See that entry's own reason for "
+        "the byte accounting (checkout-path-length artifact leaving no "
+        "budget after the mandatory anti-evasion sentence); identical "
+        "here, just measured through the other surface."
+    ),
+    ("guard_host_subagent_bash_spawn_shapes", "fire-deny-spawn-shape"): (
+        "same root cause as `guard_host_subagent_bash_ban`/`fire-deny-"
+        "policy` immediately above: the same guard/text as the already-"
+        "exempted BASH-band entry keyed `(\"guard-host-subagent-bash-"
+        "spawn-shapes\", \"guard-host-subagent-bash-spawn-shapes-fire\")`, "
+        "reached here through the `directory:hooks` proxy band rather "
+        "than bash_guards' own native band. See that entry's own reason; "
+        "identical here."
+    ),
+    ("block-subagent-destructive-action", "block-subagent-destructive-action-fire"): (
+        "C8a trimmed 842 -> 292 measured prose bytes, still 72 over cap. The "
+        "static skeleton alone (with `Denied:`/`Command:` values emptied) measures "
+        "~227 bytes before any command text is appended. Reaching 220 "
+        "unconditionally would require dropping one of: the `Denied:`/`Command:` "
+        "diagnostic lines (loses which command fired), the 'not a capability "
+        "boundary, an interpreter can still reach git' clause (pinned by "
+        "`test_generic_branch_deny_message_states_shell_surface_not_capability_"
+        "boundary` as the regression fix for "
+        "state/bug-backlog/2026-08-10-the-git-verb-bash-guard-does-not-stop-a-"
+        "a1caf2991aa6.yaml -- cutting it reopens that defect), or the "
+        "'No subagent-reachable override exists' clause (a load-bearing "
+        "OVERRIDE-WITHHOLDING fact). None can be cut without reopening a fixed "
+        "defect or losing what-was-denied information."
+    ),
+    ("nudge_em_code_dispatch", "fire-code-write"): (
+        "the overage is the suppression-sentinel path "
+        "(`dispatch_nudge_sentinel.sentinel_path`), which embeds "
+        "`tempfile.gettempdir()` plus the session_id verbatim so the EM can "
+        "touch the exact file that suppresses a repeat fire -- on this dev "
+        "host that path alone is 131 bytes, over half the cap before any "
+        "authored text. The surrounding prose (file_path, dispatch-brief "
+        "`type:`/`task:` lines) is already trimmed per this module's own "
+        "'TRIMMED (C8c...)' comment, and `task: {edit_description}` is "
+        "byte-pinned by `test_firing_shape_gate.py::"
+        "test_post_fix_brief_still_names_a_concrete_task_line`. Shortening "
+        "the sentinel path would change the suppression contract "
+        "(`dispatch_nudge_sentinel.sentinel_path`'s own callers), out of "
+        "this cell's scope -- residual is environment-dependent path "
+        "length, not authored prose."
     ),
     ("multiprobe-banner", "multiprobe-banner-fire"): (
         "same root cause and same 'embed verbatim, unrunnable is worse than "
@@ -263,6 +348,26 @@ def _grep_via_bash_guard_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], 
     return cmd, session_id, cwd, payload, False
 
 
+def _guard_repo_setup_claude_home_refusal_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bool]:
+    """Mirrors `guard_message_corpus.py`'s own `guard-repo-setup-claude-
+    home-refusal-fire` row: the guard denies only when the scaffold's
+    resolved target root EQUALS Claude Home, so the payload's own `env`
+    declares a scratch home and the command targets that same path."""
+    home = Path(tempfile.mkdtemp(prefix="guard-message-exemption-home-")) / ".claude"
+    home.mkdir(parents=True, exist_ok=True)
+    cmd = "python3 -m coordinator_core.install.scaffold_structure --root %s" % home
+    session_id = "guard-message-exemption-%s" % uuid.uuid4().hex
+    cwd = str(home.parent)
+    payload: Dict[str, Any] = {
+        "tool_name": "Bash",
+        "tool_input": {"command": cmd},
+        "session_id": session_id,
+        "cwd": cwd,
+        "env": {"CLAUDE_CONFIG_DIR": str(home)},
+    }
+    return cmd, session_id, cwd, payload, False
+
+
 def _multiprobe_banner_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bool]:
     """Mirrors `guard_message_corpus.py`'s own `multiprobe-banner-fire`
     row: the same multi-probe session-facts banner command."""
@@ -274,6 +379,23 @@ def _multiprobe_banner_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bo
         "tool_input": {"command": cmd},
         "session_id": session_id,
         "cwd": cwd,
+    }
+    return cmd, session_id, cwd, payload, False
+
+
+def _block_subagent_destructive_action_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bool]:
+    """Mirrors `guard_message_corpus.py`'s own `block-subagent-destructive-
+    action-fire` row: `git rebase -i HEAD~3` under the executor identity."""
+    cmd = "git rebase -i HEAD~3"
+    session_id = "guard-message-exemption-%s" % uuid.uuid4().hex
+    cwd = "/nonexistent-guard-message-exemption-dir"
+    payload: Dict[str, Any] = {
+        "tool_name": "Bash",
+        "tool_input": {"command": cmd},
+        "session_id": session_id,
+        "cwd": cwd,
+        "agent_id": "deadbeef0123",
+        "agent_type": "coordinator:executor",
     }
     return cmd, session_id, cwd, payload, False
 
@@ -313,6 +435,44 @@ _EXEMPTION_FIXTURES: Dict[Tuple[str, str], Callable[[], Tuple[str, str, str, Dic
         "multiprobe-banner",
         "multiprobe-banner-fire",
     ): _multiprobe_banner_fire_fixture,
+    (
+        "block-subagent-destructive-action",
+        "block-subagent-destructive-action-fire",
+    ): _block_subagent_destructive_action_fire_fixture,
+    (
+        "guard-repo-setup-claude-home-refusal",
+        "guard-repo-setup-claude-home-refusal-fire",
+    ): _guard_repo_setup_claude_home_refusal_fire_fixture,
+}
+
+
+#: Re-measurement lookup for the eight `directory:hooks`-band exemptions
+#: above (composed-dispatcher / context-injection cells). Unlike
+#: `_EXEMPTION_FIXTURES` above -- independently-authored fixtures re-fired
+#: through `capture_one_guard`, bash_guards' native-band capture seam --
+#: each of these entries' whole written reason IS "this cell is C3's own
+#: `HOOK_ROWS` row for this exact (guard, row_id), re-fired and measured
+#: exactly as `test_leg1_ceiling_per_band` already fires it." Re-deriving
+#: an independent fixture here would not verify that claim; it would
+#: verify a DIFFERENT, hand-authored cell that happens to resemble it. So
+#: this lookup keys directly into `guard_message_corpus.HOOK_ROWS` rather
+#: than owning a duplicate fixture -- the one deliberate exception to
+#: `_EXEMPTION_FIXTURES`'s own "never imported from a sibling corpus
+#: module" rule, because for THESE entries the sibling corpus row is the
+#: evidence, not a shape to be independently reproduced.
+_HOOK_EXEMPTION_ROWS: Dict[Tuple[str, str], "guard_message_corpus.HookRow"] = {
+    (row.guard, row.row_id): row
+    for row in guard_message_corpus.HOOK_ROWS
+    if (row.guard, row.row_id)
+    in {
+        ("nudge_em_code_dispatch", "fire-code-write"),
+        ("project_orientation", "fire-always"),
+        ("sessionstart_dispatch", "fire-composed-legs"),
+        ("preuse_bash_dispatch", "fire-host-ban"),
+        ("preuse_write_dispatch", "fire-claude-md-grant"),
+        ("guard_host_subagent_bash_ban", "fire-deny-policy"),
+        ("guard_host_subagent_bash_spawn_shapes", "fire-deny-spawn-shape"),
+    }
 }
 
 
@@ -334,7 +494,18 @@ def test_exemption_guards_are_currently_registered():
     check ever telling anyone. Modeled on
     `test_override_route_inventory.test_allowlist_entries_are_actually_registered_guards`."""
     live_names = _live_guard_names()
-    stale = {guard_name for guard_name, _ in GUARD_MESSAGE_EXEMPTIONS if guard_name not in live_names}
+    #: `directory:hooks`-band entries name a hooks module, never a
+    #: `dispatch.GuardEntry.name` -- `_live_guard_names` reads only
+    #: `dispatch._build_guard_chain`'s bash_guards registrations, so those
+    #: keys are checked for liveness against `_HOOK_EXEMPTION_ROWS`
+    #: (itself keyed off `guard_message_corpus.HOOK_ROWS`, C3's own live
+    #: hooks-row registry) instead, below.
+    hook_exempted = {guard_name for guard_name, _ in _HOOK_EXEMPTION_ROWS}
+    stale = {
+        guard_name
+        for guard_name, _ in GUARD_MESSAGE_EXEMPTIONS
+        if guard_name not in live_names and guard_name not in hook_exempted
+    }
     assert not stale, (
         "these exemption entries name a guard that is not currently registered in "
         "dispatch._build_guard_chain -- remove or fix them: %s" % sorted(stale)
@@ -354,6 +525,13 @@ def test_exemption_cells_still_exceed_cap():
     under_cap = []
     for key in GUARD_MESSAGE_EXEMPTIONS:
         guard_name, input_id = key
+        hook_row = _HOOK_EXEMPTION_ROWS.get(key)
+        if hook_row is not None:
+            hook_capture = guard_message_corpus.fire_hook_row(hook_row)
+            measurement = measure_envelope(hook_capture.envelope, band=hook_capture.band)
+            if not measurement.over_cap:
+                under_cap.append(key)
+            continue
         builder = _EXEMPTION_FIXTURES.get(key)
         if builder is None:
             missing_fixtures.append(key)

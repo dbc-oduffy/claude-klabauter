@@ -67,6 +67,53 @@ from coordinator_core.win_portability import no_console_creationflags
 
 log = logging.getLogger(__name__)
 
+#: Standard 8-4-4-4-12 hex UUID shape. Local to this module by deliberate
+#: choice (see module docstring's "Explicitly OUT of scope" block) — NOT a
+#: reach into archive_stamp.py's `_SESSION_ID_UUID_RE`, which is looser and
+#: serves a different accessor's own contract. A trailer value that fails
+#: this shape check is not itself proof of corruption (a caller could inject
+#: a non-UUID own_session_id in a test fixture), but a well-formed Session-Id
+#: trailer produced by this repo's own tooling is always a UUID — a mismatch
+#: is a data-integrity signal worth a log line even when the classifier's
+#: existing over-refuse-not-over-credit posture is otherwise left unchanged
+#: (bug-backlog 2026-08-07-corrupted-session-id-trailer-reads-as-a-session-
+#: that-never-existed.yaml, proposed_action (1)).
+_SESSION_ID_UUID_SHAPE_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+#: Line-anchored, whole-message fallback for a `Session-Id:` line that git's
+#: OWN trailer-block detection does not see -- a blank line, or a `---`
+#: divider (e.g. a merge conflict marker, or a hand-composed message with a
+#: horizontal rule before the trailer block) earlier in the message breaks
+#: git's last-paragraph trailer-block rule, so `%(trailers:key=...)` reads
+#: empty even though the line is plainly present and legible. Same shape as
+#: `detect_foreign_commits`'s own local `trailer_re` (this module's other,
+#: independently-scanning classifier), reused here as a module-level
+#: constant since `trailer_foreign_shas` and `bulk_trailer_session_map` both
+#: need it.
+_SESSION_ID_LINE_RE = re.compile(r"^Session-Id:\s*(\S+)\s*$", re.MULTILINE)
+
+
+def _warn_if_not_uuid_shaped(sha: str, trailer: str) -> None:
+    """Log a data-integrity warning when a captured Session-Id trailer value
+    does not match the standard UUID shape — see `_SESSION_ID_UUID_SHAPE_RE`.
+
+    Detection only: does not change which set/map the caller places `sha`
+    into. A non-UUID-shaped trailer still names an impossible session (a
+    text-encoding mangle at the authoring seam, not a session that ever
+    existed), and the existing exclusion-based/foreign-by-default posture
+    already fails in the SAFE direction (over-refuse, never over-credit) —
+    see each caller's own docstring. This only makes that failure visible.
+    """
+    if not _SESSION_ID_UUID_SHAPE_RE.match(trailer):
+        log.warning(
+            "session_attribution: commit %s carries a Session-Id trailer "
+            "%r that is not UUID-shaped — likely a text-encoding mangle at "
+            "the authoring seam, naming a session that never existed",
+            sha, trailer,
+        )
+
 #: Signature of a "never raises, returns (returncode, stdout, stderr)" git
 #: runner — the contract coverage.py's own `_run` helper makes, and the one
 #: `trailer_foreign_shas` requires from its caller (dependency-injected
@@ -144,6 +191,17 @@ def trailer_foreign_shas(
     history) is left credited exactly as before — only a commit AFFIRMATIVELY
     attributed to a different session is stripped out.
 
+    When git's own trailer-block parse comes back empty for a commit, this
+    falls back to a line-anchored scan (`_SESSION_ID_LINE_RE`) of that same
+    commit's full message before concluding it is genuinely untrailered — a
+    blank line or `---` divider earlier in the message can break git's
+    last-paragraph trailer-block detection while leaving a `Session-Id:` line
+    perfectly legible in the raw text. The fallback only ever fires on a
+    commit git's own parse already reported empty, and only recognizes it
+    when the message actually carries a matching line — an ordinary
+    untrailered commit's fallback scan finds nothing and is classified
+    exactly as before.
+
     Cached per (sha_range, own_session_id) in the caller-supplied `cache` —
     many trail records commonly share a range or session_id.
 
@@ -163,7 +221,7 @@ def trailer_foreign_shas(
     rc, out, err = run(
         [
             "git", "log", "--no-merges",
-            "--format=%H%x1f%(trailers:key=Session-Id,valueonly)",
+            "--format=%x1e%H%x1f%(trailers:key=Session-Id,valueonly)%x1f%B",
             sha_range,
         ],
         cwd,
@@ -174,14 +232,26 @@ def trailer_foreign_shas(
             f"sha_range={sha_range!r}: {err.strip() or 'unknown error'}"
         )
     foreign: Set[str] = set()
-    for line in out.splitlines():
-        if "\x1f" not in line:
+    for record in out.split("\x1e"):
+        if "\x1f" not in record:
             continue
-        sha, trailer = line.split("\x1f", 1)
+        sha, _sep, rest = record.partition("\x1f")
+        trailer, _sep2, body = rest.partition("\x1f")
         sha = sha.strip()
         trailer = trailer.strip()
-        if sha and trailer and trailer != own_session_id:
-            foreign.add(sha)
+        if not sha:
+            continue
+        if trailer:
+            if trailer != own_session_id:
+                _warn_if_not_uuid_shaped(sha, trailer)
+                foreign.add(sha)
+            continue
+        line_match = _SESSION_ID_LINE_RE.search(body)
+        if line_match:
+            line_trailer = line_match.group(1).strip()
+            if line_trailer and line_trailer != own_session_id:
+                _warn_if_not_uuid_shaped(sha, line_trailer)
+                foreign.add(sha)
     result_set: FrozenSet[str] = frozenset(foreign)
     cache[key] = result_set
     return result_set
@@ -225,6 +295,13 @@ def bulk_trailer_session_map(
     — same exclusion-based posture as `trailer_foreign_shas` (untrailered
     commits are never treated as foreign).
 
+    Same fallback as `trailer_foreign_shas`: when git's own trailer-block
+    parse comes back empty for a commit, a line-anchored scan
+    (`_SESSION_ID_LINE_RE`) of that commit's full message is tried before the
+    commit is treated as carrying no trailer at all — see that function's own
+    docstring for why (a blank line or `---` divider elsewhere in the message
+    can break git's last-paragraph trailer-block detection).
+
     Raises `GitLogFailed` on a non-zero `git log` returncode — same fail-closed
     contract as `trailer_foreign_shas`; not swallowed to an empty map, since an
     empty map reads as "nothing has a trailer," which would make every
@@ -236,7 +313,7 @@ def bulk_trailer_session_map(
     if not include_merges:
         args.append("--no-merges")
     args += [
-        "--format=%H%x1f%(trailers:key=Session-Id,valueonly)",
+        "--format=%x1e%H%x1f%(trailers:key=Session-Id,valueonly)%x1f%B",
         range_str,
     ]
     rc, out, err = run(args, cwd)
@@ -246,14 +323,25 @@ def bulk_trailer_session_map(
             f"range={range_str!r}: {err.strip() or 'unknown error'}"
         )
     result: Dict[str, str] = {}
-    for line in out.splitlines():
-        if "\x1f" not in line:
+    for record in out.split("\x1e"):
+        if "\x1f" not in record:
             continue
-        sha, trailer = line.split("\x1f", 1)
+        sha, _sep, rest = record.partition("\x1f")
+        trailer, _sep2, body = rest.partition("\x1f")
         sha = sha.strip()
         trailer = trailer.strip()
-        if sha and trailer:
+        if not sha:
+            continue
+        if trailer:
+            _warn_if_not_uuid_shaped(sha, trailer)
             result[sha] = trailer
+            continue
+        line_match = _SESSION_ID_LINE_RE.search(body)
+        if line_match:
+            line_trailer = line_match.group(1).strip()
+            if line_trailer:
+                _warn_if_not_uuid_shaped(sha, line_trailer)
+                result[sha] = line_trailer
     return result
 
 
@@ -275,7 +363,7 @@ def _git_run(args: List[str], cwd: Path) -> subprocess.CompletedProcess:
             **no_console_creationflags(),
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
-        # Review: code-reviewer — Finding 1: dropped during the "ported
+        # Dropped during the "ported
         # verbatim" extraction from wsc_resolve.py's own `_git_run`, which
         # logs this exact spawn failure. This is precisely the class of
         # failure detect_foreign_commits/range_is_contiguous_suffix fail-empty
@@ -389,6 +477,7 @@ def detect_foreign_commits(
         m = trailer_re.search(body)
         if m:
             if m.group(1) != sid:
+                _warn_if_not_uuid_shaped(sha, m.group(1))
                 foreign_shas.append(sha)
             continue
 
@@ -400,7 +489,7 @@ def detect_foreign_commits(
         touched_by_sha = _batch_touched_paths(worktree_root, trailerless_shas)
         for sha in trailerless_shas:
             touched = touched_by_sha.get(sha)
-            # Review: code-reviewer — Finding 1 (P2, fix-on-principle): an empty
+            # fix-on-principle): an empty
             # touched-set (a merge commit's `--name-only` diff is empty, or a
             # genuinely empty commit) must be treated as "cannot place in scope"
             # (foreign), matching the conservative posture already taken for an

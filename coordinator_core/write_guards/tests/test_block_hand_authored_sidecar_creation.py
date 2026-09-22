@@ -134,7 +134,7 @@ def test_non_write_tool_not_matched(tmp_path):
 
 
 def test_allows_overwrite_when_file_path_relative_to_payload_cwd(tmp_path):
-    # Review: reviewer -- os.path.exists(file_path) must resolve a relative
+    # os.path.exists(file_path) must resolve a relative
     # Write file_path against payload['cwd'] (mirrors
     # block_fleet_delegation_write._resolve_candidate), not the guard
     # process's own cwd, or a legitimate overwrite of an already-provisioned

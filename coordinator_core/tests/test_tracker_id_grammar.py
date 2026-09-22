@@ -1,7 +1,7 @@
 """
 Unit tests for coordinator_core.tracker_id_grammar.ITEM_ID_PATTERN / is_item_id.
 
-Review: code-reviewer sat-07-review.slice-A Finding 2 — the module is a new
+The module is a new
 leaf load-bearing in two places (`tracker_entities.mint_item_id`'s charset
 guard and `ops.emit.closure_trailer`'s trailer pattern table) but was only
 exercised indirectly, via `test_closure_trailer.py`'s happy-path round-trip.

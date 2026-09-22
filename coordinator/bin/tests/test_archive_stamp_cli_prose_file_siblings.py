@@ -408,7 +408,7 @@ class DispositionNoteFileSiblingTest(_ProseFlagTestBase):
         )
 
     def test_decision_note_file_survives_interleaving_with_other_flags(self):
-        # Review: overengineering-reviewer -- trimmed to the one fact this case
+        # Trimmed to the one fact this case
         # uniquely pins (resolution survives interleaving with unrelated
         # flags); the resolved-tail/no-`-file`-token facts are already covered
         # by test_every_prose_disposition_flag_has_a_working_sibling.
@@ -533,7 +533,7 @@ class DispositionNoteFileSiblingTest(_ProseFlagTestBase):
         self.assertEqual(rc, 2)
         self.assertEqual(self.stub.action_calls, [])
 
-    # Review: coordinator:code-reviewer a5c86ae1f7c7c0a12 -- Finding 1/2. Before
+    # Before
     # the fix, the positional walk tracked "consumed as a value" only for the
     # three prose flags, so a non-prose 2-token flag's value (or missing-value
     # slot) landing on a prose flag's name got misread as a fresh pair and the

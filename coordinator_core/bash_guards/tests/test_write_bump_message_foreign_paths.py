@@ -71,7 +71,7 @@ def _measure(text: str):
     return measure_envelope(envelope)
 
 
-# Review: overengineering-reviewer (finding 4) -- dropped
+# Dropped
 # test_em_message_call_site_declares_axis_3_classification and its subagent
 # twin. Both asserted only that a comment string was present in source,
 # duplicating the declaration-presence pinning now owned by

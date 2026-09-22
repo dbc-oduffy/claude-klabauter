@@ -183,7 +183,7 @@ def test_maintenance_lock_younger_than_maint_floor_preserved(repo, monkeypatch):
     assert lock.exists()
 
 
-# Review: code-reviewer (Finding 2) — regression coverage for the linked-worktree
+# Regression coverage for the linked-worktree
 # path: `objects/maintenance.lock` lives in the SHARED object store, resolved via
 # `git rev-parse --git-common-dir`, which differs from `--git-dir` inside a linked
 # worktree. Neither bash oracle nor the rest of this file exercised that branch;

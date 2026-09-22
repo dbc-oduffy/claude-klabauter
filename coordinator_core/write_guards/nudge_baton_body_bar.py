@@ -106,7 +106,7 @@ _HEADING_RE = re.compile(r"^\s*#{1,6}\s")
 
 _MIN_ROW_LINES = 3
 
-# Review: code-reviewer — Finding 3 (P2): a bullet/numbered line matching
+# A bullet/numbered line matching
 # _BULLET_RE/_NUMBERED_RE syntactically could be either a terse data row
 # ("2026-07-23 | did thing one") or a full narrative bullet with real
 # reasoning ("Decided to defer X because Y would break Z..."). Only the
@@ -293,7 +293,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 return None
             trivial_reason = True
 
-        # Review: code-reviewer P1 -- COORDINATOR_BATON_BODY_PUNT is
+        # COORDINATOR_BATON_BODY_PUNT is
         # reason-shaped, not flag-shaped; render VAR="<reason>", not the
         # default VAR=1 (which this guard's own _is_trivial_reason would
         # reject).

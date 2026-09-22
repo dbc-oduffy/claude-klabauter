@@ -141,6 +141,40 @@ def test_the_seam_fires_for_handoffs_alone_with_zero_actioned_memos(tmp_path, mo
     assert calls["n"] == 1, "the seam must fire exactly once for a handoff-only batch"
 
 
+def test_dirty_check_fallback_pathspec_covers_migrated_inbox_root(tmp_path, monkeypatch):
+    """state/bug-backlog/2026-09-03-cycle-py-fallback-pathspec-still-hardcodes-
+    the-legacy-cross-repo-inbox-literal.yaml -- the fallback-pathspec branch
+    of the union dirty-check (forced here via a zeroed argv budget) must
+    scope to the C10a-migrated `state/cross-repo/inbox/` root, not the
+    retired `cross-repo/inbox` literal. A memo that is dirty in the
+    migrated tree must be RETAINED, never archived out from under an
+    uncommitted edit."""
+    from coordinator_core.ops.fleet import archive_terminal_handoffs
+
+    root = _init_repo(tmp_path / "repo")
+    memo_path = root / "state" / "cross-repo" / "inbox" / "memo-dirty.md"
+    _write_memo(memo_path, "actioned")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "fixture: one actioned memo, migrated root")
+
+    # Dirty the memo post-commit (uncommitted edit) without staging it.
+    memo_path.write_text(
+        memo_path.read_text(encoding="utf-8") + "dirty edit\n", encoding="utf-8"
+    )
+
+    # Force the overflow/fallback branch of _dirty_handoff_relpaths.
+    monkeypatch.setattr(
+        archive_terminal_handoffs, "_DIVERGENCE_CHECK_ARGV_BUDGET_CHARS", 0,
+    )
+
+    result = cycle.run(root, cap=10)
+
+    assert result["memos_archived"] == [], (
+        "a dirty memo under the migrated state/cross-repo/inbox/ root was "
+        "archived — the fallback pathspec did not cover the migrated root"
+    )
+
+
 def test_run_never_calls_the_seam_when_the_batch_is_empty(tmp_path, monkeypatch):
     root = _init_repo(tmp_path / "repo")
     _git(root, "add", "-A")

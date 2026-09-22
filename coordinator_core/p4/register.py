@@ -22,7 +22,7 @@ this — this op is the one documented stable entry point for ANY surface that
 registers a p4 workspace (cockpit's desktop registration affordance calls it
 too; this signature is a cross-repo contract, not an internal detail).
 
-Review: overengineering-reviewer F2 (integrator-applied — documentation
+Documentation
 fix, params kept). ``p4_submit_tool``/``p4_checkout_tool`` are written but
 read by NOTHING in this repo, BY DESIGN — they are a cross-repo contract
 row, not residue. The reader contract is DoE's committed
@@ -173,7 +173,7 @@ def _root_contains(candidate_root: str, repo_root_resolved: Path) -> bool:
         pass
     if repo_root_resolved == candidate:
         return True
-    # Review: code-reviewer F2 (integrator-applied) -- `Path.resolve()` does
+    # `Path.resolve()` does
     # not reliably case-normalize a component that doesn't already exist
     # verbatim under that casing on disk, and a `p4 client -o` `Root:`/
     # `AltRoots:` value routinely differs in casing from what the OS
@@ -403,7 +403,6 @@ def _register_workspace(params: dict, repo_root: Optional[Path] = None) -> dict:
                 "than relying on it for full ignore semantics."
             )
 
-        # Review: overengineering-reviewer F6 (integrator-applied --
         # documentation fix, both derivations kept). `p4_repo_key` is the
         # read surface for a CROSS-REPO consumer that cannot run the
         # reverse scan below (example-game-repo hit exactly this wall and correctly

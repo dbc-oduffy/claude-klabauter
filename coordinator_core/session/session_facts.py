@@ -88,7 +88,7 @@ from __future__ import annotations
 import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
 from coordinator_core.ops.ceremony.branch_resolution import (
@@ -136,7 +136,14 @@ from coordinator_core.telemetry.op_latency import record_fact_span
 #: while costing hundreds of ms. That gap is precisely why the STRUCTURAL leg
 #: (spawn count and file-read count, `benchmarks/fact_layer_hot_path.py`) is
 #: the primary, load-independent axis and this timing pair is secondary.
-def _timed_fact(fact_name: str, worktree_root: Path, sid: Any, fn, *args) -> dict:
+def _timed_fact(
+    fact_name: str,
+    worktree_root: Path,
+    sid: Any,
+    fn,
+    *args,
+    invocation_id: Optional[str] = None,
+) -> dict:
     t0 = time.perf_counter()
     c0 = time.process_time()
     t_start = time.time()
@@ -152,6 +159,7 @@ def _timed_fact(fact_name: str, worktree_root: Path, sid: Any, fn, *args) -> dic
         outcome=outcome,
         repo_root=worktree_root,
         sid=sid if isinstance(sid, str) else None,
+        invocation_id=invocation_id,
     )
     return record
 
@@ -291,7 +299,12 @@ def _session_magnitude_attributed_impl(worktree_root: Path, sid: str) -> dict:
     }
 
 
-def session_pickup_kind(worktree_root: Path, common_dir: Path, sid: str) -> dict[str, Any]:
+def session_pickup_kind(
+    worktree_root: Path,
+    common_dir: Path,
+    sid: str,
+    invocation_id: Optional[str] = None,
+) -> dict[str, Any]:
     """Serve the picked-up artifact's classification for THIS session
     (`fl-core-02` Fact 1; DR-323's lift of `quick_wrap_assemble._read_pickup_kind`).
 
@@ -339,11 +352,17 @@ def session_pickup_kind(worktree_root: Path, common_dir: Path, sid: str) -> dict
     case — computed, `classification: "none"`, same as today.
 
     TIMED (C1): emits one `op_latency` `"fact_span"` row per call — see
-    `_timed_fact`'s own docstring above.
+    `_timed_fact`'s own docstring above. `invocation_id` (additive, optional,
+    default `None`) is threaded straight through to `record_fact_span`, so a
+    caller minting one id per ceremony call and passing the same id to every
+    served fact recovers a per-ceremony aggregate at read time (`record_fact_span`'s
+    own docstring, and
+    `state/bug-backlog/2026-08-27-fact-span-rows-cannot-yield-a-per-ceremo-d9be470c2039.yaml`).
     """
     return _timed_fact(
         "session_pickup_kind", worktree_root, sid,
         _session_pickup_kind_impl, worktree_root, common_dir, sid,
+        invocation_id=invocation_id,
     )
 
 
@@ -461,7 +480,12 @@ def _read_frontmatter_scope_mode(path: Path) -> str | None:
     return read_fm_field_unquoted(head, "scope_mode")
 
 
-def session_governing_plan(worktree_root: Path, common_dir: Path, sid: str) -> dict[str, Any]:
+def session_governing_plan(
+    worktree_root: Path,
+    common_dir: Path,
+    sid: str,
+    invocation_id: Optional[str] = None,
+) -> dict[str, Any]:
     """Serve the plan THIS session holds a claim on (`fl-core-02` Fact 2; DR-323's
     lift of `quick_wrap_assemble._read_governing_plan`) — the lift only, no
     vocabulary question in it (DR-323 body, C7b).
@@ -553,11 +577,14 @@ def session_governing_plan(worktree_root: Path, common_dir: Path, sid: str) -> d
     report a collision state on the plan it did find.
 
     TIMED (C1): emits one `op_latency` `"fact_span"` row per call — see
-    `_timed_fact`'s own docstring above.
+    `_timed_fact`'s own docstring above. `invocation_id` (additive, optional,
+    default `None`) is threaded straight through to `record_fact_span` — see
+    `session_pickup_kind`'s own docstring for what it recovers.
     """
     return _timed_fact(
         "session_governing_plan", worktree_root, sid,
         _session_governing_plan_impl, worktree_root, common_dir, sid,
+        invocation_id=invocation_id,
     )
 
 
@@ -759,7 +786,12 @@ def _novel_loc_split(worktree_root: Path, sid: str) -> dict[str, Any]:
     }
 
 
-def session_diff_brightline(worktree_root: Path, common_dir: Path, sid: str) -> dict[str, Any]:
+def session_diff_brightline(
+    worktree_root: Path,
+    common_dir: Path,
+    sid: str,
+    invocation_id: Optional[str] = None,
+) -> dict[str, Any]:
     """Serve the session-scoped diff brightline (`fl-core-02` Fact 3; DR-323's lift of
     `quick_wrap_assemble._read_diff` / `_novel_loc_split`).
 
@@ -843,11 +875,14 @@ def session_diff_brightline(worktree_root: Path, common_dir: Path, sid: str) -> 
     AC8's forbidden verdict/recommendation/disposition/action shape.
 
     TIMED (C1): emits one `op_latency` `"fact_span"` row per call — see
-    `_timed_fact`'s own docstring above.
+    `_timed_fact`'s own docstring above. `invocation_id` (additive, optional,
+    default `None`) is threaded straight through to `record_fact_span` — see
+    `session_pickup_kind`'s own docstring for what it recovers.
     """
     return _timed_fact(
         "session_diff_brightline", worktree_root, sid,
         _session_diff_brightline_impl, worktree_root, common_dir, sid,
+        invocation_id=invocation_id,
     )
 
 
@@ -960,7 +995,9 @@ def _dirty_paths(worktree_root: Path) -> dict[str, Any]:
     return {"degraded": False, "paths": dirty}
 
 
-def session_terminal_sizings(worktree_root: Path) -> dict[str, Any]:
+def session_terminal_sizings(
+    worktree_root: Path, invocation_id: Optional[str] = None
+) -> dict[str, Any]:
     """Serve the terminal sizing-object scan (`fl-core-02` Fact 4; DR-323's lift of
     `quick_wrap_assemble._read_terminal_sizings` / `_dirty_paths`) —
     **the collision reference implementation** (DR-323 § (b) table): the only fact of
@@ -1022,11 +1059,14 @@ def session_terminal_sizings(worktree_root: Path) -> dict[str, Any]:
 
     TIMED (C1): emits one `op_latency` `"fact_span"` row per call — see
     `_timed_fact`'s own docstring above. This fact takes no `sid`, so the
-    row's `sid` field is `None`.
+    row's `sid` field is `None`. `invocation_id` (additive, optional, default
+    `None`) is threaded straight through to `record_fact_span` — see
+    `session_pickup_kind`'s own docstring for what it recovers.
     """
     return _timed_fact(
         "session_terminal_sizings", worktree_root, None,
         _session_terminal_sizings_impl, worktree_root,
+        invocation_id=invocation_id,
     )
 
 
@@ -1159,7 +1199,9 @@ def _scan_fold_sidecar_roots(worktree_root: Path) -> dict[str, Any]:
     return {"degraded": False, "paths": found}
 
 
-def session_fold_sidecars(worktree_root: Path) -> dict[str, Any]:
+def session_fold_sidecars(
+    worktree_root: Path, invocation_id: Optional[str] = None
+) -> dict[str, Any]:
     """Serve fold-execution-record sidecar presence (`fl-core-02` Fact 5;
     DR-323's lift of `quick_wrap_assemble._read_fold_sidecars`) — a directory
     listing over `state/execution-records/` and `state/fold-execution-records/`.
@@ -1220,11 +1262,14 @@ def session_fold_sidecars(worktree_root: Path) -> dict[str, Any]:
 
     TIMED (C1): emits one `op_latency` `"fact_span"` row per call — see
     `_timed_fact`'s own docstring above. This fact takes no `sid`, so the
-    row's `sid` field is `None`.
+    row's `sid` field is `None`. `invocation_id` (additive, optional, default
+    `None`) is threaded straight through to `record_fact_span` — see
+    `session_pickup_kind`'s own docstring for what it recovers.
     """
     return _timed_fact(
         "session_fold_sidecars", worktree_root, None,
         _session_fold_sidecars_impl, worktree_root,
+        invocation_id=invocation_id,
     )
 
 

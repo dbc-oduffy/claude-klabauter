@@ -16,11 +16,13 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.coverage import _DagChainResult, _resolve_numstat_row_path
+from coordinator_core.ops import review_brightline_gate
 from coordinator_core.ops.review_brightline_gate import (
     _classify_surface,
     _is_noise_path,
     _is_planning_artifact_path,
     _is_prose_bearing_path,
+    _session_scoped,
     _substance_weight,
     _sum_loc,
     _SUBSTANCE_WEIGHT_CONTENT,
@@ -270,6 +272,67 @@ def test_unfiltered_bogus_range_die_silent_gate(tmp_path, capsys, monkeypatch):
     assert captured.err == ""
 
 
+def test_bare_argv_on_shared_work_branch_refuses_instead_of_sweeping_whole_branch(
+    tmp_path, capsys, monkeypatch
+):
+    """A bare invocation (no --session-id, no explicit <range>) on a shared
+    `work/*` branch must refuse rather than silently default to
+    `origin/main..HEAD` and report a verdict over every peer session's
+    already-committed work — coordinator:review A.1's own prose rule."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "work/2026-09-21_batch")
+    _commit_file(repo, "b.py", "y = 2\n", "add b")
+    monkeypatch.chdir(repo)
+
+    rc = main([])
+    captured = capsys.readouterr()
+
+    assert rc == 1
+    assert captured.out == ""
+    assert "work/2026-09-21_batch" in captured.err
+    assert "--session-id" in captured.err
+
+
+def test_bare_argv_on_shared_work_branch_with_session_id_still_resolves(
+    tmp_path, capsys, monkeypatch
+):
+    """The shared-branch refusal is scoped to the bare, unscoped form only —
+    supplying --session-id (already filtered downstream in `_session_scoped`)
+    must not be blocked by it."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "work/2026-09-21_batch")
+    _commit_file_with_trailer(repo, "b.py", "y = 2\n", "add b", "sess-abc")
+    monkeypatch.chdir(repo)
+
+    rc = main(["--session-id", "sess-abc"])
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert "VERDICT=" in captured.out
+
+
+def test_bare_argv_on_non_shared_branch_unaffected(tmp_path, capsys, monkeypatch):
+    """The refusal is scoped to `work/*` branches only — a bare invocation on
+    an ordinary feature branch keeps the pre-existing default-range
+    behaviour."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "feature/not-shared")
+    _commit_file(repo, "b.py", "y = 2\n", "add b")
+    monkeypatch.chdir(repo)
+
+    rc = main([])
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert "VERDICT=" in captured.out
+
+
 # ---------------------------------------------------------------------------
 # main — --session-id path
 # ---------------------------------------------------------------------------
@@ -475,6 +538,45 @@ def test_session_id_floor_at_repo_root_degrades_to_indeterminate(
     assert "VERDICT=single-reviewer-ok" not in captured.out
     assert "VERDICT=PARTITION-MANDATORY" not in captured.out
     assert "gate vacuous" in captured.err
+
+
+def test_session_scoped_grep_is_not_end_anchored(monkeypatch):
+    """Bug row 2026-08-10-session-id-selector-anchored-on-drops-a-047ebb4e9793:
+    an end-anchored `--grep=^Session-Id: <id>$` silently drops a real commit
+    whose `Session-Id` trailer is not the message's last line, undercounting
+    review scale. `workstream_complete._session_owned_shas` was already fixed
+    to drop the trailing `$`; this pins `_session_scoped` (both its initial
+    scan and its session-aware-floor retry) and `_resolve_session_floor` to
+    the same unanchored form, so the two producers agree.
+
+    Pins the `--grep` argument shape directly rather than reproducing the
+    live drop end-to-end: the row's own residual notes that a synthetic
+    tmp-repo commit of the same apparent message shape (subject, blank,
+    Session-Id, blank, Co-Authored-By, Commit-Token) matched the anchored
+    selector fine, so an output-shape assertion over a synthetic fixture
+    would pass identically before and after this fix."""
+    calls = []
+
+    def fake_run_git(args, cwd=None):
+        calls.append(list(args))
+        if len(calls) == 2:
+            # _resolve_session_floor's unscoped query, made non-empty so the
+            # floor-retry branch (the third call) also fires.
+            return "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n", 0
+        return "", 0
+
+    monkeypatch.setattr(review_brightline_gate, "_run_git", fake_run_git)
+
+    _session_scoped("base..HEAD", "some-session-id")
+
+    assert len(calls) == 3, f"expected initial scan + floor query + floor retry, got {calls}"
+    grep_args = [a for call in calls for a in call if a.startswith("--grep=")]
+    assert len(grep_args) == 3
+    for grep_arg in grep_args:
+        assert not grep_arg.endswith("$"), (
+            f"end-anchored --grep silently drops a Session-Id trailer that "
+            f"is not the message's last line: {grep_arg}"
+        )
 
 
 def test_session_id_filters_to_matching_commits_only(tmp_path, capsys, monkeypatch):
@@ -766,7 +868,7 @@ def test_substance_weight_zeroes_only_content_identical_rename():
     assert _substance_weight("M", 0, 0) == _SUBSTANCE_WEIGHT_CONTENT
     assert _substance_weight("D", 5, 0) == _SUBSTANCE_WEIGHT_CONTENT
     assert _substance_weight("", 0, 0) == _SUBSTANCE_WEIGHT_CONTENT
-    # Review: code-reviewer — P3: pin "C" (copy) deliberately, not by accident
+    # Pin "C" (copy) deliberately, not by accident
     # of "R" being the only exempted branch. A copy adds a NEW surface, not a
     # content-identical move, so it stays at full weight even at 0 added/0
     # deleted (a copy with no line-level diff, e.g. a copy-then-immediate-
@@ -777,7 +879,7 @@ def test_substance_weight_zeroes_only_content_identical_rename():
 
 
 def test_parse_show_numstat_pairs_interleaved_rename_to_its_own_row(tmp_path):
-    """Review: code-reviewer — P2: every prior rename test puts the rename
+    """Every prior rename test puts the rename
     as the ONLY row in its commit, leaving `_parse_show_numstat`'s positional
     raw/numstat pairing unexercised for the case most likely to break it — a
     single commit touching several files where a rename/copy is interleaved

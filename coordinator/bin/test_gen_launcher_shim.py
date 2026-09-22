@@ -306,23 +306,31 @@ class BakedInterpreterExistenceGateTests(unittest.TestCase):
         self.assertIn("-3 $_entry @args", body)
         self.assertIn("exit 127", body)
 
-    def test_unsubstituted_token_self_detection_survives(self) -> None:
-        """The token self-clear must still precede the existence gate — an
-        uninstalled artifact carries the literal token, which is not a path.
+    def test_unsubstituted_token_survives_the_existence_gate(self) -> None:
+        """An uninstalled artifact carries the literal, unsubstituted
+        token as its baked value -- not a path on disk. The SAME
+        existence/Test-Path gate the BAKED-sentinel tests above pin must
+        clear it too, with no separate token-equality comparison: the gate
+        is one mechanism for both dialects and both origins of `_py`/
+        `$_pybin`, never a token-specific special case.
         """
         cmd = gls.render_cmd("queue-triage")
-        self.assertIn(f'if "%_py%"=="{gls.PYTHON_BIN_TOKEN}" set "_py="', cmd)
+        self.assertIn(
+            'if not "%_py%"=="" if exist "%_py%" goto :run_baked', cmd
+        )
         self.assertLess(
-            cmd.index(f'if "%_py%"=="{gls.PYTHON_BIN_TOKEN}"'),
-            cmd.index('if exist "%_py%"'),
+            cmd.index('if exist "%_py%" goto :run_baked'),
+            cmd.index("'where python.exe 2^>nul'"),
         )
         ps1 = gls.render_ps1("queue-triage")
         self.assertIn(
-            f"if ($_pybin -eq '{gls.PYTHON_BIN_TOKEN}') {{ $_pybin = '' }}", ps1
+            "if ($_pybin -ne '' -and -not (Test-Path -LiteralPath $_pybin)) "
+            "{ $_pybin = '' }",
+            ps1,
         )
         self.assertLess(
-            ps1.index(f"if ($_pybin -eq '{gls.PYTHON_BIN_TOKEN}')"),
             ps1.index("Test-Path -LiteralPath $_pybin"),
+            ps1.index("Get-Command python.exe"),
         )
 
     def test_quoting_of_the_baked_value_is_unchanged(self) -> None:

@@ -777,6 +777,122 @@ def test_walk_repo_excludes_extensionless_script_in_excluded_dir(
     assert excluded.suppressed_site_count == 0
 
 
+def test_walk_repo_discovers_extensionless_docstring_script_under_bin(
+    tmp_path: pathlib.Path,
+):
+    # Regression: coordinator/bin/static-check and friends are extensionless
+    # AND shebang-less by design (opened via `python3 coordinator/bin/<name>`,
+    # never executed directly), so the shebang-only admission rule left them
+    # permanently invisible to the walk.
+    bin_dir = tmp_path / "coordinator" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "static-check").write_text(
+        '"""\ncoordinator/bin/static-check -- a naked-Python CLI.\n"""\n'
+        + _src(
+            """
+            import subprocess
+
+            def f():
+                subprocess.run(["bash", "-c", "x"])
+            """
+        )
+    )
+
+    sites, excluded = walk_repo(tmp_path)
+
+    assert len(sites) == 1
+    assert sites[0].path == "coordinator/bin/static-check"
+    assert sites[0].kind == SpawnKind.SHELL_BINARY
+    assert excluded.suppressed_site_count == 0
+
+
+def test_walk_repo_discovers_extensionless_comment_preamble_script_under_bin(
+    tmp_path: pathlib.Path,
+):
+    bin_dir = tmp_path / "coordinator" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "spawn-census").write_text(
+        "#\n# spawn-census -- on-demand query surface.\n#\n"
+        + _src(
+            """
+            import subprocess
+
+            def f():
+                subprocess.run(["git", "status"])
+            """
+        )
+    )
+
+    sites, _ = walk_repo(tmp_path)
+
+    assert len(sites) == 1
+    assert sites[0].path == "coordinator/bin/spawn-census"
+    assert sites[0].kind == SpawnKind.PLAIN_SPAWN
+
+
+def test_walk_repo_ignores_extensionless_comment_led_non_python_file_under_bin(
+    tmp_path: pathlib.Path,
+):
+    # Regression: a comment-opening but NON-Python config file under bin/
+    # (e.g. `.percolate-ignore`) must not be admitted just because its first
+    # line looks like a Python comment -- it has to actually parse.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / ".percolate-ignore").write_text(
+        "# .percolate-ignore -- bin/ contributing source root\n"
+        "__pycache__/\n"
+        "*.DS_Store\n"
+    )
+
+    sites, _ = walk_repo(tmp_path)
+
+    assert sites == []
+
+
+def test_walk_repo_ignores_extensionless_docstring_script_outside_bin(
+    tmp_path: pathlib.Path,
+):
+    # The preamble check is bounded to `bin/` directories -- a docstring-led
+    # extensionless file elsewhere in the repo must stay invisible, same as
+    # before this fix.
+    (tmp_path / "README").write_text(
+        '"""\nThis looks like a module docstring but is not under bin/.\n"""\n'
+    )
+
+    sites, _ = walk_repo(tmp_path)
+
+    assert sites == []
+
+
+def test_walk_repo_ignores_non_extensionless_docstring_script_under_bin(
+    tmp_path: pathlib.Path,
+):
+    # Regression: the bin/ preamble+parse carve-out is scoped to genuinely
+    # extensionless files (the naked-Python-CLI convention), not to "any
+    # suffix other than .py". A file that already carries a non-.py suffix
+    # -- e.g. an editor backup or snapshot copy left beside a real script --
+    # must stay invisible even when its head and body both parse as Python,
+    # or every such stray file under bin/ double-counts the original's
+    # spawn sites.
+    bin_dir = tmp_path / "coordinator" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "some-tool.py.orig").write_text(
+        '"""\nsome-tool -- a naked-Python CLI.\n"""\n'
+        + _src(
+            """
+            import subprocess
+
+            def f():
+                subprocess.run(["bash", "-c", "x"])
+            """
+        )
+    )
+
+    sites, _ = walk_repo(tmp_path)
+
+    assert sites == []
+
+
 # --- Defect 2: SHELL_UNKNOWN for opaque **kwargs forwarding ---------------
 
 

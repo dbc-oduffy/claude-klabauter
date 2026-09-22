@@ -66,11 +66,20 @@ def repo(tmp_path):
 
 
 def _released_paths(repo: Path, sid: str) -> set:
-    touched = _sdir(repo, sid) / "touched.txt"
-    if not touched.exists():
+    """Release (``R``) events for THIS session, read off the live sink.
+
+    Reads ``touch-record.jsonl`` through `session_scope`'s own legacy-dialect
+    seam (`_read_touch_record_as_legacy_lines`), not the retired ``touched.txt``
+    file -- both `scope.touch` and `release_committed_claims`' session-side arm
+    have written only the jsonl sink since the C4 writer flip, so a helper
+    pointed at the legacy name reads back an empty set for a release that in
+    fact happened."""
+    record = _sdir(repo, sid) / session_scope._TOUCH_RECORD_FILENAME
+    if not record.exists():
         return set()
+    legacy_lines, _truncated = session_scope._read_touch_record_as_legacy_lines(record)
     released = set()
-    for line in touched.read_text(encoding="utf-8").splitlines():
+    for line in legacy_lines:
         verb, _ts, path = session_scope.parse_touch_event(line)
         if verb == "R":
             released.add(path)

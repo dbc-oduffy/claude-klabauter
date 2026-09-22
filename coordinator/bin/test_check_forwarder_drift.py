@@ -142,7 +142,7 @@ def test_content_axis_lib_names_includes_resolve_claude_klabauter_file():
 
 
 def test_content_axis_lib_names_falls_back_when_substrate_unimportable(monkeypatch):
-    # Review: code-reviewer 2026-08-12 (P2): the `except ImportError` branch
+    # code-reviewer 2026-08-12 (P2): the `except ImportError` branch
     # of `_content_axis_lib_names` had no test driving it for real — every
     # other test only exercises the success path (substrate imports fine on
     # this checkout). This drives the actual fallback by making the import
@@ -165,7 +165,7 @@ def test_content_axis_lib_names_falls_back_when_substrate_unimportable(monkeypat
 
 
 def test_content_axis_unresolved_source_reported_and_not_counted_clean(tmp_path: Path):
-    # Review: code-reviewer 2026-08-12 (nit): a source file that cannot be
+    # code-reviewer 2026-08-12 (nit): a source file that cannot be
     # found is reported [warn] but must not be silently folded into a
     # "0 drifted" summary that reads as full clean coverage.
     mod = _load_module()

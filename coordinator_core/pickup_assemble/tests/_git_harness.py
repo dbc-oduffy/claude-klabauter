@@ -77,7 +77,7 @@ def init_repo(repo: Path) -> None:
     git(repo, "config", "commit.gpgsign", "false")
     git(repo, "config", "user.email", "test@example.com")
     git(repo, "config", "user.name", "Test")
-    # Review: coordinator:code-reviewer — every one of the 21 inline
+    # Every one of the 21 inline
     # `_init_repo` implementations this harness replaced ended with a real
     # "init" commit, so `git rev-list --count HEAD` had a born HEAD to count.
     # Without it, `rev-list --count HEAD` on an unborn branch exits non-zero

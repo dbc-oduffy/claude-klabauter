@@ -66,6 +66,7 @@ import pytest
 import coordinator_core.backlog_grind_assemble as bga
 import coordinator_core.backlog_grind_assemble.apply as bga_apply
 import coordinator_core.backlog_grind_assemble.directives as bga_directives
+import coordinator_core.backlog_grind_assemble.grind_rows as bga_grind_rows
 import coordinator_core.backlog_grind_assemble.verifier as bga_verifier
 from coordinator_core.contract import apply_base
 from coordinator_core.contract.decision_object.envelope import ENVELOPE_KEYS
@@ -1479,7 +1480,13 @@ class TestExecutorDispatchTemplateFieldsUnmovedByC2Refactor:
     each passes to `build_executor_dispatch_prompt_template_emission` must
     not move by one byte. These strings are the pre-refactor bytes,
     captured directly from the readers before C1/C2 existed -- a literal
-    pin, not a re-derivation through the same builders under test."""
+    pin, not a re-derivation through the same builders under test.
+
+    The footprint field is pinned as a PREFIX, not an equality: the shared
+    constant has since gained a deliberate write-tool clause, and this class
+    guards against silent drift in the refactored text, not against a later
+    documented addition to it. Its first 168 bytes are still the readers'
+    own pre-refactor bytes, unmoved."""
 
     _MISE_FOOTPRINT = (
         "You MUST NOT create or modify any file outside this footprint: "
@@ -1496,7 +1503,8 @@ class TestExecutorDispatchTemplateFieldsUnmovedByC2Refactor:
         "the full suite, or any unscoped runner invocation; note in the DONE "
         "summary if the spec calls for broader verification and leave it to "
         "the EM; (4) leave your changes uncommitted and unstaged — you do not "
-        "invoke git under any circumstance. Only the EM commits, once per "
+        "stage, commit, or otherwise mutate git state; reading git status "
+        "as step (2) directs is expected. Only the EM commits, once per "
         "wave, after every item in the wave passes verification."
     )
     _MISE_DONE_SUMMARY = (
@@ -1531,14 +1539,14 @@ class TestExecutorDispatchTemplateFieldsUnmovedByC2Refactor:
     def test_mise_fields_unmoved(self):
         result = bga.readers_mise_en_place._read_executor_dispatch_template()
         fields = result.directives[0]["fields"]
-        assert fields["footprint_constraint_template"] == self._MISE_FOOTPRINT
+        assert fields["footprint_constraint_template"].startswith(self._MISE_FOOTPRINT)
         assert fields["self_verify_constraint"] == self._MISE_SELF_VERIFY
         assert fields["done_summary_constraint_template"] == self._MISE_DONE_SUMMARY
 
     def test_blitz_fields_unmoved(self):
         result = bga.readers_bug_blitz._read_executor_dispatch_template()
         fields = result.directives[0]["fields"]
-        assert fields["footprint_constraint_template"] == self._BLITZ_FOOTPRINT
+        assert fields["footprint_constraint_template"].startswith(self._BLITZ_FOOTPRINT)
         assert fields["done_summary_constraint_template"] == self._BLITZ_DONE_SUMMARY
         assert "self_verify_constraint" not in fields, (
             "bug-blitz adopting self-verify is out of scope for this plan"
@@ -3461,7 +3469,7 @@ def _load_entry_point_shim():
     return importlib.import_module("entry_point_shim")
 
 
-# Review: cli-and-tests reviewer (Finding 1) -- single source of truth for
+# Single source of truth for
 # which callee each allowlisted subcommand is expected to reach. Feeds BOTH
 # the parametrize list below AND
 # test_every_allowlisted_subcommand_has_an_expected_callee_mapped's
@@ -3485,6 +3493,7 @@ _EXPECTED_CALLEE_BY_SUBCOMMAND = {
     "mint-run-id": "brief.main",
     "apply": "apply.main_apply",
     "drop": "apply.main_drop",
+    "grind-row": "grind_rows.main",
 }
 
 
@@ -3630,6 +3639,7 @@ class TestTrampolineDispatchRouting:
         monkeypatch.setattr(bga, "main", _make_spy("brief.main"))
         monkeypatch.setattr(bga_apply, "main_apply", _make_spy("apply.main_apply"))
         monkeypatch.setattr(bga_apply, "main_drop", _make_spy("apply.main_drop"))
+        monkeypatch.setattr(bga_grind_rows, "main", _make_spy("grind_rows.main"))
 
         full_argv = [subcommand, "mise-en-place"]
         exit_code = shim._backlog_grind_assemble_entry(full_argv)

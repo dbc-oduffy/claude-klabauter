@@ -821,7 +821,7 @@ class TestDisambiguation:
         assert "pln-alpha" in plan_ids
         assert "pln-beta" in plan_ids
         # No file written — directory must not exist (not created on disambiguation path).
-        # Review: code-reviewer (F7) — previous assertion was vacuously True when the
+        # Previous assertion was vacuously True when the
         #   directory was absent (the expected state).  Assert absence directly.
         assert not (repo_root / "state" / "handoffs").exists()
 
@@ -861,7 +861,7 @@ class TestDisambiguation:
 
         Validates the sequential contract: plan ambiguity is resolved first; goal
         ambiguity is NOT surfaced until the plan is pinned (F5 negative-spec).
-        Review: code-reviewer (F8) — double-ambiguous test makes the sequential order
+        double-ambiguous test makes the sequential order
         observable and wire-contract-verifiable.
         """
         repo_root = tmp_path / "repo"
@@ -1015,7 +1015,7 @@ class TestArtifactWrite:
     def test_minted_by_absent_via_creation_door_when_resolver_unresolvable(
         self, tmp_path, monkeypatch
     ):
-        """Review: coordinator:code-reviewer c71df2b9 (P2) -- the everyday case
+        """The everyday case
         on a box with no `gh` auth configured: `resolve_operating_person()`
         returns an empty bundle (`{}`), `.get("github")` is `None`, and
         `minted_by` must be entirely absent from the written file at the
@@ -1241,7 +1241,7 @@ class TestExtractFrontmatterScalar:
     def test_double_quoted_value_stripped(self, tmp_path, monkeypatch):
         """Double-quoted consumed_by: \"sess-abc\" returns sess-abc without surrounding quotes.
 
-        Review: code-reviewer (F4) — operators and YAML tools sometimes emit quoted scalars;
+        Operators and YAML tools sometimes emit quoted scalars;
         without stripping, comparison against the unquoted resolved session id silently fails.
         """
         from coordinator_core.ops._fm_util import extract_frontmatter_scalar
@@ -1271,7 +1271,7 @@ class TestExtractFrontmatterScalar:
         End-to-end test: _resolve_origin_handoff uses extract_frontmatter_scalar;
         if quotes were not stripped, consumed_by: "sess-xyz" would not match sess-xyz
         and origin_handoff would be null instead of the handoff stem.
-        Review: code-reviewer (F4) — integration path through the op handler.
+        Integration path through the op handler.
         """
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)
@@ -1885,6 +1885,50 @@ class TestStampMode:
         assert result.get("status") == "ok", f"unexpected: {result}"
         assert result["origin_plan_id"] == "pln-quantum"
 
+    def test_stamp_mode_derives_origin_handoff_id_from_caller_supplied_path(
+        self, tmp_path, monkeypatch
+    ):
+        """A caller-supplied ``origin_handoff`` that resolves to a real,
+        readable file must NOT leave ``origin_handoff_id`` null when that
+        file itself carries a ``handoff_id`` -- the id should be read off
+        the SAME file ``origin_handoff`` names, mirroring
+        ``_resolve_origin_handoff``'s own same-file C2 invariant.
+
+        Regression guard for the spinoff whose ``origin_handoff`` named a
+        real predecessor path while ``origin_handoff_id`` stayed null."""
+        repo_root = tmp_path / "repo"
+        common_dir = _make_git_repo(repo_root)
+        handoffs_dir = repo_root / "state" / "handoffs"
+        target = _seed_spinoff_stub(handoffs_dir, "2026-08-30-my-spinoff.md")
+        _seed_handoff(
+            handoffs_dir,
+            "2026-08-30_135923_predecessor.md",
+            claimed_by="sess-elsewhere",
+            handoff_id="hnd-real-predecessor-1a2b3c",
+        )
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-stamp-derive-id")
+
+        result = _run(
+            _handler(
+                {
+                    "handoff_path": str(target),
+                    "origin_handoff": (
+                        "state/handoffs/2026-08-30_135923_predecessor.md"
+                    ),
+                },
+                repo_root=common_dir,
+            )
+        )
+
+        assert result.get("status") == "ok", f"unexpected: {result}"
+        assert result["origin_handoff"] == (
+            "state/handoffs/2026-08-30_135923_predecessor.md"
+        )
+        assert result["origin_handoff_id"] == "hnd-real-predecessor-1a2b3c"
+
+        content = target.read_text(encoding="utf-8")
+        assert "origin_handoff_id: hnd-real-predecessor-1a2b3c" in content
+
     def test_resolve_stamp_match_text_tolerates_absent_frontmatter(self, tmp_path):
         """``_resolve_stamp_match_text`` on a file with NO frontmatter block
         returns the stem rather than raising.
@@ -1985,7 +2029,6 @@ class TestStampMode:
         """`_stamp_fork_provenance`'s array-cardinality replace branch
         (`origin_goal_id`) must inherit the SAME nested-block guard every
         scalar field in this function gets from `replace_fm_field` --
-        Review: code-reviewer (P1). A block-sequence-shaped existing
         `origin_goal_id:` (hand-edited, or written by a foreign tool) must
         raise rather than being silently truncated to one bare
         `origin_goal_id: [...]` line with its indented items orphaned."""
@@ -2062,7 +2105,7 @@ class TestStampMode:
         block-sequence `origin_goal_id:` must come back as this op's
         ordinary structured `_err(...)` shape (status != "ok", an `error`
         string), never an unhandled `ValueError` escaping the op --
-        Review: code-reviewer (P1 + P1, the guard AND the exception
+        code-reviewer (P1 + P1, the guard AND the exception
         translation)."""
         repo_root = tmp_path / "repo"
         common_dir = _make_git_repo(repo_root)

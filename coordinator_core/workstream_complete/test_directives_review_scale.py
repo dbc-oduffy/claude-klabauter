@@ -47,6 +47,8 @@ from coordinator_core.ops.ceremony.wsc_disposition import (
     PREDECESSOR_CONSUMED,
     SINGLE_SESSION,
 )
+from coordinator_core.session import core as _session_core
+from coordinator_core.session import scope as _session_scope
 from coordinator_core.workstream_complete import directives_review, judgments
 from coordinator_core.workstream_complete.directives_review import (
     decide_review_scale,
@@ -610,7 +612,7 @@ def test_split_tracked_partitions_mixed_tracked_and_untracked_with_normalization
 
 
 def test_measure_session_review_scale_inputs_counts_backslash_tracked_modified_file():
-    """Review: code-reviewer — Finding (P1). `_split_tracked` normalizes
+    """`_split_tracked` normalizes
     paths into its OWN `ls-files` pathspec but used to return `tracked`
     built from the caller's original, unnormalized paths -- which
     `_measure_session_review_scale_inputs` then fed straight into a second
@@ -1350,14 +1352,15 @@ def test_split_per_commit_numstat_ignores_marker_line_not_in_known_shas():
     assert fake_path_line in result["cccccccccccccccccccccccccccccccccccccccc"]
 
 
-def test_measure_session_review_scale_inputs_misattributes_unclaimed_peer_dirty_file():
-    """Pins the CURRENT (buggy) value: a peer's untracked, uncommitted file
-    — created after THIS session's `session_start_time`, with no claim dir
-    under `coordinator-sessions/` and no landed commit naming it — is not
-    excludable by `resolve_known_concurrent_paths` and so is counted into
-    this session's own `gross_loc`/`code_loc`/`surface_count` via the
-    default `uncommitted_paths=None` derivation path. Exercises the SAME
-    code path `brief()` uses in production (unlike every other test in this
+def test_measure_session_review_scale_inputs_excludes_touch_claimed_peer_dirty_file():
+    """A peer's untracked, uncommitted file — created after THIS session's
+    `session_start_time`, with no landed commit naming it — is excluded
+    from this session's own `gross_loc`/`code_loc`/`surface_count` once it
+    carries a live TOUCH-claim in the peer's own touch-record, the shape a
+    real Edit/Write-tool write leaves via the PostToolUse hook
+    (`hooks.track_touched_files`) — `resolve_known_concurrent_paths`'s
+    third producer (`_peer_touch_claimed_paths`). Exercises the SAME code
+    path `brief()` uses in production (unlike every other test in this
     file, which passes `uncommitted_paths` explicitly and so never reaches
     `classify_session_authored_files`/`resolve_known_concurrent_paths` at
     all)."""
@@ -1374,9 +1377,43 @@ def test_measure_session_review_scale_inputs_misattributes_unclaimed_peer_dirty_
         _commit_as(root, "my commit", _SESSION_ID)
 
         # A peer session's own in-progress work: an untracked file, mtime
-        # necessarily after session_start_time (just written), with NO
-        # coordinator-sessions/ claim dir and no commit — i.e. genuinely
-        # unclaimed at measurement time, the exact race this bug reproduces.
+        # necessarily after session_start_time (just written), with no
+        # commit naming it — but a live PostToolUse-hook-shaped touch-claim,
+        # the positive authorship signal a peer's Edit/Write write leaves.
+        peer_lines = "\n".join(f"p{i} = {i}" for i in range(30)) + "\n"
+        (root / "peer_unclaimed.py").write_text(peer_lines, encoding="utf-8")
+        _session_core.init(_PEER_SESSION_ID, cwd=str(root))
+        _session_scope.touch(_PEER_SESSION_ID, "peer_unclaimed.py", cwd=str(root))
+
+        gross_loc, code_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
+            root, session_start_time, _SESSION_ID, uncommitted_paths=None
+        )
+
+        assert commit_count == 1
+        assert gross_loc == 1
+        assert code_loc == 1
+        assert surface_count == 1
+
+
+def test_measure_session_review_scale_inputs_still_misattributes_untouch_claimed_peer_dirty_file():
+    """Documents the residual gap `resolve_known_concurrent_paths`'s own
+    `_peer_touch_claimed_paths` producer does NOT close: a peer's
+    untracked file written with no touch-claim at all (a Bash-authored
+    write, never reconciled onto a live session until that peer's own
+    commit-time pass) carries no positive authorship signal and is still
+    swept into this session's own measurement. Guards against silently
+    regressing this residual into a falsely-reported "closed" state."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_git_repo(root)
+        session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+        (root / "mine.py").write_text("m = 1\n", encoding="utf-8")
+        _run_git(["add", "mine.py"], str(root))
+        _commit_as(root, "my commit", _SESSION_ID)
+
         peer_lines = "\n".join(f"p{i} = {i}" for i in range(30)) + "\n"
         (root / "peer_unclaimed.py").write_text(peer_lines, encoding="utf-8")
 
@@ -1385,13 +1422,6 @@ def test_measure_session_review_scale_inputs_misattributes_unclaimed_peer_dirty_
         )
 
         assert commit_count == 1
-        # BUG, pinned: the peer's 30-line unclaimed file is swept into this
-        # session's own measurement (1 own line + 30 peer lines), not the
-        # correct gross_loc == 1 a genuine positive-authorship signal would
-        # produce. If this assertion ever starts failing because gross_loc
-        # == 1, a fix landed — replace this test with a real regression
-        # guard (assert == 1) and close the bug-backlog entry above rather
-        # than loosening this assertion.
         assert gross_loc == 31
         assert code_loc == 31
         assert surface_count == 1

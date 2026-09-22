@@ -240,7 +240,7 @@ Body.
     assert result == {"held": [], "unclaimed": [], "review_due": []}
 
 
-# Review: staff-eng (Finding 4) -- the removed
+# The removed
 # `test_build_work_state_scan_root_is_single_glob_no_second_filter` asserted
 # `"archive" not in source text`, a spelling assertion (red on a pure rename
 # of the archive-index helper; green against a real archive filter spelled
@@ -435,7 +435,7 @@ def test_pickup_ready_never_drives_eligibility_only_stamp_comparison():
     the PRODUCER's own computed verdict key, never a second frontmatter
     read standing in for it (the second-gate-evaluator shape this module's
     docstring forbids)."""
-    # Review: staff-eng (Finding 14) -- the removed third arm
+    # The removed third arm
     # (`"stamped_pickup_ready" in stripped`) subsumed the second exact-
     # expression arm entirely, so it constrained the local variable's NAME
     # rather than the expression: it would happily admit a future

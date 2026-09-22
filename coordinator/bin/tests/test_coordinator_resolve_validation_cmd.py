@@ -511,6 +511,53 @@ def test_resolve_python_interp_returns_none_when_nothing_resolves(monkeypatch):
     assert rvc._resolve_python_interp(None) is None
 
 
+def test_ac11_bin_path_is_byte_identical_re_export(tmp_path, monkeypatch):
+    """AC11 (C1, docs/plans/2026-07-30-diff-scoped-ceremony-gates-elegant.md):
+    the bin path's resolved output is byte-identical to
+    coordinator_core.resolve_validation_cmd's bin-shape API, because the bin
+    module now re-exports (not re-implements) it -- see
+    coordinator/bin/coordinator-resolve-validation-cmd.py's module docstring
+    ("Consolidation") and coordinator_core/resolve_validation_cmd.py's
+    "Bin-shape API" section header. This pins non-gate behaviour only (a
+    resolved command string/returncode/stderr on an ordinary repo_root); it
+    does not pin coordinator_core's OWN historical cs_*/ResolvedCommand names,
+    which have zero production callers outside
+    coordinator_core/test_resolve_validation_cmd.py and are free to diverge
+    per that module's own docstring.
+    """
+    monkeypatch.delenv("COORDINATOR_FAST_TEST_CMD", raising=False)
+    monkeypatch.delenv("COORDINATOR_FULL_TEST_CMD", raising=False)
+    (tmp_path / "coordinator.local.md").write_text(
+        '---\nfast_test_cmd: "pytest -q"\n---\n', encoding="utf-8"
+    )
+
+    bin_fast = rvc.resolve_fast_test_cmd(str(tmp_path))
+    core_fast = core_rvc.resolve_fast_test_cmd(str(tmp_path))
+    assert (bin_fast.stdout, bin_fast.returncode, bin_fast.stderr) == (
+        core_fast.stdout,
+        core_fast.returncode,
+        core_fast.stderr,
+    )
+
+    bin_full = rvc.resolve_full_test_cmd(str(tmp_path))
+    core_full = core_rvc.resolve_full_test_cmd(str(tmp_path))
+    assert (bin_full.stdout, bin_full.returncode, bin_full.stderr) == (
+        core_full.stdout,
+        core_full.returncode,
+        core_full.stderr,
+    )
+
+    # The bin module re-exports the SAME function objects rather than
+    # independently re-implementing them (PEP 562 bootstrap in
+    # coordinator-resolve-validation-cmd.py's _bootstrap_engine).
+    assert rvc.resolve_fast_test_cmd is core_rvc.resolve_fast_test_cmd
+    assert rvc.resolve_full_test_cmd is core_rvc.resolve_full_test_cmd
+    assert rvc.main is not core_rvc.main  # bin main() delegates, distinct def
+    assert rvc.main(["--fast", str(tmp_path)]) == core_rvc.main(
+        ["--fast", str(tmp_path)]
+    )
+
+
 if __name__ == "__main__":
     import pytest
 

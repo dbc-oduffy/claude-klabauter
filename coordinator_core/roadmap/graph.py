@@ -136,7 +136,7 @@ def topo_number(
         # only). Callers must ensure `nodes` is the full label set; this
         # module's only caller (number_stubs.py's derive_nodes) always
         # unions from/to into the node set before calling topo_number.
-        # Review: code-reviewer — F5, comment overstated what the guard does.
+        # Comment overstated what the guard does.
         if frm not in in_degree:
             in_degree[frm] = 0
         if to not in successors:

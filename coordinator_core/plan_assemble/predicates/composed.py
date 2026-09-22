@@ -393,7 +393,7 @@ def collapse_premise_gate_green(premise_gate_row: dict[str, Any]) -> Any:
     if _is_undetermined(m_band_uncovered):
         return m_band_uncovered
     tshirt = _field(premise_gate_row, "tshirt")
-    # Review: code-reviewer — tshirt could in principle carry the
+    # Tshirt could in principle carry the
     # `undetermined` sentinel independently of m_band_uncovered (a future
     # producer shape change, not the current substrate_seven_dim.premise_gate
     # contract); guard explicitly rather than relying on the m_band_uncovered

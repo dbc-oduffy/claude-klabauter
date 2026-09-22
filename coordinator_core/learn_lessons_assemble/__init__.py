@@ -222,7 +222,7 @@ def _jaccard(a: set[str], b: set[str]) -> float:
     return len(a & b) / len(a | b)
 
 
-# Review: code-reviewer — Finding 10. Jaccard on raw heading tokens with no
+# Jaccard on raw heading tokens with no
 # genericity weighting means two single- or two-word generic headings ("## Overview"
 # / "## Overview", "## Notes" / "## Notes") repeated legitimately in unrelated
 # sections score 1.0 and fire as a duplicate -- indistinguishable from a genuine
@@ -338,7 +338,7 @@ def generate_candidates(
     return candidates, meta
 
 
-# Review: code-reviewer — Finding 7. Mirrors `pickup_assemble`/`baton_assemble`'s
+# Mirrors `pickup_assemble`/`baton_assemble`'s
 # `_emit` -- the single validation chokepoint `brief()` routes through, rather than
 # constructing `BriefResult` directly. Low risk today since `narration`/`next_move`
 # are literal always-non-empty strings in every current code path, but the safety
@@ -448,7 +448,7 @@ def main(argv: list[str]) -> int:
             return _usage("learn-lessons-reconcile-candidates")
         text_file = Path(tail[1])
         try:
-            # Review: code-reviewer — Finding 9. `generate_candidates`' own file read
+            # `generate_candidates`' own file read
             # uses `errors="replace"` (lenient); this path used to read strict
             # (no `errors=`), so a non-UTF-8 --text-file raised `UnicodeDecodeError`
             # -- a `ValueError` subclass, not `OSError` -- uncaught by the except
@@ -467,7 +467,7 @@ def main(argv: list[str]) -> int:
     else:
         return _usage("learn-lessons-reconcile-candidates")
 
-    # Review: code-reviewer — Finding 6. Matches `pickup_assemble`'s `main()`
+    # Matches `pickup_assemble`'s `main()`
     # backstop: the contract's "a decision object is emitted on every exit, never
     # a bare traceback" guarantee must not rest on having enumerated every raise
     # site in `brief()`/`generate_candidates()` correctly (e.g. an `OSError` from a

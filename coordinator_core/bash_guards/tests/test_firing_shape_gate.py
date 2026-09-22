@@ -212,12 +212,20 @@ class TestItem3NudgeDispatchBriefFiringShape:
 
     def test_post_fix_brief_still_names_a_concrete_task_line(self):
         """AC10: the post-fix brief still fires real, payload-derived
-        content -- not merely an absence of the placeholder."""
+        content -- not merely an absence of the placeholder.
+
+        The expected text carries no column padding: C8c (docs/plans/
+        2026-09-11-trim-the-remaining-over-cap-guard-messages.md) dropped the
+        `file:`/`commit:` lines the padding used to align against, so a
+        padded expectation would now pin a shape the builder no longer
+        renders. What AC10 asserts is unchanged -- the task line names the
+        payload-derived edit, not a `[TODO: ...]` placeholder.
+        """
         edit_description = _nudge._describe_edit(
             {"tool_name": "Write", "tool_input": {"content": "..."}}
         )
         text = _nudge._build_dispatch_brief("some/file.py", "generic-executor", edit_description)
-        assert "task:          Write: full-file content write" in text
+        assert "task: Write: full-file content write" in text
 
 
 # ---------------------------------------------------------------------------
@@ -328,7 +336,7 @@ def test_known_violations_still_violate():
 
 
 def test_known_violations_ratchet_loop_against_a_populated_set(monkeypatch):
-    """Review: code-reviewer (Finding 5) -- `test_known_violations_still_violate`'s
+    """`test_known_violations_still_violate`'s
     loop body never actually runs while KNOWN_VIOLATIONS is empty by
     construction. This exercises the REAL loop path
     (`_known_violations_loop`, the same helper the gate test above calls)
@@ -382,7 +390,7 @@ def _run_all_live_violation_checks_in_fresh_subprocess() -> dict:
     invocation, so each run re-imports every module from disk rather than
     reusing sys.modules-cached bytecode.
 
-    Review: code-reviewer (Finding 3) -- an in-process loop over the same 5
+    An in-process loop over the same 5
     calls can never observe `_alternative_liveness.py`'s own documented
     determinism hazard (a concurrent-edit sibling import minutes apart across
     SEPARATE process launches, not within one already-imported process). A

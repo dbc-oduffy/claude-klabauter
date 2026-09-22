@@ -41,7 +41,7 @@ _GUARDED_MODULES = (_TARGET_MODULE, _EMIT_MODULE)
 
 _FORBIDDEN_ATTRS = {"walk", "glob", "iglob", "rglob", "iterdir"}
 _SUBPROCESS_CALL_NAMES = {"run", "Popen", "check_output", "call", "check_call"}
-# Review: code-reviewer (wsc-B) -- `from os import walk` (etc.) bypasses
+# `from os import walk` (etc.) bypasses
 # visit_ImportFrom's {"glob", "subprocess"} module check entirely, then
 # the bare-name call it enables bypasses visit_Call's
 # _SUBPROCESS_CALL_NAMES check too, since none of these names were in it.
@@ -65,7 +65,7 @@ class TreeSurveyVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         func = node.func
-        # Review: code-reviewer (wsc-B) -- `getattr(os, "walk")(path)`: the
+        # `getattr(os, "walk")(path)`: the
         # outer call's `.func` is itself a Call (the `getattr(...)`), not
         # an Attribute/Name, so the name-resolution below would silently
         # fall through to None without this explicit getattr check.

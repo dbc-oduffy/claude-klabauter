@@ -90,25 +90,35 @@ from coordinator_core.frontmatter.baton_class import baton_class
 # Generator-provenance declaration ONLY (C2, generator_provenance.py's AST
 # reader) -- this module is a HARD EXTERNAL DEPENDENCY (DoE's sole
 # regeneration path for their frozen schema; CLAUDE.md § Architecture) and
-# nothing else in this file changes for this chunk. `sources` names the
-# pydantic entity models whose movement actually changes the emitted bytes
-# -- `entities/` (the per-entity model definitions) and `__init__.py` (the
-# `ENTITY_SCHEMAS` registry mapping those entities to output names) -- never
-# this emitter's own path (§ Mechanism correction, docs/plans/2026-08-13-
-# generator-output-staleness-detector.md). `stamp_key` names `version`
-# (`CONTRACT_VERSION`, already embedded in every emitted schema's own JSON
-# body by `emit_schemas` below) rather than adding a new field: this row is
-# declaration-only and must not change one byte of what this module emits.
-GENERATES = [
-    {
-        "artifact": "schema/cockpit-contract.schema.json",
-        "stamp_key": "version",
-        "sources": [
-            "coordinator_core/contract/cockpit_schema/entities",
-            "coordinator_core/contract/cockpit_schema/__init__.py",
-        ],
-    },
-]
+# nothing else in this file changes for this chunk.
+#
+# Declared EMPTY, and the emptiness is the accurate answer rather than a stub:
+# this emitter writes no artifact claude-klabauter tracks. Its real destination is always
+# a caller-supplied directory in a tree it does not own -- DoE's
+# `coordinator/cockpit-contract/schema/` via `--out-dir`, or another consumer's
+# via `COCKPIT_SCHEMA_OUT_DIR` (see `assert_no_orphaned_schema`'s own
+# negative-spec, which exists because of that). `_schema_out_dir`'s fallback,
+# `<repo-root>/schema`, is committed by nobody: the directory does not exist
+# here and `git ls-files schema` is empty.
+#
+# It previously declared `schema/cockpit-contract.schema.json`, matching that
+# fallback and therefore matching no tracked file, so the staleness sweep
+# scored the row UNSTAMPED ("artifact not found") on every run -- an
+# always-red row reading as coverage. It could not have gone green either way:
+# `stamp_key` was `version` (`CONTRACT_VERSION`, a semver), and
+# `check_generator_output_staleness` needs a commit-ish or timestamp to open a
+# range -- the same gap named on `emit_memo_schema.GENERATES`.
+#
+# Retained because it is true and a future declaration will need it: the
+# emitted bytes move with `entities/` (the per-entity pydantic models) and
+# `__init__.py` (the `ENTITY_SCHEMAS` registry), never with this emitter's own
+# path (§ Mechanism correction, the 2026-08-13 generator-output-staleness-
+# detector plan). Expressing a cross-repo output is what `GENERATES` cannot
+# do; `check_generator_output_staleness.VENDORED_PAIRS` is the leg that
+# resolves an artifact against a peer clone, and is where this belongs if it
+# is ever wired up. Neither is attempted here -- this row is declaration-only
+# and must not change one byte of what this module emits.
+GENERATES: list = []
 
 # ---------------------------------------------------------------------------
 # CONTRACT_VERSION — single literal source of truth (this module).
@@ -1083,7 +1093,7 @@ def assert_no_version_desync(
     try:
         committed_json = json.loads(committed_path.read_text())
     except (json.JSONDecodeError, OSError) as exc:
-        # Review: code-reviewer (cockpit-schema-a F2, P2) — was print()+return,
+        # Was print()+return,
         # a fail-open no-op that would let this guard silently never fire
         # again once the committed file went unparseable. This guard exists
         # solely to catch an unbumped CONTRACT_VERSION; a corrupt/unreadable
@@ -1162,7 +1172,7 @@ def _schema_out_dir(out_dir: str | os.PathLike[str] | None = None) -> Path:
     env_override = os.environ.get("COCKPIT_SCHEMA_OUT_DIR")
     if env_override:
         return Path(env_override).resolve()
-    # Review: code-reviewer (cockpit-schema-a F1, P1) — was 4 levels of ".."
+    # Was 4 levels of ".."
     # (Path(__file__).parent / .. / .. / .. / .. / "schema"), which from
     # coordinator_core/contract/cockpit_schema/ resolves to the PARENT of the
     # claude-klabauter repo, silently writing every *.schema.json + bundle

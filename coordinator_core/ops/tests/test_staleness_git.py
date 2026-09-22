@@ -234,7 +234,7 @@ def test_artifact_path_excludes_regeneration_commit_timestamp_form(tmp_path):
 
 
 def test_artifact_path_excludes_root_commit_regeneration_timestamp_form(tmp_path):
-    # Review: coordinator:code-reviewer — `git diff-tree <commit>` without
+    # `git diff-tree <commit>` without
     # `--root` never reports a parentless commit as touching anything (it
     # diffs against nothing rather than the empty tree), so a root commit
     # that touches BOTH sources and the artifact must still be excluded by

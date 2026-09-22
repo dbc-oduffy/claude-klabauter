@@ -149,7 +149,7 @@ def test_partial_reentrant_run_skips_already_moved_files(tmp_path, capsys):
 
 
 def test_empty_root_flag_value_is_usage_error(tmp_path, capsys):
-    """Review: code-reviewer — `--root ""` must not silently fall through to
+    """`--root ""` must not silently fall through to
     env/git-auto-discovery; it's an explicit usage error."""
     rc = main(["--root", ""])
 

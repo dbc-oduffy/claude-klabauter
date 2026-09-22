@@ -48,10 +48,12 @@ limitation, not new scope.
 Concurrency: every mutating entrypoint below (``write_baton``,
 ``merge_baton``) goes through :func:`coordinator_core.locked_write.locked_rmw`
 — a cross-process flock keyed to the baton file itself, anchored at the
-owning repo's root (derived from the ``.git`` ancestor of the target path,
-mirroring ``coordinator_core.session.claims::_atomic_dedup_append_lock_
-anchor``'s own derivation for the sibling ``touched.txt`` writer in the same
-per-session directory). Two sessions (or a session and a hook subprocess)
+caller's own ``cwd`` (see :func:`_lock_anchor`) — the same value
+``core.session_dir`` already resolves ``git_common_dir`` from to build the
+target path, so the anchor tracks whatever layout (plain clone, linked
+worktree, submodule) that resolution already understands, rather than
+re-deriving it from the target path's own parent names. Two sessions (or a
+session and a hook subprocess)
 racing a mint/merge on the SAME sid serialise correctly; a reader
 (``read_baton``) is unlocked — a torn read degrades to the skeleton default,
 never a crash, matching this store's overall degrade-to-default posture.
@@ -71,7 +73,6 @@ Negative-spec:
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -182,30 +183,35 @@ def baton_path(sid: str, cwd: Optional[str] = None) -> Optional[Path]:
     return sdir / BATON_FILENAME
 
 
-def _lock_anchor(path: Path) -> Optional[Path]:
-    """Derive the ``locked_rmw`` ``repo_root`` anchor from ``path``'s own
-    on-disk position, mirroring
-    ``coordinator_core.session.claims::_atomic_dedup_append_lock_anchor``
-    for the sibling ``touched.txt`` writer in the same per-session
-    directory. ``path`` is always ``<git-common-dir>/coordinator-sessions/
-    <sid>/baton.json``, so its third parent is the git common dir itself
-    (``parents[0]`` = ``<sid>``, ``parents[1]`` = ``coordinator-sessions``,
-    ``parents[2]`` = the git common dir, named ``.git`` for every non-bare,
-    non-worktree-private layout this hub uses).
+def _lock_anchor(cwd: Optional[str]) -> Path:
+    """The ``locked_rmw`` ``repo_root`` anchor: ``cwd`` itself (or
+    ``Path.cwd()`` when ``cwd`` is not supplied) — the SAME value
+    ``core.session_dir`` already resolves ``git_common_dir`` from to BUILD
+    the baton path in the first place (see the module docstring's
+    ``Concurrency`` section).
 
-    Returns ``None`` when ``path`` does not have the expected shape (a test
-    fixture writing to an ad-hoc temp path, for instance) so the caller can
-    fall back to an unlocked write rather than passing a nonsense anchor
-    into ``locked_rmw``.
+    Previously derived by asserting the target path's third parent was
+    literally named ``.git`` (mirroring
+    ``coordinator_core.session.claims::_atomic_dedup_append_lock_anchor``),
+    which holds for a plain clone but not for every layout: under a
+    submodule the git common dir is ``.git/modules/<name>``, so that
+    parent's name is ``<name>``, the literal check missed, and the write
+    silently fell back to UNLOCKED (bug-backlog
+    ``2026-08-19-session-baton-store-lock-anchor-submodule-fallback``).
+    ``locked_rmw``'s own ``_lock_dir`` already re-resolves
+    ``git_common_dir(repo_root)`` from whatever anchor it is given, so
+    handing it ``cwd`` directly — rather than reverse-engineering the
+    common dir's location from the target path's parent names — tracks
+    every layout ``git_common_dir`` itself understands, with no second name
+    check to keep in sync.
+
+    A ``cwd`` outside any git repository (a test fixture at an ad-hoc temp
+    path) makes ``git_common_dir`` raise inside ``locked_rmw``, which
+    ``write_baton``/``merge_baton`` already catch and fall back to an
+    unlocked write for — the same degrade-to-unlocked posture as before,
+    just resolved one level down instead of pre-checked here.
     """
-    p = Path(os.path.abspath(str(path)))
-    parents = p.parents
-    if len(parents) < 3:
-        return None
-    common_dir = parents[2]
-    if common_dir.name != ".git":
-        return None
-    return common_dir.parent
+    return Path(cwd) if cwd else Path.cwd()
 
 
 def _parse_record(text: str, session_id: str) -> Dict[str, Any]:
@@ -280,19 +286,18 @@ def write_baton(
     to_write["session_id"] = sid
     new_text = json.dumps(to_write, indent=2, sort_keys=True) + "\n"
 
-    anchor = _lock_anchor(path)
-    if anchor is not None:
-        try:
-            locked_rmw(
-                path,
-                lambda _old, _new=new_text: _new,
-                repo_root=anchor,
-                timeout=_LOCK_TIMEOUT_SECS,
-                missing_ok=True,
-            )
-            return True
-        except (LockTimeout, OSError, RuntimeError):
-            pass  # fall through to the unlocked write below
+    anchor = _lock_anchor(cwd)
+    try:
+        locked_rmw(
+            path,
+            lambda _old, _new=new_text: _new,
+            repo_root=anchor,
+            timeout=_LOCK_TIMEOUT_SECS,
+            missing_ok=True,
+        )
+        return True
+    except (LockTimeout, OSError, RuntimeError):
+        pass  # fall through to the unlocked write below
 
     try:
         path.write_text(new_text, encoding="utf-8", newline="\n")
@@ -429,19 +434,18 @@ def merge_baton(
         merged.update(record)
         return json.dumps(record, indent=2, sort_keys=True) + "\n"
 
-    anchor = _lock_anchor(path)
-    if anchor is not None:
-        try:
-            locked_rmw(
-                path,
-                _mutate,
-                repo_root=anchor,
-                timeout=_LOCK_TIMEOUT_SECS,
-                missing_ok=True,
-            )
-            return merged
-        except (LockTimeout, OSError, RuntimeError):
-            pass  # fall through to the unlocked best-effort path below
+    anchor = _lock_anchor(cwd)
+    try:
+        locked_rmw(
+            path,
+            _mutate,
+            repo_root=anchor,
+            timeout=_LOCK_TIMEOUT_SECS,
+            missing_ok=True,
+        )
+        return merged
+    except (LockTimeout, OSError, RuntimeError):
+        pass  # fall through to the unlocked best-effort path below
 
     # Unlocked fallback (no derivable anchor, or the lock itself failed):
     # best-effort read-modify-write, matching this store's fail-open

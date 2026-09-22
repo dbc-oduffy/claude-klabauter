@@ -141,7 +141,7 @@ class _SpawnCounter:
         self._popen = subprocess.Popen
         counter = self
 
-        # Review: coordinator:code-reviewer (Finding 5) -- patch Popen ONLY.
+        # Patch Popen ONLY.
         # subprocess.run() resolves subprocess.Popen as a module-global
         # lookup internally, so patching both double-counts every call that
         # goes through run() (one argv appended by the run_spy wrapper, a
@@ -178,7 +178,7 @@ def test_stamp_only_never_reaches_corpus_walk_call_sites(tmp_path, monkeypatch):
         result = _call_handoff_archive_transition(path, params)
 
     assert result["exit_code"] == 0, result
-    # Review: coordinator:code-reviewer (Finding 4) -- exit_code==0 alone
+    # exit_code==0 alone
     # passes for a no-op refusal path; assert the stamp itself happened.
     assert result["stamped"] is True, result
     assert "shipped_in:" in Path(path).read_text(encoding="utf-8")
@@ -271,7 +271,7 @@ def test_ship_handoff_spawns_zero_git(tmp_path):
         result = _call_handoff_archive_transition(path, params)
 
     assert result["exit_code"] == 0, result
-    # Review: coordinator:code-reviewer (Finding 4) -- exit_code==0 alone
+    # exit_code==0 alone
     # passes for a no-op refusal path; assert the stamp itself happened.
     assert result["stamped"] is True, result
     assert "shipped_in:" in Path(path).read_text(encoding="utf-8")

@@ -734,7 +734,7 @@ def _dispatch(argv: List[str]) -> int:
             print("Usage: dep-probe <dep-id> [manifest-path]", file=sys.stderr)
             return 2
         dep_id = rest[0]
-        # Review: code-reviewer — bash's "${2:-}" idiom produces an empty-string
+        # bash's "${2:-}" idiom produces an empty-string
         # positional arg (not an omitted one) for the "no manifest path" case; treat
         # empty the same as omitted so the layout-aware default resolution still fires.
         manifest_path = rest[1] if len(rest) > 1 and rest[1] else None

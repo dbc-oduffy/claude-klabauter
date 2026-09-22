@@ -820,6 +820,20 @@ static int read_line_bounded(int fd, buf_t *resp) {
  * as its FIRST statement, the single choke point every fall-through in
  * this file already reaches, so gating there covers every existing call
  * site (and any added later) without a second edit. */
+/* One `"NAME":"VALUE"` member of the envelope's `_env` object, comma-led
+ * after the first. `name` is not NUL-terminated at `name_len` when it points
+ * into an `environ` entry. */
+static int env_pair_append(buf_t *pairs, const char *name, size_t name_len,
+                           const char *value) {
+    int ok = 1;
+    ok &= buf_append_cstr(pairs, pairs->len > 0 ? ",\"" : "\"");
+    ok &= buf_append_json_escaped(pairs, name, name_len);
+    ok &= buf_append_cstr(pairs, "\":\"");
+    ok &= buf_append_json_escaped(pairs, value, strlen(value));
+    ok &= buf_append_cstr(pairs, "\"");
+    return ok;
+}
+
 static int g_door_hook_mode = 0;
 
 /* True iff the caller declared hook mode via `DOOR_STDIN_MODE_ENV_NAME`
@@ -847,6 +861,35 @@ static long door_stdin_read_chunk(void *reader_ctx, char *buf, size_t cap) {
         }
         return (long)n;
     }
+}
+
+/* The caller's hook payload, kept for `hook_fall_through`: every
+ * fall-through is pre-delivery or provably undispatched, so the cold leg
+ * must be handed the same bytes the warm request would have carried. */
+static const char *g_hook_payload = NULL;
+static size_t g_hook_payload_len = 0;
+
+/* Engine down: pass loudly, never deny -- see `build_hook_pass_loudly_envelope`.
+ * Exit 0 either way; if the envelope cannot be built, an empty stdout is a
+ * pass, and the stderr line keeps it from being a silent one. */
+static int emit_hook_pass_loudly(const char *reason) {
+    buf_t event, out;
+    const char *event_name = NULL;
+    int have_event = buf_init(&event, 32);
+    if (have_event && g_hook_payload &&
+        door_hook_event_name(g_hook_payload, g_hook_payload_len, &event)) {
+        event_name = event.data;
+    }
+    int built = buf_init(&out, 1024) && build_hook_pass_loudly_envelope(&out, reason, event_name);
+    if (have_event) free(event.data);
+    if (!built) {
+        fprintf(stderr, "door: guard did not run: %s\n", reason);
+        free(out.data);
+        return 0;
+    }
+    write_all_fd(STDOUT_FILENO, out.data, out.len);
+    free(out.data);
+    return 0;
 }
 
 /* Same split as `emit_indeterminate` below: the envelope's bytes are built
@@ -910,25 +953,13 @@ static int emit_indeterminate(const char *detail) {
  * operation. The two messages this function can print are the genuinely
  * fatal cases: no engine it can name at all, and no interpreter it can
  * launch at all. */
-static int fall_through(int argc, char **argv, const char *engine_root) {
-    /* HOOK MODE INVERTS THIS FUNCTION'S ENTIRE PURPOSE (door_core.h ::
-     * build_hook_deny_envelope), the same inversion door.c's own
-     * `fall_through` applies -- see that file's comment for the full
-     * rationale. Every fall-through in this file reaches this function
-     * directly, so checking the flag HERE, first, covers every existing
-     * call site (and any added later) without a second edit. `argc`/
-     * `argv`/`engine_root` go unused on this leg -- the caller declared no
-     * argv grammar is going to run here, only a decision. */
-    if (g_door_hook_mode) {
-        (void)argc;
-        (void)argv;
-        (void)engine_root;
-        return emit_hook_deny(
-            "coordinator-door: could not deliver this request to the "
-            "resident engine; denying rather than falling through to the "
-            "cold entrypoint in hook mode");
-    }
-
+/* Resolves the cold entrypoint `fall_through` spawns into `script_path`
+ * (`PATH_MAX` bytes): `<engine>/coordinator/bin/<own basename>.py`, or the
+ * extensionless sibling. Returns 0 on success; on failure prints the one
+ * diagnostic naming why and returns 1. Shared by both fall-through legs so
+ * a hook-mode fall-through can never resolve a different CLI than an
+ * ordinary one. */
+static int resolve_fallback_script(const char *engine_root, char *script_path) {
     const char *root = (engine_root != NULL) ? engine_root : BUILD_ENGINE_ROOT;
 
     /* `engine_root`, when supplied, was already validated by
@@ -968,10 +999,9 @@ static int fall_through(int argc, char **argv, const char *engine_root) {
      * different CLI's grammar. */
     const char *entrypoint_basename = door_entrypoint_basename();
 
-    char script_path[PATH_MAX];
-    int n = snprintf(script_path, sizeof(script_path),
+    int n = snprintf(script_path, PATH_MAX,
                      "%s/coordinator/bin/%s.py", root, entrypoint_basename);
-    if (n < 0 || (size_t)n >= sizeof(script_path)) return 1;
+    if (n < 0 || (size_t)n >= PATH_MAX) return 1;
 
     char extensionless_path[PATH_MAX];
     int ext_n = snprintf(extensionless_path, sizeof(extensionless_path),
@@ -984,7 +1014,7 @@ static int fall_through(int argc, char **argv, const char *engine_root) {
         struct stat ext_st;
         int ext_ok = (stat(extensionless_path, &ext_st) == 0) && S_ISREG(ext_st.st_mode);
         if (ext_ok) {
-            memcpy(script_path, extensionless_path, sizeof(script_path));
+            memcpy(script_path, extensionless_path, PATH_MAX);
         } else {
             fprintf(stderr,
                 "door: this image is named %s, and no matching coordinator/bin "
@@ -998,6 +1028,117 @@ static int fall_through(int argc, char **argv, const char *engine_root) {
             return 1;
         }
     }
+
+    return 0;
+}
+
+
+/* HOOK MODE'S FALL-THROUGH: run the guard cold, never skip it.
+ *
+ * Every `fall_through` call site is pre-delivery or provably undispatched,
+ * so nothing has evaluated this hook yet. Denying there turned a dead or
+ * idle-demoted engine into a wall around every Bash call until some other
+ * process happened to respawn it. Instead the same entrypoint runs cold
+ * (`hook-run.py`, ~0.2s process time) with the payload on its stdin, and
+ * its verdict is relayed; the cold leg also asks for the engine back, so
+ * only the first call of an outage pays that.
+ *
+ * PASSES LOUDLY on anything that is not a verdict. The child's stdout is
+ * captured, not inherited: a nonzero exit or an empty stdout means the guard
+ * did not answer, which gets `emit_hook_pass_loudly` -- never a deny (the
+ * engine being down is no reason to wall off Bash) and never a silent pass
+ * (an unrun guard must not read as one that allowed). */
+static int hook_fall_through(int argc, char **argv, const char *engine_root) {
+    char script_path[PATH_MAX];
+    if (resolve_fallback_script(engine_root, script_path) != 0) {
+        return emit_hook_pass_loudly("coordinator-door: engine unreachable and no cold entrypoint resolved");
+    }
+
+    int in_pipe[2], out_pipe[2];
+    if (pipe(in_pipe) != 0) {
+        return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard could not be started");
+    }
+    if (pipe(out_pipe) != 0) {
+        close(in_pipe[0]);
+        close(in_pipe[1]);
+        return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard could not be started");
+    }
+
+    int spawn_argc = 2 + (argc > 1 ? argc - 1 : 0);
+    char **spawn_argv = (char **)calloc((size_t)spawn_argc + 1, sizeof(char *));
+    posix_spawn_file_actions_t actions;
+    int actions_ok = spawn_argv != NULL && posix_spawn_file_actions_init(&actions) == 0;
+    int rc = -1;
+    pid_t pid = 0;
+    if (actions_ok) {
+        spawn_argv[0] = (char *)PYTHON_BIN;
+        spawn_argv[1] = script_path;
+        for (int i = 1; i < argc; i++) spawn_argv[1 + i] = argv[i];
+        spawn_argv[spawn_argc] = NULL;
+        posix_spawn_file_actions_adddup2(&actions, in_pipe[0], STDIN_FILENO);
+        posix_spawn_file_actions_adddup2(&actions, out_pipe[1], STDOUT_FILENO);
+        posix_spawn_file_actions_addclose(&actions, in_pipe[1]);
+        posix_spawn_file_actions_addclose(&actions, out_pipe[0]);
+        rc = posix_spawnp(&pid, PYTHON_BIN, &actions, NULL, spawn_argv, environ);
+        posix_spawn_file_actions_destroy(&actions);
+    }
+    free(spawn_argv);
+    close(in_pipe[0]);
+    close(out_pipe[1]);
+    if (rc != 0) {
+        close(in_pipe[1]);
+        close(out_pipe[0]);
+        return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard could not be started");
+    }
+
+    /* hook-run reads all of stdin before it writes anything, so writing the
+     * whole payload before reading cannot deadlock on a full pipe. */
+    if (g_hook_payload_len > 0) {
+        write_all_fd(in_pipe[1], g_hook_payload, g_hook_payload_len);
+    }
+    close(in_pipe[1]);
+
+    buf_t verdict;
+    int verdict_ok = buf_init(&verdict, 4096);
+    char chunk[4096];
+    for (;;) {
+        ssize_t got = read(out_pipe[0], chunk, sizeof(chunk));
+        if (got > 0) {
+            if (verdict_ok) verdict_ok = buf_append(&verdict, chunk, (size_t)got);
+            continue;
+        }
+        if (got < 0 && errno == EINTR) continue;
+        break;
+    }
+    close(out_pipe[0]);
+
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) break;
+    }
+
+    int answered = verdict_ok && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    size_t i = 0;
+    while (answered && i < verdict.len && (verdict.data[i] == ' ' || verdict.data[i] == '\n' ||
+                                           verdict.data[i] == '\r' || verdict.data[i] == '\t')) {
+        i++;
+    }
+    if (!answered || i == verdict.len) {
+        if (verdict_ok) free(verdict.data);
+        return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard returned no verdict");
+    }
+    write_all_fd(STDOUT_FILENO, verdict.data, verdict.len);
+    free(verdict.data);
+    return 0;
+}
+
+static int fall_through(int argc, char **argv, const char *engine_root) {
+    if (g_door_hook_mode) {
+        return hook_fall_through(argc, argv, engine_root);
+    }
+
+    char script_path[PATH_MAX];
+    if (resolve_fallback_script(engine_root, script_path) != 0) return 1;
 
     /* argv[0] is replaced by the interpreter, argv[1] by the script, and
      * the caller's argv[1:] follows -- exactly what door.c's command line
@@ -1098,7 +1239,7 @@ int main(int argc, char **argv) {
      * invocation. Read before engine-root resolution because it depends on
      * none of it, and so a caller who declared hook mode gets a decided
      * verdict even when the engine root cannot be resolved -- that failure
-     * now denies too, via `fall_through`'s own hook-mode check.
+     * reaches `hook_fall_through`, which passes loudly when no cold leg resolves.
      *
      * From this point to the request-build site further below, every
      * pre-delivery fall-through call site frees its own intermediate
@@ -1122,6 +1263,8 @@ int main(int argc, char **argv) {
                     : "coordinator-door: stdin read failed; refusing");
         }
         have_stdin_payload = 1;
+        g_hook_payload = stdin_payload.data;
+        g_hook_payload_len = stdin_payload.len;
     }
 
     /* Resolved once, unconditionally, before any branch splits -- see
@@ -1306,9 +1449,7 @@ int main(int argc, char **argv) {
 
     /* HOOK MODE'S PAYLOAD (door_core.h). Inside `params`, sibling of
      * `argv`/`cwd` above -- an OP ARGUMENT, never transport metadata,
-     * mirroring exactly where door.c places the same field. Freed
-     * immediately after appending -- `buf_append_json_escaped` copies the
-     * bytes, so `stdin_payload.data` has no further use. */
+     * mirroring exactly where door.c places the same field. */
     if (req_ok && have_stdin_payload) {
         req_ok &= buf_append_cstr(&req, ",\"stdin\":\"");
         if (req_ok) {
@@ -1317,10 +1458,9 @@ int main(int argc, char **argv) {
         }
         req_ok &= buf_append_cstr(&req, "\"");
     }
-    if (have_stdin_payload) {
-        free(stdin_payload.data);
-        have_stdin_payload = 0;
-    }
+    /* `stdin_payload.data` is NOT freed here: `hook_fall_through` still
+     * needs it if the delivery below fails, and the process exit that follows
+     * every return reclaims it (at most `DOOR_STDIN_MAX_BYTES`). */
 
     /* ADDITIVE, NOT ALWAYS PRESENT (C0) -- the POSIX half of the field
      * `door.c` appends at the same point in the same request; see that
@@ -1388,31 +1528,65 @@ int main(int argc, char **argv) {
      * second resolver -- see `warm/entry_seam.py` for the one place that
      * validation belongs. */
     if (req_ok) {
+        /* Pairs are collected into `env_pairs` first and the `_env` object is
+         * opened in exactly one place below, so "no name resolved" still omits
+         * `_env` entirely without either source of names tracking whether the
+         * other already opened it. */
+        buf_t env_pairs;
+        req_ok &= buf_init(&env_pairs, 256);
+
         #define X(name) #name,
         static const char *const kDoorEnvSet[] = { DOOR_ENV_SET(X) };
         #undef X
         const size_t door_env_set_count =
             sizeof(kDoorEnvSet) / sizeof(kDoorEnvSet[0]);
 
-        int env_obj_open = 0;
         for (size_t i = 0; req_ok && i < door_env_set_count; i++) {
             const char *value = getenv(kDoorEnvSet[i]);
             if (value == NULL || value[0] == '\0') continue;
-            if (!env_obj_open) {
-                req_ok &= buf_append_cstr(&req, ",\"_env\":{");
-                env_obj_open = 1;
-            } else {
-                req_ok &= buf_append_cstr(&req, ",");
-            }
-            req_ok &= buf_append_cstr(&req, "\"");
-            req_ok &= buf_append_cstr(&req, kDoorEnvSet[i]);
-            req_ok &= buf_append_cstr(&req, "\":\"");
-            req_ok &= buf_append_json_escaped(&req, value, strlen(value));
-            req_ok &= buf_append_cstr(&req, "\"");
+            req_ok &= env_pair_append(&env_pairs, kDoorEnvSet[i],
+                                      strlen(kDoorEnvSet[i]), value);
         }
-        if (env_obj_open) {
+
+        /* PREFIX RULE -- `DOOR_ENV_PREFIXES`, the per-session guard override
+         * namespace (`env_forwarding.CALLER_PREFIXES`). Walked off `environ`
+         * because the names are not known in advance: a guard adds a key and
+         * the door must carry it with no rebuild. Same omit-empty contract
+         * as the declared names; no declared name matches a prefix (pinned
+         * Python-side), so no name is sent twice.
+         *
+         * Review: coordinator-code-reviewer -- this leg carries the name's
+         * case as-is (POSIX env names are case-sensitive); door.c's Windows
+         * walk upper-cases the name before it crosses, since Windows env
+         * names are case-insensitive there. Guard code reading these names
+         * is expected to use the canonical SCREAMING_SNAKE spelling, but
+         * that convention is unenforced -- a mixed-case override name set on
+         * this leg keeps its case, unlike the Windows leg. */
+        #define X(prefix) #prefix,
+        static const char *const kDoorEnvPrefixes[] = { DOOR_ENV_PREFIXES(X) };
+        #undef X
+        const size_t door_env_prefix_count =
+            sizeof(kDoorEnvPrefixes) / sizeof(kDoorEnvPrefixes[0]);
+
+        for (char **entry = environ; req_ok && entry && *entry; entry++) {
+            const char *eq = strchr(*entry, '=');
+            if (eq == NULL || eq == *entry || eq[1] == '\0') continue;
+            size_t name_len = (size_t)(eq - *entry);
+            for (size_t p = 0; p < door_env_prefix_count; p++) {
+                size_t plen = strlen(kDoorEnvPrefixes[p]);
+                if (name_len > plen && strncmp(*entry, kDoorEnvPrefixes[p], plen) == 0) {
+                    req_ok &= env_pair_append(&env_pairs, *entry, name_len, eq + 1);
+                    break;
+                }
+            }
+        }
+
+        if (req_ok && env_pairs.len > 0) {
+            req_ok &= buf_append_cstr(&req, ",\"_env\":{");
+            req_ok &= buf_append(&req, env_pairs.data, env_pairs.len);
             req_ok &= buf_append_cstr(&req, "}");
         }
+        free(env_pairs.data);
     }
 
     /* `_caller.pid` -- NOT a forwarded name (`CLAUDE_PID` is deliberately

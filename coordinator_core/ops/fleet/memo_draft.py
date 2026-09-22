@@ -75,7 +75,7 @@ from coordinator_core.ops.fleet._memo_summary import (
 from coordinator_core.ops.fleet._memo_resolver import (
     AmbiguousReceiverError,
     RegistryReadError,
-    read_publish_mirror_owners as _read_publish_mirror_owners,
+    reroute_owner as _reroute_owner,
     resolve_receiver_inbox as _resolve_receiver_inbox,
     suggest_nearest_receiver as _suggest_nearest_receiver,
     unique_nearest_receiver as _unique_nearest_receiver,
@@ -152,7 +152,7 @@ def merged_outbox_drafts(caller_worktree: Path) -> list[Path]:
     outbox directory at either root yields no candidates from that root, not
     an error.
 
-    Review: overengineering-reviewer (Kira) — single shared implementation of
+    Single shared implementation of
     the dual-root merge previously copy-pasted verbatim into
     memo_list_outbox._enumerate_outbox_candidates and
     memo_reconcile_outbox._reconcile.
@@ -316,8 +316,8 @@ def _validate_scoped_to(dry_run: bool, value: Any):
 #: a consumer that has never read our source must be able to branch on these
 #: without parsing log text. Do NOT reuse a value across two different causes,
 #: and do NOT rename an existing value once a consumer depends on it — treat
-#: this tuple as append-only.
-REJECTION_CLASS_PUBLISH_TARGET = "publish_target_rejected"
+#: this tuple as append-only. `publish_target_rejected` is retired, not
+#: reusable: a publish-mirror `to` now routes to its owner instead.
 REJECTION_CLASS_UNKNOWN_RECEIVER = "unknown_receiver"
 REJECTION_CLASS_REGISTRY_ERROR = "registry_error"
 REJECTION_CLASS_AMBIGUOUS_RECEIVER = "ambiguous_receiver"
@@ -327,6 +327,10 @@ def _classify_receiver_for_draft(to: str, dry_run: bool):
     """Validate `to` against the shared receiver-resolution authority.
 
     Returns one of three shapes:
+      - `str` -- the owner, when `to` addresses a publish mirror or a manifest
+        redirect alias (`_memo_resolver.reroute_owner`): a mirror is not a
+        receiver, so the draft is addressed to its owner, the same
+        substitution the did-you-mean auto-accept below makes.
       - `None` when `to` resolves cleanly as typed (proceed to draft as
         normal — this covers both a directly-registered sibling repo and a
         central-receiver id, since resolve_receiver_inbox already unifies
@@ -350,14 +354,10 @@ def _classify_receiver_for_draft(to: str, dry_run: bool):
         constants) so a caller can branch on the failure class WITHOUT parsing
         log text:
 
-      - PUBLISH-TARGET REJECTED (rejection_class="publish_target_rejected"):
-        `to` resolves to a publish.mirrors.* owner (an outward OSS
-        distribution mirror, not an EM working tree) — mirrors DoE
-        cross-repo-memo's _cmd_draft publish-target rejection (DoE: exit 1).
       - UNKNOWN RECEIVER (rejection_class="unknown_receiver"): `to` does not
         resolve to any registered receiver on this machine (nor auto-accept
-        to a unique did-you-mean candidate — see the `str` case above), and
-        is not a publish-target — mirrors DoE's unknown-receiver rejection
+        to a unique did-you-mean candidate — see the `str` case above) —
+        mirrors DoE's unknown-receiver rejection
         (DoE: exit 2), including the same "did you mean?" nearest-match
         suggestion resolve_receiver_inbox's sibling suggest_nearest_receiver
         already produces for memo.send/memo.list.
@@ -373,46 +373,15 @@ def _classify_receiver_for_draft(to: str, dry_run: bool):
         iff classification rejection" invariant below (a real defect caught
         in PM review of the initial 3-value cut).
 
-    Publish-target is checked FIRST (mirrors DoE's _classify_receiver
-    ordering): mirrors were removed from repos.* by the 2026-06-30
-    registry-publish-vs-working-targets migration, so in practice the two
-    checks never overlap — but ordering publish-target first keeps the
-    mirror-rejection message authoritative regardless.
-
-    Negative-spec: `rejection_class` is added on ALL FOUR envelopes this
-    function can return (every one is a receiver-classification rejection —
-    see the sweep note below). It is NEVER added by ordinary param-validation
-    setup errors (e.g. `_validate_draft_params`'s `classify_receiver must be
-    bool` path, or _memo_draft's missing-repo_root check) — those are not
-    returned by this function at all. The field's presence is itself
-    meaningful: present iff the exit_code:1 envelope originated from THIS
-    function. See _memo_draft's docstring Returns section for the invariant
-    statement.
-
-    Sweep (2026-07-24, re-verified after the unique-did-you-mean auto-accept
-    fix): this function has exactly four return points that produce a
-    setup-error envelope — publish-target rejection, RegistryReadError,
-    AmbiguousReceiverError, and unknown-receiver — one `return None` (the
-    "resolves cleanly as typed" success path), and one `return <str>` (the
-    "resolves via unique did-you-mean auto-accept" success path, no envelope
-    either). All four error envelopes are stamped; no fifth error path
-    exists. Nothing outside this function ever sets `rejection_class`.
-    """
+"""
     normalized = to.strip().lower()
 
-    mirror_owners = _read_publish_mirror_owners()
-    if normalized in mirror_owners:
-        owner = mirror_owners[normalized]
-        result = build_setup_error_result(
-            _MODE, dry_run,
-            f"memo.draft: PUBLISH-TARGET REJECTED — {to!r} is an outward OSS "
-            f"distribution mirror (publish.mirrors.*), not an EM working tree. "
-            f"A memo dropped there is invisible to any EM and gets clobbered "
-            f"on the next publish run. Route this concern to its owner "
-            f"instead: {owner!r}.",
-        )
-        result["rejection_class"] = REJECTION_CLASS_PUBLISH_TARGET
-        return result
+    owner = _reroute_owner(to)
+    if owner:
+        # A publish mirror or redirect alias is not a receiver; its owner is. Returned as a str so
+        # the draft's `to:` carries the owner, the same substitution the
+        # did-you-mean auto-accept below makes.
+        return owner
 
     try:
         inbox_dir, receiver_repo_path, all_repos = _resolve_receiver_inbox(to)
@@ -760,9 +729,8 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
         summary (str, optional):  tl;dr ≤120 chars; left empty-string when absent
                                    (filled in / re-derived by memo.compose once
                                    a body exists — footgun #4).
-        kind    (str, REQUIRED):  one of `_memo_compose._VALID_KINDS`
-                                  (ask | consult | fyi | proposal | bug --
-                                  read the constant, not this line). Gated here
+        kind    (str, REQUIRED):  one of `memo_kinds.VALID_KINDS` -- read the
+                                  constant, never a list copied here. Gated here
                                   as well as at send, so `draft` cannot mint
                                   an artifact `send` will refuse.
         scoped_to (dict, optional): {artifact, exactly one of version|sha, seam} —
@@ -822,8 +790,6 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
         2026-07-21 addition — DoE claude-central-em consult: their CLI
         previously mapped these to distinct process exit codes and could not
         reconstruct the split once collapsed to a single exit_code:1). One of:
-            "publish_target_rejected" — `to` resolves to a publish.mirrors.*
-                owner (DoE's prior exit 1).
             "unknown_receiver"        — `to` does not resolve to any
                 registered receiver (DoE's prior exit 2).
             "registry_error"          — the machine-local registry could not
@@ -884,7 +850,7 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
     if repo_root is None:
         return build_setup_error_result(
             _MODE, dry_run,
-            # Review: coordinator:code-reviewer — error named the retired write root; corrected to canonical.
+            # Error named the retired write root; corrected to canonical.
             "memo.draft: no repo_root supplied — memo.draft writes into the CALLING "
             "repo's own .coordinator-local/memo-outbox/ and requires a resolved worktree "
             "(common_dir-keyed op).",

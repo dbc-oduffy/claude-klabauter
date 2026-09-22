@@ -93,7 +93,7 @@ logger = logging.getLogger(__name__)
 _PLN_PREFIX = "pln-"
 _DLV_PREFIX = "dlv-"
 
-# Review: code-reviewer P2 — the only <repo>: qualifier resolve() accepts.
+# The only <repo>: qualifier resolve() accepts.
 # Mirrors rewrite_spec_backlinks._PEER_REPO_NAME, the fixed literal the emit
 # side ever produces; a queried_id carrying any OTHER qualifier is refused
 # as a typed miss rather than silently routed to the DoE-claude peer index.
@@ -213,7 +213,7 @@ class _BacklinkIndex:
 
     def _add(self, plan_id: Optional[str], deliverable_id: Optional[str], path: str) -> None:
         if plan_id is not None:
-            # Review: code-reviewer P3 — list-valued like deliverable_id_to_paths,
+            # list-valued like deliverable_id_to_paths,
             # not a single str with last-write-wins. plan_id is documented as
             # per-file identity, never shared, but a genuine duplicate/copy-
             # pasted plan_id must surface as a typed AMBIGUITY in resolve_id(),

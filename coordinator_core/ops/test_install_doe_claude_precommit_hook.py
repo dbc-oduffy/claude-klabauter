@@ -344,6 +344,74 @@ def test_foreign_hook_ending_in_unconditional_exit_1_swallows_appended_gates(
     ), "known limitation: appended gate is dead code after a foreign hook's unconditional non-`exit 0` trailing line"
 
 
+def test_comment_only_marker_does_not_suppress_the_gate(tmp_path, monkeypatch, capsys):
+    """A marker mentioned only in a COMMENT used to make its gate
+    un-installable FOREVER: `marker in existing_text` was True, so it fell
+    out of `missing_gates` (never appended), leaving a registry entry that
+    could never reach the hook. Same defect class fixed in
+    `install_meta_repo_precommit_hook._marker_is_installed` (2026-08-25);
+    ported here (independent copy, this module's own registry entry)."""
+    repo = tmp_path / "fake-doe-claude"
+    repo.mkdir()
+    _git_init(repo)
+    gate_dir = repo / "coordinator" / "hooks" / "scripts"
+    monkeypatch.setattr(_mod, "_resolve_doe_root", lambda: str(repo))
+    _write_stub_gates(gate_dir)
+
+    gate = _GATE_REGISTRY[0]
+    hook = _hook_path(repo)
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text(
+        f"#!/bin/sh\n# A prior hand-written {gate.marker} check was removed here.\nexit 0\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    rc = main([str(repo)])
+    assert rc == 0
+    content = hook.read_text(encoding="utf-8")
+    assert "appended gate(s)" in capsys.readouterr().err
+    assert f"# --- Gate: {gate.label} ({gate.marker}) ---" in content
+
+    result = _run_hook(hook, repo)
+    assert any(line.startswith("RAN:") for line in result.stdout.splitlines()), (
+        "the gate must actually be wired into the hook, not just textually "
+        "mentioned inside a retirement comment"
+    )
+
+
+def test_marker_on_a_real_code_line_still_counts_as_installed(tmp_path, monkeypatch, capsys):
+    """The word-bounded code-portion arm must still recognise a marker
+    referenced on a genuine command line (not merely inside this module's
+    own region header) as present, so a legacy/hand-authored hook that
+    already wires the gate some other way is never double-appended."""
+    repo = tmp_path / "fake-doe-claude"
+    repo.mkdir()
+    _git_init(repo)
+    gate_dir = repo / "coordinator" / "hooks" / "scripts"
+    monkeypatch.setattr(_mod, "_resolve_doe_root", lambda: str(repo))
+    _write_stub_gates(gate_dir)
+
+    gate = _GATE_REGISTRY[0]
+    monkeypatch.setattr(_mod, "_GATE_REGISTRY", [gate])
+    hook = _hook_path(repo)
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text(
+        f'#!/bin/sh\necho "already wired: {gate.marker}"\nexit 0\n',
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    rc = main([str(repo)])
+    err = capsys.readouterr().err
+    # The marker is recognised as installed (not re-appended); the custom
+    # hook's region is then correctly surfaced as STALE rather than
+    # silently rewritten -- this installer never clobbers foreign content.
+    assert "appended gate(s)" not in err
+    assert "STALE" in err
+    assert rc == 1
+
+
 # ---------------------------------------------------------------------------
 # Fail loud — missing script / missing interpreter, always exit 1
 # ---------------------------------------------------------------------------

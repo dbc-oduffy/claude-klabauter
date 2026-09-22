@@ -97,7 +97,7 @@ def _run_git(
     import subprocess
 
     try:
-        # Review: code-reviewer — had a timeout but no stdin guard; an inherited
+        # Had a timeout but no stdin guard; an inherited
         # stdin can still hand an interactive prompt a controlling terminal before
         # the timeout kills the process. Windows console-popup suppression added too.
         return subprocess.run(
@@ -163,7 +163,7 @@ def _venv_pin_check(
     site_pkg_dir = Path(site_packages)
     if not site_pkg_dir.exists():
         return "NO_VENV"
-    # Review: code-reviewer — sort by mtime (newest first), not lexicographically:
+    # Sort by mtime (newest first), not lexicographically:
     # lexicographic sort mis-orders semantic versions (e.g. "9.0" > "10.0") and could
     # pick a stale dist-info dir when multiple are present.
     dist_info_dirs = sorted(
@@ -789,7 +789,7 @@ def check_plugin(
             refresh_log,
             current_pyproject_hash_override,
         )
-    # Review: code-reviewer — an unrecognized (e.g. typo'd) propagation_mode must
+    # An unrecognized (e.g. typo'd) propagation_mode must
     # fail loud, not silently fall through to _check_default as if it were the
     # legitimate empty-string default. Only "" reaches this point intentionally.
     if prop_mode:
@@ -996,7 +996,7 @@ def _run(filter_plugin: str, check_clean_only: bool):
         stdout_lines.append(f"{_PROG}: no plugin.mirrors registered -- nothing to check")
         return stdout_lines, stderr_lines, 0
 
-    # Review: code-reviewer — a filter_plugin that matches no registered entry must
+    # A filter_plugin that matches no registered entry must
     # fail loud (typo'd name is otherwise indistinguishable from "plugin is healthy").
     if filter_plugin and filter_plugin not in mirrors:
         stderr_lines.append(

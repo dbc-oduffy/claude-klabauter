@@ -367,6 +367,53 @@ def _bt_tail_ring_buffer_lines(gen_lines: List[str], kind: str, n: int) -> List[
     return out
 
 
+def _bt_serve_find_census(
+    up_tokens: List[str],
+    is_head: bool,
+    n: int,
+    payload: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """SERVE (not rewrite) a `find`-census-into-`head`/`tail` pipeline whose upstream
+    segment falls inside `coordinator_core.search.census`'s certified subset (C0's
+    spike, docs/research/2026-09-10-in-process-census-evaluator-spike.md; AC13/AC14) --
+    the actual in-process evaluator ASK-1 asked for. Returns the served
+    `rewrite_input` envelope on success (`updatedInput.command == "true"`, the answer
+    and an already-handled footer in `additionalContext`, mirroring
+    `guard_inprocess_search.check`'s established shape) or `None` for anything
+    `coordinator_core.search.census` declines (`Unanswerable`), a missing/malformed
+    `tool_input`, or an import failure -- the caller falls back to the existing
+    `python3 -c` generator rewrite UNCHANGED on `None`, never guessing at a partial
+    answer (AC4).
+    """
+    tool_input = (payload or {}).get("tool_input") if payload else None
+    if not isinstance(tool_input, dict) or not tool_input.get("command"):
+        return None
+    try:
+        from coordinator_core._hook_envelope import rewrite_input
+        from coordinator_core.search import census as _census
+        from coordinator_core.search.engine import Unanswerable
+    except Exception:
+        return None
+    cwd = (payload or {}).get("cwd") or os.getcwd()
+    try:
+        spec = _census.parse_find_census_segment(up_tokens)
+        entries = sorted(_census.run(spec, cwd=cwd))
+    except Unanswerable:
+        return None
+    except Exception:
+        return None
+    served = entries[:n] if is_head else (entries[-n:] if n > 0 else [])
+    updated_input = dict(tool_input)
+    updated_input["command"] = "true"
+    footer = (
+        "[Answered in-process: recognized as a find census feeding "
+        "head/tail, no subprocess spawned.]"
+    )
+    return rewrite_input(
+        "PreToolUse", updated_input, context="%s\n\n%s" % (footer, "\n".join(served))
+    )
+
+
 def _check_head_tail_plumbing_powershell(
     cmd: str, payload: Optional[Dict[str, Any]] = None
 ) -> Optional[Dict[str, Any]]:
@@ -478,6 +525,11 @@ def _check_head_tail_plumbing_powershell(
 
     if kind in ("find", "ls") and not os.path.exists(parsed["path"]):
         return None
+
+    if kind == "find":
+        served = _bt_serve_find_census(up_tokens, is_head, n, payload)
+        if served is not None:
+            return served
 
     gen_lines = _bt_build_generator_lines(kind, parsed)
     if gen_lines is None:  # pragma: no cover -- defensive, kind is always recognized here
@@ -671,6 +723,16 @@ def check_head_tail_plumbing_rewrite(
     # that DOES exist is completely unaffected by this check.
     if kind in ("find", "ls") and not os.path.exists(parsed["path"]):
         return None
+
+    # SERVE the answer in-process instead of handing back a python3 one-liner,
+    # for the `find`-census shape C0's spike (docs/research/2026-09-10-in-
+    # process-census-evaluator-spike.md) certified faithful. `None` here means
+    # `coordinator_core.search.census` declined the shape -- fall through to
+    # the existing generator rewrite below UNCHANGED, never guessing (AC4).
+    if kind == "find":
+        served = _bt_serve_find_census(up_tokens, is_head, n, payload)
+        if served is not None:
+            return served
 
     gen_lines = _bt_build_generator_lines(kind, parsed)
     if gen_lines is None:  # pragma: no cover -- defensive, kind is always recognized here

@@ -103,7 +103,7 @@ def _find_ledger_key_line(lines: List[str]) -> int:
     invents the key or appends a new top-level block; the artifact is expected to
     already declare `ledger:` (today as `ledger: []`).
 
-    Review: coordinatorcode-reviewer c8602a8b — F4: also raises when MORE than
+    Also raises when MORE than
     one column-0 `ledger:` line exists, rather than silently taking the
     first. A header authoring mistake (e.g. a mis-indented block-scalar
     continuation line landing back at column 0) can put the literal text
@@ -129,7 +129,7 @@ def _find_ledger_block_end(lines: List[str], ledger_start: int) -> int:
     """Index of the first line AFTER the `ledger:` block, or `len(lines)` if the
     block runs to the end of the file.
 
-    Review: coordinatorcode-reviewer f292d223 — F4: the splice previously assumed
+    The splice previously assumed
     the `ledger:` block was the last content in the artifact and discarded
     anything after it. The block is either the single line `ledger: []` (its
     own line, index `ledger_start + 1` ends it) or `ledger:` followed by an
@@ -200,7 +200,7 @@ def _render_row(row: Dict[str, Any]) -> List[str]:
     value is `None`, is omitted entirely rather than rendered as an explicit `null`,
     matching the schema comment's documented "absent when not required" convention.
 
-    Review: coordinatorcode-reviewer f292d223 — F5: the required-vs-`None` fields
+    The required-vs-`None` fields
     (`deliverable_id`, `status`, `adjudicator`, `evidence_source`) always pass
     `validate_deliverable_ledger_rows` as non-blank strings before this function
     runs, so they are never `None` here — omitting a `None` value is safe for
@@ -266,7 +266,7 @@ def _validate_rendered_tmp_file(
     """Pre-`os.replace` guard (F2's fix): parse and validate the RENDERED temp file
     itself — not the pre-write in-memory rows — before it ever becomes the artifact.
 
-    Review: coordinatorcode-reviewer f292d223 — F2: `_render_scalar`'s rendering
+    `_render_scalar`'s rendering
     runs AFTER `validate_deliverable_ledger_rows` validates the in-memory row set,
     so a corrupt render was previously only caught by `_verify_write_or_restore`
     AFTER `os.replace` had already landed it — a window in which any of this
@@ -394,7 +394,7 @@ def upsert_deliverable_ledger_rows(
     ):
         existing_rows = load_deliverable_ledger(worktree_root)
 
-        # Review: coordinatorcode-reviewer f292d223 — F1: a present-but-malformed
+        # A present-but-malformed
         # on-disk row must fail loud, never be silently excluded from the merge
         # (contradicts both this module's "every row not mentioned is preserved"
         # contract and validate_deliverable_ledger_rows's own fail-loud philosophy).
@@ -413,7 +413,7 @@ def upsert_deliverable_ledger_rows(
         final_rows = list(merged.values())
         validate_deliverable_ledger_rows(final_rows)
 
-        # Review: coordinatorcode-reviewer f292d223 — F8: _render_row/_render_ledger_block
+        # _render_row/_render_ledger_block
         # assume LF-only line endings and a trailing newline immediately before the
         # `ledger:` key. Check raw bytes for a CRLF BEFORE opening in text mode —
         # Python's universal-newlines translation silently normalizes "\r\n" to
@@ -436,7 +436,7 @@ def upsert_deliverable_ledger_rows(
                 "the artifact's header does not end with a trailing newline before "
                 "'ledger:' — refusing to splice onto a non-newline-terminated line"
             )
-        # Review: coordinatorcode-reviewer f292d223 — F4: preserve any content after
+        # Preserve any content after
         # the old ledger block (a future footer) instead of silently discarding it.
         footer_lines = lines[ledger_end:]
         ledger_lines = _render_ledger_block(final_rows)
@@ -521,7 +521,7 @@ def main(
 ) -> int:
     """CLI entry point. No standalone row-authoring flag set — see `_HELP_TEXT`.
 
-    Review: coordinatorcode-reviewer c8602a8b — F5: the happy path used to
+    The happy path used to
     compute `artifact_path.is_file()` and then discard the result, printing
     `_HELP_TEXT` unconditionally — a validation-then-noop shape indistinguishable
     from a smoke test that never runs. This is deliberately NOT upgraded to a

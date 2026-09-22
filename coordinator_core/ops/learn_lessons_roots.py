@@ -64,10 +64,12 @@ import subprocess
 import sys
 from typing import Dict, List, Optional
 
+from coordinator_core._settings_home import settings_home
+from coordinator_core.ops.learn_lessons_cutoff import _claude_home
 from coordinator_core.state_root import coordinator_state_root_central
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 
-# Review: code-reviewer — module-level alias (not a re-derived duplicate) so this
+# module-level alias (not a re-derived duplicate) so this
 # module's own tests can keep monkeypatching a local name; the actual
 # implementation now lives once in coordinator_core.state_root, shared with
 # coordinator_core.ops.central_run_due (previously two independently
@@ -78,21 +80,6 @@ _SUBPROCESS_TIMEOUT_SECS = 15
 _DENYLIST_KEYS = ("coordinator_claude", "deep_research_claude")
 _BEGIN_SENTINEL = "BEGIN learn-lessons-roots"
 _END_SENTINEL = "END learn-lessons-roots"
-
-
-def _claude_home() -> str:
-    """Mirror the bash oracle's `CLAUDE_HOME="${CLAUDE_HOME:-$HOME}/.claude"`.
-
-    Note the oracle's own naming: the env var CLAUDE_HOME, when set, overrides
-    $HOME (not the full .claude path) -- reproduced verbatim, not "fixed".
-    """
-    base = (
-        os.environ.get("CLAUDE_HOME")
-        or os.environ.get("HOME")
-        or os.environ.get("USERPROFILE")
-        or os.path.expanduser("~")
-    )
-    return os.path.join(base, ".claude")
 
 
 def _machine_local_run(machine_local: str, *args: str) -> str:
@@ -229,18 +216,41 @@ def resolve_roots() -> List[str]:
     `coordinator_core.ops.central_run_due`) that previously shelled out to this
     module's bash oracle predecessor and now import it directly instead."""
     claude_home = _claude_home()
-    machine_local = os.path.join(claude_home, "bin", "machine-local")
+    # Settings-home-first resolution, mirroring `coordinator_core.bare_forwarder.
+    # forward`'s two-rung ordering: try `<settings-home>/bin/machine-local`
+    # first, fall back to the legacy `<claude_home>/bin/machine-local` rung.
+    # (Deliberately NOT `_settings_home.resolve_machine_local_cli`'s PATH-first
+    # ladder -- a bare `shutil.which("machine-local")` would resolve whatever
+    # is on the CALLING PROCESS's PATH, which on an operator box commonly
+    # includes the real settings-home bin dir regardless of which CLAUDE_HOME/
+    # COORDINATOR_SETTINGS_HOME a caller or test has pointed elsewhere; the two
+    # explicit rungs below are both env-derived and therefore respect a
+    # sandboxed CLAUDE_HOME/COORDINATOR_SETTINGS_HOME the way PATH does not.)
+    #
+    # This module previously hand-rolled a SINGLE-rung probe against ONLY the
+    # legacy `<claude_home>/bin/machine-local` location, which `~/.claude/bin`'s
+    # 2026-07-28 retirement left permanently unable to find a settings-home-
+    # installed CLI. That silently degraded to "no machine-local" on any box
+    # installed post-migration, skipping `_registry_roots()` entirely and
+    # reporting only `claude_home` as if no peers were registered at all --
+    # dbc-oduffy/claude-klabauter#38.
+    machine_local_name = "machine-local"
+    settings_home_candidate = os.path.join(str(settings_home()), "bin", machine_local_name)
+    legacy_candidate = os.path.join(claude_home, "bin", machine_local_name)
     if os.name == "nt":
         # The bare shim is EXTENSION-LESS, so CreateProcess cannot exec it
         # (WinError 193) — prefer the delivered .cmd sibling on Windows.
-        # Mirrors coordinator_core.install._shared.resolve_machine_local_cli.
-        cmd_sibling = machine_local + ".cmd"
-        if os.path.isfile(cmd_sibling):
-            machine_local = cmd_sibling
-    ml_ok = os.path.isfile(machine_local) and is_executable(machine_local)
+        settings_home_candidate = settings_home_candidate + ".cmd"
+        legacy_candidate = legacy_candidate + ".cmd"
+    if os.path.isfile(settings_home_candidate) and is_executable(settings_home_candidate):
+        machine_local = settings_home_candidate
+    elif os.path.isfile(legacy_candidate) and is_executable(legacy_candidate):
+        machine_local = legacy_candidate
+    else:
+        machine_local = None
 
     roots: List[str] = [claude_home]
-    if ml_ok:
+    if machine_local:
         roots.extend(_registry_roots(machine_local))
 
     central_state_root = _coordinator_state_root_central()

@@ -32,8 +32,9 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.op_census.kill_ledger_inventory import fate_entries
+from coordinator_core.session.machinery_paths import kill_ledger_path
 
-LEDGER = Path(__file__).resolve().parents[2] / "state" / "kill-ledger.md"
+LEDGER = Path(kill_ledger_path(str(Path(__file__).resolve().parents[2])))
 
 # The published mirror ships `coordinator_core/` without claude-klabauter's `state/`
 # corpus — working data is deliberately excluded from every publish set — so
@@ -46,7 +47,7 @@ LEDGER = Path(__file__).resolve().parents[2] / "state" / "kill-ledger.md"
 # corpus exists, which is the only place this guard's question has a subject.
 if not LEDGER.is_file():  # pragma: no cover - only reachable in a published mirror
     pytest.skip(
-        "state/kill-ledger.md is absent — no corpus here for this guard to check",
+        f"{LEDGER} is absent — no corpus here for this guard to check",
         allow_module_level=True,
     )
 

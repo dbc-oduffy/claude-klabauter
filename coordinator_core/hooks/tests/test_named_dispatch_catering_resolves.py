@@ -60,12 +60,12 @@ covered separately by
 from __future__ import annotations
 
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
 
 import coordinator_core.ipc as ipc
+from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.hooks.cater_subagent_start import (
     OP_NAME,
     SIDECAR_MISS_MARKER,
@@ -487,7 +487,8 @@ def test_ac9_compose_catering_process_time_before_and_after_c2_delegation(
     path, not a spawn" claim. Against the fixture as written the spread is
     ~3.3x, and every bit of that beyond ~10% is file reads, not compute.
 
-    N=200, amortized per-call over the batch (NOT min-of-N -- see
+    Batch-amortised per-call via the shared `in_process_time_ms` primitive
+    (C6), adaptively grown rather than a fixed N (NOT min-of-N -- see
     `_min_process_time`'s own docstring for why min-of-N can't read
     anything on this clock). Reports both numbers via the assertion
     message; a generous 25ms ceiling guards against a gross regression
@@ -496,7 +497,7 @@ def test_ac9_compose_catering_process_time_before_and_after_c2_delegation(
     ratio assertion below pins the actual claim that the only measured
     delta is the added regex/delegation path.
 
-    Measured (this box, N=200): pre-C2-shaped avg~0.31ms, post-C2 (real)
+    Measured (this box): pre-C2-shaped avg~0.31ms, post-C2 (real)
     avg~1.02ms per call -- both numbers vary with machine load, so the
     assertion message reports the live figures on every run rather than
     pinning them as constants.
@@ -504,25 +505,18 @@ def test_ac9_compose_catering_process_time_before_and_after_c2_delegation(
     _write_backpointer(git_repo, REAL_CANONICAL_AGENT_ID, "em-session-ac9", REAL_RESOLVED_TYPE)
     payload = _real_shaped_payload(str(git_repo))
 
-    def _min_process_time(n: int = 200) -> float:
-        """Per-call process time, AMORTIZED over the batch rather than
-        min-of-N per call.
+    def _min_process_time() -> float:
+        """Per-call process time via the shared `in_process_time_ms`
+        primitive (C6) -- batch-amortised over an adaptively grown window
+        rather than this test's own former fixed-N loop, closing the same
+        sub-tick trap (`time.process_time()`'s ~15.6ms Windows scheduler
+        tick) with an adaptive window instead of a fixed n=200 that could
+        itself land below the tick on a faster call shape."""
+        return in_process_time_ms(lambda: compose_catering(payload, cwd=str(git_repo)))[
+            "process_time_ms"
+        ]
 
-        `time.process_time()` advertises a 100ns resolution, but on Windows
-        it is backed by GetProcessTimes, whose real granularity is the
-        ~15.6ms scheduler tick. A single `compose_catering` call is orders
-        of magnitude below that, so min-of-N per call can only ever read
-        0.0 -- which measures the clock, not the code, and reports a number
-        that would look identical if the call had never run at all.
-        Timing the whole batch and dividing puts the per-call figure back
-        above the granularity floor.
-        """
-        start = time.process_time()
-        for _ in range(n):
-            compose_catering(payload, cwd=str(git_repo))
-        return (time.process_time() - start) / n
-
-    after_ms = _min_process_time() * 1000.0
+    after_ms = _min_process_time()
 
     real_canonical = engine_mod._canonical_agent_id
 
@@ -535,15 +529,15 @@ def test_ac9_compose_catering_process_time_before_and_after_c2_delegation(
         return real_canonical(raw_agent_id, session_id)
 
     monkeypatch.setattr(engine_mod, "_canonical_agent_id", _pre_c2_canonical_agent_id)
-    before_ms = _min_process_time() * 1000.0
+    before_ms = _min_process_time()
 
     assert after_ms < 25.0 and before_ms < 25.0, (
         f"AC9 process-time measurement: pre-C2-shaped avg={before_ms:.4f}ms, "
-        f"post-C2 (real) avg={after_ms:.4f}ms over N=200 -- delegation adds a "
+        f"post-C2 (real) avg={after_ms:.4f}ms -- delegation adds a "
         f"regex path, not a spawn; both must stay far under the 500ms "
         f"brightline and the leg's own 150ms sibling-plan budget"
     )
-    # Review: coordinator:code-reviewer -- the ceiling above only bounds
+    # The ceiling above only bounds
     # each arm in isolation and would pass silently even if the added
     # regex/delegation path made post-C2 5x-10x more expensive than
     # pre-C2, as long as it stayed under 25ms. Pin the differential

@@ -104,7 +104,7 @@ def _base_env(settings_home: Path) -> dict:
 
 
 def _lock_dir(settings_home: Path) -> Path:
-    return settings_home / "claude-klabauter" / "test-suite-mutex.lock"
+    return settings_home / "test-suite-mutex.lock"
 
 
 def test_missing_separator_is_rejected(tmp_path):
@@ -428,6 +428,10 @@ def test_bare_name_resolves_a_cmd_shim_on_windows(tmp_path):
     assert result.returncode == 7, (result.returncode, result.stdout, result.stderr)
 
 
+@pytest.mark.deliberate_wall_clock(
+    reason="bounds the max-runtime ceiling on a child that sleeps forever -- a kill deadline "
+    "against wall-clock hang time, invisible to process/CPU time"
+)
 def test_max_runtime_kills_a_stuck_child_and_releases_the_lock(tmp_path):
     """A child that never exits is killed at the ceiling, not waited on forever.
 

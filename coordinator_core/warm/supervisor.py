@@ -510,7 +510,7 @@ def unlink_discovery(
                 except OSError:
                     pass
         except locked_write.LockTimeout:
-            # Review: code-reviewer -- contention past `held_lock`'s own
+            # Contention past `held_lock`'s own
             # timeout must not escape this never-raises contract; a caller
             # (`ctx_shutdown`) relying on that contract to reach its own
             # handle release must not see this branch raise.
@@ -1018,7 +1018,7 @@ class _ServerContext:
 
     def ctx_shutdown(self) -> None:
         self._skew_watchdog_stop.set()
-        # Review: code-reviewer (Finding 2) -- `telemetry.flush` and
+        # `telemetry.flush` and
         # `unlink_discovery` are each best-effort/never-raises BY CONTRACT,
         # but the handle release must not sit downstream of either one's
         # ABILITY to raise: this failure mode is unrecoverable (a leaked
@@ -1410,7 +1410,7 @@ def _make_handler(ctx: "_ServerContext"):
                 # SessionStart posted to either spelling would otherwise get a confident
                 # verdict on a question nobody asked. Both spellings resolve to the same
                 # `op_name`, so both get the same eligibility check.
-                # Review: coordinator:code-reviewer -- explicit /hook/<op> alias bypassed
+                # Explicit /hook/<op> alias bypassed
                 # the bare-/hook safety check because it resolves to the same DEFAULT_OP_NAME
                 # but failed the path-based exclusion; gate on op_name alone instead.
                 if op_name == hook_http.DEFAULT_OP_NAME:
@@ -1498,6 +1498,21 @@ def _make_handler(ctx: "_ServerContext"):
                     serve_kwargs["dispatch"] = ctx.dispatch
 
                 raw_response = _collect_response(request_frame, _serve_line, serve_kwargs)
+                if _is_engine_skew(raw_response):
+                    # PROVABLY NOT RUN, AND RUNNABLE COLD. `_serve_line` answers
+                    # ENGINE_SKEW without dispatching, so the guard can still be
+                    # evaluated -- which `interpret_result` would turn into a
+                    # 200 "guard did not run" pass, skipping every Bash guard for
+                    # the length of every publish. A 409, the same status
+                    # `_refuse_stale_caller` uses, sends the forwarder down its
+                    # non-2xx ladder to `evaluate_cold` instead. The loud pass is
+                    # for an engine that is genuinely unreachable, not this.
+                    self.send_response(409)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw_response)))
+                    self.end_headers()
+                    self.wfile.write(raw_response)
+                    return
                 response = hook_http.interpret_result(event_name, raw_response)
 
                 body = json.dumps(response, ensure_ascii=False).encode("utf-8")
@@ -1510,6 +1525,16 @@ def _make_handler(ctx: "_ServerContext"):
                 _release_once()
 
     return _Handler
+
+
+def _is_engine_skew(frame: bytes) -> bool:
+    """True iff `frame` is a JSON-RPC error envelope carrying ENGINE_SKEW."""
+    try:
+        obj = json.loads(frame.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return False
+    err = obj.get("error") if isinstance(obj, dict) else None
+    return isinstance(err, dict) and err.get("code") == skew.ENGINE_SKEW
 
 
 def _assert_credential_ready(root: Path) -> None:
@@ -1617,7 +1642,7 @@ def main() -> int:
         _release_election_handle(handle)
         return 3
 
-    # Review: code-reviewer (Finding 1) -- between the credential check
+    # Between the credential check
     # passing and `ctx` being successfully constructed, `handle` is owned
     # by nothing: `ThreadingHTTPServer` can raise on bind failure,
     # `skew.ServerVersionState` can raise, and `_ServerContext.__init__`
@@ -1655,7 +1680,7 @@ def main() -> int:
     # is not the idle watchdog `warm.server` runs. Started after the
     # discovery write so a poll landing before the first write sees this
     # context's own `engine_token`, never a torn boot sequence.
-    # Review: code-reviewer (Finding 3) -- `try:` moved up to cover the
+    # `try:` moved up to cover the
     # thread start too: `ctx` already owns the election handle by this
     # point, and `threading.Thread(...).start()` can raise `RuntimeError`
     # under resource exhaustion, which must not leak the handle any more

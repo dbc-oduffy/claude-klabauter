@@ -108,7 +108,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 @pytest.fixture(autouse=True)
 def _reset_registry_snapshot_cache():
-    """Review: staff-eng F5 — `session_live`'s per-process registry-snapshot
+    """`session_live`'s per-process registry-snapshot
     memoization (see `liveness._cached_registry_lookup`) must not leak a
     dict built against one test's `monkeypatch`-ed `registry_dir()` into the
     next test sharing this process. Reset before AND after each test so
@@ -265,7 +265,7 @@ class TestSessionLive:
         assert liveness.session_live("s-dead-stable", cwd=str(repo)) is False
 
     def test_layer1_exception_fails_open_no_fallthrough_to_layer2(self, tmp_path, monkeypatch):
-        # Review: staff-eng-review B. A raise from core.stable_pid_alive in
+        # staff-eng-review B. A raise from core.stable_pid_alive in
         # session_live's own Layer-1 arm must fail OPEN (True), matching
         # live_session_verdicts' sibling Layer-1 arm's (True, "unknown",
         # None) exactly -- and must NOT fall through to Layer 2, even though
@@ -801,12 +801,21 @@ class TestLiveSessionIdsMetalessEnumeration:
         _touch(sdir, old_epoch)
         assert "s-mid-write-stale" not in liveness.live_session_ids(cwd=str(repo))
 
-    def test_empty_meta_less_dir_recent_dir_mtime_is_live(self, tmp_path):
+    def test_empty_meta_less_dir_recent_dir_mtime_not_live_no_record(self, tmp_path):
+        """Superseded negative-spec (state/bug-backlog/2026-08-27-session-
+        liveness-by-directory-mtime-repo-f8e5d28047bb.yaml): this class's own
+        VISITATION guarantee stands -- the dir is still visited, still
+        enumerated -- but a dir carrying zero content of any kind (unlike
+        test_meta_less_dir_recent_mtime_is_in_live_set's "lock" marker above)
+        gives ``_dir_recency_fallback_epoch`` nothing to substitute but the
+        bare directory's OWN mtime, which is not evidence of a process. That
+        used to read confident 'live' purely off a freshly-``mkdir``'d shell;
+        it now reports basis "no-record" and is excluded from the live set."""
         repo = _make_repo(tmp_path)
         sdir = _session_dir_path(repo, "s-empty-fresh")
         sdir.mkdir(parents=True)
         _touch(sdir, core.now_epoch())
-        assert "s-empty-fresh" in liveness.live_session_ids(cwd=str(repo))
+        assert "s-empty-fresh" not in liveness.live_session_ids(cwd=str(repo))
 
     def test_reserved_non_session_dirs_still_excluded(self, tmp_path):
         repo = _make_repo(tmp_path)
@@ -1150,6 +1159,25 @@ class TestLiveSessionVerdicts:
         assert live is False
         assert basis == "recency-window-mtime"
 
+    def test_bare_ghost_dir_no_record_not_live(self, tmp_path):
+        """A session dir holding nothing at all -- no meta.json, no
+        harness-registry entry, no touch-record, not even a lock/marker file
+        -- must never read confident 'live' off its own directory mtime
+        (state/bug-backlog/2026-08-27-session-liveness-by-directory-mtime-
+        repo-f8e5d28047bb.yaml). Contrast with
+        test_meta_less_dir_basis_recency_window_mtime above, whose "lock"
+        marker gives the dir real content evidence and keeps the mtime
+        fallback trusted."""
+        repo = _make_repo(tmp_path)
+        sdir = _session_dir_path(repo, "s-ghost")
+        sdir.mkdir(parents=True)
+        _touch(sdir, core.now_epoch())
+        verdicts = liveness.live_session_verdicts(cwd=str(repo))
+        live, basis, age_sec = verdicts["s-ghost"]
+        assert live is False
+        assert basis == "no-record"
+        assert age_sec is None
+
     def test_reserved_non_session_dirs_excluded_from_verdicts(self, tmp_path):
         repo = _make_repo(tmp_path)
         base = Path(repo) / ".git" / "coordinator-sessions"
@@ -1186,7 +1214,7 @@ class TestSessionVerdict:
     liveness_basis``'s incidental whole-corpus scan."""
 
     def test_matches_whole_corpus_verdict_recency(self, tmp_path):
-        # Review: staff-eng slice-A P2 — this test was misnamed
+        # This test was misnamed
         # "..._stable_pid" while writing a recency-only session (no
         # stable_pid, no registry record), so it exercised only the
         # recency arm. Renamed to match what it actually covers; the
@@ -1203,7 +1231,7 @@ class TestSessionVerdict:
         assert single == whole
 
     def test_matches_whole_corpus_verdict_stable_pid(self, tmp_path):
-        # Review: staff-eng slice-A P2 — parity for the stable-pid arm,
+        # Parity for the stable-pid arm,
         # which the misnamed test above never exercised. Reuses the
         # os.getpid()/create_time() fixture already written for
         # TestLivenessBasisMatchesVerdictSource.
@@ -1237,7 +1265,7 @@ class TestSessionVerdict:
         assert liveness.session_verdict("", cwd=str(repo)) is None
 
     def test_traversal_sid_returns_none(self, tmp_path):
-        # Review: staff-eng slice-A P2 — core.session_dir is a bare join
+        # core.session_dir is a bare join
         # with no validation; unlike the whole-corpus loop (which only ever
         # sees real child directory names), the per-sid path must reject
         # a traversal-shaped sid explicitly rather than resolving it.
@@ -1256,7 +1284,7 @@ class TestSessionVerdict:
         "this hazard is only real, and only exercisable, on Windows.",
     )
     def test_colon_drive_letter_sid_returns_none(self, tmp_path):
-        # Review: coordinator:code-reviewer — a blocklist of `/`, `\`, `..`,
+        # A blocklist of `/`, `\`, `..`,
         # NUL did not reject a bare drive-letter/colon component; on
         # Windows, `core.session_dir`'s underlying `Path.__truediv__` join
         # DISCARDS `base` entirely for a drive-letter-bearing sid like
@@ -1485,8 +1513,15 @@ class TestLiveSessionIdsMatchesVerdictsSeam:
         # Pin the concrete membership, not just internal self-consistency —
         # this is the assertion that would fail if `live_session_ids` ever
         # stopped being a thin wrapper (e.g. reverted to its own independent
-        # loop) and silently diverged from the seam.
-        assert expected == frozenset({"live-recency", "meta-less-fresh"})
+        # loop) and silently diverged from the seam. "meta-less-fresh" is
+        # EXCLUDED (not "recency-window-mtime"/live) as of state/bug-backlog/
+        # 2026-08-27-session-liveness-by-directory-mtime-repo-f8e5d28047bb.yaml
+        # — a bare directory with no meta.json, no harness-registry entry,
+        # and no content of any kind carries no positive existence signal,
+        # so its own mtime (which this fixture never even ages) is no longer
+        # trusted as recency evidence; see
+        # TestLiveSessionVerdicts.test_bare_ghost_dir_no_record_not_live.
+        assert expected == frozenset({"live-recency"})
         # The negative-elapsed fixture must NOT be live in EITHER function —
         # the invariant this whole test class exists to pin.
         assert "future-nostable" not in liveness.live_session_ids(cwd=str(repo))
@@ -2118,7 +2153,7 @@ class TestHarnessRegistrySessionLivePrecedence:
     def test_registry_stale_record_with_no_local_session_dir_still_reads_dead(
         self, tmp_path, monkeypatch
     ):
-        """Review: staff-eng F4 — the false-LIVE direction was untested even
+        """The false-LIVE direction was untested even
         though the entire safety argument for the 2026-08-14 reorder rests
         on it: a registry record that FAILS `stable_pid_alive`'s
         birth-instant compare (here, a `start_epoch` far from the real
@@ -2183,7 +2218,6 @@ class TestHarnessRegistrySessionLivePrecedence:
     def test_registry_compare_raises_falls_through_to_layer1_exact_verdict(
         self, tmp_path, monkeypatch
     ):
-        # Review: staff-eng-review P2 (PM-overridden, treated as accepted).
         # A registry HIT whose core.stable_pid_alive compare raises (e.g.
         # MissingPsutilError) must fall through to Layer 1/2 byte-unchanged
         # -- exact same fail-open posture as live_session_verdicts' sibling
@@ -2561,7 +2595,6 @@ class TestSessionAbandoned:
     def test_unparseable_last_activity_does_not_count_as_a_stale_signal(
         self, tmp_path
     ):
-        # Review: coordinator:code-reviewer P2 (coordinatorcode-reviewer-
         # 1da5144e.md) -- core.iso_to_epoch returns 0 on BOTH empty input
         # and parse failure, so an unparseable-but-present last_activity
         # (e.g. "not-a-timestamp") used to score epoch 0 (maximally stale)

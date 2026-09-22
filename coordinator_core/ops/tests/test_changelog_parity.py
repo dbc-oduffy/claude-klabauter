@@ -419,7 +419,7 @@ class TestAppendDayByteParity:
     """Facade-wiring parity: changelog.append_day env/arg mapping vs. step9-append-changelog.sh
     (strang-10 AC).
 
-    Review: code-reviewer (F4) — this class name/docstring previously read as an
+    This class name/docstring previously read as an
     independent-implementation byte-parity comparison ("changelog.append_day ==
     step9-append-changelog.sh"). That framing is no longer accurate: the oracle's
     Zone B (write) has completed its strangler cutover to an unconditional native
@@ -465,7 +465,7 @@ class TestAppendDayByteParity:
     def test_byte_parity_fresh_file(self, tmp_path):
         """Oracle and native produce byte-identical files for an empty-day date.
 
-        Review: code-reviewer (F2) — oracle and native now run in separate repos (repo_a /
+        Oracle and native now run in separate repos (repo_a /
         repo_b) so native sees a fresh empty directory and exercises the create-new-file path,
         not the idempotency path triggered when the oracle's file is already present.
         """
@@ -921,7 +921,7 @@ class TestAppendDaySmoke:
         assert "error" in result, f"bare '..' machine must be rejected, got: {result}"
 
     def test_append_day_handler_rejects_malformed_date(self, tmp_path):
-        """Review: code-reviewer (F3) — AC13's date-containment guard (F2) must be
+        """AC13's date-containment guard (F2) must be
         exercised by the test suite: both a traversal-shaped date and a
         calendar-invalid-but-shape-valid date must be rejected."""
         from coordinator_core.ops.changelog_ops import _append_day_handler
@@ -1011,7 +1011,7 @@ class TestBackfillGapsSmoke:
         assert result.get("backfilled") == []
 
     def test_backfill_handler_rejects_malformed_today(self, tmp_path):
-        """Review: code-reviewer (F3) — AC13's date-containment guard (F2) must be
+        """AC13's date-containment guard (F2) must be
         exercised by the test suite: both a traversal-shaped 'today' and a
         calendar-invalid-but-shape-valid 'today' must be rejected."""
         from coordinator_core.ops.changelog_ops import _backfill_gaps_handler

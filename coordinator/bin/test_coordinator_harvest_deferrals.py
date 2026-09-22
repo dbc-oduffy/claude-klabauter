@@ -751,3 +751,22 @@ def test_the_other_key_dedups_a_row_already_harvested(harvest_mod, monkeypatch):
     )
     assert (queued, deduped, failed) == ([], 1, 0)
     assert unroutable == []
+
+
+def test_a_plan_the_stamp_already_archived_resolves_to_its_archive_home(harvest_mod, tmp_path):
+    # workstream_complete's stamp archives the plan before the harvest directive
+    # dispatches with the docs/plans path it was built with.
+    archived = tmp_path / "archive" / "specs" / "2026-09" / "2026-09-22-some-plan.md"
+    archived.parent.mkdir(parents=True)
+    archived.write_text("# plan\n", encoding="utf-8")
+    stale = tmp_path / "docs" / "plans" / "2026-09-22-some-plan.md"
+    assert harvest_mod._resolve_archived_plan(str(stale)) == str(archived)
+
+
+def test_a_live_or_unarchived_plan_path_is_left_unchanged(harvest_mod, tmp_path):
+    live = tmp_path / "docs" / "plans" / "2026-09-22-live-plan.md"
+    live.parent.mkdir(parents=True)
+    live.write_text("# plan\n", encoding="utf-8")
+    assert harvest_mod._resolve_archived_plan(str(live)) == str(live)
+    missing = tmp_path / "docs" / "plans" / "2026-09-22-gone.md"
+    assert harvest_mod._resolve_archived_plan(str(missing)) == str(missing)

@@ -97,7 +97,7 @@ def load_vocabulary(contract_path: Path = CONTRACT_PATH) -> tuple[str, ...]:
     `vocabulary` key, or a `vocabulary` value that isn't a list of
     strings.
 
-    Review: code-reviewer -- a contract that is valid JSON but has no
+    A contract that is valid JSON but has no
     `vocabulary` key (or has it as a non-list) previously raised
     `KeyError`/`TypeError` past the CLI's `except json.JSONDecodeError`,
     producing exit 1 (an uncaught traceback) instead of the documented

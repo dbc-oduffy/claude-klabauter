@@ -54,6 +54,30 @@ def _ensure_session_dir(repo: Path, sid: str) -> Path:
     return sdir
 
 
+def _make_non_dot_git_common_dir_repo(tmp_path):
+    """A repo whose git COMMON dir is not literally named ``.git`` —
+    ``git init --separate-git-dir=...`` reproduces the same "common dir
+    lives elsewhere, under a non-'.git' name" shape a submodule's
+    ``.git/modules/<name>`` common dir has, without invoking the
+    ``submodule`` subcommand. Returns ``(workdir, common_dir)``."""
+    common_dir = tmp_path / "elsewhere" / "not-dot-git"
+    workdir = tmp_path / "workdir"
+    common_dir.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "init", "-q", f"--separate-git-dir={common_dir}", str(workdir)],
+        **no_console_passthrough_kwargs(),
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "t@example.com"],
+        cwd=workdir,
+        **no_console_passthrough_kwargs(),
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "t"], cwd=workdir, **no_console_passthrough_kwargs()
+    )
+    return workdir, common_dir
+
+
 # ---------------------------------------------------------------------------
 # baton_path / baton_dir
 # ---------------------------------------------------------------------------
@@ -212,6 +236,29 @@ def test_merge_baton_absent_session_dir_creates_nothing_and_says_so(tmp_path, ca
     err = capsys.readouterr().err
     assert "sid-nodir2" in err
     assert "merge_baton" in err
+
+
+def test_write_baton_takes_lock_under_non_dot_git_common_dir(tmp_path):
+    """Regression for bug-backlog
+    ``2026-08-19-session-baton-store-lock-anchor-submodule-fallback``:
+    ``_lock_anchor`` must not silently degrade to an unlocked write just
+    because the git common dir is not literally named ``.git`` (a
+    submodule's ``.git/modules/<name>``, or here, a
+    ``--separate-git-dir`` common dir named ``not-dot-git``). A locked
+    write creates ``locked_rmw``'s ``coordinator-locks`` sidecar under the
+    resolved common dir; an unlocked fallback never does."""
+    workdir, common_dir = _make_non_dot_git_common_dir_repo(tmp_path)
+    sid = "sid-non-dot-git"
+    sdir = common_dir / "coordinator-sessions" / sid
+    sdir.mkdir(parents=True, exist_ok=True)
+
+    ok = store.write_baton(sid, store.default_record(sid), cwd=str(workdir))
+
+    assert ok is True
+    assert (common_dir / "coordinator-locks").is_dir(), (
+        "write_baton fell back to an unlocked write under a non-'.git'-named "
+        "common dir instead of taking the cross-process flock"
+    )
 
 
 def test_write_and_merge_round_trip_unchanged_when_dir_already_exists(tmp_path):

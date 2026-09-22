@@ -145,6 +145,11 @@ class TestExecutorRegexWidening:
         hso = result["hookSpecificOutput"]
         assert "permissionDecision" not in hso
         assert "docs/problems/2026-07-24-x.md" in hso["additionalContext"]
+        # Regression pin -- state/bug-backlog/2026-08-06-c16-s-advisory-
+        # reason-never-names-the-pl-b38e24982c9f.yaml: the advisory must
+        # name the plan the guard actually resolved as currently executing,
+        # not just the violating write target.
+        assert "docs/plans/some-other-plan.md" in hso["additionalContext"]
 
     def test_executor_write_to_wiki_allowed(self, tmp_path, monkeypatch):
         monkeypatch.setattr(guard, "_resolve_git_root", _stub_git_root(tmp_path))
@@ -258,7 +263,11 @@ class TestExecutorRegexWidening:
         result = guard.check(payload)
 
         assert result is not None
-        assert "permissionDecision" not in result["hookSpecificOutput"]
+        hso = result["hookSpecificOutput"]
+        assert "permissionDecision" not in hso
+        # Regression pin -- b38e24982c9f: with no resolvable sidecar, the
+        # advisory must say so explicitly rather than omitting the clause.
+        assert "none" in hso["additionalContext"]
 
 
 class TestNonExecutorPassThrough:

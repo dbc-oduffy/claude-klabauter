@@ -63,11 +63,11 @@ rendered message is deliberately padded past
 seam plus a local dict copy, per Anti-scope's production-wiring ban.
 
 AC9 -- fast tier, target end-state: no `cadence`/`pending_fix`/
-`designed_red` marker anywhere in this module. Until C8 of
-docs/plans/2026-08-02-guard-message-size-discipline.md lands,
+`designed_red` marker anywhere in this module. Until row C10 of
+docs/plans/2026-09-11-trim-the-remaining-over-cap-guard-messages.md lands,
 `test_leg1_ceiling_per_band` below deliberately carries `@pytest.mark.
 pending_fix` (16 cells remain over cap; see state/handoffs/2026-08-03-
-guard-message-cap-remaining-16.md) -- C8 removing that marker is what
+guard-message-cap-remaining-16.md) -- C10 removing that marker is what
 makes this AC9 clause true, not a present-tense fact today. No
 uncommitted external corpus dependency either way (C3's corpus
 rows fire live guards against fresh scratch fixtures, not a golden file),
@@ -130,6 +130,7 @@ from coordinator_core.bash_guards.tests.guard_message_corpus import (
     fire_hook_row,
     fire_row,
     fire_write_guard_row,
+    normalize_envelope_for_measurement,
 )
 from coordinator_core.bash_guards.tests.guard_message_exemptions import (
     GUARD_MESSAGE_EXEMPTIONS,
@@ -161,7 +162,9 @@ def _measure_all_cells() -> Tuple[List[_Cell], float]:
 
     for row in CONFINEMENT_ROWS + ADVISORY_REWRITE_ROWS + PLATFORM_CONDITIONED_ROWS:
         capture = fire_row(row)
-        measurement = measure_envelope(capture.envelope, band=capture.band)
+        measurement = measure_envelope(
+            normalize_envelope_for_measurement(capture.envelope), band=capture.band
+        )
         cells.append(_Cell(row.guard, row.row_id, measurement.band, measurement))
 
     for row in WRITE_GUARD_ROWS:
@@ -171,12 +174,16 @@ def _measure_all_cells() -> Tuple[List[_Cell], float]:
             # own `WriteGuardRow.unverified_reason` docstring.
             continue
         capture = fire_write_guard_row(row)
-        measurement = measure_envelope(capture.envelope, band=capture.band)
+        measurement = measure_envelope(
+            normalize_envelope_for_measurement(capture.envelope), band=capture.band
+        )
         cells.append(_Cell(row.guard, row.row_id, measurement.band, measurement))
 
     for row in HOOK_ROWS:
         capture = fire_hook_row(row)
-        measurement = measure_envelope(capture.envelope, band=capture.band)
+        measurement = measure_envelope(
+            normalize_envelope_for_measurement(capture.envelope), band=capture.band
+        )
         cells.append(_Cell(row.guard, row.row_id, measurement.band, measurement))
 
     elapsed = time.perf_counter() - t0
@@ -355,13 +362,13 @@ def leg3_ratchet_violations(cells: List[_Cell]) -> List[str]:
 def test_leg1_ceiling_per_band(measured_corpus):
     """Leg 1 is RED on arrival by construction, and that is the gate working.
 
-    The ceiling is what names today's over-cap guards; chunk C8 of
-    docs/plans/2026-08-02-guard-message-size-discipline.md consumes that list and
-    brings each cell under cap or into C4's adjudicated manifest. Until it lands,
-    the marker keeps a shared branch's fast tier green for every other session
-    without weakening the assertion itself — C8 removes the marker as its closing
-    act, which is also what makes AC9's no-marker requirement true at plan
-    completion rather than at chunk-authoring time.
+    The ceiling is what names today's over-cap guards; row C10 of
+    docs/plans/2026-09-11-trim-the-remaining-over-cap-guard-messages.md consumes
+    that list and brings each cell under cap or into C4's adjudicated manifest.
+    Until it lands, the marker keeps a shared branch's fast tier green for every
+    other session without weakening the assertion itself — C10 removes the
+    marker as its closing act, which is also what makes AC9's no-marker
+    requirement true at plan completion rather than at chunk-authoring time.
 
     Deleting this marker without fixing the cells, or softening the assertion to
     pass, both defeat the plan: the ceiling is the only thing that makes legs 2
@@ -387,6 +394,106 @@ def test_leg3_ratchet_mean_prose_bytes_per_band(measured_corpus):
     assert not violations, "leg-3 ratchet increase(s) -- adjudicate each named cell, do not sweep:\n%s" % (
         "\n".join(violations)
     )
+
+
+# ---------------------------------------------------------------------------
+# AC2 -- dead-entry enforcement over `guard_message_exemptions.
+# GUARD_MESSAGE_EXEMPTIONS`. A lookup over the SAME cells `measured_corpus`
+# already fires once (`_measure_all_cells`), not a second firing path.
+# ---------------------------------------------------------------------------
+
+
+def _stale_exemptions(
+    manifest: Dict[Tuple[str, str], str], cells: List[_Cell]
+) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
+    """Looks `manifest` entries up as a dict keyed by `(guard, row_id)`
+    against `cells` (the values `measured_corpus`'s `_measure_all_cells`
+    already produced). A missing key is an unknown entry -- no corpus row
+    exists for it, so it names no reproducible cell. A present key whose
+    measurement is `not over_cap` is a stale entry -- the guard's message
+    must have been trimmed or the input stopped triggering it. Pure: never
+    fires anything itself."""
+    cell_by_key: Dict[Tuple[str, str], MessageSizeMeasurement] = {
+        (c.guard, c.row_id): c.measurement for c in cells
+    }
+    unknown_keys = [key for key in manifest if key not in cell_by_key]
+    under_cap_keys = [
+        key for key in manifest if key in cell_by_key and not cell_by_key[key].over_cap
+    ]
+    return unknown_keys, under_cap_keys
+
+
+def test_exemption_entries_name_known_corpus_rows(measured_corpus):
+    """An exemption naming no corpus row is dead config -- a corpus row
+    exists only for a firing guard, so this is a stricter, corpus-grounded
+    replacement for the retired bash-only registered-guard check."""
+    cells, _elapsed = measured_corpus
+    unknown_keys, _under_cap_keys = _stale_exemptions(GUARD_MESSAGE_EXEMPTIONS, cells)
+    assert not unknown_keys, (
+        "these exemption entries name no corpus row in measured_corpus -- remove or fix "
+        "them: %s" % unknown_keys
+    )
+
+
+def test_exemption_entries_still_exceed_cap(measured_corpus):
+    """An exemption for a cell that no longer exceeds `MESSAGE_PROSE_CAP_BYTES`
+    is dead config of a different shape than an unknown entry -- it would
+    silently keep exempting a cell that no longer needs exempting."""
+    cells, _elapsed = measured_corpus
+    _unknown_keys, under_cap_keys = _stale_exemptions(GUARD_MESSAGE_EXEMPTIONS, cells)
+    assert not under_cap_keys, (
+        "these exemption entries no longer exceed MESSAGE_PROSE_CAP_BYTES -- the guard's "
+        "message must have been trimmed or the input stopped triggering it; remove the "
+        "now-unneeded exemption: %s" % under_cap_keys
+    )
+
+
+def test_exemption_entries_carry_a_written_reason():
+    """Every value is a non-empty prose string -- guards against a future
+    entry landing with a placeholder/blank reason, the exact failure mode
+    the written-reason requirement exists to prevent."""
+    blank = [
+        key for key, reason in GUARD_MESSAGE_EXEMPTIONS.items() if not reason or not reason.strip()
+    ]
+    assert not blank, "these exemption entries have no written reason: %s" % blank
+
+
+def test_ac2a_stale_exemptions_flags_a_manifest_entry_with_no_corpus_row(measured_corpus):
+    """Falsifiability: a synthetic manifest naming a guard/row-id that fires
+    no corpus row must be caught. `GUARD_MESSAGE_EXEMPTIONS` is empty today,
+    so `test_exemption_entries_name_known_corpus_rows` above passes
+    vacuously; this proves `_stale_exemptions` itself actually detects the
+    failure mode rather than being untested machinery."""
+    cells, _elapsed = measured_corpus
+    synthetic_manifest = {("no-such-guard", "no-such-row"): "synthetic falsifiability fixture"}
+    unknown_keys, _under_cap_keys = _stale_exemptions(synthetic_manifest, cells)
+    assert unknown_keys == [("no-such-guard", "no-such-row")]
+
+
+def test_ac2b_stale_exemptions_flags_a_manifest_entry_that_no_longer_exceeds_cap(measured_corpus):
+    """Falsifiability: a synthetic manifest naming a real, currently-under-cap
+    corpus cell must be flagged stale. Uses a write-guard/hook band cell
+    from the real, already-fired `measured_corpus` population -- no
+    monkeypatching, and the module-level `GUARD_MESSAGE_EXEMPTIONS` is never
+    mutated."""
+    cells, _elapsed = measured_corpus
+    under_cap_cell = next(
+        (
+            c
+            for c in cells
+            if c.band.startswith("directory:") and c.measurement.is_speaker and not c.measurement.over_cap
+        ),
+        None,
+    )
+    assert under_cap_cell is not None, (
+        "sanity: this falsifiability test needs at least one under-cap write-guard/hook "
+        "speaker cell in the fired corpus"
+    )
+    synthetic_manifest = {
+        (under_cap_cell.guard, under_cap_cell.row_id): "synthetic falsifiability fixture"
+    }
+    _unknown_keys, under_cap_keys = _stale_exemptions(synthetic_manifest, cells)
+    assert under_cap_keys == [(under_cap_cell.guard, under_cap_cell.row_id)]
 
 
 # ---------------------------------------------------------------------------

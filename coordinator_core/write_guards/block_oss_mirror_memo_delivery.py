@@ -12,12 +12,10 @@ cross-repo memo: a memo delivered there sits unactioned, invisible to every
 ``/pickup`` and every inbox sweep, because no EM lives there to read it.
 
 The sanctioned ``cross-repo-memo`` CLI (``claude-klabauter
-coordinator/bin/cross-repo-memo.py``) already closes this for the CLI path —
-``_is_publish_target_em()`` / ``_publish_target_owner()`` /
-``_publish_target_rejection_msg()`` / ``_redirect_kind()``, backed by
-machine-local ``publish.mirrors.<key>.owner`` enumeration plus the
-code-pinned ``REDIRECT_ALIASES`` fallback (``coordinator/bin/lib/
-coordinator_registry.py``). That machinery is NOT rebuilt here.
+coordinator/bin/cross-repo-memo.py``) already closes this for the op path —
+``_memo_resolver.resolve_receiver_inbox`` reroutes a publish mirror or a
+redirect alias to its owner (``reroute_owner``), so draft, send, cc and list
+never deliver into a mirror. That machinery is NOT rebuilt here.
 
 The remaining hole is the HAND-WRITTEN delivery: an agent that skips the CLI
 and issues a ``Write``/``Edit``/``MultiEdit``/``NotebookEdit`` straight at
@@ -68,7 +66,7 @@ ordinary work on a fresh clone with no registry provisioned yet.
 
 Negative-spec:
   - Does NOT duplicate the ``cross-repo-memo`` CLI's publish-target
-    ownership/redirect logic (``_is_publish_target_em`` et al.) — this guard
+    ownership/redirect logic (``reroute_owner``) — this guard
     is a narrower, independent safety net over the hand-written-``Write``
     leg only; the CLI path is already closed.
   - Does NOT hand-roll TOML parsing — mirror paths come from

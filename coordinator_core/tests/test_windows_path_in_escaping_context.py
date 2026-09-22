@@ -40,6 +40,11 @@ backslash-bearing). Interpolating it directly into an f-string / `%`
 string a shell or a generated-program parser can misinterpret, mirroring
 `_bt_python3_invocation`'s own docstring rationale (this repo already gets
 this right everywhere in production -- this gate keeps it that way).
+A POSIX shebang line (`f"#!{sys.executable}\n"`) is exempt from the same
+requirement: the kernel parses `#!<path>` directly, with no shell
+word-splitting or quote-removal, so wrapping the path would insert
+delimiter characters into the literal interpreter path instead of
+protecting it.
 
 Leg (ii) -- the existing `re.sub` replacement-template gate
 --------------------------------------------------------------
@@ -68,7 +73,7 @@ real code (a path that reaches an always-POSIX consumer via
 `posixpath.join`, for instance, is legitimate and MUST NOT be flagged),
 this leg should be dropped, not tightened into something that also requires
 Path-type inference.
-# Review: coordinator:code-reviewer (slice D, P3) -- docstring corrected to
+# Docstring corrected to
 # describe the actual substring-match implementation, not an AST-shape claim
 # it didn't make good on. Detection logic unchanged.
 """
@@ -192,6 +197,32 @@ def _find_sys_executable_violations(root: Path) -> list[tuple[str, int, str]]:
                         if _is_sys_executable(sub):
                             literal_dquoted_ids.add(id(sub))
 
+        # Every `sys.executable` FormattedValue immediately preceded by a
+        # literal `"#!"` segment in the SAME f-string -- a POSIX shebang
+        # line. The kernel parses `#!<path>` directly with no shell
+        # word-splitting or quote-removal, so `shlex.quote`/`json.dumps`/
+        # `repr` would insert delimiter characters the kernel treats as part
+        # of the literal interpreter path rather than stripping, breaking
+        # any path containing a shell metacharacter (e.g. `~`) that worked
+        # unquoted. See `fake_machine_local.write_fake_executable`'s POSIX
+        # branch.
+        shebang_ids: set[int] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.JoinedStr):
+                continue
+            for i, value in enumerate(node.values):
+                if not isinstance(value, ast.FormattedValue):
+                    continue
+                before = node.values[i - 1] if i > 0 else None
+                if (
+                    isinstance(before, ast.Constant)
+                    and isinstance(before.value, str)
+                    and before.value.endswith("#!")
+                ):
+                    for sub in ast.walk(value.value):
+                        if _is_sys_executable(sub):
+                            shebang_ids.add(id(sub))
+
         for node in ast.walk(tree):
             interpolation_sites: list[ast.expr] = []
             if isinstance(node, ast.JoinedStr):
@@ -215,7 +246,11 @@ def _find_sys_executable_violations(root: Path) -> list[tuple[str, int, str]]:
                 for sub in ast.walk(site):
                     if not _is_sys_executable(sub):
                         continue
-                    if id(sub) in quoted_ids or id(sub) in literal_dquoted_ids:
+                    if (
+                        id(sub) in quoted_ids
+                        or id(sub) in literal_dquoted_ids
+                        or id(sub) in shebang_ids
+                    ):
                         continue
                     relpath = _relpath(path, root)
                     func_name = _enclosing_function(tree, sub)
@@ -311,6 +346,25 @@ def test_leg_i_accepts_literal_double_quote_wrapped_sys_executable(tmp_path):
         "\n"
         "def build(py_path):\n"
         '    return f\'@echo off\\r\\n"{sys.executable}" "{py_path}" %*\\r\\n\'\n',
+        encoding="utf-8",
+    )
+
+    assert _find_sys_executable_violations(tmp_path) == []
+
+
+def test_leg_i_accepts_shebang_prefixed_sys_executable(tmp_path):
+    """Negative control: a POSIX shebang line writes `sys.executable`
+    literally right after `#!` -- the kernel parses this line directly (no
+    shell word-splitting or quote-removal), so `shlex.quote` etc. would
+    corrupt a path containing a shell metacharacter rather than protect it.
+    See `coordinator_core/testing/fake_machine_local.py::write_fake_executable`.
+    """
+    fixture = tmp_path / "fixture_shebang.py"
+    fixture.write_text(
+        "import sys\n"
+        "\n"
+        "def build(body):\n"
+        "    return f'#!{sys.executable}\\n' + body\n",
         encoding="utf-8",
     )
 

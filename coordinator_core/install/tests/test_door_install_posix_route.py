@@ -183,7 +183,6 @@ def test_write_agent_helper_forwarders_continues_past_a_build_failure(tmp_path, 
     every name after it, while the existing OSError leg keeps the run
     failing loud rather than exiting 0).
 
-    Review: overengineering-reviewer flagged that raising `SystemExit` here
     constructs a path via monkeypatching `_cut_over_to_native_door` itself
     rather than exercising the real call chain, since
     `_write_native_door_forwarder` already catches `(DoorInstallError,
@@ -196,7 +195,7 @@ def test_write_agent_helper_forwarders_continues_past_a_build_failure(tmp_path, 
     bug regardless of the inner catch. Escalated rather than applied; the
     catch here (and this test) stay as they were pending that call.
 
-    Review: coordinator:code-reviewer (Finding 3) -- `_cut_over_to_native_door`
+    `_cut_over_to_native_door`
     is monkeypatched to always raise before `_write_agent_forwarder` is ever
     reached, so this test only proves loop continuation (both names attempted,
     run still raises); it does NOT exercise the Python-pair fallback landing.
@@ -227,7 +226,7 @@ def test_write_agent_helper_forwarders_continues_past_a_build_failure(tmp_path, 
             agent_helper_target_map, bin_dst, check_only=False, engine_root=tmp_path / "engine",
         )
 
-    # Review: coordinator:code-reviewer (Finding 3) -- `_cut_over_to_native_door`
+    # `_cut_over_to_native_door`
     # raises before `_write_agent_forwarder` is ever called here, so
     # `_write_agent_forwarder` must NOT have been reached for either name;
     # this pins what this test actually proves (loop continuation), not the
@@ -236,7 +235,7 @@ def test_write_agent_helper_forwarders_continues_past_a_build_failure(tmp_path, 
 
 
 def test_write_agent_helper_forwarders_writes_python_fallback_on_real_build_failure(tmp_path, monkeypatch):
-    """Review: coordinator:code-reviewer (Finding 3) -- integration companion
+    """Integration companion
     to the test above, exercising the REAL `_cut_over_to_native_door` ->
     `_write_native_door_forwarder` call chain (only
     `door_install.install_named_forwarder` is mocked, to raise

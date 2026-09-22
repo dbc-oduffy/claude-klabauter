@@ -129,7 +129,7 @@ class ClauseResolutionMismatchError(RuntimeError):
     """Raised when a `ClauseResolution` entry does not match the declared
     shape of the `ShapedClause` it is pinning down.
 
-    # Review: code-reviewer (Finding 2, P2) — `derive_receipt_entries`
+    # `derive_receipt_entries`
     # previously accepted a caller-supplied resolution with zero check
     # against `clause.entry_template`: not `kind`, not a root/path-prefix
     # relationship. `write_surface.validate()` only validates a
@@ -454,7 +454,7 @@ def _receipt_from_jsonable(data: object) -> InstallReceipt:
     for raw_entry in raw_entries:
         if not isinstance(raw_entry, dict):
             raise ValueError(f"receipt entry is not a JSON object: {type(raw_entry)!r}")
-        # Review: code-reviewer (Finding, P3) — `key`/`path`/`begin_marker`/
+        # `key`/`path`/`begin_marker`/
         # `end_marker` were previously taken via bare `.get(...)` with no
         # type check, so a corrupted receipt (e.g. an integer `path`) would
         # reconstruct into a `ReceiptEntry` with a non-string field instead
@@ -499,7 +499,7 @@ def _receipt_from_jsonable(data: object) -> InstallReceipt:
     if not isinstance(raw_unreported, list) or not all(isinstance(w, str) for w in raw_unreported):
         raise ValueError(f"'unreported_writer_ids' is not a JSON array of strings: {raw_unreported!r}")
 
-    # Review: code-reviewer (Finding, P1) — `build_receipt` enforces
+    # `build_receipt` enforces
     # reported/unreported disjointness at construction (raises `ValueError`
     # on overlap), but that invariant was previously bypassed entirely on
     # this load path: a writer_id present in both lists round-tripped into
@@ -550,7 +550,7 @@ def persist_receipt(
     its own receipt is a real configuration error, not the honest-unknown
     case `load_receipt` exists to represent.
     """
-    # Review: code-reviewer (Finding, P2) — this docstring and
+    # This docstring and
     # `ReceiptPersistenceError`'s own docstring both document an
     # unresolvable settings-home as surfacing `ReceiptPersistenceError`,
     # but the code previously let `RequireHomeError` propagate raw here

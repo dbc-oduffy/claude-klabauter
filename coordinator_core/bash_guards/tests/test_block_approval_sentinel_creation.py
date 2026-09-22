@@ -313,7 +313,7 @@ class TestReasonClassSpecificMessages:
         denies. So the remedy is dropping the interpreter, and the message now
         names it rather than leaving the reader to infer replication.
 
-        # Review: overengineering-reviewer -- was three verbatim prose pins
+        # Was three verbatim prose pins
         # (one of them pinning the clause since deleted for restating a
         # fact already said once). Structural check instead: extract the
         # recommended command from the message and assert this same guard
@@ -335,7 +335,7 @@ class TestReasonClassSpecificMessages:
         A message recommending a route this same guard blocks would send the
         reader in a circle, which is worse than naming no route at all.
         """
-        # Review: overengineering-reviewer -- dropped the paired
+        # Dropped the paired
         # `bash ... is not None` assertion; it duplicated the preceding
         # test's deny and `test_bash_bare_file_denies` below.
         assert guard.check(_payload("./bin/install-git-hooks.sh")) is None

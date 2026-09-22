@@ -44,7 +44,7 @@ Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C9
 
 from __future__ import annotations
 
-from coordinator_core._hook_envelope import deny, no_advisory
+from coordinator_core._hook_envelope import deny, no_advisory, payload_of
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.hooks.support.worktree_isolation_strip import (
     sentinel_override_active,
@@ -55,8 +55,7 @@ _WIKI_ANCHOR = "coordinator/docs/wiki/guard-message-concision.md#worktree-ban-ra
 
 _DENY_PROSE = (
     "Worktrees banned (break Windows, don't scale to concurrent dispatch). "
-    "Use scoped, disjoint paths here; escalate to the EM (PM-approved) for "
-    "branch isolation."
+    "Use scoped, disjoint paths; escalate to the EM for branch isolation."
 )
 
 
@@ -70,6 +69,10 @@ def _deny_message(env: object = None) -> str:
 async def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(EnterWorktree|ExitWorktree) op: deny EnterWorktree unless
     the repo-root sentinel override is active; always allow ExitWorktree."""
+    # Params arrives wrapped as
+    # {"payload": event} through both engine doors; payload_of reads either
+    # shape (see preuse_bash_dispatch's identical fix, same defect class).
+    params = payload_of(params)
     tool_name = params.get("tool_name") or ""
 
     if tool_name == "ExitWorktree":

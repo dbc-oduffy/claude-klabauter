@@ -242,7 +242,7 @@ def mint_item_id(
             "item id with no slug segment"
         )
     if nonce is not None:
-        # Review: code-reviewer c2a5a195 Finding 6 — an explicit nonce was
+        # An explicit nonce was
         # accepted with no length/hex validation, silently breaking the
         # documented nonce6 grammar segment for a malformed caller-supplied
         # value; only the whole-id charset check ran, which tolerates any
@@ -605,7 +605,7 @@ def _emit(payload: dict, *, item_id_or_pair: object, repo_root: Path) -> dict:
 
     event = dict(payload)
     if kind == "item_created" and "id" in event:
-        # Review: code-reviewer c2a5a195 Finding 5 — gate the rename on the
+        # Gate the rename on the
         # payload's kind, not on key presence, so a future payload
         # constructor with an unrelated 'id'-named field is never silently
         # (and incorrectly) renamed.
@@ -840,7 +840,7 @@ def _alias_owner(
         ):
             continue
         if event.get("kind") == "person_alias_added":
-            # Review: code-reviewer a9ebdff5 Finding P2 — a malformed add
+            # A malformed add
             # event missing person_id would silently become "unclaimed"
             # (None), indistinguishable from a real absence, rather than
             # raising as this event passes through the same _emit path as
@@ -872,7 +872,7 @@ def _person_merge_map(*, repo_root: Path) -> dict[str, str]:
             continue
         from_id = event.get("from_id")
         into_id = event.get("into_id")
-        # Review: code-reviewer a9ebdff5 Finding P1 — a missing/non-string
+        # A missing/non-string
         # from_id or into_id was silently dropped rather than raised, which
         # would let the AC5 idempotency guard and AC7 cycle guard both miss
         # an existing tombstone/edge for a malformed event already on disk.

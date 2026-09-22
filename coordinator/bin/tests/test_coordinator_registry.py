@@ -322,7 +322,7 @@ def test_bootstrap_import_fails_loud_with_pointer_unreachable():
 
 
 # ---------------------------------------------------------------------------
-# Review: staff-eng MINOR-6 — the two tests above assert the ladder's
+# The two tests above assert the ladder's
 # PRESENCE (case a passes via whatever ambient rung this dev box happens to
 # carry; case b asserts a negative and can't witness a working rung). Four
 # prior reviews shipped BLOCKER-1 (a present-but-INERT ladder on a real OSS
@@ -391,7 +391,7 @@ def _build_payload_shaped_fixture(root: str) -> tuple[str, str]:
 
 
 def test_bootstrap_import_succeeds_on_payload_shaped_tree_under_oss_environment():
-    """Review: staff-eng MINOR-6 / BLOCKER-1(b) — the acceptance test the
+    """The acceptance test the
     findings said was missing. Fails pre-fix (no marketplace-cache rung to
     reach the manifest); passes post-fix."""
     with tempfile.TemporaryDirectory() as _tmp:
@@ -453,12 +453,12 @@ def _clear_doe_root_env(monkeypatch):
     codename rungs' pointer/marketplace-cache/registry helpers to '' / None,
     so a test can install exactly the one rung under test.
 
-    Review: staff-eng MAJOR-4 — DOE_ROOT/REPO_DOE_CLAUDE now run FIRST in
+    DOE_ROOT/REPO_DOE_CLAUDE now run FIRST in
     doe_root(), ahead of the codename-free rungs, so they must be cleared
     here too (this function already did) for the codename-rung tests below
     to observe their own rung rather than short-circuiting on the reordered
     override.
-    Review: staff-eng BLOCKER-1 — _mp_marketplace_cache_rung() is a new real
+    _mp_marketplace_cache_rung() is a new real
     filesystem probe (~/.claude/plugins/cache/coordinator-claude/coordinator)
     that could accidentally resolve on a dev box with a real marketplace
     install; stub it like every other rung so isolation holds.
@@ -483,7 +483,7 @@ def test_doe_root_resolves_via_doe_root_pointer_rung(monkeypatch):
 
 
 def test_doe_root_resolves_via_marketplace_cache_rung(monkeypatch):
-    """Review: staff-eng BLOCKER-1(a) — the real marketplace-cache install
+    """The real marketplace-cache install
     location resolves like the flat-layout rung: as-is, gated on
     `<cand>/state` being a directory (BLOCKER-2)."""
     with _tempfile.TemporaryDirectory() as _fake_root:
@@ -491,6 +491,22 @@ def test_doe_root_resolves_via_marketplace_cache_rung(monkeypatch):
         _clear_doe_root_env(monkeypatch)
         monkeypatch.setattr(reg, "_mp_marketplace_cache_rung", lambda: _fake_root)
         assert reg.doe_root() == _fake_root
+
+
+def test_mp_marketplace_cache_rung_excludes_unparseable_version_dirs(monkeypatch):
+    """Opaque hash-named cache dirs (e.g. a github-sourced install's commit
+    SHAs) must not out-rank a real semver dir via leading-digit coercion —
+    only strictly numeric, <=3-segment dot-versions are ranking candidates.
+    Pre-fix, `021d0d725330` parsed as (21, 0, 0) and `0371a29ed35d` as
+    (371, 0, 0), so the hash with the longer leading-digit run won on an
+    ordering that reflects nothing about install recency."""
+    with _tempfile.TemporaryDirectory() as _home:
+        _cache_parent = os.path.join(_home, "plugins", "cache", "coordinator-claude", "coordinator")
+        os.makedirs(os.path.join(_cache_parent, "0371a29ed35d"))
+        os.makedirs(os.path.join(_cache_parent, "021d0d725330"))
+        os.makedirs(os.path.join(_cache_parent, "1.2.3"))
+        monkeypatch.setattr(reg, "_mlir_claude_home", lambda: _home)
+        assert reg._mp_marketplace_cache_rung() == os.path.join(_cache_parent, "1.2.3")
 
 
 def test_doe_root_resolves_via_flat_layout_probe_rung(monkeypatch):
@@ -506,7 +522,7 @@ def test_doe_root_resolves_via_flat_layout_probe_rung(monkeypatch):
 
 
 def test_doe_root_flat_layout_rejected_without_state_dir(monkeypatch):
-    """Review: staff-eng BLOCKER-2 regression guard — a resolved-but-
+    """A resolved-but-
     unrelated directory (isdir() true, no state/ under it) must NOT win;
     the ladder must fall through to fail loud rather than accept it."""
     with _tempfile.TemporaryDirectory() as _fake_root:
@@ -551,7 +567,7 @@ def test_doe_root_uses_claude_plugin_root_directly_in_oss_flat_layout(monkeypatc
 
 
 def test_doe_root_rejects_foreign_plugin_root_over_explicit_override(monkeypatch):
-    """Review: staff-eng BLOCKER-2, executed shape from the findings —
+    """
     CLAUDE_PLUGIN_ROOT set to a DIFFERENT plugin's root (no
     .claude-plugin/plugin.json under it, since it belongs to a foreign
     plugin's content, not the plugin root itself) must NOT be accepted, and
@@ -565,7 +581,7 @@ def test_doe_root_rejects_foreign_plugin_root_over_explicit_override(monkeypatch
 
 
 def test_doe_root_resolves_via_registry_live_path_rung(monkeypatch):
-    """Review: staff-eng MAJOR-3 — machine-local
+    """machine-local
     plugin.mirrors.coordinator-claude.live_path is now routed through the
     same CLAUDE_PLUGIN_ROOT-shaped normalizer (not trusted as a repo root
     unconverted) and gated on `<cand>/state` being a directory (BLOCKER-2)."""
@@ -584,7 +600,7 @@ def test_doe_root_resolves_via_registry_live_path_rung(monkeypatch):
 
 
 def test_doe_root_rejects_live_path_content_root_without_git(monkeypatch):
-    """Review: staff-eng MAJOR-3, executed shape from the findings —
+    """
     live_path pointing at a CONTENT root (`<repo>/coordinator`, no
     `.claude-plugin/plugin.json` beside it in this fixture, i.e.
     unrecognizable to the normalizer) must NOT be accepted as the repo root
@@ -610,7 +626,7 @@ def test_doe_root_falls_back_to_legacy_env_chain_when_codename_rungs_unreachable
 
 
 def test_doe_root_env_override_wins_over_live_pointer_when_both_set(monkeypatch):
-    """Review: staff-eng MAJOR-4, executed shape from the findings — with a
+    """With a
     live `.doe-root` pointer AND an explicit DOE_ROOT/REPO_DOE_CLAUDE
     override both present, the explicit override must win (it is an
     operator's stated intent and cannot be present by accident); ambient

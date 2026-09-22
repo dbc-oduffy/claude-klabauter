@@ -112,7 +112,7 @@ def test_windows_install_never_copy2s_onto_the_live_destination(tmp_path, orch, 
     # assertion (wrapper invocability there is governed by extension/shebang
     # association, not the exec bit); this test does not verify it.
     #
-    # Review: coordinator:code-reviewer (P1/P2) -- must NOT guard on
+    # Must NOT guard on
     # `os.name` here: the monkeypatch above (`maximalist.os` is the same
     # singleton `os` module this test also imports) already forced
     # `os.name == "nt"` process-wide for the rest of this test body, so an

@@ -233,7 +233,7 @@ class NormalizeResult:
     rows_rewritten: int | None = None
     rows_already_canonical: int | None = None
 
-    # Review: review-integrator — `rows_migrated` conflates "rows actually rewritten
+    # `rows_migrated` conflates "rows actually rewritten
     # from a non-canonical dialect" with "rows already canonical, left untouched"
     # (both were counted into one counter per the module docstring's own "'Migrated'
     # here covers BOTH..." admission). These two optional fields split the ledger so a
@@ -245,7 +245,7 @@ class NormalizeResult:
     def to_dict(self) -> dict:
         """Render the exact contract §7 JSON shape.
 
-        # Review: code-reviewer (Finding 6) — the field order below matches the spec's
+        # The field order below matches the spec's
         # written key order for readability, but that is an insertion-order incidental
         # of Python's dict/json.dump behavior, not a JSON contract guarantee (JSON objects
         # are unordered by spec). A consumer must key-access, never position-access,
@@ -275,7 +275,7 @@ class AlreadyCanonicalError(RuntimeError):
 class NotLegacyShapedError(RuntimeError):
     """Raised when `log_path` is neither already-canonical nor legacy-pipe-table-shaped.
 
-    # Review: code-reviewer (Finding 4) — `is_already_canonical` returning False does not
+    # `is_already_canonical` returning False does not
     # imply "safe to run the legacy parse": a canonical-shaped file whose every row happens
     # to be unparseable (0 well-formed rows, e.g. a corrupted canonical file) would also
     # return False from `is_already_canonical`, and since none of its lines start with `|`,
@@ -341,7 +341,7 @@ def _row_round_trips(row_text: str, run_id: str, path: str, disposition: str, re
     `## Run <run_id>` header, re-parses via `_common.parse_distillation_log` back to
     the exact (path, disposition, fate, run_id) values it was rendered from.
 
-    # Review: code-reviewer (Finding 1) — a legacy `path`/`run_id` cell can contain
+    # A legacy `path`/`run_id` cell can contain
     # embedded whitespace (free-text pipe-table cells, not validated \\S+ tokens).
     # `render_row` only checks non-emptiness, never the `\\S+` shape `_common`'s
     # `_RUN_HEADER_RE`/`_ROW_RE` grammar requires, so such a row would render, get
@@ -518,7 +518,7 @@ def normalize_log(log_path: Path) -> NormalizeResult:
         canonical_lines.extend(migrated_by_run[run_id])
     canonical_text = "\n".join(canonical_lines) + "\n"
 
-    # Review: code-reviewer (Finding 3) — atomic write (temp file + os.replace) so a
+    # Atomic write (temp file + os.replace) so a
     # process crash mid-write can never leave log_path truncated/partially written;
     # the backup (already on disk, guarded above) remains the recovery path either way.
     tmp_path = log_path.with_name(log_path.name + ".tmp")
@@ -763,7 +763,7 @@ def normalize_arrow_dialects_log(log_path: Path) -> NormalizeResult:
         output_lines[idx] = row_text
         rows_migrated += 1
         rows_rewritten += 1
-        # Review: review-integrator — only a row that actually survived the
+        # Only a row that actually survived the
         # round-trip check (i.e. was really rewritten from a recognized arrow
         # dialect) may flip this flag; setting it on regex match alone let a
         # round-trip-failing row's file bypass NoArrowDialectRowsError, write a

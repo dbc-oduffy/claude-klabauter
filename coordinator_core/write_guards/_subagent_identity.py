@@ -185,7 +185,6 @@ def _read_backpointer_subagent_type(
     except OSError:
         return ""
 
-    # Review: coordinator:code-reviewer (2026-08-14, P3, duplicate-row
     # ambiguity) -- a bare "return on first match" resolved a duplicate
     # agent_id (one legacy 2-column row, one full 3+-column row) by file
     # order rather than by recency. Now: rows with fewer than 3 columns are

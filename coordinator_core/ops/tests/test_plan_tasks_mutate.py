@@ -170,7 +170,7 @@ def _governed_plan(*, status: str = "approved", digest: str | None = None) -> st
     backlogged — i.e. the cut-set the PM would have been shown and approved,
     which is what resolve checks its prospective write against.
 
-    Review: code-reviewer (Finding 2) -- docstring was stale, still naming
+    Docstring was stale, still naming
     spun_off, though the digest computation below already used backlogged.
     """
     from coordinator_core.frontmatter.schema_validate import compute_grouping_digest
@@ -485,7 +485,7 @@ def test_stamp_atomicity_bad_id_zero_writes(tmp_path):
 
 
 def test_stamp_duplicate_id_in_batch_fails_loud_no_write(tmp_path):
-    """Review: code-reviewer (F2) — a duplicate id within one `updates` batch
+    """A duplicate id within one `updates` batch
     aborts the whole batch (fail-loud, mirrors add-task's dup discipline) —
     no writes, not last-write-wins."""
     repo = _make_git_repo(tmp_path)
@@ -669,7 +669,7 @@ def test_stamp_no_op_no_write(tmp_path):
         repo_root=repo / ".git",
     ))
     assert second["exit_code"] == 0, second
-    # Review: code-reviewer — make the docstring's "applied reports True
+    # Make the docstring's "applied reports True
     # either way" claim executable rather than asserted-but-unchecked (F4).
     assert second["applied"] is True, second
 
@@ -682,7 +682,7 @@ def test_stamp_no_op_no_write(tmp_path):
 
 
 def test_stamp_no_op_idempotent_for_multiline_body_with_blank_line(tmp_path):
-    """Review: code-reviewer (F5) — _dump_rows re-serialization idempotency
+    """_dump_rows re-serialization idempotency
     must also hold for a `body` value shaped to stress PyYAML's scalar-style
     selection: an embedded blank line plus trailing whitespace on a line.
     Extends the test_stamp_no_op_no_write pattern to a less "friendly" body
@@ -914,7 +914,7 @@ def test_rejects_traversal_path(tmp_path):
     """A '../' traversal plan_path escaping docs/plans/ is rejected; target
     (if it exists) is untouched.
 
-    Review: code-reviewer — containment here relies entirely on `_resolve_path`
+    Containment here relies entirely on `_resolve_path`
     joining the relative path onto worktree and then `Path.resolve()`
     collapsing the `..` segments before `contained_path` checks containment;
     there is no explicit parse-time `..` string reject (contrast with the JS
@@ -997,7 +997,18 @@ def test_sequential_add_task_calls_both_land_in_final_spine(tmp_path):
 
 
 def _invoke_cli(op: str, params: dict, repo: Path) -> subprocess.CompletedProcess:
-    """Run ``python -m coordinator_core.invoke <op> '<json-params>' --repo <repo>``."""
+    """Run ``python -m coordinator_core.invoke <op> '<json-params>' --repo <repo>``.
+
+    ``--allow-unstamped-dispatch`` is required here for the same reason
+    ``conftest.py``'s ``pytest_configure`` calls ``ipc.allow_unstamped_dispatch()``
+    for the in-process path: this repo IS the dev tree (never the published,
+    stamped klabauter mirror -- see this repo's own CLAUDE.md), so a bare
+    subprocess dispatch against it hits ipc.py's stamp gate before ever
+    reaching plan.tasks.mutate, regardless of host. Without this flag the
+    subprocess leg is testing the stamp gate, not the CLI seam AC8 exists to
+    cover -- exactly the sanctioned "deliberate manual testing" carve-out the
+    gate's own refusal message names.
+    """
     env = {**os.environ}
     return subprocess.run(
         [
@@ -1006,6 +1017,7 @@ def _invoke_cli(op: str, params: dict, repo: Path) -> subprocess.CompletedProces
             op,
             json.dumps(params),
             "--repo", str(repo),
+            "--allow-unstamped-dispatch",
         ],
         capture_output=True,
         text=True,
@@ -1284,7 +1296,7 @@ def test_resolve_closed_disposition_refuses_without_pm_approved(tmp_path):
             "the gate-prints-its-own-key defect the grouping-approval contract removes"
         )
 
-    # Review: code-reviewer Finding 4 — the legacy refusal previously reused
+    # The legacy refusal previously reused
     # _GROUPING_APPROVAL_HINT verbatim, describing a "grouping" and a
     # pm_utterance field that don't exist anywhere on a LEGACY plan's schema.
     # A legacy plan has no groupings and nowhere to record pm_utterance, so
@@ -2717,7 +2729,7 @@ def _governed_two_row_defer_cutset(*, status: str = "approved", digest: str | No
     single-row `resolve` call could only ever produce a one-row prospective
     membership, which never matches a digest approved over two rows.
 
-    Review: code-reviewer (Finding 1) -- C3 remapped 'spun_off' out of the
+    C3 remapped 'spun_off' out of the
     'defer' grouping into its own grouping, so a digest computed over
     spun_off rows for grouping 'defer' hashed an empty member set. Rows here
     now use 'backlogged', which is still mapped to 'defer', to keep this a
@@ -2779,7 +2791,7 @@ def _governed_two_groupings_plan(*, defer_digest: str | None = None, ruled_out_d
     checked against its own approval block and its own prospective
     membership").
 
-    Review: code-reviewer (Finding 1) -- the 'defer' leg's digest was
+    The 'defer' leg's digest was
     computed over a spun_off row, which is no longer in the 'defer'
     grouping post-C3 and hashed an empty set. Uses 'backlogged' instead so
     the approval is over a real one-row cut-set for 'defer'.
@@ -2843,7 +2855,7 @@ def test_resolve_batch_two_row_cutset_lands(tmp_path, monkeypatch):
     never match a digest approved over {C1, C2}, and closing C2 afterward
     never ran because the C1 call always aborted first.
 
-    Review: code-reviewer (Finding 1) -- repointed from `spun_off` to
+    Repointed from `spun_off` to
     `backlogged`. `spun_off` is now its own ungated grouping (C3), so
     resolving both rows to spun_off never reached the grouping-digest gate
     at all; `backlogged` is still in the PM-gated 'defer' grouping this test
@@ -2889,7 +2901,7 @@ def test_resolve_batch_spans_two_groupings_each_checked_independently(tmp_path, 
     ('ruled_out') -- each grouping's approval is checked against its OWN
     block and its OWN prospective membership.
 
-    Review: code-reviewer (Finding 1) -- C1 repointed from `spun_off` to
+    C1 repointed from `spun_off` to
     `backlogged`. `spun_off` is now ungated (its own grouping, C3), so
     resolving C1 to spun_off never exercised the 'defer' grouping's digest
     check this test's docstring claims to cover; `backlogged` still does.
@@ -2934,7 +2946,7 @@ def test_resolve_batch_one_grouping_unapproved_refuses_whole_batch(tmp_path):
     batch is refused (including the otherwise-approved C1/'defer' half) --
     no partial application, and the file is byte-unchanged.
 
-    Review: code-reviewer (Finding 1) -- C1 repointed from `spun_off` to
+    C1 repointed from `spun_off` to
     `backlogged` so the approved 'defer' half is actually gated (and
     therefore a real thing to be "otherwise-approved") rather than exempt.
     """
@@ -3310,7 +3322,7 @@ def test_resolve_all_rows_resolved_stamps_landed_no_execute_plan_involved(tmp_pa
 
 
 def test_resolve_landed_stamp_exception_does_not_fail_the_resolve(tmp_path, monkeypatch):
-    """Review: code-reviewer (P2 #2) -- the `try/except Exception` around
+    """The `try/except Exception` around
     `_stamp_plan_landed` (C1) is plan-specified as a derived side effect
     that "must never fail resolve", but that contract had zero test
     coverage of its failure branch. Force the stamp call itself to RAISE

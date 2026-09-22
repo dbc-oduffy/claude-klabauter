@@ -1,0 +1,227 @@
+"""coordinator_core.ops.grind_ops — the queue-grind engine's closed op
+list: `lessons.extract` (source), `lessons.verify_extraction` (verify) and
+`doctrine.surface_split_regenerate` (regenerate) — the three op names the
+vocabulary (`coordinator_core.contract.grind_vocab`'s `SOURCE_OPS` /
+`VERIFY_OPS` / `REGENERATE_OPS`, C1) pins closed.
+
+Purpose: each op is a thin `(params, repo_root) -> dict` adapter, in-process
+and NEVER a subprocess, over an existing backing function:
+
+    - `lessons.extract` wraps `coordinator/bin/extract-lessons.py::extract()`.
+    - `lessons.verify_extraction` wraps `coordinator/bin/extract-lessons.py::
+      verify()`, translated into the DR-404 verify-op wire contract this
+      row's own spec pins: params `{manifest, records}`, return
+      `{ok, failing_ids}` (exit 0 means ok). `records` arrives as an
+      already-materialised list of routing-record dicts (the per-batch
+      record the engine holds in memory, never a caller-supplied file);
+      this adapter spills it to a throwaway JSON tempfile so it can reuse
+      `verify()`'s existing disk-based grounding logic unchanged, and
+      removes the tempfile in a `finally` before returning.
+    - `doctrine.surface_split_regenerate` wraps `coordinator/bin/
+      generate-doctrine-surface-split.py::regenerate_split_dir()`.
+
+None of the three re-derives its backing function's decision logic — this
+module is a registration/adapter seam only, mirroring
+`coordinator_core.learn_lessons_pipeline.ops` (C5, the precedent commit is
+c4528ac83a), whose own docstring states the identical posture. Registration
+follows that same precedent's three registries: `_registry_map.py`'s
+`OP_MODULE_MAP` (this module's dotted path), `authz/classification.py`'s
+`OP_CLASSIFICATION` (DR-208 five-question affirmation per op) and
+`op_scopes.py`'s `OP_KEY_SCOPE` (`"show_top"` for all three — each handler's
+own `repo_root` arg is the already-resolved worktree root, forwarded
+straight through to the backing function's own path arguments; the
+`coordinator/bin` scripts these adapters load are ENGINE-provisioned and
+resolved via `resolve_cli_script_root()`, never joined against `repo_root`).
+
+Measured process time (this op's own handler body, warm interpreter, in
+isolation — see `test_grind_ops.py::test_measured_under_budget`; a fixture
+directory of 3 lesson files / a 3-record extraction+routing pair / a
+2-section split source): `lessons.extract` ~8ms (includes the one-time
+`load_cli_module` cost of the first call in a process), `lessons.
+verify_extraction` <1ms, `doctrine.surface_split_regenerate` ~18ms
+(`check_mode`, first call). All three are comfortably under the 500ms
+"source op absorbed into emit" ceiling this row's body sets.
+
+Negative-spec:
+    - Do NOT re-derive `extract()`/`verify()`/`regenerate_split_dir()`'s own
+      decision logic here — thin adapters only.
+    - Do NOT spawn a subprocess in `lessons.extract` or `lessons.
+      verify_extraction` — both load their backing script via
+      `cli_dispatch.load_cli_module` and call its Python functions directly,
+      never `main(argv)` via a spawned process and never `subprocess.run`/
+      `Popen`. `doctrine.surface_split_regenerate` is the one exception:
+      load-bearing — its default call path (both `check_mode` and
+      `allow_dirty` false/omitted) runs `regenerate_split_dir()` ->
+      `dirty_bodies()` -> `git_native._git(["status", "--porcelain", ...])`,
+      exactly ONE real `subprocess.run` per call. This is what stops the op
+      silently overwriting a peer's uncommitted doctrine body — see
+      `dirty_bodies()`'s own docstring in `generate-doctrine-surface-
+      split.py`. Pinned at exactly 1 spawn by `test_grind_ops.py::
+      test_doctrine_surface_split_regenerate_default_path_spawns_exactly_once`.
+    - Do NOT resolve a repo path via `Path.cwd()`/`Path(__file__)` in any
+      handler — the per-request resolved `repo_root` parameter is the only
+      source for a params path that is not already absolute.
+    - Do NOT add a `coordinator/bin/grind-*.py` front door — no bin door
+      exists or is wanted for these ops; the op registry is the only
+      caller (§ C9 body / D1 precedent).
+
+Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md § C9
+"""
+from __future__ import annotations
+
+import json
+import re
+import tempfile
+from contextlib import redirect_stderr
+from io import StringIO
+from pathlib import Path
+from types import ModuleType
+from typing import Any, Optional
+
+from coordinator_core.ceremony_common.cli_dispatch import (
+    load_cli_module,
+    resolve_cli_script_root,
+)
+from coordinator_core.ipc import register_op
+
+#: The `coordinator/bin` directory holding the two backing scripts this
+#: module loads — resolved from THIS module's own location, never
+#: `repo_root` and never `Path.cwd()` (see `cli_dispatch.
+#: resolve_cli_script_root`'s own docstring for why: these scripts are
+#: ENGINE-provisioned, not part of the consumer repo this op operates on).
+_SCRIPT_ROOT = resolve_cli_script_root()
+
+_LOADED_MODULES: dict[str, ModuleType] = {}
+
+#: A `verify()` suspect/note line's leading `  {id}: ` prefix — same shape
+#: for both the notes block and the suspects block, so only the suspects
+#: block (after the `VERDICT: FAIL` header) is ever fed through this.
+_SUSPECT_LINE = re.compile(r"^  (\S+):")
+
+
+def _load(script_stem: str) -> ModuleType:
+    """Loads (once, cached) the named `coordinator/bin/<script_stem>.py`
+    module in-process via the shared `cli_dispatch.load_cli_module`
+    primitive — never a subprocess."""
+    cached = _LOADED_MODULES.get(script_stem)
+    if cached is not None:
+        return cached
+    module_name = f"_grind_ops_{script_stem.replace('-', '_')}"
+    module = load_cli_module(module_name, _SCRIPT_ROOT / f"{script_stem}.py")
+    _LOADED_MODULES[script_stem] = module
+    return module
+
+
+def _resolve_path(repo_root: Optional[Path], value: str) -> Path:
+    """A params-supplied path resolves against the already-resolved
+    `repo_root` when relative, and is used verbatim when already absolute
+    — never against `Path.cwd()` (§ module docstring negative-spec)."""
+    path = Path(value)
+    if path.is_absolute() or repo_root is None:
+        return path
+    return repo_root / path
+
+
+@register_op("lessons.extract")
+async def _lessons_extract(
+    params: dict[str, Any], repo_root: Optional[Path]
+) -> dict[str, Any]:
+    """Source op: thin adapter over `extract-lessons.py::extract()`.
+    `shortname` defaults to `lessons_dir`'s parent directory name only
+    because `extract()` itself has no default for it; every other param
+    forwards verbatim."""
+    module = _load("extract-lessons")
+    lessons_dir = _resolve_path(repo_root, params["lessons_dir"])
+    shortname = params.get("shortname") or lessons_dir.parent.name
+    since = params.get("since")
+    include_md = bool(params.get("include_md", False))
+    records, stats = module.extract(lessons_dir, shortname, since, include_md)
+    return {"exit_code": 0, "records": records, "stats": stats}
+
+
+def _parse_failing_ids(stderr_text: str) -> list[str]:
+    """Extracts the failing routing-record ids `verify()` names in its
+    `GROUNDING GATE VERDICT: FAIL` stderr block — never re-deriving the
+    checks themselves, only reading the ids `verify()` already decided to
+    report. The advisory-notes block (printed first, same `  {id}: `
+    line shape) is excluded by only scanning lines after the FAIL header."""
+    marker = "GROUNDING GATE VERDICT: FAIL"
+    idx = stderr_text.find(marker)
+    if idx == -1:
+        return []
+    failing_ids: list[str] = []
+    for line in stderr_text[idx:].splitlines():
+        match = _SUSPECT_LINE.match(line)
+        if match:
+            failing_ids.append(match.group(1))
+    return failing_ids
+
+
+class VerifyRefusalError(RuntimeError):
+    """Raised when `verify()` cannot ground the routing records at all — a
+    missing/unreadable `manifest` path, or `verify()`'s own exit 2 (bad
+    input: no `*-extracted-full.{yaml,json}` found under a directory
+    manifest). Distinct from a grounding failure (exit 1, `ok=False` with
+    `failing_ids`): a refusal means the check never ran, not that it ran
+    and found fabricated ids."""
+
+
+@register_op("lessons.verify_extraction")
+async def _lessons_verify_extraction(
+    params: dict[str, Any], repo_root: Optional[Path]
+) -> dict[str, Any]:
+    """Verify op: thin adapter over `extract-lessons.py::verify()`, the
+    DR-404 verify-op wire contract (params `{manifest, records}`, return
+    `{ok, failing_ids}`). `verify()`'s exit 2 (bad input) or a missing
+    `manifest` path raises `VerifyRefusalError` rather than returning
+    `ok=False`. Only stderr is captured (for `failing_ids`)."""
+    module = _load("extract-lessons")
+    extraction_path = _resolve_path(repo_root, params["manifest"])
+    if not extraction_path.exists():
+        raise VerifyRefusalError(f"lessons.verify_extraction: manifest not found: {extraction_path}")
+    records = params["records"]
+
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False, encoding="utf-8"
+    )
+    try:
+        json.dump({"records": records}, tmp)
+        tmp.close()
+        routing_path = Path(tmp.name)
+        stderr_buf = StringIO()
+        with redirect_stderr(stderr_buf):
+            exit_code = module.verify(extraction_path, routing_path)
+    finally:
+        # tmp.close() is idempotent; call
+        # it unconditionally here so a json.dump failure before the happy
+        # path's own close() can't leak an open fd past the unlink below.
+        tmp.close()
+        Path(tmp.name).unlink(missing_ok=True)
+
+    if exit_code == 0:
+        return {"ok": True, "failing_ids": []}
+    if exit_code == 1:
+        return {"ok": False, "failing_ids": _parse_failing_ids(stderr_buf.getvalue())}
+    raise VerifyRefusalError(
+        f"lessons.verify_extraction: verify() refused (exit {exit_code}): "
+        f"{stderr_buf.getvalue().strip()}"
+    )
+
+
+@register_op("doctrine.surface_split_regenerate")
+async def _doctrine_surface_split_regenerate(
+    params: dict[str, Any], repo_root: Optional[Path]
+) -> dict[str, Any]:
+    """Regenerate op: thin adapter over `generate-doctrine-surface-
+    split.py::regenerate_split_dir()`. Refreshes only `README.md` from
+    `_preamble.md`, never body files. Returns `regenerate_split_dir()`'s
+    own exit contract (0 ok, 1 drift under `check_mode`, 2 not a split
+    directory, 3 dirty bodies refused) unchanged."""
+    module = _load("generate-doctrine-surface-split")
+    split_dir = _resolve_path(repo_root, params["split_dir"])
+    check_mode = bool(params.get("check_mode", False))
+    allow_dirty = bool(params.get("allow_dirty", False))
+    exit_code = module.regenerate_split_dir(
+        split_dir, check_mode=check_mode, allow_dirty=allow_dirty
+    )
+    return {"exit_code": exit_code}

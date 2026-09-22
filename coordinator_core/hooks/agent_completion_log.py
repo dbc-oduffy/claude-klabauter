@@ -113,7 +113,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     try:
         _sessions_base = git_common_dir(repo_root) / "coordinator-sessions"
     except RuntimeError:
-        # Review: code-reviewer — fallback had ".git" doubled: repo_root IS git_common_dir,
+        # Fallback had ".git" doubled: repo_root IS git_common_dir,
         # so Path(repo_root) / ".git" / "coordinator-sessions" → <repo>/.git/.git/… (never exists).
         # Fix: drop the redundant ".git" join in this fallback branch.
         _sessions_base = Path(str(repo_root)) / "coordinator-sessions"

@@ -229,7 +229,7 @@ def _is_valid(fm: dict) -> bool:
     )
 
 
-# Review: code-reviewer (F3) — _cap_decision_note/_cap_body were structurally identical
+# _cap_decision_note/_cap_body were structurally identical
 # (differing only in which module-level max-chars constant they compared against), a shape
 # that drifts silently when one copy's strip/truncation rule changes and the other doesn't.
 # Extracted to one tested implementation; the two public helpers are now thin wrappers.
@@ -344,7 +344,7 @@ def _read_memo_body(ctx: EmitContext, rel_path: object) -> Optional[str]:
     root = ctx.subprocess_root if ctx.subprocess_root is not None else ctx.repo_root
     try:
         text = (Path(root) / rel_path).read_text(encoding="utf-8")
-    # Review: code-reviewer (F1) — UnicodeDecodeError is a ValueError subclass, not an
+    # UnicodeDecodeError is a ValueError subclass, not an
     # OSError subclass; a bare `except OSError` let a non-UTF-8 memo body (binary paste,
     # mis-encoded copy, BOM-less UTF-16) propagate past this guard and crash the whole
     # collect() call (envelope.build has no per-section try/except). Widened to cover both.

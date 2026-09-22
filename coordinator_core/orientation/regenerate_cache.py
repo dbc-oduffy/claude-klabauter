@@ -206,6 +206,7 @@ from coordinator_core.git.repo_root import is_inside_work_tree, show_toplevel
 from coordinator_core.ipc import register_op
 from coordinator_core.orientation.hook_cancellation_signal import emit_hook_cancellation_rate
 from coordinator_core.orientation.warm_health_signal import emit_warm_engine_health
+from coordinator_core.orientation.route_unreachable_signal import emit_route_unreachable
 from coordinator_core.orientation.budget_breach_signal import emit_budget_breaches
 from coordinator_core.orientation.expired_grant_signal import emit_expired_grants
 from coordinator_core.orientation.abandoned_claim_signal import emit_abandoned_claims
@@ -230,17 +231,28 @@ from coordinator_core.resolve_validation_cmd import (
 )
 
 # Generator-provenance declaration (C2, generator_provenance.py's AST reader
-# — see that module for the discovery/coverage mechanism this feeds). `sources`
-# names this module's own path: unlike the bin/ CLI trampolines that delegate
-# derivation elsewhere, this module IS the whole derive-and-render
-# implementation (build_cache/_render_cache/write_cache all live here), so
-# its own movement is what actually changes state/orientation_cache.md's
-# content -- there is no deeper locus to point at.
+# — see that module for the discovery/coverage mechanism this feeds). This
+# module holds the derive-and-render implementation (build_cache/_render_cache/
+# write_cache all live here), so its own movement changes
+# state/orientation_cache.md's content.
+#
+# Every per-signal `emit_*` module is a source: each renders a section of the
+# artifact, so any of them moving changes the emitted bytes exactly as this
+# file does. A declaration naming only this path leaves the staleness sweep
+# watching the wrong set.
 GENERATES = [
     {
         "artifact": "state/orientation_cache.md",
         "stamp_key": "generated_at",
-        "sources": ["coordinator_core/orientation/regenerate_cache.py"],
+        "sources": [
+            "coordinator_core/orientation/regenerate_cache.py",
+            "coordinator_core/orientation/abandoned_claim_signal.py",
+            "coordinator_core/orientation/budget_breach_signal.py",
+            "coordinator_core/orientation/expired_grant_signal.py",
+            "coordinator_core/orientation/hook_cancellation_signal.py",
+            "coordinator_core/orientation/route_unreachable_signal.py",
+            "coordinator_core/orientation/warm_health_signal.py",
+        ],
     },
 ]
 
@@ -1288,7 +1300,7 @@ _TRUST_CAVEAT_TMPL = (
 
 
 def _render_cache(
-    # Review: coordinator:code-reviewer a56496f0 finding 3 — keyword-only
+    # keyword-only
     # closes the mid-signature-insertion recurrence at every call site,
     # not only the one the publish gate happened to check.
     *,
@@ -1308,6 +1320,7 @@ def _render_cache(
     audits_lines: List[str],
     hook_cancellation_line: str,
     warm_engine_line: str,
+    route_unreachable_line: str,
     budget_breach_line: str,
     expired_grant_lines: str,
     abandoned_claim_lines: str,
@@ -1358,6 +1371,9 @@ def _render_cache(
 
     if warm_engine_line:
         parts.append("\n## Warm engine\n" + warm_engine_line + "\n")
+
+    if route_unreachable_line:
+        parts.append("\n## Sanctioned routes\n" + route_unreachable_line + "\n")
 
     if budget_breach_line:
         parts.append("\n## Budget breaches\n" + budget_breach_line + "\n")
@@ -1450,6 +1466,7 @@ def build_cache(
     audits_lines = emit_audits_index(state_root)
     hook_cancellation_line = emit_hook_cancellation_rate(repo_root)
     warm_engine_line = emit_warm_engine_health()
+    route_unreachable_line = emit_route_unreachable()
     budget_breach_line = emit_budget_breaches(repo_root)
     expired_grant_lines = emit_expired_grants(repo_root)
     abandoned_claim_lines = emit_abandoned_claims(repo_root)
@@ -1480,6 +1497,7 @@ def build_cache(
         audits_lines=audits_lines,
         hook_cancellation_line=hook_cancellation_line,
         warm_engine_line=warm_engine_line,
+        route_unreachable_line=route_unreachable_line,
         budget_breach_line=budget_breach_line,
         expired_grant_lines=expired_grant_lines,
         abandoned_claim_lines=abandoned_claim_lines,
@@ -1913,7 +1931,7 @@ def _atomic_replace(cache_file: Path, output: str) -> None:
                 existing_mode: Optional[int] = cache_file.stat().st_mode & 0o777
             except FileNotFoundError:
                 existing_mode = None
-            # Review: coordinator:code-reviewer 9b8765ad finding 4 — narrowed
+            # Narrowed
             # from a broad `except OSError` to `FileNotFoundError` only. A
             # permission-denied or other real stat failure on an EXISTING
             # file must not silently fall through to the first-write default

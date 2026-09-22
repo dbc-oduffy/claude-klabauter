@@ -161,6 +161,7 @@ from coordinator_core.group_em import watch_heartbeat
 from coordinator_core.session import peer_roster
 from coordinator_core.session.receiver_state import parse_iso_timestamp
 from coordinator_core.session import machinery_paths
+from coordinator_core.session.claimed_write import append_claimed_line
 
 #: Corpus-mutator declaration (generator-provenance sweep): `_record_offer`,
 #: `record_offers` and `decline` append to `state/subagent-share/<session-
@@ -212,7 +213,7 @@ DEFAULT_MAX_ENTRIES = 5
 # the same join and the same filename string, and `obligations` was importing
 # two of them out of THIS module's private namespace.
 #
-# Review: overengineering-reviewer (finding #2, minor, accepted) -- the
+# The
 # private aliases previously bound here (`_safe_session_id`,
 # `_session_share_dir`) restored exactly the private-looking-but-foreign
 # symbol the consolidation existed to remove. Call sites now name
@@ -229,7 +230,7 @@ def undischarged_obligations(repo_root: str, session_id: str) -> Optional[int]:
     """
     if not machinery_paths.safe_session_id(session_id):
         return None
-    # Review: overengineering-reviewer (finding #3, minor, accepted) -- this
+    # This
     # used to re-derive the join by hand instead of calling the owner's
     # `ledger_path` helper, leaving the stated duplication failure mode half
     # closed.
@@ -368,8 +369,7 @@ def _record_offer(
     )
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "a", encoding="utf-8", newline="\n") as handle:
-            handle.write(line + "\n")
+        append_claimed_line(path, (line + "\n").encode("utf-8"))
     except OSError:
         return False
     return True
@@ -401,8 +401,8 @@ def record_offers(
     refuses the whole batch; a malformed peer id is refused per-row, the
     rest of the batch still lands.
 
-    Emits a SINGLE `write()` of all recorded lines joined, not one
-    `open(..., 'a')` + `write()` per row -- free given the entry point is
+    Emits a SINGLE append of all recorded lines joined, not one append call
+    per row -- free given the entry point is
     batched by construction, and it removes the concurrent-writer torn-line
     hazard a per-row append would otherwise reintroduce on a box running a
     machine-wide watcher as a second writer to the same log path.
@@ -439,8 +439,7 @@ def record_offers(
     path = send_log_path(repo_root, holder_session_id)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "a", encoding="utf-8", newline="\n") as handle:
-            handle.write("\n".join(lines) + "\n")
+        append_claimed_line(path, ("\n".join(lines) + "\n").encode("utf-8"))
     except OSError:
         return unrecorded + recorded
 
@@ -488,8 +487,7 @@ def decline(
     )
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "a", encoding="utf-8", newline="\n") as handle:
-            handle.write(line + "\n")
+        append_claimed_line(path, (line + "\n").encode("utf-8"))
     except OSError:
         return False
     return True
@@ -534,7 +532,6 @@ def _log_key_is_open(log: list[dict[str, Any]], key: str) -> bool:
     return True
 
 
-# Review: overengineering-reviewer (finding #6, confidence 8 AUTO-FIX,
 # EM-in-scope discretionary application) -- the local copy is deleted. It now
 # calls `receiver_state.parse_iso_timestamp`, the implementation itself, rather
 # than `read_pass._parse_iso_stamp`, which is a thin domain-named alias over
@@ -636,7 +633,6 @@ def _suppressed(session_id, why, reason=None, obligations=None, remaining=None, 
     """One `suppressed` row. Every row carries the same keys -- `None` where
     inapplicable -- so a consumer never has to key-check by variant.
 
-    Review: overengineering-reviewer (finding #4, EM-ratified partial) --
     `obligation`/`dwell_seconds` folded in here rather than round-tripped
     through a separate `declined` row. Per-peer declination was a pure
     projection of this row (`reason` was verbatim `row["why"]`); a consumer
@@ -739,7 +735,7 @@ def _declinations(
     """Tick-level declinations only -- one row per thing the TICK ITSELF declined,
     never a per-peer row.
 
-    Review: overengineering-reviewer (finding #4, EM-ratified partial) -- the
+    The
     per-peer declination previously emitted here was a pure projection of
     `suppressed` (`reason` was verbatim `row["why"]`, `obligation` was derivable
     from `session_id` alone); those rows are gone from this function, and a
@@ -946,7 +942,7 @@ def build_send_digest(
         # precedent, same helper shape): a digest pasted into context or read
         # minutes later as one leg of a `groupem.enter` payload could report
         # WHAT it counted but not WHEN.
-        # Review: overengineering-reviewer finding 3 -- was a literal copy of
+        # Was a literal copy of
         # the fromtimestamp/strftime expression; now the shared seam.
         "as_of": watch_heartbeat.iso_instant(now),
     }

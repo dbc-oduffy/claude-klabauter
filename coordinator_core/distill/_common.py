@@ -72,7 +72,7 @@ _RUN_HEADER_RE = re.compile(r"^##\s+Run\s+(?P<run_id>\S+)\s*$")
 # ASCII "->" only — never a unicode arrow (→ U+2192). The row shape is:
 #   - <path> -> <disposition>, <fate> (run: <run-id>)
 #
-# Review: workflow-review (2026-07-12) — the fate capture group was previously
+# The fate capture group was previously
 # `[^()]+?` (parenthesis-excluding), which meant a writer-emitted row whose free-text
 # `fate` legitimately contained a parenthetical aside (e.g. "folded into wiki (see
 # also X)") would round-trip to disk but then silently fail to parse back — the row

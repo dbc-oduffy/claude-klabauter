@@ -165,7 +165,7 @@ _MCP_SERVING_PLUGINS = {
     "notebooklm": "notebooklm",
 }
 
-# Review: code-reviewer (nit) — ndjson rows are now parsed with json.loads
+# Ndjson rows are now parsed with json.loads
 # instead of unanchored regexes; json.loads is free in Python (unlike the
 # bash oracle, which had no JSON parser and grepped fields out with sed/grep).
 # Regex extraction was fragile against nested objects/escaped quotes.
@@ -592,7 +592,7 @@ def _run_prereq_probe_function(scripts_lib_dir: Path, func_name: str) -> Tuple[s
     try:
         result = native_fn()
     except Exception as exc:  # noqa: BLE001 — isolate a raising probe; never crash the suite
-        # Review: code-reviewer (nit) — surface the exception type/message in
+        # Surface the exception type/message in
         # the amber note instead of a bare "raised" so a future
         # signature-mismatch coding defect (as opposed to a genuine
         # environment-probe failure) is at least visible in the sentinel
@@ -1038,7 +1038,7 @@ def probe_p7(claude_home: Path) -> List[ProbeNote]:
             cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
             mcp_servers = cfg.get("mcpServers") or {}
         except Exception:
-            # Review: code-reviewer (P2) — a parse/read failure on an
+            # A parse/read failure on an
             # EXISTING config file is a genuinely broken config, not "no
             # MCP servers registered". Surface amber instead of silently
             # falling back to {} (which the isinstance(dict) guard below
@@ -1391,7 +1391,7 @@ def probe_p13(
     return [ProbeNote("P-13", "amber", f"onboarding currency probe returned unexpected status: {out}")]
 
 
-# Review: code-reviewer (F1) — operator-facing note on the DR-079 semantic
+# operator-facing note on the DR-079 semantic
 # change: before the repoint, P-15/P-17 "missing" fired whenever DoE's
 # scripts/lib/prereq_probe.sh was absent at scripts_lib_dir (silent skip,
 # []). After the repoint, that file's on-disk presence is no longer
@@ -1472,7 +1472,7 @@ def probe_p17(scripts_lib_dir: Optional[Path]) -> List[ProbeNote]:
         ]
     row = ndjson.strip()
     if not row:
-        # Review: code-reviewer (P2) — matches P-15's severity for the
+        # Matches P-15's severity for the
         # identical "sourced fine but no output" shape (red, not amber).
         # The bash oracle's severity table for this case is unavailable to
         # confirm, so pick the fail-loud direction: a probe that produced no
@@ -1544,7 +1544,7 @@ def probe_p18(original_claude_home: Optional[str]) -> List[ProbeNote]:
     only degradation path is `_NativeCallFailed -> _inconclusive`, which
     reports the actual failure the native call raised, never a fabricated
     diagnosis."""
-    # Review: code-reviewer (nit) — omit the key entirely when the operator
+    # Omit the key entirely when the operator
     # never set CLAUDE_HOME, rather than forcing it to "". Matches the
     # codebase-wide ":-" (empty-or-unset) convention exactly instead of
     # introducing a third "explicitly empty" state that
@@ -1883,7 +1883,7 @@ def _resolve_wrapper_home() -> Path:
     USERPROFILE` order — rather than re-deriving a second copy of that
     ladder here.
 
-    Review: code-reviewer (P1) — the prior derivation was
+    The prior derivation was
     `Path(os.environ.get("CLAUDE_HOME") or str(Path.home()))`, which falls
     through to `Path.home()` (stdlib `ntpath.expanduser`, USERPROFILE
     before HOME on Windows) once CLAUDE_HOME is unset, instead of
@@ -1933,7 +1933,7 @@ def probe_p23(claude_klabauter_root: Path, wrapper_home: Path, sh_bin: Path) -> 
     """
     wrapper_src = claude_klabauter_root / "coordinator" / "bin" / "claude-doe.py"
     wrapper_dst = wrapper_home / ".local" / "bin" / "claude-doe"
-    # Review: code-reviewer (P1) — `wrapper_home` MUST reach here via the
+    # `wrapper_home` MUST reach here via the
     # installer's own require_home() ladder (see _resolve_wrapper_home
     # below), never a re-derived Path.home(): the installer's
     # CLAUDE_HOME -> HOME -> USERPROFILE order can diverge from
@@ -2051,7 +2051,7 @@ def _write_sentinel(
     }
     try:
         sentinel_path.parent.mkdir(parents=True, exist_ok=True)
-        # Review: code-reviewer (P1) — atomic write (mkstemp in the same dir +
+        # Atomic write (mkstemp in the same dir +
         # os.replace) so a crash/kill mid-write can never leave a truncated
         # doctor-last-run.json for downstream json.loads() consumers.
         fd, tmp = tempfile.mkstemp(dir=str(sentinel_path.parent), suffix=".tmp")
@@ -2209,7 +2209,7 @@ def _run(mode: str, arg: str) -> Tuple[List[str], List[str], int]:
     sh = settings_home()
     sh_bin = sh / "bin"
 
-    # Review: code-reviewer (P2) — mkdir moved out of the unconditional path.
+    # Mkdir moved out of the unconditional path.
     # _write_sentinel() already does sentinel_path.parent.mkdir(parents=True,
     # exist_ok=True) before writing, so only "full" mode (the only mode that
     # writes the sentinel) needs the directory to exist. triage/cluster/probe/
@@ -2231,7 +2231,7 @@ def _run(mode: str, arg: str) -> Tuple[List[str], List[str], int]:
     # will not consult.
     registry_keys_lazy = _Lazy(lambda: _registry_keys(ml_dir))
 
-    # Review: code-reviewer (P2) — each probe call is isolated in its own
+    # Each probe call is isolated in its own
     # try/except. An unexpected exception in any single probe must not abort
     # the whole run before _write_sentinel executes; otherwise the other
     # (passing) probes never get to update the sentinel and a stale sentinel

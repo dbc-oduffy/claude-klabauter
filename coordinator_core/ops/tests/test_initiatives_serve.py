@@ -306,7 +306,7 @@ class TestInitiativeServeSet:
         for status in ("active", "paused", "shipped", "abandoned"):
             assert returned_statuses[status] == status
 
-    def test_repo_root_none_returns_empty(self):  # Review: code-reviewer — no_ctx_repo_root fragment is a dead transition-time artifact; ctx fully stripped
+    def test_repo_root_none_returns_empty(self):  # no_ctx_repo_root fragment is a dead transition-time artifact; ctx fully stripped
         """repo_root=None → empty list without raising."""
         result = _handler({}, repo_root=None)
         assert result == {"initiatives": []}

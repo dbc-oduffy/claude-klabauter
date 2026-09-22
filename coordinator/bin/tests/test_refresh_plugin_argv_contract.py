@@ -39,7 +39,7 @@ ArgvCommandError = _mod.ArgvCommandError
 
 
 def test_windows_backslash_path_survives_argv_parsing(tmp_path):
-    # Review: bare `shlex.split` runs POSIX mode on every platform and treats
+    # bare `shlex.split` runs POSIX mode on every platform and treats
     # `\` as a C-style escape character, so a Windows-authored drive-letter
     # path with backslash separators (abs-path-ok: illustrative example, not
     # a real path) silently mangles down to a garbled token — and the

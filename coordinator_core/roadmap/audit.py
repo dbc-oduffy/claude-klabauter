@@ -235,7 +235,7 @@ def _claude_klabauter_root_pointer_file() -> Optional[str]:
     """Rung-1.5 fast path: read ``<settings-home>/machine-local/.claude-klabauter-live-root``
     directly, no subprocess spawn.
 
-    Review: code-reviewer (P2) — the oracle (coordinator-claude-klabauter-root.sh, rung
+    The oracle (coordinator-claude-klabauter-root.sh, rung
     1.5) checks this pointer file BEFORE the machine-local subprocess ladder,
     documented as a Windows hook-latency fix (per-invoke resolution avoiding a
     bash subprocess spawn). This port skipped straight to the subprocess-based
@@ -296,7 +296,7 @@ def _state_root(repo_root: Path) -> Path:
 def resolve_repo_root(cwd: Optional[Path] = None) -> Path:
     """``git rev-parse --show-toplevel`` from *cwd*.
 
-    Review: code-reviewer (P1) — the oracle (coordinator-state-root.sh Rule 5)
+    The oracle (coordinator-state-root.sh Rule 5)
     FAILS LOUD when the git root is unresolvable ("never silently
     pick either branch"); this previously fell back to *cwd* unchanged, which
     would silently mis-root DATA_ROOT and let audits 2/4/5 vacuously PASS on
@@ -332,7 +332,7 @@ _RUN_ID_RE = re.compile(r'^[a-z0-9][a-z0-9-]*$')
 def validate_run_id(run_id: str) -> Optional[str]:
     """Return an error message if run_id is invalid, else None.
 
-    Review: code-reviewer (nit) — a real, beneficial divergence from the oracle,
+    A real, beneficial divergence from the oracle,
     undocumented until now. The oracle's ``grep -qE`` matches PER LINE, so a
     run_id with an embedded newline could smuggle content past validation (one
     line matches even though the full string doesn't). ``re.match`` without
@@ -359,7 +359,7 @@ _VERDICT_PROSE_RE: Dict[str, "re.Pattern[str]"] = {
 }
 
 
-# Review: overengineering-reviewer (major) — this used to be col-2-ONLY while
+# This used to be col-2-ONLY while
 # `_VERDICT_TABLE_RE["KEEP"]` (the count this function's result replaces in
 # `_audit1_stub_coverage`) accepts col-2 OR col-3. Two rules for "is this a
 # KEEP row" consumed in the same branch could disagree: a col-3 reconciliation
@@ -484,7 +484,7 @@ _INTERNAL_WS_RE = re.compile(r'[ \t]+')
 def _parse_pending_stubs(pmg_text: str) -> List[str]:
     """awk -F'|' '/pending/ { gsub(/[ \\t]+/,"",$3); if ($3 ~ /^[a-z]+-[0-9]+$/) print $3 }'.
 
-    Review: code-reviewer (P2) — the oracle's ``gsub(/[ \t]+/,"",$3)`` strips
+    The oracle's ``gsub(/[ \t]+/,"",$3)`` strips
     EVERY run of spaces/tabs anywhere in the cell, not just leading/trailing.
     ``.strip()`` only trimmed edges, so a pending row with internal spacing
     (e.g. ``| foo - 3 |``) matched the oracle's post-gsub regex but silently
@@ -512,7 +512,7 @@ _TRAILING_NUM_RE = re.compile(r'[-_](\d+)$')
 
 
 def _resolve_number(stub: Dict[str, Any]) -> Optional[float]:
-    # Review: code-reviewer (P1) — ``number`` may already be a coerced
+    # ``number`` may already be a coerced
     # float("nan") from _build_stub_descriptors (non-numeric frontmatter
     # value); re-wrapping in int() here would crash on nan. Values coming
     # through this dict are already int/float/None-typed by the descriptor
@@ -795,7 +795,7 @@ def _audit1_stub_coverage(
         return
 
     text = recon_path.read_text(encoding="utf-8")
-    # Review: overengineering-reviewer (major) -- `keep_count` is derived from
+    # `keep_count` is derived from
     # `parse_keep_cluster_ids` (ids the primitive, count falls out of it)
     # rather than from a second, separately-ruled regex (`_count_verdict`),
     # so the count consumed here and `keep_ids` consumed below cannot
@@ -942,7 +942,7 @@ def _audit1_stub_coverage(
             # the historical bar stands unchanged rather than failing every
             # roadmap in the corpus.
             #
-            # Review: overengineering-reviewer (minor) -- this arm had no
+            # This arm had no
             # stated retirement condition, so it could survive indefinitely
             # by nobody's job being to remove it. As measured 2026-09-06,
             # 1 of 13 corpora under state/roadmap/ has a live (non-shipped)
@@ -1099,7 +1099,7 @@ def _audit3_pm_gates_cross_reference(
             )
             any_missing = True
 
-    # Review: code-reviewer (P2) — the oracle gates this PASS line on the
+    # The oracle gates this PASS line on the
     # GLOBAL accumulator (`[ "$EXIT_CODE" -eq 0 ] && pass ...`),
     # suppressing it once any prior audit has already failed. Gate on
     # r.exit_code (not just this audit's local any_missing) for stdout-shape
@@ -1139,7 +1139,7 @@ def _audit4_pending_rows_reference_stubs(
 def _coerce_int_or_nan(value: Any) -> Optional[float]:
     """``int(value)`` if possible, else ``float("nan")`` for a non-numeric value.
 
-    Review: code-reviewer (P1) — a malformed frontmatter value (e.g.
+    A malformed frontmatter value (e.g.
     ``number: TBD``) previously raised an uncaught ValueError here, which
     propagated to main()'s blanket except -> exit 3 "internal error",
     misclassifying an authoring typo as a tooling failure. The oracle's JS
@@ -1782,7 +1782,7 @@ def main(argv: List[str]) -> int:
         print(f"ERROR: unexpected argument: {tok}", file=sys.stderr)
         return 2
 
-    # Review: code-reviewer (P2) — resolve_data_root/RuntimeError is a
+    # resolve_data_root/RuntimeError is a
     # foreseeable USAGE/CONFIG error (no CLAUDE_KLABAUTER_ROOT env, no
     # repos.claude_klabauter machine-local entry), not this module's own
     # documented exit-3 "unexpected internal error (records-query failure)"

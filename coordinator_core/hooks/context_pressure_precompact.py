@@ -13,7 +13,7 @@ Landing convention confirmed by `08-claude-klabauter-landing-contract.md § 1`: 
 per hook op under `coordinator_core/hooks/`, `snake_case.py` named after the
 op (not the bash script), registered via `@register_op("hooks.<name>")` at
 import time, using `_envelope.py`'s shape builders. This module follows the
-`session_heartbeat.py` shape most closely (both are async bookkeeping ops
+`track_touched_files.py` shape most closely (both are async bookkeeping ops
 whose product is an on-disk write side-effect, not an advisory) — see that
 file for the sibling pattern this one mirrors.
 
@@ -31,7 +31,7 @@ Called TWO ways (both in-process, no subprocess, no bash):
 
 Output is IGNORED by Claude Code for PreCompact events (stdout is not
 surfaced to the model) — `_handler` therefore always returns `no_advisory()`,
-matching `session_heartbeat.py`'s "the product is the write side-effect"
+matching `track_touched_files.py`'s "the product is the write side-effect"
 contract. State is bridged to context via
 `coordinator_core.hooks.postuse_advisory_dispatch` (PostToolUse), which
 ALREADY consumes the two files this module writes:
@@ -351,7 +351,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     dispatch-routed `_handler(params_dict)`) execute identical logic.
 
     Always returns `no_advisory()` — the product is the on-disk write
-    side-effect (mirrors `session_heartbeat.py`'s "never blocks" contract);
+    side-effect (mirrors `track_touched_files.py`'s "never blocks" contract);
     PreCompact output is ignored by Claude Code regardless.
     """
     session_id = field(params, "session_id")

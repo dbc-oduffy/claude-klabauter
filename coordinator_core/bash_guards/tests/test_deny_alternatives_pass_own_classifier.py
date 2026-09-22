@@ -37,6 +37,22 @@ from coordinator_core.bash_guards import check_test_suite_invocation as guard
 
 _AGENT_ID = "a0123456789abcdef"
 
+
+def _refused(verdict) -> bool:
+    """Did the guard REFUSE this command?
+
+    Not the same question as "did it return None". Since the Tier-T
+    CONCURRENCY leg (0.5) a dispatched caller's scoped run comes back as an
+    ALLOW carrying a slot-wrapper rewrite, which is not a refusal and does not
+    make the offered alternative unfollowable -- the operator's command runs,
+    routed through the semaphore. What this gate exists to catch is a deny,
+    and a deny is still caught.
+    """
+    if verdict is None:
+        return False
+    return verdict.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+
+
 #: An offered alternative line: two-space indented, and a test-runner
 #: invocation rather than a grant/override/diagnostic line.
 _RUNNER_ALTERNATIVE_RE = re.compile(
@@ -102,7 +118,7 @@ def _deny_messages() -> List[tuple]:
                          ids=lambda v: v if isinstance(v, str) and "\n" not in v else "")
 def test_offered_alternative_is_allowed_by_this_guard(label, message, agent_id, repo):
     for alternative in _alternatives(message):
-        assert guard.check(_payload(alternative, repo, agent_id)) is None, (
+        assert not _refused(guard.check(_payload(alternative, repo, agent_id))), (
             "%s deny text offers a command this guard refuses: %r" % (label, alternative)
         )
 
@@ -116,7 +132,7 @@ def test_offered_alternative_captures_output_without_flipping_the_verdict(
     which tier the runner's argv classifies as."""
     for alternative in _alternatives(message):
         piped = "%s 2>&1 | tail -20" % alternative
-        assert guard.check(_payload(piped, repo, agent_id)) is None, (
+        assert not _refused(guard.check(_payload(piped, repo, agent_id))), (
             "%s alternative flips to a deny once output is captured: %r"
             % (label, piped)
         )

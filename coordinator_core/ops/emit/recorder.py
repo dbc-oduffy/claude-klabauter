@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.ipc import register_op
-# Review: code-reviewer (S3-F1) — import machine_slug from the single source of truth (_slug.py)
+# Import machine_slug from the single source of truth (_slug.py)
 # instead of the now-removed private _machine_slug duplicate. Eliminates the fragmentation risk
 # where a future update to _slug.machine_slug would not propagate to recorder's private copy.
 from coordinator_core.ops.emit._slug import machine_slug
@@ -106,13 +106,13 @@ def record(ctx: Optional[EmitContext] = None) -> dict:
         ctx = resolve_context()
 
     date = _today()
-    # Review: code-reviewer (S3-F6 nit) — "unknown" → None retry: passes None so machine_slug
+    # "unknown" → None retry: passes None so machine_slug
     # re-probes socket.gethostname() in case the ctx-capture was a transient OSError. If the
     # retry also returns empty/fails, the result is "unknown" again — harmless; documented here.
     machine = machine_slug(ctx.hostname if ctx.hostname != "unknown" else None)
     shard = ctx.central_state_root / _SHARD_NAME_TEMPLATE.format(machine=machine)
 
-    # Review: code-reviewer (S3-F4/F5) — vestigial fleet-walk rows list+loop collapsed to a
+    # Vestigial fleet-walk rows list+loop collapsed to a
     # direct single-write; `skipped: []` removed (no concept of skipping in single-repo mode).
     row = _count_repo(ctx.central_state_root, ctx.repo_name, date)
     ctx.central_state_root.mkdir(parents=True, exist_ok=True)
@@ -136,7 +136,7 @@ def _backlog_record(params: dict, repo_root=None) -> dict:
     explicitly — the internal ``ctx=resolve_context()`` fallback is NOT reached. Delegates to
     ``record(ctx)``. Returns the writer summary.
     """
-    # Review: code-reviewer (S4-F1) — AC5 fail-loud guard mirrors artifact_emit + goal_append.
+    # AC5 fail-loud guard mirrors artifact_emit + goal_append.
     # Without this guard, None.parent → AttributeError → INTERNAL_ERROR (-32603), not
     # INVALID_PARAMS (-32602). Wrong error code, wrong message, wrong signal to the caller.
     if repo_root is None:
@@ -144,7 +144,7 @@ def _backlog_record(params: dict, repo_root=None) -> dict:
             "backlog.record requires a per-repo dispatch key (_origin_worktree); "
             "repo_root is None. No silent fallback to meta-repo (AC5)."
         )
-    # Review: code-reviewer (S4-F4 deferral) — AC5 requires fail-loud on duplicate-basename
+    # AC5 requires fail-loud on duplicate-basename
     # collision (two local repos with the same directory basename → same `local/<name>` slug).
     # Detection is IMPOSSIBLE at single-emit time: this invocation sees only ONE repo's context
     # and cannot enumerate sibling repos. Disambiguation happens CONSUMER-side via the top-level

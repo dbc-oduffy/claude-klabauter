@@ -464,7 +464,7 @@ def _grep_scan(search_root: Path, sentinels: list[str]) -> list[str]:
             **no_console_creationflags(),
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        # Review: code-reviewer — grep-absent/grep-failed-to-run must not be
+        # grep-absent/grep-failed-to-run must not be
         # conflated with "grep ran and found zero matches" (both used to
         # return [] here, so a machine without grep on PATH silently and
         # permanently reported "no consumers detected" instead of surfacing
@@ -886,7 +886,7 @@ def _fence_aware_slice(
     """Split `text` into (prefix, rest) where `rest` starts at the line of
     the first STANDALONE (fence-skipped, if fence_aware) BEGIN occurrence.
 
-    Review: code-reviewer — `sentinel_blocks._find_markers` (which both
+    `sentinel_blocks._find_markers` (which both
     `_extract_block` and `_replace_block` delegate to) has zero fence
     awareness: it takes the first LITERAL occurrence of `begin` anywhere in
     the file. For fence_aware=True snippets (meta-ask-preamble), a fenced
@@ -1081,7 +1081,7 @@ def run(
         try:
             raw_candidates = _grep_scan(search_root, scan_sentinels)
         except RuntimeError as exc:
-            # Review: code-reviewer — grep-tool-absence must surface as a
+            # grep-tool-absence must surface as a
             # verification failure (exit 2), never as a silent "0 consumers"
             # result indistinguishable from a genuine empty scan.
             return SyncOutcome(exit_code=2, stderr_lines=[f"ERROR: {exc}"])
@@ -1321,7 +1321,7 @@ def run(
             fixed = counts["fixed"] > 0
 
         if _is_standalone_sentinel_line(text, begin_sentinel, fence_aware=fence_aware):
-            # Review: code-reviewer — the MISSING_END pre-check must be
+            # The MISSING_END pre-check must be
             # position-aware (end marker found AFTER the real begin marker), not
             # a positionless substring test: a stray END-sentinel-shaped line
             # elsewhere in the file (e.g. left over from a prior bad edit) used
@@ -1343,7 +1343,7 @@ def run(
                     fixed = True
                     _claim_if_session(raw)
                 else:
-                    # Review: code-reviewer — the rewrite must not be
+                    # The rewrite must not be
                     # reported as FIXED if _rewrite_block silently found the
                     # markers absent/vanished (fail loud, not a false FIXED).
                     error_vanished = True

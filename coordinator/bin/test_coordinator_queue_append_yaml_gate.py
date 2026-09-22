@@ -181,7 +181,7 @@ def test_ordinary_write_still_parses_and_is_unchanged_by_the_gate() -> None:
     if legacy_doc != _LEGACY._build_yaml("debt-backlog", dict(fields)):
         raise AssertionError("legacy CLI: _build_yaml is not idempotent on a well-formed input")
 
-    # Review: staff-eng — AC7 claims document-level byte-parity between the
+    # AC7 claims document-level byte-parity between the
     # two copies' emitted output; no existing test asserted that (the CLI-vs-
     # core parity suite covers schema validation, not document bytes). Pin it
     # here.

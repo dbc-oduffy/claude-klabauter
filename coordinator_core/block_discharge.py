@@ -62,7 +62,7 @@ class InvalidSessionId(ValueError):
 
 
 def _ledger_path(repo_root: str, session_id: str) -> str:
-    # Review: code-reviewer Finding 2 -- session_id is joined straight into a
+    # session_id is joined straight into a
     # filesystem path with no validation at any entry point. Reject anything
     # containing a path separator or a leading '.' rather than silently
     # joining, since this is the one place `state/block-discharge/<id>.jsonl`

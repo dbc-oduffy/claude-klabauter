@@ -114,3 +114,42 @@ transient failure to marker exclusion and under-firing the ratchet's subset gate
 **Derive these numbers, or read them from source at the moment you need them — including when you
 are certain an existing number is wrong.** A confident correction of a number is exactly how this
 document's figures go stale.
+
+## A tier-U guard can reject the repo's own configured fast-tier command
+
+`check_test_suite_invocation.py` has rejected the repo's own configured `fast_test_cmd`, run
+verbatim, as unauthorized Tier-U. Root cause: a marker-filter deselect expression was read as
+unscoped by `_tier_for_cfg_match`, discharged via `coordinator.local.md`'s R6
+`fast_tier_unscoped_reason`. The wrapped-invocation repro for this was lost/untested at close —
+treat that gap as open if you're relying on the wrapped form, not just the bare one.
+
+## A green suite re-run is not new evidence
+
+Re-running a broad test suite is not new evidence on a shared branch. Decide what a targeted
+scoped run must prove before spending it, and never re-run the full tier just to "confirm" a
+pass — a full-tier re-run buys no new information over the prior run.
+
+## Brief dispatched agents with file/node-id pytest targets, never directory arguments
+
+The DR-088 R9 guard refuses directory arguments outright. Briefing a dispatched agent with a
+directory-scoped pytest invocation costs a truncated verification and an EM round trip when the
+guard denies it — brief with explicit file or node-id targets instead.
+## Perf ratchets measure process time, not wall clock
+
+An upper-bound assertion on an elapsed-time value is process time by default; wall clock is a
+declared exception, never a fallback. `deliberate_wall_clock` is the fourth marker (registered
+alongside `cadence`/`pending_fix`/`designed_red` in `pyproject.toml`'s `markers` list) and applies
+at function, class, or module level with a non-empty `reason=` naming the behaviour CPU time
+cannot see — a bare marker does not discharge.
+
+Discriminator, in three lines:
+- In-process, no subprocess → time it with `coordinator_core/benchmarks/process_time.py`'s
+  process-time primitive.
+- Spawns a subprocess → count spawns and/or sum their process time through the same module.
+- Neither is possible (the thing under test genuinely is wall-bound, e.g. a lock's real-world
+  wait) → `pytest.mark.deliberate_wall_clock(reason=...)`.
+
+`coordinator_core/tests/test_no_wall_clock_ratchets.py` is the enforcing guard: an unmarked
+upper-bound assertion on a tainted wall-clock duration anywhere under `testpaths` fails, naming
+the file/function and the two routes above. See `CLAUDE.md` § The brightline and
+`docs/wiki/machine-load-norm.md` for why wall clock is the wrong axis on this box.

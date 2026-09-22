@@ -101,7 +101,7 @@ def _settings_home_dir_from_env(env: dict) -> str:
     precedence used by ``_doe_root``, ``_claude_klabauter_root``, and
     ``coordinator_core.resolution.facade.resolve_operator_config``.
 
-    Review: code-reviewer -- Finding 1 (P2, AC-3). Consolidates what used to
+    AC-3). Consolidates what used to
     be a 3x/4x-duplicated inline branch (``_doe_root``, ``_claude_klabauter_root``, and
     ``facade._settings_home_dir`` each carried an independent copy) into one
     env-parametrized helper. Reads from the injected ``env`` dict rather than
@@ -169,7 +169,7 @@ def _registry_key(settings_home_dir: str, key: str) -> Optional[str]:
     multi-line anchor must stay detectable rather than be silently reflattened
     here.
 
-    Review: Kira (overengineering, F2) — was three byte-identical copies of
+    Was three byte-identical copies of
     this body differing only in the key string.
     """
     reg_dir = Path(settings_home_dir) / "machine-local"
@@ -305,7 +305,7 @@ def _doe_root(env: dict) -> str:
                 content = f.read()
         except OSError:
             content = ""
-    # Review: code-reviewer -- byte-exact parity with the bash oracle's
+    # byte-exact parity with the bash oracle's
     # `_cc_doe="$(cat ... || true)"` (command substitution strips only
     # trailing newlines, never leading whitespace) + `${_cc_doe%/}` (strips
     # exactly one trailing slash, not all of them). rstrip("/") + .strip()
@@ -340,7 +340,6 @@ def _norm(p: str) -> str:
     # prefix — widening trust, the exact direction this guard exists to prevent.
     # It is also a larger drift from the bash oracle's ASCII `case` match than the
     # byte-exact-parity goal stated for _doe_root tolerates.
-    # Review: code-reviewer 2026-07-20 Finding 1 (P2).
     return p.replace("\\", "/").lower()
 
 
@@ -517,7 +516,7 @@ def _norm_anchor(raw: str) -> str:
     bash-oracle parity quirk (see test_doe_root_only_single_trailing_slash_
     stripped) and must not be broadened.
 
-    Review: Kira (overengineering, F2) — was a third copy of the same
+    Was a third copy of the same
     `os.name == "nt"` re-strip inline in `is_trusted`.
     """
     anchor = _norm(raw)
@@ -559,7 +558,7 @@ def is_trusted(root: str, *, env: dict | None = None) -> bool:
             trusted = True
 
     # Checked against the normalized form so Windows "\.." is caught too.
-    # Review: reviewer-S3, Finding 2 -- this reset is the ONLY thing that
+    # This reset is the ONLY thing that
     # neutralizes a "/.."-poisoned registry anchor VALUE (e.g. a
     # plugin.mirrors.coordinator-claude.live_path of "/legit/../evil"). No
     # anchor resolver scrubs "/.." out of the value it returns; any root_cmp

@@ -122,7 +122,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
         # instance-level memoized assembler when roadmap_id is present.  A null/absent
         # roadmap_id short-circuits before the call — the assembler requires a string.
         if roadmap_id is not None:
-            # Review: code-reviewer (F6) — str-cast to match roadmap_dag.py's cache key type.
+            # str-cast to match roadmap_dag.py's cache key type.
             # roadmap_dag.collect() casts roadmap_id = str(roadmap_id) before ctx.assembler_dag();
             # roadmaps.collect() shares the same _dag_cache via ctx. A YAML-integer roadmap_id
             # (e.g. roadmap_id: 123) would cache under int(123) here vs str("123") there, causing

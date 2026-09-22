@@ -190,7 +190,7 @@ def _run_bootstrap(plugin_root: str, cwd: str) -> tuple[bool, str]:
         except OSError as exc:
             return False, f"ERROR: could not write {settings_path}: {exc}"
         finally:
-            # Review: code-reviewer — os.replace() moves tmp_path onto
+            # os.replace() moves tmp_path onto
             # settings_path on success (nothing left at tmp_path to unlink);
             # unlink(missing_ok=True) is a no-op then. On any exception after
             # write_text() succeeded (e.g. os.replace() failing), this clears
@@ -225,7 +225,7 @@ def _run_bootstrap(plugin_root: str, cwd: str) -> tuple[bool, str]:
     except OSError as exc:
         return False, f"ERROR: could not write {settings_path}: {exc}"
     finally:
-        # Review: code-reviewer — see fresh-write path above; clears an
+        # See fresh-write path above; clears an
         # orphaned .tmp.<pid> file left by a write_text()-succeeds/
         # os.replace()-fails split.
         tmp_path.unlink(missing_ok=True)
@@ -241,7 +241,7 @@ def run(cwd: str, plugin_root: str) -> DistrustResult:
         from "${BASH_SOURCE[0]}/../.."; the DoE stub passes it explicitly --
         it owns bin/claude-ue-bootstrap.py, not claude-klabauter).
     """
-    # Review: code-reviewer -- Finding 4, 2026-07-24-codereview-sliceowns-zero-claude-klabauter
+    # 2026-07-24-codereview-sliceowns-zero-claude-klabauter
     # sidecar (docstring above still said "claude-ue-bootstrap.sh"; the
     # DoE-side source script was renamed extensionless-to-.py by the
     # bash-kill campaign -- repointed to match, same as the user-facing

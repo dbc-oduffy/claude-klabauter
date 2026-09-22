@@ -30,7 +30,7 @@ from coordinator_core.warm import server
 from coordinator_core.warm.caller_context import resolve_caller_context
 
 
-async def _echo_settings_home(msg, *, caller: str | None = None) -> dict:
+async def _echo_settings_home(msg, *, caller: str | None = None, corr_id: str | None = None) -> dict:
     from coordinator_core._settings_home import settings_home
 
     return {"jsonrpc": "2.0", "id": msg.get("id"), "result": str(settings_home())}

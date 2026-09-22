@@ -81,7 +81,7 @@ def _extract_scope_paths(text: str, key: str = "scope") -> List[str]:
     items through `serialize_yaml_scalar`. A future writer that quoted a
     scope path containing a YAML structural character would have its quotes
     silently stripped here where the old code returned them literally —
-    Review: code-reviewer — Finding 1, softened from an unqualified "no-op"
+    Softened from an unqualified "no-op"
     claim so a future reader doesn't treat it as enforced by this module.).
 
     Stop-condition shape this was originally ported FROM (the bash oracle
@@ -108,7 +108,7 @@ def _extract_scope_paths(text: str, key: str = "scope") -> List[str]:
         if line.startswith("---"):
             break
         if re.match(r"^[a-z]", line):
-            # Review: code-reviewer — ASCII-only `[a-z]` match, not
+            # ASCII-only `[a-z]` match, not
             # str.islower() (which is True for non-ASCII lowercase code
             # points like 'ñ'), to match the bash oracle's ASCII-only
             # `/^[a-z]/` and dirty_tree_gate.py's twin stop condition.

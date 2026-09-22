@@ -133,7 +133,7 @@ def _normalize_path(raw: str) -> str:
     """Normalize a changed-file path to forward-slash, repo-root-relative
     form for comparison against `_SELF_EXCLUDED_PATHS` / the inventory.
 
-    # Review: coordinator:code-reviewer wsc-B-dimensions — a bare
+    # A bare
     # `.lstrip("./")` strips any run of `.`/`/` characters, not the literal
     # `"./"` prefix; strip the literal prefix once instead.
     """
@@ -154,7 +154,7 @@ def _load_op_inventory() -> list[dict]:
     is re-raised with a legible message naming the file, mirroring
     `gate_dimension_docstrings._load_fail_under`'s degrade-with-a-reason
     shape rather than surfacing a bare `json.JSONDecodeError` traceback.
-    # Review: coordinator:code-reviewer wsc-B-dimensions — message-legibility
+    # message-legibility
     # parity with the docstrings dimension's malformed-file handling.
     """
     if not _OP_INVENTORY_PATH.exists():
@@ -207,7 +207,7 @@ def _op_class_for(op_key: str, inventory: Optional[list[dict]] = None) -> Option
     `inventory` may be passed in by a caller that already loaded it once per
     gate run (see `_check_latency`); defaults to a fresh load for callers
     (e.g. tests) that invoke this directly.
-    # Review: coordinator:code-reviewer wsc-B-dimensions — avoid re-reading
+    # Avoid re-reading
     # op-inventory.json from disk once per mapped op in `_check_latency`.
     """
     if inventory is None:

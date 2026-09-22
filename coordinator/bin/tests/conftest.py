@@ -12,7 +12,12 @@ The refusal is correct; the child asking the wrong engine is the defect, and it
 cost 15 red lines across six files in the 2026-08-27 bin-suite triage
 (`state/audits/2026-08-27-bin-suite-failure-inventory.md` § B1).
 
-Negative-spec, and the reason this is an opt-in fixture rather than `autouse`:
+Negative-spec for `stamped_engine_env` -- the fixture this module exists for,
+and the reason IT is opt-in rather than `autouse`. It does not govern
+`real_state_dir_untouched_guard` below, which IS autouse and may safely be:
+that one only snapshots two directory listings and asserts nothing was added,
+setting no environment and pre-resolving nothing, so it cannot delete any
+suite's subject the way pre-setting an engine root would:
 
   - It does NOT touch `--allow-unstamped-dispatch` / `is_unstamped_dispatch_allowed`.
     That carve-out is deliberately argv-typed per invocation; a suite-wide env
@@ -26,6 +31,7 @@ Negative-spec, and the reason this is an opt-in fixture rather than `autouse`:
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -41,6 +47,16 @@ from engine_stamp_probe import (  # noqa: E402  (import after path setup)
     _ENGINE_ROOT_VAR,
     _stamped_dispatch_root,
 )
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+# The live state-corpus write guard that used to live here is now
+# `coordinator_core.conftest._no_live_state_corpus_writes`, re-exported from the
+# repo-root conftest. It was moved for two reasons, both measured 2026-09-20:
+# it watched only THIS repo's state/ and so saw none of an eleven-week leak into
+# a sibling's tracked tree, and it could not reach the second leaker in
+# `coordinator/tests/` at all. A guard scoped to one directory is not a guard on
+# the contract; keeping a second copy here would be a second implementation of
+# it.
 
 
 @pytest.fixture
