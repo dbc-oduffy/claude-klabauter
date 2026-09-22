@@ -85,6 +85,15 @@ silent-inherit hole this module exists to close. Mirrors
 `enforce_agent_model_pin`'s own fail-closed stance on pin-resolution
 failure, applied to the parent-model question instead of the pin question.
 
+INHERITED IS REWRITTEN, NOT DENIED (PM ask, 2026-09-22). When the tier
+resolved at rung 3 is gated (or unresolved, per the fail-closed rule
+above), the dispatch is rewritten to `model: "sonnet"` via `updatedInput`
+and proceeds, with one advisory line. No one chose that tier, so there is no
+decision to gate. A deny here was always answered by an identical re-send
+with `model: "sonnet"` added. Rungs 1 and 2 still DENY: an explicit gated
+`model` param, or a gated non-`opus` frontmatter pin, is a choice the PM
+gates, and it must never be quietly downgraded.
+
 PERSONA EXEMPTION -- UNCONDITIONAL ON THE TYPE'S OWN PIN, NOT ON WHAT WAS
 PASSED. If `resolve_model_pins()` shows this `subagent_type`'s own
 frontmatter pins `model: opus`, this module returns `None` (out of scope)
@@ -147,7 +156,7 @@ import os
 import sys
 from typing import Any, Dict, Optional
 
-from coordinator_core._hook_envelope import deny
+from coordinator_core._hook_envelope import deny, rewrite_input
 from coordinator_core.hooks.block_unenumerated_agent_type import resolve_model_pins
 from coordinator_core.hooks.enforce_agent_model_pin import _clean_str
 
@@ -167,6 +176,10 @@ _FORK_TYPE = "fork"
 #: it by analogy with the sibling module's RANK-ordering stance, which
 #: answers a different question (see docstring).
 _GATED_TIER_TOKENS = ("opus", "fable")
+
+#: What a gated INHERITED dispatch is rewritten to -- see module docstring
+#: "INHERITED IS REWRITTEN, NOT DENIED".
+_INHERITED_REWRITE_MODEL = "sonnet"
 
 #: Bounded tail-read constants -- identical to
 #: `hooks/subagent_arrival_check.py`'s own `_TAIL_CHUNK_BYTES` /
@@ -333,6 +346,17 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     if not gated:
         return None
+
+    if effective_model is None:
+        # Nobody chose the tier -- it leaked in from the parent (or could not
+        # be read). A rewrite has no decision to override, and unlike a deny it
+        # is not answered by a verbatim re-send, so it closes the hole firmer.
+        return rewrite_input(
+            "PreToolUse",
+            {**tool_input, "model": _INHERITED_REWRITE_MODEL},
+            f"subagent_type={subagent_type!r} resolved to {_INHERITED_REWRITE_MODEL} "
+            f"(was inheriting {resolved_model!r}).",
+        )
 
     return deny("PreToolUse", _deny_reason(subagent_type, resolved_model, note))
 

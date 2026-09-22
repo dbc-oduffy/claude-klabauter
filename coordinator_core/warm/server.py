@@ -714,6 +714,37 @@ def _run_dispatch(msg: dict, *, caller: Optional[CallerContext] = None, isolated
     return response
 
 
+def _run_joining_handler(coro):
+    """`asyncio.run`, except the default executor is joined WITHOUT a bound.
+
+    TRAP: an op past its budget (`ipc._timeout_for`) is abandoned, not
+    stopped -- its `asyncio.to_thread` handler thread runs on. `asyncio.run`
+    (3.12+) joins that executor for only `THREAD_JOIN_TIMEOUT` (300s), then
+    returns with the thread still alive; `per_request_state`'s `finally`
+    restores `os.environ` and this worker takes its next task. The orphaned
+    handler then reads -- and hands to every child it spawns (`git commit`'s
+    trailer hook included) -- whichever session THAT task mirrored in, or the
+    server spawner's pristine identity between tasks. Measured 2026-09-22: a
+    example-retrieval-repo workday-complete apply committed under three foreign
+    Session-Ids in one run (`state/bug-backlog/2026-09-22-a-session-holds-
+    write-claims-on-a-peer-r-c14423a992c3.yaml`).
+
+    INVARIANT: a pool worker never leaves a request's identity scope while
+    that request's handler is still executing. Holding the worker is the
+    honest cost -- the op IS still running in it; the connection thread
+    already returned its indeterminate envelope on its own deadline.
+    """
+    import asyncio
+
+    with asyncio.Runner() as runner:
+        try:
+            return runner.run(coro)
+        finally:
+            runner.get_loop().run_until_complete(
+                runner.get_loop().shutdown_default_executor()
+            )
+
+
 def _pool_dispatch_worker(msg: dict, caller: Optional[CallerContext]) -> dict:
     """The `DISPATCH_PROCESS_POOL_SIZE` worker-process target -- identical
     body to `_run_dispatch`, factored out as its own top-level (picklable)
@@ -794,7 +825,7 @@ def _pool_dispatch_worker(msg: dict, caller: Optional[CallerContext]) -> dict:
             isolated=True,
         ):
             with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
-                response = asyncio.run(
+                response = _run_joining_handler(
                     dispatch_message(msg, caller=_caller_route, corr_id=_corr_id)
                 )
     finally:

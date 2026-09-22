@@ -244,3 +244,48 @@ def test_real_future_already_running_is_indeterminate_for_a_mutation(monkeypatch
         pool.shutdown(wait=True)
 
     assert out["error"]["code"] == WARM_DISPATCH_INDETERMINATE
+
+
+# ---------------------------------------------------------------------------
+# The worker side of an expired budget: the abandoned handler keeps its caller
+# ---------------------------------------------------------------------------
+
+
+def test_an_over_budget_handler_finishes_inside_its_callers_identity(monkeypatch):
+    """An op past its budget is abandoned, not stopped. If the worker leaves
+    `per_request_state` while the handler thread still runs, `os.environ` is
+    restored under it and the worker's NEXT task mirrors a different session
+    in -- the orphan then stamps that session on everything it spawns
+    (2026-09-22: one example-retrieval-repo apply committed under three foreign
+    Session-Ids). The worker must not return until the handler has."""
+    import asyncio.constants
+    import os
+    import time
+
+    from coordinator_core import ipc
+    from coordinator_core.warm.caller_context import CallerContext
+
+    caller = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-1111-4111-8111-111111111111")
+    monkeypatch.setattr(ipc, "_engine_stamped_verdict", True)
+    monkeypatch.setattr(ipc, "_timeout_for", lambda method, msg=None: 0.05)
+    # Production joins for 300s and then walks away; shrink it so the
+    # pre-fix shape returns while the handler is still asleep.
+    monkeypatch.setattr(asyncio.constants, "THREAD_JOIN_TIMEOUT", 0.01)
+
+    seen = []
+
+    def _over_budget(params, repo_root=None):
+        time.sleep(0.3)
+        seen.append(os.environ.get("COORDINATOR_SESSION_ID"))
+        return {}
+
+    monkeypatch.setitem(ipc._REGISTRY, "test.over_budget", _over_budget)
+    ctx = CallerContext(
+        plugin_root=None, cwd=os.getcwd(), session_id=caller, agent_id=None,
+        pid="1", env={"COORDINATOR_SESSION_ID": caller},
+    )
+
+    server._pool_dispatch_worker(_msg("test.over_budget"), ctx)
+
+    assert seen == [caller]
