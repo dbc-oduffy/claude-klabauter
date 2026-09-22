@@ -69,10 +69,9 @@ Negative-spec:
       `--closed-by` (the cmd.exe carrier rule: `VAR=value command` is not a
       line `cmd.exe` parses).
     - Does NOT own the profile file's full validation (unknown-key refusal,
-      graph rules) — that is `grind_profile.py`'s job (C3, not yet landed).
-      `close` reads only the two blocks it needs (`closure`, `archive_path`,
-      `schema`) via `schema_validate.parse_yaml`, and raises a plain usage
-      error naming the missing key if the profile lacks one.
+      graph rules) — that is `grind_profile.py`'s job (C3); `close` loads
+      the profile via `grind_profile.load_profile` and reads only the
+      `closure`, `archive_path`, `schema` fields it needs.
 """
 from __future__ import annotations
 
@@ -81,7 +80,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from coordinator_core.contract.grind_vocab import (
     CLOSURE_CLOSING_BRANCHES,
@@ -211,28 +210,52 @@ def _extract_manifest(script_text: str) -> list[dict[str, Any]]:
     return parsed["entries"]
 
 
+def _extract_batch_rows(script_text: str, batch_id: str) -> Optional[list[str]]:
+    """Row ids of ``batch_id`` from the script's one-line
+    `const BATCHES = [...];` (the composer writes it with `json.dumps`).
+    None when the batch id is absent."""
+    marker = "const BATCHES = "
+    for line in script_text.splitlines():
+        if line.startswith(marker) and line.endswith(";"):
+            try:
+                batches = json.loads(line[len(marker):-1])
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"grind-row check: `BATCHES` is not valid JSON: {exc}") from exc
+            for batch in batches:
+                if batch.get("id") == batch_id:
+                    return list(batch.get("rows", []))
+            return None
+    raise ValueError("grind-row check: no `const BATCHES = ` line found in the manifest script")
+
+
 def cmd_check(rest: list[str]) -> int:
-    flags = _parse_flags(rest, required=("manifest", "batch"))
+    flags = _parse_flags(rest, required=("manifest", "batch", "repo-root"))
     if flags is None:
-        return _usage("usage: grind-row check --manifest <script> --batch <id>")
+        return _usage("usage: grind-row check --manifest <script> --batch <batch-id> --repo-root <dir>")
+    repo_root = Path(flags["repo-root"])
 
     script_path = Path(flags["manifest"])
     if not script_path.is_file():
         return _usage(f"grind-row check: manifest script not found: {script_path}")
 
     try:
-        manifest = _extract_manifest(script_path.read_text(encoding="utf-8"))
+        script_text = script_path.read_text(encoding="utf-8")
+        manifest = _extract_manifest(script_text)
+        batch_rows = _extract_batch_rows(script_text, flags["batch"])
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return EXIT_USAGE
+    if batch_rows is None:
+        return _usage(f"grind-row check: batch {flags['batch']!r} is not in the manifest script")
 
     stale: list[str] = []
     vanished: list[str] = []
+    wanted = set(batch_rows)
     for entry in manifest:
-        if entry.get("batch_key") != flags["batch"]:
+        if entry.get("row_id") not in wanted:
             continue
         row_id = entry.get("row_id")
-        entry_path = Path(entry.get("path", ""))
+        entry_path = repo_root / entry.get("path", "")
         current_digest = _sha256_file(entry_path)
         if current_digest is None:
             vanished.append(row_id)

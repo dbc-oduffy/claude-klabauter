@@ -910,6 +910,46 @@ def test_current_prebuilt_reports_nothing(monkeypatch, capsys):
     assert capsys.readouterr() == ("", "")
 
 
+# Review: coordinator-code-reviewer -- pin that check_door_provenance's own
+# platform gate actually wires _report_prebuilt_currency in on Windows and
+# leaves it out elsewhere, through the real entry point rather than by
+# calling _report_prebuilt_currency() directly (which the two tests above
+# do, bypassing the gate). Monkeypatches the file's own _is_windows()
+# predicate, never sys.platform globally.
+def test_check_door_provenance_windows_also_runs_prebuilt_currency_check(
+    monkeypatch, capsys
+):
+    _patch_verdict(monkeypatch, "ok")
+    monkeypatch.setattr(install_health_run_module, "_is_windows", lambda: True)
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.door_install.committed_prebuilt_source_drift",
+        lambda: ["door.c"],
+    )
+    rc = check_door_provenance("", "")
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "door.c" in captured.err
+
+
+def test_check_door_provenance_non_windows_skips_prebuilt_currency_check(
+    monkeypatch, capsys
+):
+    _patch_verdict(monkeypatch, "ok")
+    monkeypatch.setattr(install_health_run_module, "_is_windows", lambda: False)
+
+    def _boom():
+        raise AssertionError("committed_prebuilt_source_drift must not run off-Windows")
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.door_install.committed_prebuilt_source_drift",
+        _boom,
+    )
+    rc = check_door_provenance("", "")
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "FAIL" not in captured.err
+
+
 # ---------------------------------------------------------------------------
 # check-door-route (C2)
 # ---------------------------------------------------------------------------

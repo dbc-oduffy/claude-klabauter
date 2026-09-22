@@ -287,7 +287,7 @@ def test_prebuilt_built_from_older_sources_names_each_changed_file(tmp_path, mon
     assert door_install.committed_prebuilt_source_drift() == ["door.c", "door_env_set.h"]
 
 
-@pytest.mark.parametrize("record", [None, {}, {"sources": {}}])
+@pytest.mark.parametrize("record", [None, {}, {"sources": {}}, ["not", "an", "object"]])
 def test_prebuilt_drift_is_unanswerable_without_a_source_record(tmp_path, monkeypatch, record):
     if record is None:
         monkeypatch.setattr(

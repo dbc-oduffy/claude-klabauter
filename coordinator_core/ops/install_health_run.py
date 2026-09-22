@@ -391,7 +391,7 @@ def check_door_provenance(plugin_root: str, claude_klabauter_root: str) -> int:
     rc = _report_installed_verdict(
         door_install.verify_installed_provenance(settings_home() / "bin")
     )
-    if sys.platform == "win32":
+    if _is_windows():  # Review: coordinator-code-reviewer -- reuse the file's existing platform predicate instead of re-deriving sys.platform == "win32"
         rc = max(rc, _report_prebuilt_currency())
     return rc
 

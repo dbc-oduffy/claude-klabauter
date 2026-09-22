@@ -159,9 +159,14 @@ def test_emit_then_check_reports_a_mutated_row_stale(grind_repo, capsys):
         encoding="utf-8",
     )
 
-    batch_key = "P0"  # row-a's severity
+    batches = json.loads(
+        next(l for l in script_path.read_text(encoding="utf-8").splitlines()
+             if l.startswith("const BATCHES = "))[len("const BATCHES = "):-1]
+    )
+    batch_id = next(b["id"] for b in batches if "row-a" in b["rows"])
     exit_code = grind_rows.main(
-        ["check", "--manifest", str(script_path), "--batch", batch_key]
+        ["check", "--manifest", str(script_path), "--batch", batch_id,
+         "--repo-root", str(grind_repo["repo_root"])]
     )
     assert exit_code == grind_rows.EXIT_OK
     out = json.loads(capsys.readouterr().out)
@@ -388,3 +393,12 @@ def test_emitted_prompt_flags_match_grind_rows_argparse():
     assert 'required=(' in source
     source = inspect.getsource(grind_rows.cmd_close)
     assert 'required=(' in source
+
+
+def test_emitted_script_names_no_host_path(grind_repo):
+    """no-single-machine-assumptions: an emission over a real checkout names
+    rows and the run dir repo-relative, never the host's checkout path."""
+    script = _emit(grind_repo, grind_repo["repo_root"] / "a.mjs")
+    root = str(grind_repo["repo_root"].resolve())
+    assert root not in script
+    assert str(grind_repo["repo_root"]) not in script

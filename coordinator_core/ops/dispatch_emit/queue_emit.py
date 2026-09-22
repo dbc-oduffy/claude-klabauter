@@ -74,6 +74,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Mapping, NamedTuple, Optional, Sequence
 
@@ -210,8 +211,7 @@ def emit_queue_script(
         manifest,
         loaded_profile,
         resolved_knobs,
-        repo_root=repo_root,
-        run_dir=guarded_run_dir,
+        run_dir=Path(os.path.relpath(guarded_run_dir, repo_root)).as_posix(),
         agent_type_host=agent_type_host,
     )
 

@@ -31,7 +31,6 @@ from coordinator_core.ops.dispatch_emit import grind_profile as gp
 from coordinator_core.ops.dispatch_emit.queue_select import Manifest, ManifestEntry
 
 _FIXTURE_PROFILE_DIR = Path(__file__).parent / "fixtures" / "queue-profiles"
-_REPO_ROOT = Path(__file__).resolve().parents[4]
 _GOLDEN_PATH = Path(__file__).parent / "fixtures" / "grind-fixture.golden.mjs"
 
 
@@ -63,7 +62,6 @@ def _compose(**overrides):
         manifest,
         profile,
         knobs,
-        repo_root=_REPO_ROOT,
         run_dir=Path("state/queue-grind/fixture/run-1"),
         agent_type_host=None,
     )
@@ -227,7 +225,7 @@ def test_agent_call_site_count_independent_of_row_count():
 
     def _agent_count(n):
         script = gc.compose_grind_script(
-            _manifest(n), profile, knobs, repo_root=_REPO_ROOT,
+            _manifest(n), profile, knobs,
             run_dir=Path("state/queue-grind/fixture/run-1"), agent_type_host=None,
         )
         return len(re.findall(r"\bagent\(", script)), len(script.encode("utf-8"))

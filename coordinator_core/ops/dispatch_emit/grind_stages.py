@@ -200,6 +200,7 @@ def compose_triage_call(
         script_part,
         ("lit", " --batch "),
         batch_id_part,
+        ("lit", " --repo-root ."),
         (
             "lit",
             "` first, and skip any row it reports as `stale` "

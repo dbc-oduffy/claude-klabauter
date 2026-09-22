@@ -158,16 +158,10 @@ class ProfileError(ValueError):
     ``closure_branch_missing``, ``unknown_appetite_preset``,
     ``unoverridable_knob``, ``hand_back_type_collision``). ``node`` is the offending node/knob id when the
     rule is node-shaped, ``None`` for a profile-wide or path-shaped rule
-    (the path itself is folded into ``detail``, same as the prior per-rule
-    classes' own message). ``detail`` is the free-text description.
-
-    Replaces eighteen single-purpose subclasses (one per rule) that carried
-    no information a caller ever read off the exception object — every
-    caller in this repo catches by rule text or by the bare class, never by
-    a per-rule attribute (``.node_id``/``.path``/``.missing``/etc, grepped
-    with none found outside this module and its own tests) — so the
-    per-rule split bought type-checking specificity nobody used, at the
-    cost of eighteen names a caller had to know to catch."""
+    (the path itself is folded into ``detail``). ``detail`` is the
+    free-text description. One class rather than a per-rule subclass: no
+    caller in this repo catches by a per-rule attribute, only by ``rule``
+    text or the bare class."""
 
     def __init__(self, rule: str, node: str | None = None, detail: str = "") -> None:
         where = f" ({node})" if node else ""
@@ -597,11 +591,10 @@ def resolve_appetite(profile: Profile, appetite: str, overrides: dict | None = N
     ``profile``'s preset values. Only ``vocab.OVERRIDABLE_KNOBS`` may be
     overridden. Concurrency is resolved as
     ``min(profile, vocab.ENGINE_CONCURRENCY_CEILING)`` and the resolved
-    value is written into the returned knobs — no ``cpu_count`` term
-    (overengineering-reviewer #5): the runtime applies its own host cap
-    independently, the emit host is not necessarily the run host, and a
-    cpu_count-dependent clamp would make the emitted bytes vary with the
-    emitting host, which re-emit determinism does not want."""
+    value is written into the returned knobs — no ``cpu_count`` term: the
+    runtime applies its own host cap independently, the emit host is not
+    necessarily the run host, and a cpu_count-dependent clamp would make
+    the emitted bytes vary with the emitting host."""
     if appetite not in vocab.APPETITE_PRESETS:
         raise ProfileError("unknown_appetite_preset", detail=f"unknown appetite: {appetite!r}")
     if appetite not in profile.appetite:

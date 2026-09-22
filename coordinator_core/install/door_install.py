@@ -305,15 +305,10 @@ def committed_prebuilt_source_drift() -> "list[str]":
     """Names of the door sources that differ from those the committed
     `door.exe` was built from -- empty when the prebuilt is current.
 
-    EVERY WINDOWS CURRENCY CHECK IS BLIND TO THIS. Each compares an installed
-    image against the committed prebuilt, so a prebuilt that is itself behind
-    `door.c` passes all of them: the install is exactly what the tree ships,
-    and the tree ships a stale binary. The prebuilt is only buildable on a
-    Windows box, so a `door.c` change landed from any other box leaves it
-    behind with nothing saying so -- the 2026-09-21 override-forwarding and
-    cold-fall-through changes did exactly that. The provenance sidecar
-    `build.py` writes beside the prebuilt records the source hashes it was
-    built from, which makes this answerable without a compiler.
+    Every other currency check compares an INSTALLED image against the
+    committed prebuilt, so a prebuilt itself behind `door.c` passes all of
+    them; this compares the prebuilt's own recorded source hashes against
+    the sources on disk instead, which is answerable without a compiler.
 
     Raises `DoorInstallError` when the sidecar is unreadable or records no
     sources -- same convention as `_prebuilt_image_bytes`."""
@@ -323,7 +318,7 @@ def committed_prebuilt_source_drift() -> "list[str]":
         raise DoorInstallError(
             f"door_install: no readable prebuilt provenance at {_WINDOWS_PREBUILT_PROVENANCE}: {exc}"
         ) from exc
-    recorded = record.get("sources")
+    recorded = record.get("sources") if isinstance(record, dict) else None
     if not isinstance(recorded, dict) or not recorded:
         raise DoorInstallError(
             f"door_install: {_WINDOWS_PREBUILT_PROVENANCE} records no source fingerprint"
@@ -331,7 +326,7 @@ def committed_prebuilt_source_drift() -> "list[str]":
     return sorted(
         path.name
         for path in door_build.SOURCES
-        if recorded.get(path.name) != hashlib.sha256(path.read_bytes()).hexdigest()
+        if recorded.get(path.name) != door_build._sha256_file(path)
     )
 
 

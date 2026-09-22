@@ -12,17 +12,13 @@ mutex, the generic edge interpreter driving those calls PER ROW at run
 time, the downstream-first bounded admission gate, the actual-spend
 accounting, and the hand-back document.
 
-**Live routing, not an emit-time bucket assignment.** A prior attempt
-assigned each batch a deterministic verdict bucket at COMPOSE time (a hash
-of the batch id) and hard-coded the fix/verify outcomes -- discarding the
-triage agent's actual verdict and making verify a no-op. It does not
-survive this rewrite. ``ROUTING`` (below) is the profile's own graph,
-rendered once as data; a small generic interpreter (``routeAfterTriage``/
-``followEdge`` in the emitted script, mirrored by ``route_after_triage``/
-``follow_edge`` in the pure-Python model below) reads it at RUN time
-against whatever the triage/fix/verify/refute-close agent actually
-returns, per ROW -- two rows in the same triage batch can diverge to
-different graph nodes depending on their own verdict/size/tradeoff.
+**Live routing.** ``ROUTING`` is the profile's own graph, rendered once as
+data; a small generic interpreter (``routeAfterTriage``/``followEdge`` in
+the emitted script, mirrored by ``route_after_triage``/``follow_edge`` in
+the pure-Python model below) reads it at RUN time against whatever the
+triage/fix/verify/refute-close agent actually returns, per ROW -- two rows
+in the same triage batch can diverge to different graph nodes depending
+on their own verdict/size/tradeoff.
 
 **Engine-fixed routing** (DR-404 § Run authority, not a profile knob): a
 row sized ``>= grind_vocab.PLAN_WEIGHT_FLOOR`` routes to ``baton`` and
@@ -36,17 +32,14 @@ retry over the union of its locked files plus every extra file, then
 ``rejected-after-retry``; a node's ``on_fail`` back-edge is traversed at
 most once per row.
 
-STAGE_OUTPUT_TOKENS / batch_reserve live here, not a separate module
-(overengineering-reviewer #6). Calibration source (measured once at
-authoring time, 2026-09-21 -- eng-director F2, no runtime transcript read
-ever): the cloud tally at ``tasks/backlog-grind-2026-09-21/`` on origin
-carries no ``usage.output_tokens`` field, so the fallback -- this
+STAGE_OUTPUT_TOKENS / batch_reserve live here, not a separate module.
+Calibration source (measured once at authoring time, 2026-09-21): this
 session's LOCAL per-agent transcripts under
-``subagents/workflows/wf_d3e60811-d4c/`` -- supplies the MEDIAN per-agent
+``subagents/workflows/wf_d3e60811-d4c/`` supply the MEDIAN per-agent
 output-token total per label prefix: ``triage`` 5786 (n=371), ``close``
 8 (n=5), ``fix`` 4 (n=3). **PARTIAL**: no sample anywhere for
-``verify``/``commit``/``undo`` -- per F2 those stage kinds are simply
-ABSENT below, never an invented value or an import-time raise.
+``verify``/``commit``/``undo`` -- those stage kinds are simply ABSENT
+below, never an invented value or an import-time raise.
 ``batch_reserve(batch_size)`` is the dominant measured per-call cost times
 batch size -- no ``verdict_mix`` parameter; the reserve stays sound over a
 partial map.
@@ -59,12 +52,9 @@ the composed prompt is built as static, escaped literal pieces
 concatenated (via ``+``) with that live expression, never a static
 per-row manifest-path stand-in. This module always supplies the live
 expression: a fix's lock-key/"files you hold" clause reads the row's
-runtime ``declaredFiles`` (the triage agent's own per-row declaration,
-widened on ``NEEDS_WIDER_SCOPE`` reacquire); a commit's "stage exactly
-this touched list" and ``--declared-revert`` clauses read the row's
-runtime ``touchedFiles`` (the FIXER's own returned ``touched_files``,
-added to the fix schema) and ``removedFiles`` (set when a refute-close
-routes the row to archive); an undo restores the same live
+runtime ``declaredFiles``; a commit's "stage exactly this touched list"
+and ``--declared-revert`` clauses read the row's runtime
+``touchedFiles``/``removedFiles``; an undo restores the same live
 ``touchedFiles``; the ledger-only commits (batch-end and drain) read the
 live ``unsettled``/``RUN_ID`` in scope at commit time. The mutex lock keys
 `withLock` acquires are computed from these SAME live values, so the
@@ -265,15 +255,12 @@ def run_admission(
 
     Downstream-first, one admitted batch's row work fully drains before the
     next admission decision -- this reference scheduler never holds more
-    than one batch open at once, which is a compliant (if not maximally
-    concurrent) instance of "at most WINDOW batches in flight" (no `window`
-    param here: a single-batch-at-a-time scheduler is compliant at every
-    window size, so the value was read but never branched on -- pyright's
-    own unused-parameter flag); the
-    rendered `.mjs` (below) implements the SAME admission invariant with
-    real bounded concurrency via an async worker pool, since Node cannot be
-    executed to verify true interleaving under pytest (CLAUDE.md: no Node
-    runtime for claude-klabauter's own work)."""
+    than one batch open at once, a compliant (if not maximally concurrent)
+    instance of "at most WINDOW batches in flight" (no `window` param here:
+    a single-batch-at-a-time scheduler is compliant at every window size).
+    The rendered `.mjs` (below) implements the SAME admission invariant
+    with real bounded concurrency via an async worker pool, since Node
+    cannot be executed to verify true interleaving under pytest."""
     if budget is None:
         budget = _StubBudget(total=budget_tokens)
     start_spent = budget.spent()
@@ -335,7 +322,7 @@ def run_admission(
             )
             _apply_route(row, action, f"triage verdict {rec['verdict']!r}")
         # A row triage never returned a record for must not stay pending
-        # forever (§ EM follow-up): hand it back rather than spin.
+        # forever: hand it back rather than spin.
         for rid in batch.row_ids:
             row = rows[rid]
             if rid not in seen and not row.done and row.node is None:
@@ -608,9 +595,8 @@ def _manifest_const(manifest: Manifest) -> str:
 def _capture(call_text: str, stage_kind: str, *, return_expr: str = "_result", tail: Optional[str] = None) -> str:
     """Wrap a ``grind_stages.compose_*`` call (which returns a bare
     ``await agent(...);`` statement, discarding the result) so the caller
-    gets the parsed schema object back AND every call site records itself
-    (defect: the first attempt never called `_recordCall`-equivalent for
-    fix/verify/commit/refute-close). ``return_expr`` lets a caller return a
+    gets the parsed schema object back AND every call site records itself.
+    ``return_expr`` lets a caller return a
     field off ``_result`` (e.g. triage's ``_result.rows``) instead of the
     raw object. ``tail``, when given, replaces the trailing
     ``return <return_expr>;`` entirely -- for a caller (op-mode verify)
@@ -688,7 +674,6 @@ def compose_grind_script(
     profile: Profile,
     knobs: Mapping[str, Any],
     *,
-    repo_root: Any,
     run_dir: Any,
     agent_type_host: Optional[str] = None,
 ) -> str:
@@ -697,8 +682,7 @@ def compose_grind_script(
     arguments: no clock, no random, no disk read. Assumes the Workflow
     runtime provides ``agent``, ``phase``, ``budget`` (``spent()``/``total``/
     ``remaining()``) and ``args`` globals; the runtime mutex is defined
-    in-script (no ``lock`` global is assumed -- the first attempt's ``lock.
-    acquire``/``lock.release`` calls had no such runtime counterpart).
+    in-script (no ``lock`` global is assumed).
 
     Fire-time ``args`` contract (the launcher supplies these; the script
     bakes none of them, so its bytes never vary with the emitting host):
@@ -718,11 +702,11 @@ def compose_grind_script(
     node_kind = _node_kind_map(profile)
 
     # Per-batch-key data (a small const, NOT unrolled per row/per batch --
-    # EM follow-up: the number of `agent(` call SITES must be a small
-    # constant independent of row count. Every stage kind is composed
-    # exactly ONCE below, as an in-script function taking the row/batch
-    # object; per-batch-key variation (triage depth, verify mode/op) is a
-    # runtime lookup into these consts, never unrolled code.
+    # the number of `agent(` call SITES must be a small constant
+    # independent of row count. Every stage kind is composed exactly ONCE
+    # below, as an in-script function taking the row/batch object;
+    # per-batch-key variation (triage depth, verify mode/op) is a runtime
+    # lookup into these consts, never unrolled code.
     batches_const: list[dict[str, Any]] = [
         {"id": batch_id, "batch_key": entries[0].batch_key, "rows": [e.row_id for e in entries]}
         for batch_id, entries in grouped
@@ -1037,8 +1021,7 @@ def compose_grind_script(
     # The batch-scheduler state (`triaged`/`closeCalled` flags per admitted
     # batch id) plus the bounded-concurrency worker pool (§ Design §
     # Composer, "up to `window` batches in flight" -- real fan-out, never
-    # `pipeline()` over all batches, eng-director F3/overengineering-reviewer
-    # #5's forebear on the fix side).
+    # `pipeline()` over all batches).
     lines.append(
         "const _admitted = {};\n"
         "const _queue = BATCHES.map((b) => b.id);\n"

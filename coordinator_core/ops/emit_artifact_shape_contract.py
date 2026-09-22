@@ -305,6 +305,12 @@ preserved there as the historical record; this port carries only the CURRENT pin
     carries DoE's additive `lesson-entry` and `lessons-outbox` 1.0.0 -> 1.1.0: five optional
     properties and `lesson-entry.status` gaining `discarded`, no `required` added. MINOR per
     the bump rule below. Plan: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md, C13.
+  9.3.0  (2026-09-22) Closes a stamp collision: DoE's committed bundle changed body at an
+    unchanged 9.2.0 (DoE-claude e0583d5af -> 30aa260ca), when `queue-grind-profile` 2.1.0 gained
+    the optional `hand_back_types` property (engine side: claude-klabauter e72a7d57c0) and
+    `queue_grind_graph_node.on_fail`'s description was reworded. Both additive — no `required`
+    added, no enum narrowed, `schema_count` 70 and `$defs` 98 unchanged — so MINOR. Same
+    violation-closing shape as 7.0.0: the body already exists; this stamps it.
 Bump rule (unchanged from JS): additive $defs/enum-widen changes stay minor; any
 non-additive change (enum-narrow, field/required removal) bumps MAJOR regardless of
 whether a vendored consumer version-asserts yet — two different bundle bodies must
@@ -369,7 +375,7 @@ from coordinator_core.session.declared_writes import declare_write
 # Constants
 # ---------------------------------------------------------------------------
 
-CONTRACT_VERSION = "9.2.0"
+CONTRACT_VERSION = "9.3.0"
 
 # Generator-provenance: emits artifact-shape-contract/artifact-shape-contract.
 # schema.json under the DoE-claude coordinator/ tree, explicitly NOT claude-klabauter

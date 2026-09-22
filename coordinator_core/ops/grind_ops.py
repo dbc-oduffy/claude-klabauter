@@ -36,22 +36,11 @@ resolved via `resolve_cli_script_root()`, never joined against `repo_root`).
 Measured process time (this op's own handler body, warm interpreter, in
 isolation — see `test_grind_ops.py::test_measured_under_budget`; a fixture
 directory of 3 lesson files / a 3-record extraction+routing pair / a
-2-section split source):
-
-    - `lessons.extract`: ~8ms (includes the one-time `load_cli_module` cost
-      of the first call in a process; subsequent calls reuse the cached
-      module).
-    - `lessons.verify_extraction`: <1ms.
-    - `doctrine.surface_split_regenerate`: ~18ms (`check_mode`, first call
-      in a process; includes the same one-time module-load cost above).
-
-All three are comfortably under the 500ms "source op absorbed into emit"
-ceiling this row's body sets — none needs the "run beforehand; pass its
-output as --queue" carve-out. A real `state/lessons/` directory is orders
-of magnitude smaller than the ~890-row bug queue this plan's entrypoint
-budgets against, so this ceiling is not expected to bind in practice either;
-re-measure here if a future `state/lessons/` census makes that reading
-questionable.
+2-section split source): `lessons.extract` ~8ms (includes the one-time
+`load_cli_module` cost of the first call in a process), `lessons.
+verify_extraction` <1ms, `doctrine.surface_split_regenerate` ~18ms
+(`check_mode`, first call). All three are comfortably under the 500ms
+"source op absorbed into emit" ceiling this row's body sets.
 
 Negative-spec:
     - Do NOT re-derive `extract()`/`verify()`/`regenerate_split_dir()`'s own
@@ -129,15 +118,9 @@ async def _lessons_extract(
     params: dict[str, Any], repo_root: Optional[Path]
 ) -> dict[str, Any]:
     """Source op: thin adapter over `extract-lessons.py::extract()`.
-
-    Measured process time: ~8ms (module docstring; includes the one-time
-    `load_cli_module` cost of the first call in a process).
-
-    Negative-spec: does NOT re-derive `extract()`'s own decision logic —
     `shortname` defaults to `lessons_dir`'s parent directory name only
     because `extract()` itself has no default for it; every other param
-    forwards verbatim.
-    """
+    forwards verbatim."""
     module = _load("extract-lessons")
     lessons_dir = _resolve_path(repo_root, params["lessons_dir"])
     shortname = params.get("shortname") or lessons_dir.parent.name
@@ -180,18 +163,9 @@ async def _lessons_verify_extraction(
 ) -> dict[str, Any]:
     """Verify op: thin adapter over `extract-lessons.py::verify()`, the
     DR-404 verify-op wire contract (params `{manifest, records}`, return
-    `{ok, failing_ids}`).
-
-    Measured process time: <1ms (module docstring).
-
-    Negative-spec:
-      - Does NOT report `verify()`'s exit 2 (bad input) or a missing
-        `manifest` path as a grounding failure — both raise
-        `VerifyRefusalError` instead of returning `ok=False`.
-      - Does NOT capture `verify()`'s stdout — only stderr is read (for
-        `failing_ids` on a grounding failure), so only one process-global
-        stream is redirected, not two.
-    """
+    `{ok, failing_ids}`). `verify()`'s exit 2 (bad input) or a missing
+    `manifest` path raises `VerifyRefusalError` rather than returning
+    `ok=False`. Only stderr is captured (for `failing_ids`)."""
     module = _load("extract-lessons")
     extraction_path = _resolve_path(repo_root, params["manifest"])
     if not extraction_path.exists():
@@ -226,17 +200,10 @@ async def _doctrine_surface_split_regenerate(
     params: dict[str, Any], repo_root: Optional[Path]
 ) -> dict[str, Any]:
     """Regenerate op: thin adapter over `generate-doctrine-surface-
-    split.py::regenerate_split_dir()`.
-
-    Measured process time: ~18ms (module docstring; `check_mode`, first
-    call in a process, includes the one-time module-load cost).
-
-    Negative-spec: does NOT refresh body files, only `README.md` from
-    `_preamble.md` — see `regenerate_split_dir()`'s own docstring for that
-    boundary. Returns `regenerate_split_dir()`'s own exit contract
-    (0 ok, 1 drift under `check_mode`, 2 not a split directory, 3 dirty
-    bodies refused) unchanged.
-    """
+    split.py::regenerate_split_dir()`. Refreshes only `README.md` from
+    `_preamble.md`, never body files. Returns `regenerate_split_dir()`'s
+    own exit contract (0 ok, 1 drift under `check_mode`, 2 not a split
+    directory, 3 dirty bodies refused) unchanged."""
     module = _load("generate-doctrine-surface-split")
     split_dir = _resolve_path(repo_root, params["split_dir"])
     check_mode = bool(params.get("check_mode", False))

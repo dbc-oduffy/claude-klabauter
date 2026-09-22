@@ -134,6 +134,15 @@ class Manifest:
     digest: str
 
 
+def _repo_relative(path: Path, repo_root: Path) -> str:
+    """POSIX path relative to ``repo_root``, so the frozen manifest names no
+    host path; a row outside the root keeps its own POSIX form."""
+    try:
+        return path.resolve().relative_to(repo_root.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
 def _read_ledger_lines(profile: str, repo_root: Path) -> dict[str, list[dict]]:
     """Read every `state/queue-grind/<profile>/*.jsonl` line, grouped by `row_id`.
 
@@ -563,7 +572,7 @@ def select_rows(
         entries.append(
             ManifestEntry(
                 row_id=row_id,
-                path=row_path.as_posix(),
+                path=_repo_relative(row_path, repo_root),
                 digest=digest,
                 batch_key=_coalesce_batch_key(normalised, batch_key),
                 skip_stages=skip_stages,

@@ -156,7 +156,7 @@ def _compiler_version(kind: str, compiler_path: str) -> str:
 
 
 def write_provenance(
-    output_exe: Path, source_path: Path, kind: str, compiler_path: str, engine_root: Path,
+    output_exe: Path, kind: str, compiler_path: str, engine_root: Path,
     *, image_sha256: str | None = None,
 ) -> Path:
     """Records, next to `output_exe`, the SHA-256 of the `door.c` this
@@ -218,11 +218,8 @@ def write_provenance(
     Defaults to `None`/self-computed so a direct or test caller that has
     no digest handy keeps working unchanged."""
     provenance = {
-        "door_c_sha256": _sha256_file(source_path),
-        "sources": {
-            path.name: _sha256_file(path)
-            for path in (source_path, *SOURCES[1:])
-        },
+        "door_c_sha256": _sha256_file(_SOURCE),
+        "sources": {path.name: _sha256_file(path) for path in SOURCES},
         "image_sha256": image_sha256 if image_sha256 is not None else _sha256_file(output_exe),
         "compiler": kind,
         "compiler_version": _compiler_version(kind, compiler_path),
@@ -389,7 +386,7 @@ def build(
 
     write_sidecar(output, engine_root)
     image_sha256 = _sha256_file(output)
-    write_provenance(output, _SOURCE, kind, compiler_path, engine_root, image_sha256=image_sha256)
+    write_provenance(output, kind, compiler_path, engine_root, image_sha256=image_sha256)
 
     return output
 

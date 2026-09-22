@@ -51,7 +51,10 @@ def test_a_legal_path_lands(tmp_path):
 
 
 def test_a_deletion_is_never_refused():
-    assert commit_path_legality.illegal_path_refusal({"a:b.md": object()}) is None
+    # Review: coordinator-code-reviewer — use the real deletion sentinel
+    # git_native assembles, not a synthetic object(), so this tests the
+    # actual integration point rather than only the predicate's contract.
+    assert commit_path_legality.illegal_path_refusal({"a:b.md": git_native._ABSENT}) is None
 
 
 def test_the_shared_override_key_disables_it(monkeypatch):

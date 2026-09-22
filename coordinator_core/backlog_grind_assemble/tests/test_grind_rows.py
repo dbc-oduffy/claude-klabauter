@@ -363,12 +363,14 @@ class TestCheckVerb:
         script_path = tmp_path / "script.mjs"
         manifest_const = {"entries": manifest, "digest": "0" * 64}
         script_path.write_text(
-            f"const QUEUE_GRIND_MANIFEST = {json.dumps(manifest_const)};\nconsole.log('ok');\n",
+            f"const QUEUE_GRIND_MANIFEST = {json.dumps(manifest_const)};\n"
+            f"const BATCHES = {json.dumps([{'batch_key': 'batch-1', 'id': 'batch-1:b0', 'rows': ['a', 'b', 'c']}, {'batch_key': 'other-batch', 'id': 'other-batch:b0', 'rows': ['d']}])};\n"
+            "console.log('ok');\n",
             encoding="utf-8",
         )
 
         exit_code = grind_rows.main(
-            ["check", "--manifest", str(script_path), "--batch", "batch-1"]
+            ["check", "--manifest", str(script_path), "--batch", "batch-1:b0", "--repo-root", str(tmp_path)]
         )
         assert exit_code == grind_rows.EXIT_OK
         out = json.loads(capsys.readouterr().out)
