@@ -212,6 +212,7 @@ def emit_queue_script(
         loaded_profile,
         resolved_knobs,
         run_dir=Path(os.path.relpath(guarded_run_dir, repo_root)).as_posix(),
+        appetite=appetite,
         agent_type_host=agent_type_host,
     )
 

@@ -209,23 +209,6 @@ class _Batch:
     triaged: bool = False
     close_called: bool = False
 
-class _StubBudget:
-    """A minimal ``budget`` stand-in for a caller that only tracks a running
-    spend, no total ceiling."""
-
-    def __init__(self, total: Optional[int] = None) -> None:
-        self._spent = 0
-        self.total = total
-
-    def spend(self, amount: int) -> None:
-        self._spent += amount
-
-    def spent(self) -> int:
-        return self._spent
-
-    def remaining(self) -> Optional[int]:
-        return None if self.total is None else self.total - self._spent
-
 def run_admission(
     batches: Sequence[tuple[str, Sequence[str]]],
     routing: Mapping[str, dict],
@@ -233,8 +216,7 @@ def run_admission(
     *,
     reserve: int,
     max_agent_calls: Optional[int] = None,
-    budget_tokens: Optional[int] = None,
-    budget: Optional[_StubBudget] = None,
+    budget: Any,
     agent: Callable[[str, str], Any],
 ) -> dict:
     """Drive the admission policy over ``batches`` (``(batch_id,
@@ -261,8 +243,6 @@ def run_admission(
     The rendered `.mjs` (below) implements the SAME admission invariant
     with real bounded concurrency via an async worker pool, since Node
     cannot be executed to verify true interleaving under pytest."""
-    if budget is None:
-        budget = _StubBudget(total=budget_tokens)
     start_spent = budget.spent()
 
     rows: dict[str, Row] = {}
@@ -291,6 +271,8 @@ def run_admission(
 
     def _handback(row: Row, htype: str, reason: str) -> None:
         row.done = True
+        if any(h["row"] == row.row_id and h["type"] == htype for h in handed_back):
+            return
         handed_back.append({"row": row.row_id, "type": htype, "reason": reason})
 
     def _apply_route(row: Row, action: tuple[str, str], reason: str) -> None:
@@ -319,8 +301,9 @@ def run_admission(
                 continue
             row = rows[rec["row"]]
             seen.add(rec["row"])
+            tradeoff = rec.get("tradeoff", "") if rec.get("has_tradeoff") else ""
             action = route_after_triage(
-                routing, triage_node_id, rec["verdict"], rec.get("tshirt_size"), rec.get("tradeoff", "")
+                routing, triage_node_id, rec["verdict"], rec.get("tshirt_size"), tradeoff
             )
             _apply_route(row, action, f"triage verdict {rec['verdict']!r}")
         # A row triage never returned a record for must not stay pending
@@ -362,7 +345,7 @@ def run_admission(
     def _fix_row(row: Row) -> None:
         prior_node = row.node
         result = _record_call("fix", row.row_id) or {}
-        tradeoff = result.get("tradeoff", "")
+        tradeoff = result.get("tradeoff", "") if result.get("has_tradeoff") else ""
         outcome = result.get("outcome")
         if result.get("touched_files"):
             row.touched_files = list(result["touched_files"])
@@ -465,10 +448,9 @@ def run_admission(
         if max_agent_calls is not None and len(call_log) >= max_agent_calls:
             exhausted = True
             break
-        spent_delta = budget.spent() - start_spent
-        if budget_tokens is not None and spent_delta + reserve > budget_tokens:
-            exhausted = True
-            break
+        # Review: overengineering-reviewer finding 3 -- one ceiling check via
+        # budget.total/remaining(); budget_tokens/spent_delta was a redundant
+        # second check over the same number on the default path.
         if budget.total is not None and (budget.remaining() or 0) <= reserve:
             exhausted = True
             break
@@ -599,7 +581,7 @@ _ROUTING_HELPERS = (
     "  return { kind: 'node', value: target };\n"
     "}\n"
     "function applyRoute(row, rowId, route, reason) {\n"
-    "  if (route.kind === 'handback') { row.done = true; _handedBack.push({ row: rowId, type: route.value, reason }); }\n"
+    "  if (route.kind === 'handback') { row.done = true; _handBack(rowId, route.value, reason); }\n"
     "  else { row.node = route.value; }\n"
     "}\n"
     "function _lockKeysFor(row, rowId) { return row.declaredFiles.concat([`ledger:${rowId}`]); }"
@@ -645,9 +627,6 @@ def _capture(call_text: str, stage_kind: str, *, return_expr: str = "_result", t
         return body + f"\n{tail}"
     return body + f"\n  return {return_expr};"
 
-def _node_kind_map(profile: Profile) -> dict[str, str]:
-    return {node_id: node.kind for node_id, node in profile.graph.items()}
-
 def _indent_block(text: str, indent: str) -> str:
     """Re-indent every line of ``text`` by ``indent`` -- the join pattern
     every captured-call block below shares."""
@@ -680,26 +659,40 @@ def _ledger_commit_block(
         phase_title="Grind",
         profile=profile_name,
         unsettled_row_ids_js="unsettledPaths",
-        run_id_js="RUN_ID" if is_drain else None,
+        run_id_js="RUN_ID",
         is_drain=is_drain,
         record_js="JSON.stringify(_runCostRecord())" if is_drain else None,
         agent_type_host=agent_type_host,
     )
+    run_record_note = ""
+    if is_drain:
+        run_record_note = (
+            "\n    _handBack(RUN_ID, 'commit-failed', "
+            f"`drain commit did not land; run-cost record not written: "
+            f"state/queue-grind/{profile_name}/runs/${{RUN_ID}}.json`);"
+        )
     call_block = (
         "  const result = await withLock(lockKeys, async () => {\n"
         + _indent_block(_capture(raw, "commit"), "    ")
         + "\n  });\n"
         "  if (result.outcome === 'commit-failed') {\n"
-        "    for (const r of unsettled) { _handedBack.push({ row: r, type: 'commit-failed', reason: 'ledger-only commit did not land' }); }\n"
+        "    for (const r of unsettled) { _handBack(r, 'commit-failed', 'ledger-only commit did not land'); }"
+        + run_record_note + "\n"
         "  } else {\n"
         "    for (const r of unsettled) { _ledgerCommitted.add(r); }\n"
         "  }"
     )
+    # The drain form always runs (even over an empty unsettled set) -- it is
+    # the sole write path for the run-cost record file (finding 4): gating it
+    # behind `if (unsettled.length)` silently skipped that write whenever
+    # every row had already settled through its own per-row commit. The
+    # batch-end form stays guarded -- committing zero rows there is a no-op.
+    guarded_call = call_block if is_drain else ("  if (unsettled.length) {\n" + _indent_block(call_block, "  ") + "\n  }")
     body = (
         f"  const unsettled = {unsettled_expr};\n"
         "  const unsettledPaths = unsettled.map((r) => _ledgerPathFor(r));\n"
         "  const lockKeys = ['@commit'].concat(unsettled.map((r) => `ledger:${r}`));\n"
-        "  if (unsettled.length) {\n" + _indent_block(call_block, "  ") + "\n  }\n"
+        f"{guarded_call}\n"
     )
     return f"async function {fn_signature} {{\n{body}}}"
 
@@ -718,6 +711,7 @@ def compose_grind_script(
     knobs: Mapping[str, Any],
     *,
     run_dir: Any,
+    appetite: str = "standard",
     agent_type_host: Optional[str] = None,
 ) -> str:
     """Compose one top-level `.mjs` Workflow script implementing § Design §
@@ -742,7 +736,8 @@ def compose_grind_script(
     budget_tokens = knobs.get("budget_tokens")
     triage_depth_knob = knobs.get("triage_depth", "standard")
     triage_node_id = _triage_node_id(profile)
-    node_kind = _node_kind_map(profile)
+    # Review: overengineering-reviewer finding 5 -- inlined single-caller comprehension.
+    node_kind = {node_id: node.kind for node_id, node in profile.graph.items()}
 
     # Per-batch-key data (a small const, NOT unrolled per row/per batch --
     # the number of `agent(` call SITES must be a small constant
@@ -796,7 +791,7 @@ def compose_grind_script(
     lines.append(f"const SCRIPT_PATH = args.script_path;")
     lines.append(f"const PROFILE_NAME = {_js_string_literal(profile.name)};")
     lines.append("const PROFILE_DIR = args.profile_dir;")
-    lines.append(f"const APPETITE_NAME = {_js_string_literal(str(knobs.get('appetite', 'standard')))};")
+    lines.append(f"const APPETITE_NAME = {_js_string_literal(str(appetite))};")
     lines.append(
         f"const RESOLVED_KNOBS = {json.dumps({k: v for k, v in knobs.items() if k != 'appetite'}, sort_keys=True)};"
     )
@@ -818,6 +813,16 @@ def compose_grind_script(
     lines.append("const _handedBack = [];")
     lines.append("const _settled = [];")
     lines.append("const _ledgerCommitted = new Set();")
+    lines.append(
+        "function _handBack(rowId, type, reason) {\n"
+        "  if (_handedBack.some((h) => h.row === rowId && h.type === type)) return;\n"
+        "  _handedBack.push({ row: rowId, type, reason });\n"
+        "}\n"
+        "function _normalizeRowRef(items, ref) {\n"
+        "  const hit = items.find((it) => it.path === ref);\n"
+        "  return hit ? hit.row_id : ref;\n"
+        "}"
+    )
 
     # ONE composed call site per stage kind (verify: one per mode) --
     # row/batch-count-independent. Each function takes the live row/batch
@@ -825,6 +830,7 @@ def compose_grind_script(
     # params; per-batch-key variation reads TRIAGE_DEPTH_BY_KEY/VERIFY_SPEC.
     triage_raw = stages.compose_triage_call(
         label="triage", phase_title="Grind", run_dir=run_dir_s, profile=profile.name,
+        verdicts=profile.verdicts,
         batch_id_js="batchId", triage_depth_js="TRIAGE_DEPTH_BY_KEY[batchKey]",
         rows_js="JSON.stringify(rowsData)", script_path_js="SCRIPT_PATH", run_id_js="RUN_ID",
         agent_type_host=agent_type_host, repo_root=".",
@@ -858,7 +864,7 @@ def compose_grind_script(
         feedback_js="(row.verifyFeedback ? (' Verifier feedback from your last attempt: ' + row.verifyFeedback) : '')",
         close_note_js=(
             "(row.closeResult ? (' This row is already closed at ' + row.closeResult.new + "
-            "'; amend the fix only, do not run `grind-row close` again.') : '')"
+            "'; amend the fix only, do not run `backlog-grind-assemble grind-row close` again.') : '')"
         ),
         profile=profile.name, profile_dir_js="PROFILE_DIR", row_path_js="row.path", digest_js="row.digest",
         run_id_js="RUN_ID", agent_type_host=agent_type_host,
@@ -885,7 +891,8 @@ def compose_grind_script(
                 tail=(
                     "  const _failing = (_result.output && _result.output.failing_ids) || [];\n"
                     "  const _pass = _result.exit_code === 0 || "
-                    "(Array.isArray(_failing) && _failing.length > 0 && !_failing.includes(row.rowId));\n"
+                    "(Array.isArray(_failing) && _failing.length > 0 && "
+                    "!_failing.includes(row.rowId) && !_failing.includes(row.path));\n"
                     "  return { outcome: _pass ? 'pass' : 'fail', reason: JSON.stringify(_result.output) };"
                 ),
             ),
@@ -897,7 +904,8 @@ def compose_grind_script(
     )
 
     commit_raw = stages.compose_commit_call(
-        label="commit", phase_title="Grind", row_id_js="row.rowId",
+        label="commit", phase_title="Grind", profile=profile.name, row_id_js="row.rowId",
+        outcome_js="row.lastOutcome || 'settled'",
         touched_files_js="row.touchedFiles", removed_files_js="row.removedFiles.concat([_ledgerPathFor(row.rowId)])",
         agent_type_host=agent_type_host,
     )
@@ -922,7 +930,7 @@ def compose_grind_script(
         "    const _path = _entry.path;\n"
         "    _rows[r] = { rowId: r, batchId: b.id, batchKey: b.batch_key, path: _path, digest: _entry.digest, node: null, "
         "declaredFiles: [_path], touchedFiles: [_path], removedFiles: [], createdFiles: [], "
-        "evidence: '', verifyFeedback: '', fixPlan: '', fixNode: null, closeResult: null, "
+        "evidence: '', verifyFeedback: '', fixPlan: '', fixNode: null, closeResult: null, lastOutcome: '', "
         "widened: false, verifyRetried: false, onFailUsed: false, done: false, sha: '' };\n"
         "  }\n"
         "}"
@@ -934,38 +942,44 @@ def compose_grind_script(
         "  return null;\n"
         "}\n"
         "function _batchDone(batch) { return batch.rows.every((r) => _rows[r].done); }\n"
-        "function _batchUnsettledRows(batch) { return batch.rows.filter((r) => _rows[r].done && !_settled.some((s) => s.row === r) && !_ledgerCommitted.has(r)); }"
+        "function _batchUnsettledRows(batch) { return batch.rows.filter((r) => _rows[r].done && "
+        "!_settled.some((s) => s.row === r) && !_ledgerCommitted.has(r) && !_rows[r].closeResult); }"
     )
 
     lines.append(
         "async function _triageBatch(batchState) {\n"
         "  const batch = BATCHES.find((b) => b.id === batchState.id);\n"
+        "  const rowsMeta = batch.rows.map((r) => "
+        "({ row_id: r, path: (QUEUE_GRIND_MANIFEST.entries.find((e) => e.row_id === r) || {}).path }));\n"
         "  const _out = await _triageCall(batchState.id, batchState.batchKey, batch.rows);\n"
         "  batchState.triaged = true;\n"
         "  const _seen = new Set();\n"
         "  for (const rec of (_out.rows || [])) {\n"
-        "    if (!batch.rows.includes(rec.row)) continue;\n"
-        "    const row = _rows[rec.row];\n"
+        "    const recRow = _normalizeRowRef(rowsMeta, rec.row);\n"
+        "    if (!batch.rows.includes(recRow)) continue;\n"
+        "    const row = _rows[recRow];\n"
         "    if (!row) continue;\n"
-        "    _seen.add(rec.row);\n"
+        "    _seen.add(recRow);\n"
         "    row.evidence = rec.evidence || '';\n"
         "    row.fixPlan = rec.fix_plan || '';\n"
         "    if (rec.declared_files && rec.declared_files.length) { row.declaredFiles = rec.declared_files; row.touchedFiles = rec.declared_files; }\n"
-        "    const route = routeAfterTriage(rec.verdict, rec.tshirt_size, rec.tradeoff || '');\n"
-        "    applyRoute(row, rec.row, route, `triage verdict ${rec.verdict}`);\n"
+        "    const tradeoff = rec.has_tradeoff ? (rec.tradeoff || '') : '';\n"
+        "    const route = routeAfterTriage(rec.verdict, rec.tshirt_size, tradeoff);\n"
+        "    applyRoute(row, recRow, route, `triage verdict ${rec.verdict}`);\n"
         "  }\n"
-        "  for (const staleId of (_out.stale || [])) {\n"
+        "  for (const staleRef of (_out.stale || [])) {\n"
+        "    const staleId = _normalizeRowRef(rowsMeta, staleRef);\n"
         "    if (!batch.rows.includes(staleId)) continue;\n"
         "    const row = _rows[staleId];\n"
         "    if (!row || row.done || _seen.has(staleId)) continue;\n"
         "    _seen.add(staleId);\n"
         "    row.done = true;\n"
-        "    _handedBack.push({ row: staleId, type: 'manifest-stale', reason: 'grind-row check reported this row stale/vanished' });\n"
+        "    _handBack(staleId, 'manifest-stale', 'grind-row check reported this row stale/vanished');\n"
         "  }\n"
         "  for (const r of batch.rows) {\n"
         "    if (!_seen.has(r) && !_rows[r].done && !_rows[r].node) {\n"
         "      _rows[r].done = true;\n"
-        "      _handedBack.push({ row: r, type: 'stage-dead', reason: 'triage never returned a record for this row' });\n"
+        "      _handBack(r, 'stage-dead', 'triage never returned a record for this row');\n"
         "    }\n"
         "  }\n"
         "}"
@@ -983,27 +997,39 @@ def compose_grind_script(
         "  const result = await _closeCall(proposals);\n"
         "  batchState.closeCalled = true;\n"
         "  for (const item of (result.confirmed || [])) {\n"
-        "    const row = _rows[item.row];\n"
+        "    const itemRow = _normalizeRowRef(proposals, item.row);\n"
+        "    const row = _rows[itemRow];\n"
         "    if (!row || row.done || !row.node) continue;\n"
         "    row.removedFiles = row.removedFiles.concat([row.path]);\n"
         "    row.touchedFiles = row.touchedFiles.concat([item.new_path]);\n"
-        "    applyRoute(row, item.row, followEdge(row.node, 'confirmed', row), 'refute-close confirmed');\n"
+        "    row.closeResult = { old: row.path, new: item.new_path };\n"
+        "    row.lastOutcome = 'confirmed';\n"
+        "    const route = followEdge(row.node, 'confirmed', row);\n"
+        "    applyRoute(row, itemRow, route, 'refute-close confirmed');\n"
+        "    if (route.kind === 'handback') {\n"
+        "      const _cresult = await withLock(['@commit'], async () => _commitCall(row));\n"
+        "      if (_cresult.outcome !== 'committed') { _handBack(itemRow, 'commit-failed', \"close's archive-move commit did not land\"); }\n"
+        "      else { row.sha = _cresult.sha || ''; _ledgerCommitted.add(itemRow); }\n"
+        "    }\n"
         "  }\n"
         "  for (const entry of (result.refuted || [])) {\n"
-        "    const row = _rows[entry.row];\n"
+        "    const entryRow = _normalizeRowRef(proposals, entry.row);\n"
+        "    const row = _rows[entryRow];\n"
         "    if (!row || row.done || !row.node) continue;\n"
-        "    applyRoute(row, entry.row, followEdge(row.node, 'refuted', row), 'refute-close refuted');\n"
+        "    row.lastOutcome = 'refuted';\n"
+        "    applyRoute(row, entryRow, followEdge(row.node, 'refuted', row), 'refute-close refuted');\n"
         "  }\n"
-        "  for (const staleId of (result.stale || [])) {\n"
+        "  for (const staleRef of (result.stale || [])) {\n"
+        "    const staleId = _normalizeRowRef(proposals, staleRef);\n"
         "    const row = _rows[staleId];\n"
         "    if (!row || row.done || !row.node) continue;\n"
-        "    row.done = true; _handedBack.push({ row: staleId, type: 'manifest-stale', reason: 'refute-close close exited 3 (digest mismatch)' });\n"
+        "    row.done = true; _handBack(staleId, 'manifest-stale', 'refute-close close exited 3 (digest mismatch)');\n"
         "  }\n"
         "  for (const r of proposalIds) {\n"
         "    const row = _rows[r];\n"
         "    if (!row.done && closeNodeIds.includes(row.node)) {\n"
         "      row.done = true;\n"
-        "      _handedBack.push({ row: r, type: 'stage-dead', reason: 'refute-close left this proposal unresolved (absent from confirmed/refuted/stale)' });\n"
+        "      _handBack(r, 'stage-dead', 'refute-close left this proposal unresolved (absent from confirmed/refuted/stale)');\n"
         "    }\n"
         "  }\n"
         "}"
@@ -1015,8 +1041,9 @@ def compose_grind_script(
         "  const lockKeys = _lockKeysFor(row, rowId);\n"
         "  const _priorNode = row.node;\n"
         "  const result = await withLock(lockKeys, async () => _fixCall(row));\n"
-        "  const tradeoff = result.tradeoff || '';\n"
+        "  const tradeoff = result.has_tradeoff ? (result.tradeoff || '') : '';\n"
         "  const outcome = result.outcome;\n"
+        "  row.lastOutcome = outcome;\n"
         "  if (result.touched_files && result.touched_files.length) { row.touchedFiles = result.touched_files; }\n"
         "  row.createdFiles = result.created_files || [];\n"
         "  if (outcome === 'done' && result.close_result) {\n"
@@ -1024,13 +1051,13 @@ def compose_grind_script(
         "    row.touchedFiles = row.touchedFiles.concat([result.close_result.new]);\n"
         "    row.closeResult = result.close_result;\n"
         "  }\n"
-        "  if (tradeoff) { row.done = true; _handedBack.push({ row: rowId, type: 'needs-judgment', reason: 'fix reported a tradeoff' }); return; }\n"
-        "  if (outcome === 'NEEDS_PLAN') { row.done = true; _handedBack.push({ row: rowId, type: 'baton', reason: 'fix reported NEEDS_PLAN' }); return; }\n"
-        "  if (outcome === 'PEER_DIRTY') { row.done = true; _handedBack.push({ row: rowId, type: 'peer-dirty', reason: 'fix reported PEER_DIRTY' }); return; }\n"
-        "  if (outcome === 'MANIFEST_STALE') { row.done = true; _handedBack.push({ row: rowId, type: 'manifest-stale', reason: 'fix reported MANIFEST_STALE' }); return; }\n"
+        "  if (tradeoff) { row.done = true; _handBack(rowId, 'needs-judgment', 'fix reported a tradeoff'); return; }\n"
+        "  if (outcome === 'NEEDS_PLAN') { row.done = true; _handBack(rowId, 'baton', 'fix reported NEEDS_PLAN'); return; }\n"
+        "  if (outcome === 'PEER_DIRTY') { row.done = true; _handBack(rowId, 'peer-dirty', 'fix reported PEER_DIRTY'); return; }\n"
+        "  if (outcome === 'MANIFEST_STALE') { row.done = true; _handBack(rowId, 'manifest-stale', 'fix reported MANIFEST_STALE'); return; }\n"
         "  if (outcome === 'NEEDS_WIDER_SCOPE') {\n"
         "    if (!row.widened) { row.widened = true; row.declaredFiles = row.declaredFiles.concat(result.extra_files || []); return; }\n"
-        "    row.done = true; _handedBack.push({ row: rowId, type: 'widen-exhausted', reason: 'second NEEDS_WIDER_SCOPE' }); return;\n"
+        "    row.done = true; _handBack(rowId, 'widen-exhausted', 'second NEEDS_WIDER_SCOPE'); return;\n"
         "  }\n"
         "  row.fixNode = _priorNode;\n"
         "  applyRoute(row, rowId, followEdge(row.node, outcome, row), `fix outcome ${outcome}`);\n"
@@ -1050,7 +1077,7 @@ def compose_grind_script(
         "      return;\n"
         "    }\n"
         "    await withLock(lockKeys, async () => _undoCall(row));\n"
-        "    row.done = true; _handedBack.push({ row: rowId, type: 'rejected-after-retry', reason: 'verify failed twice' }); return;\n"
+        "    row.done = true; _handBack(rowId, 'rejected-after-retry', 'verify failed twice'); return;\n"
         "  }\n"
         "  applyRoute(row, rowId, followEdge(row.node, result.outcome, row), `verify outcome ${result.outcome}`);\n"
         "}"
@@ -1060,7 +1087,7 @@ def compose_grind_script(
         "async function _commitStage(rowId) {\n"
         "  const row = _rows[rowId];\n"
         "  const result = await withLock(['@commit'], async () => _commitCall(row));\n"
-        "  if (result.outcome !== 'committed') { row.done = true; _handedBack.push({ row: rowId, type: 'commit-failed', reason: 'commit did not land' }); return; }\n"
+        "  if (result.outcome !== 'committed') { row.done = true; _handBack(rowId, 'commit-failed', 'commit did not land'); return; }\n"
         "  row.done = true; row.sha = result.sha || '';\n"
         "  _settled.push({ row: rowId, outcome: 'committed', sha: row.sha });\n"
         "}"
@@ -1075,9 +1102,9 @@ def compose_grind_script(
         "  else if (kind === 'commit') { await _commitStage(rowId); }\n"
         "  else if (kind === 'refute-close') {\n"
         "    if (!batchState.closeCalled) { await _closeBatch(batchState); }\n"
-        "    else { row.done = true; _handedBack.push({ row: rowId, type: 'stage-dead', reason: 'refute-close already called for this batch' }); }\n"
+        "    else { row.done = true; _handBack(rowId, 'stage-dead', 'refute-close already called for this batch'); }\n"
         "  }\n"
-        "  else { row.done = true; _handedBack.push({ row: rowId, type: 'stage-dead', reason: `unhandled node kind ${kind}` }); }\n"
+        "  else { row.done = true; _handBack(rowId, 'stage-dead', `unhandled node kind ${kind}`); }\n"
         "}"
     )
 
@@ -1100,7 +1127,8 @@ def compose_grind_script(
         _ledger_commit_block(
             "_drainCommit()",
             unsettled_expr="Object.values(_rows).filter((r) => r.done && "
-            "!_settled.some((s) => s.row === r.rowId) && !_ledgerCommitted.has(r.rowId)).map((r) => r.rowId)",
+            "!_settled.some((s) => s.row === r.rowId) && !_ledgerCommitted.has(r.rowId) && "
+            "!r.closeResult).map((r) => r.rowId)",
             is_drain=True,
             profile_name=profile.name,
             agent_type_host=agent_type_host,
@@ -1130,7 +1158,7 @@ def compose_grind_script(
         "  } catch (err) {\n"
         "    const _msg = err && err.message ? err.message : String(err);\n"
         "    for (const r of batch.rows) {\n"
-        "      if (!_rows[r].done) { _rows[r].done = true; _handedBack.push({ row: r, type: 'stage-dead', reason: `batch worker threw: ${_msg}` }); }\n"
+        "      if (!_rows[r].done) { _rows[r].done = true; _handBack(r, 'stage-dead', `batch worker threw: ${_msg}`); }\n"
         "    }\n"
         "  }\n"
         "  await _finishBatch(batchState);\n"
@@ -1160,9 +1188,9 @@ def compose_grind_script(
         "  }\n"
         "  if (_exhausted) {\n"
         "    for (const bid of _queue) { for (const r of BATCHES.find((b) => b.id === bid).rows) "
-        "_handedBack.push({ row: r, type: 'budget-exhausted', reason: 'admission ceiling reached' }); }\n"
+        "_handBack(r, 'budget-exhausted', 'admission ceiling reached'); }\n"
         "    for (const bid of Object.keys(_admitted)) { for (const r of BATCHES.find((b) => b.id === bid).rows) "
-        "if (!_rows[r].done) _handedBack.push({ row: r, type: 'budget-exhausted', reason: 'admission ceiling reached' }); }\n"
+        "if (!_rows[r].done) _handBack(r, 'budget-exhausted', 'admission ceiling reached'); }\n"
         "  }\n"
         "  await _drainCommit();\n"
         "}\n"

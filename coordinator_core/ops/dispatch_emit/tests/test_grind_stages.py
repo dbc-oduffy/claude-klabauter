@@ -298,3 +298,71 @@ def test_every_grind_row_close_in_golden_carries_every_required_flag():
         for flag in required:
             assert flag in invocation, (flag, invocation[:120])
     assert "PROFILE_DIR = args.profile_dir" in text
+
+
+def test_fix_and_triage_schemas_gate_tradeoff_on_a_boolean():
+    """Live-run defect 6: a non-empty `tradeoff` string ("None", "No
+    tradeoff") routed to needs-judgment. Both schemas now require a
+    `has_tradeoff` boolean and the prompt gates `tradeoff` on it."""
+    fix_call = grind_stages.compose_fix_call(
+        label="fix:row1", phase_title="Fix", row_id="row1", locked_files=["a.py"],
+    )
+    assert "has_tradeoff" in fix_call
+    assert "has_tradeoff" in fix_call.lower()
+
+    triage_call = grind_stages.compose_triage_call(
+        label="triage:b1", phase_title="Triage", run_dir="state/queue-grind/run1",
+        batch_id="b1", triage_depth="standard", verdicts=["confirmed-bug", "not-reproduced"],
+    )
+    assert "has_tradeoff" in triage_call
+    assert '"enum": ["confirmed-bug", "not-reproduced"]' in triage_call
+
+
+def test_commit_prompts_carry_an_explicit_subject_and_body():
+    """Live-run defect 1: `coordinator:git-commit-agent` refuses a brief with
+    no subject. Every commit prompt now composes one at runtime."""
+    commit_call = grind_stages.compose_commit_call(
+        label="commit:row1", phase_title="Commit", profile="p1", row_id="row1",
+        touched_files=["a.py"],
+    )
+    assert "Use commit subject `grind(p1): " in commit_call
+    assert "commit body naming this row" in commit_call
+
+    batch_call = grind_stages.compose_commit_ledger_only_call(
+        label="commit:ledger", phase_title="Commit", profile="p1",
+        unsettled_row_ids=["row1", "row2"], run_id="run-1",
+    )
+    assert "Use commit subject `grind(p1): ledger for " in batch_call
+    assert "commit body naming these rows" in batch_call
+    assert "skip it, report which one" in batch_call
+
+    drain_call = grind_stages.compose_commit_ledger_only_call(
+        label="commit:drain", phase_title="Commit", profile="p1",
+        unsettled_row_ids=["row1"], run_id="run-1", is_drain=True,
+    )
+    assert "Use commit subject `grind(p1): drain run " in drain_call
+    assert "run-1" in drain_call
+
+
+def test_grind_row_verb_always_run_through_backlog_grind_assemble():
+    """Every composer's PROMPT text names the installed entrypoint
+    (`backlog-grind-assemble grind-row <verb>`) -- a bare `grind-row` is not
+    on PATH and exits 127 (live-run defect 8)."""
+    import re
+
+    calls = dict(_all_non_commit_calls())
+    calls["commit"] = grind_stages.compose_commit_call(
+        label="commit:row1", phase_title="Commit", profile="p1", row_id="row1",
+        touched_files=["a.py"],
+    )
+    calls["commit-ledger"] = grind_stages.compose_commit_ledger_only_call(
+        label="commit:ledger", phase_title="Commit", profile="p1",
+        unsettled_row_ids=["row1"], run_id="run-1",
+    )
+    for kind, call_text in calls.items():
+        for m in re.finditer(r"grind-row", call_text):
+            prefix = call_text[max(0, m.start() - len("backlog-grind-assemble ")):m.start()]
+            assert prefix.endswith("backlog-grind-assemble "), (
+                f"{kind}: bare `grind-row` not preceded by `backlog-grind-assemble `: "
+                f"...{call_text[max(0, m.start()-40):m.start()+20]!r}..."
+            )

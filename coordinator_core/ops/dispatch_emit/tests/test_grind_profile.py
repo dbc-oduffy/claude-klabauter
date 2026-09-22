@@ -387,8 +387,6 @@ def test_profile_hand_back_type_is_a_legal_edge_target(tmp_path):
     doc["hand_back_types"] = ["park", "wont-do"]
     profile = _profile_from_doc(tmp_path, "profile-handback", doc)
     assert profile.hand_back_types == ("park", "wont-do")
-    assert "park" in profile.all_hand_back_types
-    assert "budget-exhausted" in profile.all_hand_back_types
     gp.validate_graph(profile)
 
 

@@ -71,7 +71,7 @@ function followEdge(nodeId, outcome, row) {
   return { kind: 'node', value: target };
 }
 function applyRoute(row, rowId, route, reason) {
-  if (route.kind === 'handback') { row.done = true; _handedBack.push({ row: rowId, type: route.value, reason }); }
+  if (route.kind === 'handback') { row.done = true; _handBack(rowId, route.value, reason); }
   else { row.node = route.value; }
 }
 function _lockKeysFor(row, rowId) { return row.declaredFiles.concat([`ledger:${rowId}`]); }
@@ -122,24 +122,33 @@ const _settled = [];
 
 const _ledgerCommitted = new Set();
 
+function _handBack(rowId, type, reason) {
+  if (_handedBack.some((h) => h.row === rowId && h.type === type)) return;
+  _handedBack.push({ row: rowId, type, reason });
+}
+function _normalizeRowRef(items, ref) {
+  const hit = items.find((it) => it.path === ref);
+  return hit ? hit.row_id : ref;
+}
+
 async function _triageCall(batchId, batchKey, rowIds) {
   const rowsData = rowIds.map((r) => {
     const e = QUEUE_GRIND_MANIFEST.entries.find((x) => x.row_id === r);
     return { row_id: r, path: e.path, digest: e.digest };
   });
-    const _result = (await agent('You are the triage stage. Your rows (row_id/path/digest) are: ' + (JSON.stringify(rowsData)) + '. Run `grind-row check --manifest ' + (SCRIPT_PATH) + ' --batch ' + (batchId) + ' --repo-root .' + '` first, and list any row it reports as `stale` or `vanished` in `stale` rather than skipping it silently. For every remaining row, decide a verdict, cite the evidence for it, size the row XS through XXL with the evidence for that size, and write a fix plan. Only fill in a tradeoff statement when the fix genuinely carries one -- leave it empty otherwise. Name every file your triage declares the row touches. As you finish each row, run `grind-row append --profile fixture --row-id <its row_id> --digest <its digest> --stage triage --verdict <its verdict> --outcome <its verdict> --evidence-file <a file with your evidence> --run-stamp ' + (RUN_ID) + ' --repo-root .' + '` immediately (idempotent under a retried agent -- an identical line already appended is not re-appended) and write the per-batch triage record to state/queue-grind/fixture/run-1/records/' + (batchId) + '.json. Triage depth for this batch is \'' + (TRIAGE_DEPTH_BY_KEY[batchKey]) + '\'. You do not stage or commit anything. Only the committer stage does that.', { label: 'triage', phase: 'Grind', agentType: 'general-purpose', model: 'sonnet', effort: 'medium', schema: {"properties": {"rows": {"items": {"properties": {"declared_files": {"items": {"type": "string"}, "type": "array"}, "evidence": {"type": "string"}, "fix_plan": {"type": "string"}, "row": {"type": "string"}, "sizing_evidence": {"type": "string"}, "tradeoff": {"type": "string"}, "tshirt_size": {"enum": ["L", "M", "S", "XL", "XS", "XXL"], "type": "string"}, "verdict": {"type": "string"}}, "required": ["row", "verdict", "evidence", "tshirt_size", "sizing_evidence", "tradeoff", "declared_files", "fix_plan"], "type": "object"}, "type": "array"}, "stale": {"items": {"type": "string"}, "type": "array"}}, "required": ["rows"], "type": "object"} })) || {};
+    const _result = (await agent('You are the triage stage. Your rows (row_id/path/digest) are: ' + (JSON.stringify(rowsData)) + '. Run `backlog-grind-assemble grind-row check --manifest ' + (SCRIPT_PATH) + ' --batch ' + (batchId) + ' --repo-root .' + '` first, and list any row it reports as `stale` or `vanished` in `stale` rather than skipping it silently. Return `row` as each row\'s row_id exactly as given above -- never its path -- e.g. {"row": "row3", "verdict": ...}. For every remaining row, decide a verdict from exactly this list, verbatim, and no other value: [\'confirmed-bug\', \'not-reproduced\']. Cite the evidence for it, size the row XS through XXL with the evidence for that size, and write a fix plan. Set `has_tradeoff` to true only when the fix genuinely carries a tradeoff, and describe it in `tradeoff`; otherwise set `has_tradeoff` to false and leave `tradeoff` empty. Name every file your triage declares the row touches. As you finish each row, run `backlog-grind-assemble grind-row append --profile fixture --row-id <its row_id> --digest <its digest> --stage triage --verdict <its verdict> --outcome <its verdict> --evidence-file <a file with your evidence> --run-stamp ' + (RUN_ID) + ' --repo-root .' + '` immediately (idempotent under a retried agent -- an identical line already appended is not re-appended) and write the per-batch triage record to state/queue-grind/fixture/run-1/records/' + (batchId) + '.json. Triage depth for this batch is \'' + (TRIAGE_DEPTH_BY_KEY[batchKey]) + '\'. You do not stage or commit anything. Only the committer stage does that.', { label: 'triage', phase: 'Grind', agentType: 'general-purpose', model: 'sonnet', effort: 'medium', schema: {"properties": {"rows": {"items": {"properties": {"declared_files": {"items": {"type": "string"}, "type": "array"}, "evidence": {"type": "string"}, "fix_plan": {"type": "string"}, "has_tradeoff": {"type": "boolean"}, "row": {"description": "the row_id exactly as given in this batch's rows, never the row's path", "type": "string"}, "sizing_evidence": {"type": "string"}, "tradeoff": {"type": "string"}, "tshirt_size": {"enum": ["L", "M", "S", "XL", "XS", "XXL"], "type": "string"}, "verdict": {"enum": ["confirmed-bug", "not-reproduced"], "type": "string"}}, "required": ["row", "verdict", "evidence", "tshirt_size", "sizing_evidence", "tradeoff", "declared_files", "fix_plan", "has_tradeoff"], "type": "object"}, "type": "array"}, "stale": {"items": {"type": "string"}, "type": "array"}}, "required": ["rows"], "type": "object"} })) || {};
     _recordCall('triage');
     return { rows: _result.rows || [], stale: _result.stale || [] };
 }
 
 async function _closeCall(proposals) {
-    const _result = (await agent('You are the refute-close stage. Your close proposals (row_id/path/digest/evidence) are: ' + (JSON.stringify(proposals)) + '. For each one, actively try to refute it -- look for evidence the row is not actually resolved. For every proposal that survives that attempt, run `grind-row close --profile-dir ' + (PROFILE_DIR) + ' --profile fixture --row <its path> --digest <its digest> --verdict refute-close --evidence-file <a file with your evidence> --closed-by refute-close --run-stamp ' + (RUN_ID) + ' --repo-root .' + '`, and report the `{old,new}` path pair it prints as that row\'s `new_path`. If `grind-row close` exits 3 (digest mismatch -- the row changed since the manifest was emitted), put that row\'s id in `stale` instead. Report every proposal you refuted along with why, and never run `grind-row close` for one of those. You do not stage or commit anything. Only the committer stage does that.', { label: 'close', phase: 'Grind', agentType: 'general-purpose', model: 'sonnet', effort: 'medium', schema: {"properties": {"confirmed": {"items": {"properties": {"new_path": {"type": "string"}, "row": {"type": "string"}}, "required": ["row", "new_path"], "type": "object"}, "type": "array"}, "refuted": {"items": {"properties": {"reason": {"type": "string"}, "row": {"type": "string"}}, "required": ["row", "reason"], "type": "object"}, "type": "array"}, "stale": {"items": {"type": "string"}, "type": "array"}}, "required": ["confirmed", "refuted"], "type": "object"} })) || {};
+    const _result = (await agent('You are the refute-close stage. Your close proposals (row_id/path/digest/evidence) are: ' + (JSON.stringify(proposals)) + '. For each one, actively try to refute it -- look for evidence the row is not actually resolved. For every proposal that survives that attempt, run `backlog-grind-assemble grind-row close --profile-dir ' + (PROFILE_DIR) + ' --profile fixture --row <its path> --digest <its digest> --verdict refute-close --evidence-file <a file with your evidence> --closed-by refute-close --run-stamp ' + (RUN_ID) + ' --repo-root .' + '`, and report the `{old,new}` path pair it prints as that row\'s `new_path`. If `backlog-grind-assemble grind-row close` exits 3 (digest mismatch -- the row changed since the manifest was emitted), put that row\'s id in `stale` instead. Report every proposal you refuted along with why, and never run `backlog-grind-assemble grind-row close` for one of those. In every one of `confirmed`/`refuted`/`stale`, return `row` as the row_id exactly as given in the proposals above, never the row\'s path -- e.g. {"row": "row3", "new_path": "archive/2026-09/row3.yaml"}. You do not stage or commit anything. Only the committer stage does that.', { label: 'close', phase: 'Grind', agentType: 'general-purpose', model: 'sonnet', effort: 'medium', schema: {"properties": {"confirmed": {"items": {"properties": {"new_path": {"type": "string"}, "row": {"description": "the row_id exactly as given in the proposals above, never the row's path", "type": "string"}}, "required": ["row", "new_path"], "type": "object"}, "type": "array"}, "refuted": {"items": {"properties": {"reason": {"type": "string"}, "row": {"description": "the row_id exactly as given in the proposals above, never the row's path", "type": "string"}}, "required": ["row", "reason"], "type": "object"}, "type": "array"}, "stale": {"items": {"type": "string"}, "type": "array"}}, "required": ["confirmed", "refuted"], "type": "object"} })) || {};
     _recordCall('refute-close');
     return _result;
 }
 
 async function _fixCall(row) {
-    const _result = (await agent('You are the fix stage for row ' + (row.rowId) + '. You hold the lock on [' + ((row.declaredFiles).join(', ')) + '] plus `ledger:' + (row.rowId) + '`. Before doing any work, pre-check every locked file for peer dirt -- if a locked file has changed under you since the lock was acquired, stop and report PEER_DIRTY rather than fixing over it. If the fix needs files beyond your locked set, stop and report NEEDS_WIDER_SCOPE with the extra files, and take no other action. If the fix needs a plan before it can proceed, report NEEDS_PLAN. If your fix genuinely carries a tradeoff triage did not catch, report that tradeoff instead of proceeding. Otherwise, fix the row, run its tests, report every file you touched and every file you created, and when they pass run `grind-row close --profile-dir ' + (PROFILE_DIR) + ' --profile fixture --row ' + (row.path) + ' --digest ' + (row.digest) + ' --verdict fix --evidence-file <a file with your evidence> --closed-by fix --run-stamp ' + (RUN_ID) + ' --repo-root .`, reporting the `{old,new}` path pair it prints as `close_result`. If `grind-row close` exits 3 (digest mismatch -- the row changed since the manifest was emitted), report MANIFEST_STALE and stop.' + ((row.verifyFeedback ? (' Verifier feedback from your last attempt: ' + row.verifyFeedback) : '')) + ((row.closeResult ? (' This row is already closed at ' + row.closeResult.new + '; amend the fix only, do not run `grind-row close` again.') : '')) + ' You do not stage or commit anything. Only the committer stage does that.', { label: 'fix', phase: 'Grind', agentType: 'general-purpose', model: 'sonnet', effort: 'high', schema: {"properties": {"close_result": {"properties": {"new": {"type": "string"}, "old": {"type": "string"}}, "type": "object"}, "created_files": {"items": {"type": "string"}, "type": "array"}, "extra_files": {"items": {"type": "string"}, "type": "array"}, "outcome": {"enum": ["done", "NEEDS_WIDER_SCOPE", "PEER_DIRTY", "NOT_REPRODUCED", "NEEDS_PLAN", "MANIFEST_STALE"], "type": "string"}, "touched_files": {"items": {"type": "string"}, "type": "array"}, "tradeoff": {"type": "string"}}, "required": ["outcome"], "type": "object"} })) || {};
+    const _result = (await agent('You are the fix stage for row ' + (row.rowId) + '. You hold the lock on [' + ((row.declaredFiles).join(', ')) + '] plus `ledger:' + (row.rowId) + '`. Before doing any work, pre-check every locked file for peer dirt -- if a locked file has changed under you since the lock was acquired, stop and report PEER_DIRTY rather than fixing over it. If the fix needs files beyond your locked set, stop and report NEEDS_WIDER_SCOPE with the extra files, and take no other action. If the fix needs a plan before it can proceed, report NEEDS_PLAN. Set `has_tradeoff` to true only when your fix genuinely carries a tradeoff triage did not catch, and describe it in `tradeoff`; otherwise set `has_tradeoff` to false and leave `tradeoff` empty. Otherwise, fix the row, run its tests, report every file you touched and every file you created, and when they pass run `backlog-grind-assemble grind-row close --profile-dir ' + (PROFILE_DIR) + ' --profile fixture --row ' + (row.path) + ' --digest ' + (row.digest) + ' --verdict fix --evidence-file <a file with your evidence> --closed-by fix --run-stamp ' + (RUN_ID) + ' --repo-root .`, reporting the `{old,new}` path pair it prints as `close_result`. If `backlog-grind-assemble grind-row close` exits 3 (digest mismatch -- the row changed since the manifest was emitted), report MANIFEST_STALE and stop.' + ((row.verifyFeedback ? (' Verifier feedback from your last attempt: ' + row.verifyFeedback) : '')) + ((row.closeResult ? (' This row is already closed at ' + row.closeResult.new + '; amend the fix only, do not run `backlog-grind-assemble grind-row close` again.') : '')) + ' You do not stage or commit anything. Only the committer stage does that.', { label: 'fix', phase: 'Grind', agentType: 'general-purpose', model: 'sonnet', effort: 'high', schema: {"properties": {"close_result": {"properties": {"new": {"type": "string"}, "old": {"type": "string"}}, "type": "object"}, "created_files": {"items": {"type": "string"}, "type": "array"}, "extra_files": {"items": {"type": "string"}, "type": "array"}, "has_tradeoff": {"type": "boolean"}, "outcome": {"enum": ["done", "NEEDS_WIDER_SCOPE", "PEER_DIRTY", "NOT_REPRODUCED", "NEEDS_PLAN", "MANIFEST_STALE"], "type": "string"}, "touched_files": {"items": {"type": "string"}, "type": "array"}, "tradeoff": {"type": "string"}}, "required": ["outcome", "has_tradeoff"], "type": "object"} })) || {};
     _recordCall('fix');
     return _result;
 }
@@ -150,7 +159,7 @@ async function _verifyCall(row) {
       const _result = (await agent('Run `coordinator-invoke ' + (spec.op) + ' --params-file state/queue-grind/fixture/run-1/records/' + (row.batchId) + '.json` and return its JSON output verbatim. Exit 0 means the batch passes. A non-zero exit means the JSON output names the failing row ids -- return it unchanged either way; do not summarize or reinterpret it. You do not stage or commit anything. Only the committer stage does that.', { label: 'verify-op', phase: 'Grind', agentType: 'coordinator:queue-grind-op-runner', model: 'sonnet', effort: 'low', schema: {"properties": {"exit_code": {"type": "integer"}, "output": {"type": "object"}}, "required": ["exit_code", "output"], "type": "object"} })) || {};
       _recordCall('verify');
       const _failing = (_result.output && _result.output.failing_ids) || [];
-      const _pass = _result.exit_code === 0 || (Array.isArray(_failing) && _failing.length > 0 && !_failing.includes(row.rowId));
+      const _pass = _result.exit_code === 0 || (Array.isArray(_failing) && _failing.length > 0 && !_failing.includes(row.rowId) && !_failing.includes(row.path));
       return { outcome: _pass ? 'pass' : 'fail', reason: JSON.stringify(_result.output) };
   }
     const _result = (await agent('You are the verify stage for row ' + (row.rowId) + ' at ' + (row.path) + '. The fixer touched: [' + ((row.touchedFiles).join(', ')) + ']. Triage evidence: ' + (row.evidence) + '. The fix plan was: ' + (row.fixPlan) + '. Try to reject the fix you are handed -- look for a way it fails, not a reason to wave it through. You are read-only apart from running the named tests: do not edit any file. Report pass only if your attempt to reject it failed. You do not stage or commit anything. Only the committer stage does that.', { label: 'verify-agent', phase: 'Grind', agentType: 'general-purpose', model: 'sonnet', effort: 'high', schema: {"properties": {"outcome": {"enum": ["pass", "fail"], "type": "string"}, "reason": {"type": "string"}}, "required": ["outcome"], "type": "object"} })) || {};
@@ -159,7 +168,7 @@ async function _verifyCall(row) {
 }
 
 async function _commitCall(row) {
-    const _result = (await agent('You are the committer for row ' + (row.rowId) + '. You are the only stage that stages or commits anything. Stage exactly this touched list: [' + ((row.touchedFiles).join(', ')) + '], plus this row\'s ledger deletion via `grind-row settle`.' + ' Pass --declared-revert for every one of these removed paths: [' + ((row.removedFiles.concat([_ledgerPathFor(row.rowId)])).join(', ')) + '].' + ' Then commit. If the outcome is indeterminate, reconcile it against `git log` and `git status` before doing anything else -- never retry blind.', { label: 'commit', phase: 'Grind', agentType: 'coordinator:git-commit-agent', model: 'sonnet', effort: 'low', schema: {"properties": {"outcome": {"enum": ["committed", "commit-failed"], "type": "string"}, "sha": {"type": "string"}}, "required": ["outcome"], "type": "object"} })) || {};
+    const _result = (await agent('You are the committer for row ' + (row.rowId) + '. You are the only stage that stages or commits anything. Stage exactly this touched list: [' + ((row.touchedFiles).join(', ')) + '], plus this row\'s ledger deletion via `backlog-grind-assemble grind-row settle`.' + ' Pass --declared-revert for every one of these removed paths: [' + ((row.removedFiles.concat([_ledgerPathFor(row.rowId)])).join(', ')) + '].' + ' Use commit subject `grind(fixture): ' + (row.rowId) + ' ' + (row.lastOutcome || 'settled') + '` and a commit body naming this row.' + ' Then commit. If the outcome is indeterminate, reconcile it against `git log` and `git status` before doing anything else -- never retry blind.', { label: 'commit', phase: 'Grind', agentType: 'coordinator:git-commit-agent', model: 'sonnet', effort: 'low', schema: {"properties": {"outcome": {"enum": ["committed", "commit-failed"], "type": "string"}, "sha": {"type": "string"}}, "required": ["outcome"], "type": "object"} })) || {};
     _recordCall('commit');
     return _result;
 }
@@ -189,7 +198,7 @@ for (const b of BATCHES) {
   for (const r of b.rows) {
     const _entry = QUEUE_GRIND_MANIFEST.entries.find((e) => e.row_id === r);
     const _path = _entry.path;
-    _rows[r] = { rowId: r, batchId: b.id, batchKey: b.batch_key, path: _path, digest: _entry.digest, node: null, declaredFiles: [_path], touchedFiles: [_path], removedFiles: [], createdFiles: [], evidence: '', verifyFeedback: '', fixPlan: '', fixNode: null, closeResult: null, widened: false, verifyRetried: false, onFailUsed: false, done: false, sha: '' };
+    _rows[r] = { rowId: r, batchId: b.id, batchKey: b.batch_key, path: _path, digest: _entry.digest, node: null, declaredFiles: [_path], touchedFiles: [_path], removedFiles: [], createdFiles: [], evidence: '', verifyFeedback: '', fixPlan: '', fixNode: null, closeResult: null, lastOutcome: '', widened: false, verifyRetried: false, onFailUsed: false, done: false, sha: '' };
   }
 }
 
@@ -198,36 +207,40 @@ function _pendingRow(batch) {
   return null;
 }
 function _batchDone(batch) { return batch.rows.every((r) => _rows[r].done); }
-function _batchUnsettledRows(batch) { return batch.rows.filter((r) => _rows[r].done && !_settled.some((s) => s.row === r) && !_ledgerCommitted.has(r)); }
+function _batchUnsettledRows(batch) { return batch.rows.filter((r) => _rows[r].done && !_settled.some((s) => s.row === r) && !_ledgerCommitted.has(r) && !_rows[r].closeResult); }
 
 async function _triageBatch(batchState) {
   const batch = BATCHES.find((b) => b.id === batchState.id);
+  const rowsMeta = batch.rows.map((r) => ({ row_id: r, path: (QUEUE_GRIND_MANIFEST.entries.find((e) => e.row_id === r) || {}).path }));
   const _out = await _triageCall(batchState.id, batchState.batchKey, batch.rows);
   batchState.triaged = true;
   const _seen = new Set();
   for (const rec of (_out.rows || [])) {
-    if (!batch.rows.includes(rec.row)) continue;
-    const row = _rows[rec.row];
+    const recRow = _normalizeRowRef(rowsMeta, rec.row);
+    if (!batch.rows.includes(recRow)) continue;
+    const row = _rows[recRow];
     if (!row) continue;
-    _seen.add(rec.row);
+    _seen.add(recRow);
     row.evidence = rec.evidence || '';
     row.fixPlan = rec.fix_plan || '';
     if (rec.declared_files && rec.declared_files.length) { row.declaredFiles = rec.declared_files; row.touchedFiles = rec.declared_files; }
-    const route = routeAfterTriage(rec.verdict, rec.tshirt_size, rec.tradeoff || '');
-    applyRoute(row, rec.row, route, `triage verdict ${rec.verdict}`);
+    const tradeoff = rec.has_tradeoff ? (rec.tradeoff || '') : '';
+    const route = routeAfterTriage(rec.verdict, rec.tshirt_size, tradeoff);
+    applyRoute(row, recRow, route, `triage verdict ${rec.verdict}`);
   }
-  for (const staleId of (_out.stale || [])) {
+  for (const staleRef of (_out.stale || [])) {
+    const staleId = _normalizeRowRef(rowsMeta, staleRef);
     if (!batch.rows.includes(staleId)) continue;
     const row = _rows[staleId];
     if (!row || row.done || _seen.has(staleId)) continue;
     _seen.add(staleId);
     row.done = true;
-    _handedBack.push({ row: staleId, type: 'manifest-stale', reason: 'grind-row check reported this row stale/vanished' });
+    _handBack(staleId, 'manifest-stale', 'grind-row check reported this row stale/vanished');
   }
   for (const r of batch.rows) {
     if (!_seen.has(r) && !_rows[r].done && !_rows[r].node) {
       _rows[r].done = true;
-      _handedBack.push({ row: r, type: 'stage-dead', reason: 'triage never returned a record for this row' });
+      _handBack(r, 'stage-dead', 'triage never returned a record for this row');
     }
   }
 }
@@ -243,27 +256,39 @@ async function _closeBatch(batchState) {
   const result = await _closeCall(proposals);
   batchState.closeCalled = true;
   for (const item of (result.confirmed || [])) {
-    const row = _rows[item.row];
+    const itemRow = _normalizeRowRef(proposals, item.row);
+    const row = _rows[itemRow];
     if (!row || row.done || !row.node) continue;
     row.removedFiles = row.removedFiles.concat([row.path]);
     row.touchedFiles = row.touchedFiles.concat([item.new_path]);
-    applyRoute(row, item.row, followEdge(row.node, 'confirmed', row), 'refute-close confirmed');
+    row.closeResult = { old: row.path, new: item.new_path };
+    row.lastOutcome = 'confirmed';
+    const route = followEdge(row.node, 'confirmed', row);
+    applyRoute(row, itemRow, route, 'refute-close confirmed');
+    if (route.kind === 'handback') {
+      const _cresult = await withLock(['@commit'], async () => _commitCall(row));
+      if (_cresult.outcome !== 'committed') { _handBack(itemRow, 'commit-failed', "close's archive-move commit did not land"); }
+      else { row.sha = _cresult.sha || ''; _ledgerCommitted.add(itemRow); }
+    }
   }
   for (const entry of (result.refuted || [])) {
-    const row = _rows[entry.row];
+    const entryRow = _normalizeRowRef(proposals, entry.row);
+    const row = _rows[entryRow];
     if (!row || row.done || !row.node) continue;
-    applyRoute(row, entry.row, followEdge(row.node, 'refuted', row), 'refute-close refuted');
+    row.lastOutcome = 'refuted';
+    applyRoute(row, entryRow, followEdge(row.node, 'refuted', row), 'refute-close refuted');
   }
-  for (const staleId of (result.stale || [])) {
+  for (const staleRef of (result.stale || [])) {
+    const staleId = _normalizeRowRef(proposals, staleRef);
     const row = _rows[staleId];
     if (!row || row.done || !row.node) continue;
-    row.done = true; _handedBack.push({ row: staleId, type: 'manifest-stale', reason: 'refute-close close exited 3 (digest mismatch)' });
+    row.done = true; _handBack(staleId, 'manifest-stale', 'refute-close close exited 3 (digest mismatch)');
   }
   for (const r of proposalIds) {
     const row = _rows[r];
     if (!row.done && closeNodeIds.includes(row.node)) {
       row.done = true;
-      _handedBack.push({ row: r, type: 'stage-dead', reason: 'refute-close left this proposal unresolved (absent from confirmed/refuted/stale)' });
+      _handBack(r, 'stage-dead', 'refute-close left this proposal unresolved (absent from confirmed/refuted/stale)');
     }
   }
 }
@@ -273,8 +298,9 @@ async function _fixStage(rowId) {
   const lockKeys = _lockKeysFor(row, rowId);
   const _priorNode = row.node;
   const result = await withLock(lockKeys, async () => _fixCall(row));
-  const tradeoff = result.tradeoff || '';
+  const tradeoff = result.has_tradeoff ? (result.tradeoff || '') : '';
   const outcome = result.outcome;
+  row.lastOutcome = outcome;
   if (result.touched_files && result.touched_files.length) { row.touchedFiles = result.touched_files; }
   row.createdFiles = result.created_files || [];
   if (outcome === 'done' && result.close_result) {
@@ -282,13 +308,13 @@ async function _fixStage(rowId) {
     row.touchedFiles = row.touchedFiles.concat([result.close_result.new]);
     row.closeResult = result.close_result;
   }
-  if (tradeoff) { row.done = true; _handedBack.push({ row: rowId, type: 'needs-judgment', reason: 'fix reported a tradeoff' }); return; }
-  if (outcome === 'NEEDS_PLAN') { row.done = true; _handedBack.push({ row: rowId, type: 'baton', reason: 'fix reported NEEDS_PLAN' }); return; }
-  if (outcome === 'PEER_DIRTY') { row.done = true; _handedBack.push({ row: rowId, type: 'peer-dirty', reason: 'fix reported PEER_DIRTY' }); return; }
-  if (outcome === 'MANIFEST_STALE') { row.done = true; _handedBack.push({ row: rowId, type: 'manifest-stale', reason: 'fix reported MANIFEST_STALE' }); return; }
+  if (tradeoff) { row.done = true; _handBack(rowId, 'needs-judgment', 'fix reported a tradeoff'); return; }
+  if (outcome === 'NEEDS_PLAN') { row.done = true; _handBack(rowId, 'baton', 'fix reported NEEDS_PLAN'); return; }
+  if (outcome === 'PEER_DIRTY') { row.done = true; _handBack(rowId, 'peer-dirty', 'fix reported PEER_DIRTY'); return; }
+  if (outcome === 'MANIFEST_STALE') { row.done = true; _handBack(rowId, 'manifest-stale', 'fix reported MANIFEST_STALE'); return; }
   if (outcome === 'NEEDS_WIDER_SCOPE') {
     if (!row.widened) { row.widened = true; row.declaredFiles = row.declaredFiles.concat(result.extra_files || []); return; }
-    row.done = true; _handedBack.push({ row: rowId, type: 'widen-exhausted', reason: 'second NEEDS_WIDER_SCOPE' }); return;
+    row.done = true; _handBack(rowId, 'widen-exhausted', 'second NEEDS_WIDER_SCOPE'); return;
   }
   row.fixNode = _priorNode;
   applyRoute(row, rowId, followEdge(row.node, outcome, row), `fix outcome ${outcome}`);
@@ -306,7 +332,7 @@ async function _verifyStage(rowId) {
       return;
     }
     await withLock(lockKeys, async () => _undoCall(row));
-    row.done = true; _handedBack.push({ row: rowId, type: 'rejected-after-retry', reason: 'verify failed twice' }); return;
+    row.done = true; _handBack(rowId, 'rejected-after-retry', 'verify failed twice'); return;
   }
   applyRoute(row, rowId, followEdge(row.node, result.outcome, row), `verify outcome ${result.outcome}`);
 }
@@ -314,7 +340,7 @@ async function _verifyStage(rowId) {
 async function _commitStage(rowId) {
   const row = _rows[rowId];
   const result = await withLock(['@commit'], async () => _commitCall(row));
-  if (result.outcome !== 'committed') { row.done = true; _handedBack.push({ row: rowId, type: 'commit-failed', reason: 'commit did not land' }); return; }
+  if (result.outcome !== 'committed') { row.done = true; _handBack(rowId, 'commit-failed', 'commit did not land'); return; }
   row.done = true; row.sha = result.sha || '';
   _settled.push({ row: rowId, outcome: 'committed', sha: row.sha });
 }
@@ -327,9 +353,9 @@ async function _dispatchRow(rowId, batchState) {
   else if (kind === 'commit') { await _commitStage(rowId); }
   else if (kind === 'refute-close') {
     if (!batchState.closeCalled) { await _closeBatch(batchState); }
-    else { row.done = true; _handedBack.push({ row: rowId, type: 'stage-dead', reason: 'refute-close already called for this batch' }); }
+    else { row.done = true; _handBack(rowId, 'stage-dead', 'refute-close already called for this batch'); }
   }
-  else { row.done = true; _handedBack.push({ row: rowId, type: 'stage-dead', reason: `unhandled node kind ${kind}` }); }
+  else { row.done = true; _handBack(rowId, 'stage-dead', `unhandled node kind ${kind}`); }
 }
 
 async function _finishBatch(batchState) {
@@ -338,12 +364,12 @@ async function _finishBatch(batchState) {
   const lockKeys = ['@commit'].concat(unsettled.map((r) => `ledger:${r}`));
   if (unsettled.length) {
     const result = await withLock(lockKeys, async () => {
-        const _result = (await agent('You are the committer for a ledger-only commit. You are the only stage that stages or commits anything. Stage exactly these unsettled rows\' ledger files: [' + ((unsettledPaths).join(', ')) + '], and nothing else.' + ' Then commit. If the outcome is indeterminate, reconcile it against `git log` and `git status` before doing anything else -- never retry blind.', { label: 'commit-ledger:batch', phase: 'Grind', agentType: 'coordinator:git-commit-agent', model: 'sonnet', effort: 'low', schema: {"properties": {"outcome": {"enum": ["committed", "commit-failed"], "type": "string"}, "sha": {"type": "string"}}, "required": ["outcome"], "type": "object"} })) || {};
+        const _result = (await agent('You are the committer for a ledger-only commit. You are the only stage that stages or commits anything. Stage exactly these unsettled rows\' ledger files: [' + ((unsettledPaths).join(', ')) + '], and nothing else. If any one of those files does not exist, skip it, report which one(s) you skipped in your reason, and commit the rest rather than failing the whole commit.' + ' Use commit subject `grind(fixture): ledger for ' + (unsettled.length) + ' row(s), run ' + (RUN_ID) + '` and a commit body naming these rows.' + ' Then commit. If the outcome is indeterminate, reconcile it against `git log` and `git status` before doing anything else -- never retry blind.', { label: 'commit-ledger:batch', phase: 'Grind', agentType: 'coordinator:git-commit-agent', model: 'sonnet', effort: 'low', schema: {"properties": {"outcome": {"enum": ["committed", "commit-failed"], "type": "string"}, "sha": {"type": "string"}}, "required": ["outcome"], "type": "object"} })) || {};
         _recordCall('commit');
         return _result;
     });
     if (result.outcome === 'commit-failed') {
-      for (const r of unsettled) { _handedBack.push({ row: r, type: 'commit-failed', reason: 'ledger-only commit did not land' }); }
+      for (const r of unsettled) { _handBack(r, 'commit-failed', 'ledger-only commit did not land'); }
     } else {
       for (const r of unsettled) { _ledgerCommitted.add(r); }
     }
@@ -351,20 +377,19 @@ async function _finishBatch(batchState) {
 }
 
 async function _drainCommit() {
-  const unsettled = Object.values(_rows).filter((r) => r.done && !_settled.some((s) => s.row === r.rowId) && !_ledgerCommitted.has(r.rowId)).map((r) => r.rowId);
+  const unsettled = Object.values(_rows).filter((r) => r.done && !_settled.some((s) => s.row === r.rowId) && !_ledgerCommitted.has(r.rowId) && !r.closeResult).map((r) => r.rowId);
   const unsettledPaths = unsettled.map((r) => _ledgerPathFor(r));
   const lockKeys = ['@commit'].concat(unsettled.map((r) => `ledger:${r}`));
-  if (unsettled.length) {
-    const result = await withLock(lockKeys, async () => {
-        const _result = (await agent('You are the committer for a ledger-only commit. You are the only stage that stages or commits anything. Stage exactly these unsettled rows\' ledger files: [' + ((unsettledPaths).join(', ')) + '], and nothing else.' + ' This is the drain commit: also write and stage state/queue-grind/fixture/runs/' + (RUN_ID) + '.json in this same commit.' + ' Its content is exactly this JSON, byte for byte: ' + (JSON.stringify(_runCostRecord())) + '.' + ' Then commit. If the outcome is indeterminate, reconcile it against `git log` and `git status` before doing anything else -- never retry blind.', { label: 'commit-ledger:drain', phase: 'Grind', agentType: 'coordinator:git-commit-agent', model: 'sonnet', effort: 'low', schema: {"properties": {"outcome": {"enum": ["committed", "commit-failed"], "type": "string"}, "sha": {"type": "string"}}, "required": ["outcome"], "type": "object"} })) || {};
-        _recordCall('commit');
-        return _result;
-    });
-    if (result.outcome === 'commit-failed') {
-      for (const r of unsettled) { _handedBack.push({ row: r, type: 'commit-failed', reason: 'ledger-only commit did not land' }); }
-    } else {
-      for (const r of unsettled) { _ledgerCommitted.add(r); }
-    }
+  const result = await withLock(lockKeys, async () => {
+      const _result = (await agent('You are the committer for a ledger-only commit. You are the only stage that stages or commits anything. Stage exactly these unsettled rows\' ledger files: [' + ((unsettledPaths).join(', ')) + '], and nothing else. If any one of those files does not exist, skip it, report which one(s) you skipped in your reason, and commit the rest rather than failing the whole commit.' + ' This is the drain commit: also write and stage state/queue-grind/fixture/runs/' + (RUN_ID) + '.json in this same commit.' + ' Its content is exactly this JSON, byte for byte: ' + (JSON.stringify(_runCostRecord())) + '.' + ' Use commit subject `grind(fixture): drain run ' + (RUN_ID) + '` and a commit body naming these rows.' + ' Then commit. If the outcome is indeterminate, reconcile it against `git log` and `git status` before doing anything else -- never retry blind.', { label: 'commit-ledger:drain', phase: 'Grind', agentType: 'coordinator:git-commit-agent', model: 'sonnet', effort: 'low', schema: {"properties": {"outcome": {"enum": ["committed", "commit-failed"], "type": "string"}, "sha": {"type": "string"}}, "required": ["outcome"], "type": "object"} })) || {};
+      _recordCall('commit');
+      return _result;
+  });
+  if (result.outcome === 'commit-failed') {
+    for (const r of unsettled) { _handBack(r, 'commit-failed', 'ledger-only commit did not land'); }
+    _handBack(RUN_ID, 'commit-failed', `drain commit did not land; run-cost record not written: state/queue-grind/fixture/runs/${RUN_ID}.json`);
+  } else {
+    for (const r of unsettled) { _ledgerCommitted.add(r); }
   }
 }
 
@@ -385,7 +410,7 @@ async function _runBatchWorker(batchState) {
   } catch (err) {
     const _msg = err && err.message ? err.message : String(err);
     for (const r of batch.rows) {
-      if (!_rows[r].done) { _rows[r].done = true; _handedBack.push({ row: r, type: 'stage-dead', reason: `batch worker threw: ${_msg}` }); }
+      if (!_rows[r].done) { _rows[r].done = true; _handBack(r, 'stage-dead', `batch worker threw: ${_msg}`); }
     }
   }
   await _finishBatch(batchState);
@@ -414,8 +439,8 @@ async function runGrind() {
     workers.splice(idx, 1);
   }
   if (_exhausted) {
-    for (const bid of _queue) { for (const r of BATCHES.find((b) => b.id === bid).rows) _handedBack.push({ row: r, type: 'budget-exhausted', reason: 'admission ceiling reached' }); }
-    for (const bid of Object.keys(_admitted)) { for (const r of BATCHES.find((b) => b.id === bid).rows) if (!_rows[r].done) _handedBack.push({ row: r, type: 'budget-exhausted', reason: 'admission ceiling reached' }); }
+    for (const bid of _queue) { for (const r of BATCHES.find((b) => b.id === bid).rows) _handBack(r, 'budget-exhausted', 'admission ceiling reached'); }
+    for (const bid of Object.keys(_admitted)) { for (const r of BATCHES.find((b) => b.id === bid).rows) if (!_rows[r].done) _handBack(r, 'budget-exhausted', 'admission ceiling reached'); }
   }
   await _drainCommit();
 }

@@ -132,12 +132,6 @@ class Profile:
     source_path: Path
     hand_back_types: tuple[str, ...] = ()
 
-    @property
-    def all_hand_back_types(self) -> frozenset[str]:
-        """The universal set plus the profile's own additions (DR-404 § 3:
-        profiles add to the universal set, never remove from it)."""
-        return vocab.UNIVERSAL_HANDBACK_TYPES | frozenset(self.hand_back_types)
-
 
 # ---------------------------------------------------------------------------
 # Exceptions — one class, naming the offending node/path via `rule`/`node`,
@@ -156,8 +150,9 @@ class ProfileError(ValueError):
     ``triage_verdict_totality``, ``graph_cycle``, ``graph_on_fail_traversal``,
     ``verify_floor``, ``closing_floor``, ``closure_block``,
     ``closure_branch_missing``, ``unknown_appetite_preset``,
-    ``unoverridable_knob``, ``hand_back_type_collision``). ``node`` is the offending node/knob id when the
-    rule is node-shaped, ``None`` for a profile-wide or path-shaped rule
+    ``unoverridable_knob``, ``hand_back_type_collision``).
+    ``node`` is the offending node/knob id when the rule is node-shaped,
+    ``None`` for a profile-wide or path-shaped rule
     (the path itself is folded into ``detail``). ``detail`` is the
     free-text description. One class rather than a per-rule subclass: no
     caller in this repo catches by a per-rule attribute, only by ``rule``
@@ -464,9 +459,10 @@ def _check_verify_nodes(profile: Profile) -> None:
 
 
 def _check_edge_targets(profile: Profile) -> None:
+    all_hand_back_types = vocab.UNIVERSAL_HANDBACK_TYPES | frozenset(profile.hand_back_types)
     for node_id, node in profile.graph.items():
         for outcome, target in node.edges.items():
-            if target not in profile.graph and target not in profile.all_hand_back_types:
+            if target not in profile.graph and target not in all_hand_back_types:
                 raise ProfileError(
                     "unknown_edge_target", node=node_id, detail=f"[{outcome!r}]: unknown edge target {target!r}"
                 )
@@ -480,7 +476,7 @@ def _check_edge_targets(profile: Profile) -> None:
         if (
             node.on_fail is not None
             and node.on_fail not in profile.graph
-            and node.on_fail not in profile.all_hand_back_types
+            and node.on_fail not in all_hand_back_types
         ):
             raise ProfileError(
                 "unknown_edge_target",

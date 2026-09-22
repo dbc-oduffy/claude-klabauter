@@ -165,6 +165,7 @@ def compose_triage_call(
     profile: str = "",
     batch_id: str = "",
     triage_depth: str = "",
+    verdicts: Sequence[str] = (),
     batch_id_js: Optional[str] = None,
     triage_depth_js: Optional[str] = None,
     rows_js: Optional[str] = None,
@@ -173,11 +174,11 @@ def compose_triage_call(
     agent_type_host: Optional[str] = None,
     repo_root: str = ".",
 ) -> str:
-    """`triage` (general-purpose, sonnet, medium). Runs `grind-row check`
+    """`triage` (general-purpose, sonnet, medium). Runs `backlog-grind-assemble grind-row check`
     first, then per row returns verdict, evidence, a t-shirt size plus
     sizing evidence, a tradeoff statement (empty when there is none),
     triage-declared files, and a fix plan. Appends one ledger line per row
-    (`grind-row append --profile P --row-id R --digest D --stage triage
+    (`backlog-grind-assemble grind-row append --profile P --row-id R --digest D --stage triage
     --verdict V --outcome O --evidence-file F --run-stamp T --repo-root
     <repo_root>`) as it finishes, and writes the per-batch triage record to
     `<run_dir>/records/<batch-id>.json` for a verify op to read.
@@ -186,7 +187,7 @@ def compose_triage_call(
     ``run_id_js`` name JS runtime expressions to interpolate instead of the
     static values -- letting ONE composed call site serve every batch,
     telling the agent its own rows (row_id/path/digest) and the exact
-    `grind-row check`/`append` invocations rather than a literal
+    `backlog-grind-assemble grind-row check`/`append` invocations rather than a literal
     `<script>` placeholder."""
     batch_id_part: tuple[str, str] = ("expr", batch_id_js) if batch_id_js else ("lit", batch_id)
     depth_part: tuple[str, str] = ("expr", triage_depth_js) if triage_depth_js else ("lit", triage_depth)
@@ -196,7 +197,7 @@ def compose_triage_call(
     parts: list[tuple[str, str]] = [
         ("lit", "You are the triage stage. Your rows (row_id/path/digest) are: "),
         rows_part,
-        ("lit", ". Run `grind-row check --manifest "),
+        ("lit", ". Run `backlog-grind-assemble grind-row check --manifest "),
         script_part,
         ("lit", " --batch "),
         batch_id_part,
@@ -205,12 +206,17 @@ def compose_triage_call(
             "lit",
             "` first, and list any row it reports as `stale` "
             "or `vanished` in `stale` rather than skipping it silently. "
-            "For every remaining row, decide a verdict, cite the "
+            "Return `row` as each row's row_id exactly as given above -- "
+            "never its path -- e.g. {\"row\": \"row3\", \"verdict\": ...}. "
+            "For every remaining row, decide a verdict from exactly this "
+            f"list, verbatim, and no other value: {sorted(verdicts)}. Cite the "
             "evidence for it, size the row XS through XXL with the evidence for "
-            "that size, and write a fix plan. Only fill in a tradeoff statement "
-            "when the fix genuinely carries one -- leave it empty otherwise. "
+            "that size, and write a fix plan. Set `has_tradeoff` to true only "
+            "when the fix genuinely carries a tradeoff, and describe it in "
+            "`tradeoff`; otherwise set `has_tradeoff` to false and leave "
+            "`tradeoff` empty. "
             "Name every file your triage declares the row touches. As you finish "
-            "each row, run `grind-row append --profile "
+            "each row, run `backlog-grind-assemble grind-row append --profile "
             f"{profile} --row-id <its row_id> --digest <its digest> --stage "
             "triage --verdict <its verdict> --outcome <its verdict> "
             "--evidence-file <a file with your evidence> --run-stamp ",
@@ -230,13 +236,17 @@ def compose_triage_call(
     ]
     row_schema = {
         "type": "object",
-        "required": list(TRIAGE_RECORD_FIELDS),
+        "required": list(TRIAGE_RECORD_FIELDS) + ["has_tradeoff"],
         "properties": {
-            "row": {"type": "string"},
-            "verdict": {"type": "string"},
+            "row": {
+                "type": "string",
+                "description": "the row_id exactly as given in this batch's rows, never the row's path",
+            },
+            "verdict": {"type": "string", "enum": list(verdicts)},
             "evidence": {"type": "string"},
             "tshirt_size": {"type": "string", "enum": sorted(TSHIRT_SIZES)},
             "sizing_evidence": {"type": "string"},
+            "has_tradeoff": {"type": "boolean"},
             "tradeoff": {"type": "string"},
             "declared_files": {"type": "array", "items": {"type": "string"}},
             "fix_plan": {"type": "string"},
@@ -276,7 +286,7 @@ def compose_refute_close_call(
 ) -> str:
     """`refute-close` (general-purpose, sonnet, medium). Tries to refute
     each close proposal it is handed. Closes only the confirmed ones, via
-    `grind-row close --profile-dir D --profile P --row <path> --digest DIG
+    `backlog-grind-assemble grind-row close --profile-dir D --profile P --row <path> --digest DIG
     --verdict refute-close --evidence-file F --closed-by refute-close
     --run-stamp T --repo-root <repo_root>`, reporting the `{old,new}` path
     pair the command prints so the committer can stage the archive add and
@@ -296,7 +306,7 @@ def compose_refute_close_call(
             "lit",
             ". For each one, actively try to refute it -- look for evidence the "
             "row is not actually resolved. For every proposal that survives "
-            "that attempt, run `grind-row close --profile-dir ",
+            "that attempt, run `backlog-grind-assemble grind-row close --profile-dir ",
         ),
         profile_dir_part,
         (
@@ -310,11 +320,14 @@ def compose_refute_close_call(
         (
             "lit",
             "`, and report the `{old,new}` path pair it prints as that "
-            "row's `new_path`. If `grind-row close` exits 3 (digest mismatch "
+            "row's `new_path`. If `backlog-grind-assemble grind-row close` exits 3 (digest mismatch "
             "-- the row changed since the manifest was emitted), put that "
             "row's id in `stale` instead. Report every proposal you refuted "
-            "along with why, and never run `grind-row close` for one of "
-            "those. " + _NO_STAGING_CLAUSE,
+            "along with why, and never run `backlog-grind-assemble grind-row close` for one of "
+            "those. In every one of `confirmed`/`refuted`/`stale`, return `row` "
+            "as the row_id exactly as given in the proposals above, never the "
+            "row's path -- e.g. {\"row\": \"row3\", \"new_path\": \"archive/2026-09/row3.yaml\"}. "
+            + _NO_STAGING_CLAUSE,
         ),
     ]
     schema = {
@@ -327,7 +340,10 @@ def compose_refute_close_call(
                     "type": "object",
                     "required": ["row", "new_path"],
                     "properties": {
-                        "row": {"type": "string"},
+                        "row": {
+                            "type": "string",
+                            "description": "the row_id exactly as given in the proposals above, never the row's path",
+                        },
                         "new_path": {"type": "string"},
                     },
                 },
@@ -338,7 +354,10 @@ def compose_refute_close_call(
                     "type": "object",
                     "required": ["row", "reason"],
                     "properties": {
-                        "row": {"type": "string"},
+                        "row": {
+                            "type": "string",
+                            "description": "the row_id exactly as given in the proposals above, never the row's path",
+                        },
                         "reason": {"type": "string"},
                     },
                 },
@@ -382,7 +401,7 @@ def compose_fix_call(
     `NEEDS_WIDER_SCOPE` with the extra files, or `NEEDS_PLAN` (engine-mapped
     to `baton`), or a non-empty tradeoff statement (engine-mapped to
     `needs-judgment`). Otherwise fixes, tests, reports every file it
-    touched AND created, and runs `grind-row close` when they pass,
+    touched AND created, and runs `backlog-grind-assemble grind-row close` when they pass,
     reporting the `{old,new}` path pair it prints as `close_result`.
 
     ``locked_files_js``/``row_id_js``/``feedback_js`` name JS expressions
@@ -415,15 +434,17 @@ def compose_fix_call(
             "PEER_DIRTY rather than fixing over it. If the fix needs files "
             "beyond your locked set, stop and report NEEDS_WIDER_SCOPE with the "
             "extra files, and take no other action. If the fix needs a plan "
-            "before it can proceed, report NEEDS_PLAN. If your fix genuinely "
-            "carries a tradeoff triage did not catch, report that tradeoff "
-            "instead of proceeding. Otherwise, fix the row, run its tests, "
+            "before it can proceed, report NEEDS_PLAN. Set `has_tradeoff` to "
+            "true only when your fix genuinely carries a tradeoff triage did "
+            "not catch, and describe it in `tradeoff`; otherwise set "
+            "`has_tradeoff` to false and leave `tradeoff` empty. "
+            "Otherwise, fix the row, run its tests, "
             "report every file you touched and every file you created, and "
-            "when they pass run `grind-row close --profile-dir ",
+            "when they pass run `backlog-grind-assemble grind-row close --profile-dir ",
         )
     )
     _manifest_stale_note = (
-        " If `grind-row close` exits 3 (digest mismatch -- the row changed "
+        " If `backlog-grind-assemble grind-row close` exits 3 (digest mismatch -- the row changed "
         "since the manifest was emitted), report MANIFEST_STALE and stop."
     )
     parts.append(("expr", profile_dir_js) if profile_dir_js else ("lit", "<profile dir>"))
@@ -448,7 +469,7 @@ def compose_fix_call(
     parts.append(("lit", " " + _NO_STAGING_CLAUSE))
     schema = {
         "type": "object",
-        "required": ["outcome"],
+        "required": ["outcome", "has_tradeoff"],
         "properties": {
             "outcome": {
                 "type": "string",
@@ -468,6 +489,7 @@ def compose_fix_call(
                 "type": "object",
                 "properties": {"old": {"type": "string"}, "new": {"type": "string"}},
             },
+            "has_tradeoff": {"type": "boolean"},
             "tradeoff": {"type": "string"},
         },
     }
@@ -642,8 +664,10 @@ def compose_commit_call(
     *,
     label: str,
     phase_title: str,
+    profile: str = "",
     row_id: str = "",
     row_id_js: Optional[str] = None,
+    outcome_js: Optional[str] = None,
     touched_files: Sequence[str] = (),
     touched_files_js: Optional[str] = None,
     removed_files: Sequence[str] = (),
@@ -652,7 +676,7 @@ def compose_commit_call(
     agent_type_host: Optional[str] = None,
 ) -> str:
     """`commit` (`coordinator:git-commit-agent`, sonnet, low). Stages the
-    worker's touched list plus the row's ledger deletion (`grind-row
+    worker's touched list plus the row's ledger deletion (`backlog-grind-assemble grind-row
     settle`), runs the profile's index-regenerate op when one is named,
     then commits. Passes `--declared-revert` for every removed path
     (trap 3). An indeterminate outcome is reconciled against `git log` and
@@ -665,19 +689,25 @@ def compose_commit_call(
     site serve every row, with the committer staging what the worker
     ACTUALLY touched, never a static per-row approximation."""
     row_id_part: tuple[str, str] = ("expr", row_id_js) if row_id_js else ("lit", row_id)
+    outcome_part: tuple[str, str] = ("expr", outcome_js) if outcome_js else ("lit", "settled")
     parts: list[tuple[str, str]] = [
         ("lit", "You are the committer for row "),
         row_id_part,
         ("lit", ". You are the only stage that stages or commits anything. Stage exactly this touched list: ["),
     ]
     parts.extend(_list_parts(touched_files, touched_files_js))
-    parts.append(("lit", "], plus this row's ledger deletion via `grind-row settle`."))
+    parts.append(("lit", "], plus this row's ledger deletion via `backlog-grind-assemble grind-row settle`."))
     if regenerate_op:
         parts.append(("lit", f" Before staging, run the index-regenerate op `{regenerate_op}`."))
     if removed_files or removed_files_js:
         parts.append(("lit", " Pass --declared-revert for every one of these removed paths: ["))
         parts.extend(_list_parts(removed_files, removed_files_js))
         parts.append(("lit", "]."))
+    parts.append(("lit", f" Use commit subject `grind({profile}): "))
+    parts.append(row_id_part)
+    parts.append(("lit", " "))
+    parts.append(outcome_part)
+    parts.append(("lit", "` and a commit body naming this row."))
     parts.append(("lit", _COMMIT_TAIL_LIT))
     return _compose_commit_agent_call(
         parts, label=label, phase_title=phase_title, agent_type_host=agent_type_host
@@ -706,6 +736,7 @@ def compose_commit_ledger_only_call(
     interpolate at RUN time instead of the static values -- the real
     unsettled-row set at commit time, and the real run stamp, neither of
     which is known at emit time."""
+    run_id_part: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", str(run_id))
     parts: list[tuple[str, str]] = [
         (
             "lit",
@@ -715,7 +746,14 @@ def compose_commit_ledger_only_call(
         )
     ]
     parts.extend(_list_parts(unsettled_row_ids, unsettled_row_ids_js))
-    parts.append(("lit", "], and nothing else."))
+    parts.append(
+        (
+            "lit",
+            "], and nothing else. If any one of those files does not exist, "
+            "skip it, report which one(s) you skipped in your reason, and "
+            "commit the rest rather than failing the whole commit.",
+        )
+    )
     if is_drain:
         parts.append(
             ("lit", f" This is the drain commit: also write and stage state/queue-grind/{profile}/runs/")
@@ -729,6 +767,16 @@ def compose_commit_ledger_only_call(
             parts.append(("lit", " Its content is exactly this JSON, byte for byte: "))
             parts.append(("expr", record_js))
             parts.append(("lit", "."))
+    if is_drain:
+        parts.append(("lit", f" Use commit subject `grind({profile}): drain run "))
+        parts.append(run_id_part)
+        parts.append(("lit", "` and a commit body naming these rows."))
+    else:
+        parts.append(("lit", f" Use commit subject `grind({profile}): ledger for "))
+        parts.append(("expr", "unsettled.length"))
+        parts.append(("lit", " row(s), run "))
+        parts.append(run_id_part)
+        parts.append(("lit", "` and a commit body naming these rows."))
     parts.append(("lit", _COMMIT_TAIL_LIT))
     return _compose_commit_agent_call(
         parts, label=label, phase_title=phase_title, agent_type_host=agent_type_host

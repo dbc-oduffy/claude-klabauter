@@ -55,7 +55,8 @@ def _fixture_profile():
 
 def _compose(**overrides):
     profile = overrides.pop("profile", None) or _fixture_profile()
-    knobs = gp.resolve_appetite(profile, overrides.pop("appetite", "standard"))
+    appetite = overrides.pop("appetite", "standard")
+    knobs = gp.resolve_appetite(profile, appetite)
     knobs.update(overrides)
     manifest = overrides.pop("manifest", None) or _fixture_manifest()
     return gc.compose_grind_script(
@@ -63,6 +64,7 @@ def _compose(**overrides):
         profile,
         knobs,
         run_dir=Path("state/queue-grind/fixture/run-1"),
+        appetite=appetite,
         agent_type_host=None,
     )
 
@@ -243,21 +245,6 @@ def test_real_bounded_concurrency_not_serial_pipeline():
     assert "workers.length < WINDOW" in script
 
 
-def test_drain_commit_prompt_names_run_cost_record_path():
-    script = _compose()
-    assert "runs/" in script and ".json in this same commit." in script
-    assert "This is the drain commit" in script
-
-
-def test_drain_commit_interpolates_live_run_id_and_unsettled_rows():
-    """The drain/batch-end ledger-only commits interpolate the REAL runtime
-    `unsettled`/`RUN_ID` values (never a static per-batch placeholder) --
-    the break-class defect the EM follow-up named."""
-    script = _compose()
-    assert "(unsettledPaths).join(', ')" in script
-    assert "(RUN_ID)" in script
-
-
 def test_fix_commit_undo_interpolate_live_row_state_not_static_manifest_path():
     """The fix/commit/undo prompts read the row's own live
     declaredFiles/touchedFiles/removedFiles -- never a literal manifest
@@ -272,16 +259,18 @@ def test_fix_commit_undo_interpolate_live_row_state_not_static_manifest_path():
         assert script[m.end() : m.end() + 40].startswith("' + ((row.touchedFiles")
 
 
-def test_handback_rows_are_row_ids_and_counts_populated():
-    script = _compose()
-    assert "counts: _counts()," in script
-    assert "return { by_type, by_outcome };" in script
-    assert "_handedBack.push({ row: rowId" in script or "_handedBack.push({ row: rec.row" in script
-
-
 # ---------------------------------------------------------------------------
 # STAGE_OUTPUT_TOKENS / batch_reserve
 # ---------------------------------------------------------------------------
+
+
+def test_non_default_appetite_reaches_appetite_name():
+    """Live-run defect 9: a run emitted with `--appetite hunt` reported
+    `"appetite": "standard"` in its hand-back -- `knobs` never carried an
+    `appetite` key, so `compose_grind_script` fell back to the default."""
+    script = _compose(appetite="sweep")
+    assert "const APPETITE_NAME = 'sweep';" in script
+    assert "appetite: APPETITE_NAME" in script
 
 
 def test_stage_output_tokens_all_positive():
@@ -371,7 +360,6 @@ def _run(batches, script_by_kind, *, batch_size=4, max_agent_calls=None, budget_
         triage_node,
         reserve=gc.batch_reserve(batch_size),
         max_agent_calls=max_agent_calls,
-        budget_tokens=budget_tokens,
         budget=budget,
         agent=agent_fn,
     )
@@ -493,7 +481,7 @@ def test_row_sized_m_or_above_routes_to_baton_never_fix():
 
 
 def test_tradeoff_below_plan_weight_routes_to_needs_judgment_never_fix():
-    verdicts = {"r0": {"verdict": "confirmed-bug", "tshirt_size": "S", "tradeoff": "cuts a corner"}}
+    verdicts = {"r0": {"verdict": "confirmed-bug", "tshirt_size": "S", "has_tradeoff": True, "tradeoff": "cuts a corner"}}
     fix_calls = {"n": 0}
     script_by_kind = {
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
@@ -508,7 +496,7 @@ def test_fixer_reported_tradeoff_also_routes_needs_judgment():
     verdicts = _all_fix_batches(["r0"])
     script_by_kind = {
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
-        "fix": lambda rid: {"outcome": "done", "tradeoff": "surprise tradeoff"},
+        "fix": lambda rid: {"outcome": "done", "has_tradeoff": True, "tradeoff": "surprise tradeoff"},
     }
     result, _budget = _run([("b0", ["r0"])], script_by_kind, batch_size=1)
     assert any(h["type"] == "needs-judgment" and h["row"] == "r0" for h in result["handed_back"])
@@ -598,54 +586,6 @@ def test_no_literal_script_placeholder_in_golden():
     assert "<script>" not in script
 
 
-def test_triage_prompt_names_rows_and_grind_row_append_with_digest():
-    script = _compose()
-    assert "Your rows (row_id/path/digest) are: " in script
-    assert "grind-row append --profile" in script
-    assert "--digest" in script
-    assert "--row-id" in script
-    assert "--stage" in script
-    assert "--evidence-file" in script
-    assert "--run-stamp" in script
-    assert "grind-row check --manifest " in script
-    assert "SCRIPT_PATH" in script
-
-
-def test_close_prompt_interpolates_proposals_and_close_flags():
-    script = _compose()
-    assert "Your close proposals (row_id/path/digest/evidence) are: " in script
-    assert "JSON.stringify(proposals)" in script
-    assert "grind-row close --profile-dir" in script
-    assert "--closed-by refute-close" in script
-    assert "--run-stamp " in script
-
-
-def test_undo_prompt_interpolates_created_files():
-    """The undo prompt restores the fixer's created files -- plus, on a
-    row whose fix already closed it (`row.closeResult` set), the archived
-    `close_result.new` path so a retried undo cleans that up too (finding
-    9: the undo must also remove `close_result.new` and restore the
-    original row path)."""
-    script = _compose()
-    assert "(row.createdFiles.concat(row.closeResult ? [row.closeResult.new] : [])).join(', ')" in script
-    assert "(row.touchedFiles.concat(row.closeResult ? [row.closeResult.old] : [])).join(', ')" in script
-
-
-def test_commit_prompt_includes_ledger_path_and_archive_path():
-    script = _compose()
-    assert "_ledgerPathFor(row.rowId)" in script
-    assert "row.touchedFiles" in script
-    # the fix stage's close_result / refute-close's new_path both feed
-    # into row.touchedFiles at runtime (asserted structurally below).
-
-
-def test_fix_close_result_and_refute_close_confirmed_feed_touched_removed_files():
-    script = _compose()
-    assert "result.close_result.new" in script
-    assert "result.close_result.old" in script
-    assert "item.new_path" in script
-
-
 # ---------------------------------------------------------------------------
 # MANIFEST_STALE (grind-row close exit 3) -- fix outcome + refute-close stale
 # ---------------------------------------------------------------------------
@@ -676,48 +616,6 @@ def test_refute_close_stale_row_hands_back_manifest_stale():
     assert any(h["type"] == "manifest-stale" and h["row"] == "r0" for h in result["handed_back"])
 
 
-def test_rendered_js_fix_stage_maps_manifest_stale():
-    script = _compose()
-    assert "if (outcome === 'MANIFEST_STALE')" in script
-    assert "type: 'manifest-stale', reason: 'fix reported MANIFEST_STALE'" in script
-
-
-def test_rendered_js_close_batch_maps_stale_to_manifest_stale():
-    script = _compose()
-    assert "result.stale || []" in script
-    assert "type: 'manifest-stale', reason: 'refute-close close exited 3" in script
-
-
-def test_fix_schema_enum_includes_manifest_stale():
-    script = _compose()
-    assert '"NEEDS_PLAN", "MANIFEST_STALE"' in script
-
-
-def test_close_schema_carries_stale_field():
-    script = _compose()
-    assert '"stale": {"items": {"type": "string"}, "type": "array"}' in script
-
-
-def test_fix_prompt_names_manifest_stale_on_close_exit_3():
-    script = _compose()
-    assert "report MANIFEST_STALE and stop" in script
-
-
-def test_close_prompt_names_stale_on_close_exit_3():
-    script = _compose()
-    assert "put that row\\'s id in `stale` instead" in script
-    assert "row.removedFiles.concat([row.path])" in script
-
-
-def test_op_verify_normalises_exit_code_and_per_row_failing_ids():
-    """Op-mode verify returns `{exit_code, output}`, not `.outcome` --
-    `_verifyCall` must normalise it to `{outcome, reason}` per row."""
-    script = _compose()
-    assert "_result.exit_code === 0" in script
-    assert "_failing.includes(row.rowId)" in script
-    assert "outcome: _pass ? 'pass' : 'fail'" in script
-
-
 def test_verify_fail_routes_back_to_fix_with_feedback_then_undo_on_second_fail():
     """DR-404: a verify failure routes back to FIX with the verifier's
     reason as feedback, not a blind re-verify of the same fix."""
@@ -745,12 +643,6 @@ def test_verify_fail_routes_back_to_fix_with_feedback_then_undo_on_second_fail()
     result, _budget = _run([("b0", ["r0"])], script_by_kind, batch_size=1)
     assert seen == ["fix", "verify", "fix", "verify", "undo"]
     assert any(h["type"] == "rejected-after-retry" for h in result["handed_back"])
-
-
-def test_fix_call_site_carries_feedback_expression():
-    script = _compose()
-    assert "row.verifyFeedback" in script
-    assert "Verifier feedback from your last attempt" in script
 
 
 def test_triage_rows_omitted_from_result_hand_back_stage_dead_not_stranded():
@@ -870,11 +762,6 @@ def test_finding1_null_commit_result_hands_back_commit_failed():
     assert any(h["row"] == "r0" and h["type"] == "commit-failed" for h in result["handed_back"])
 
 
-def test_finding1_rendered_commit_stage_treats_anything_but_committed_as_failed():
-    script = _compose()
-    assert "if (result.outcome !== 'committed') { row.done = true; _handedBack.push({ row: rowId, type: 'commit-failed'" in script
-
-
 def test_finding2_run_batch_worker_wraps_body_in_try_catch_and_still_finishes():
     script = _compose()
     worker = script[script.index("async function _runBatchWorker"): script.index("async function runGrind")]
@@ -889,19 +776,6 @@ def test_finding2_run_batch_worker_wraps_body_in_try_catch_and_still_finishes():
     assert catch_idx < finish_idx
 
 
-def test_finding2_batch_worker_throw_hands_back_every_not_done_row_stage_dead():
-    worker = _compose()
-    assert "for (const r of batch.rows) {" in worker
-    assert "batch worker threw:" in worker
-
-
-def test_finding3_close_batch_sweeps_unresolved_proposals_to_stage_dead():
-    script = _compose()
-    close_batch = script[script.index("async function _closeBatch"): script.index("async function _fixStage")]
-    assert "for (const r of proposalIds) {" in close_batch
-    assert "refute-close left this proposal unresolved" in close_batch
-
-
 def test_finding3_refute_close_leftover_hands_back_stage_dead_behaviourally():
     verdicts = _all_close_batches(["r0", "r1"])
     script_by_kind = {
@@ -914,25 +788,6 @@ def test_finding3_refute_close_leftover_hands_back_stage_dead_behaviourally():
     handback_types = {(h["row"], h["type"]) for h in result["handed_back"]}
     assert ("r0", "stage-dead") in handback_types
     assert ("r1", "stage-dead") in handback_types
-
-
-def test_finding3_dispatch_row_hands_back_when_close_already_called():
-    script = _compose()
-    assert "else { row.done = true; _handedBack.push({ row: rowId, type: 'stage-dead', reason: 'refute-close already called for this batch' }); }" in script
-
-
-def test_finding4_dispatch_row_has_else_branch_for_unhandled_node_kind():
-    script = _compose()
-    dispatch = script[script.index("async function _dispatchRow"): script.index("async function _finishBatch")]
-    assert "else { row.done = true; _handedBack.push({ row: rowId, type: 'stage-dead', reason: `unhandled node kind ${kind}` }); }" in dispatch
-
-
-def test_finding5_triage_batch_filters_records_and_stale_to_its_own_batch():
-    script = _compose()
-    triage_batch = script[script.index("async function _triageBatch"): script.index("async function _closeBatch")]
-    assert "if (!batch.rows.includes(rec.row)) continue;" in triage_batch
-    assert "if (!batch.rows.includes(staleId)) continue;" in triage_batch
-    assert "_out.stale || []" in triage_batch
 
 
 def test_finding5_cross_batch_triage_record_is_ignored_python_model():
@@ -957,60 +812,6 @@ def test_finding5_cross_batch_triage_record_is_ignored_python_model():
     # r0's own (b0) triage never mentioned it -- it hands back stage-dead,
     # never rerouted by b1's mis-scoped record.
     assert any(h["row"] == "r0" and h["type"] == "stage-dead" for h in result["handed_back"])
-
-
-def test_finding5_triage_stale_rows_hand_back_manifest_stale():
-    script = _compose()
-    assert "'manifest-stale', reason: 'grind-row check reported this row stale/vanished'" in script
-    assert '"stale": {"items": {"type": "string"}, "type": "array"}' in script
-
-
-def test_finding6_verify_agent_prompt_carries_row_context():
-    script = _compose()
-    assert "You are the verify stage for row " + "' + (row.rowId) + '" + " at " in script
-    assert "The fixer touched: [" in script
-    assert "Triage evidence: " in script
-    assert "The fix plan was: " in script
-    assert "(row.fixPlan)" in script
-    assert "(row.evidence)" in script
-
-
-def test_finding6_triage_batch_populates_row_fix_plan():
-    script = _compose()
-    assert "row.fixPlan = rec.fix_plan || '';" in script
-
-
-def test_finding7_op_verify_fails_closed_on_nonzero_exit_no_failing_ids():
-    script = _compose()
-    assert (
-        "const _pass = _result.exit_code === 0 || "
-        "(Array.isArray(_failing) && _failing.length > 0 && !_failing.includes(row.rowId));"
-    ) in script
-
-
-def test_finding8_fix_prompt_names_already_closed_path_on_retry():
-    script = _compose()
-    assert "This row is already closed at " in script
-    assert "amend the fix only, do not run `grind-row close` again." in script
-    assert "row.closeResult = result.close_result;" in script
-
-
-def test_finding8_undo_restores_original_path_and_removes_new_close_path():
-    script = _compose()
-    assert "row.touchedFiles.concat(row.closeResult ? [row.closeResult.old] : [])" in script
-    assert "row.createdFiles.concat(row.closeResult ? [row.closeResult.new] : [])" in script
-
-
-def test_finding9_drain_never_restages_a_ledger_finish_batch_already_committed():
-    script = _compose()
-    assert "!_ledgerCommitted.has(r)" in script
-    assert "!_ledgerCommitted.has(r.rowId)" in script
-    assert "_ledgerCommitted.add(r)" in script
-
-
-def test_finding9_ledger_only_commit_failed_is_recorded_in_handback():
-    script = _compose()
-    assert script.count("type: 'commit-failed', reason: 'ledger-only commit did not land'") == 2
 
 
 def test_finding9_refuted_to_commit_edge_left_alone_by_design():

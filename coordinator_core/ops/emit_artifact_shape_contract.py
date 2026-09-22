@@ -305,18 +305,12 @@ preserved there as the historical record; this port carries only the CURRENT pin
     carries DoE's additive `lesson-entry` and `lessons-outbox` 1.0.0 -> 1.1.0: five optional
     properties and `lesson-entry.status` gaining `discarded`, no `required` added. MINOR per
     the bump rule below. Plan: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md, C13.
-  10.0.0 (2026-09-22) Closes a stamp collision and carries the next delta under one stamp.
-    (1) DoE's committed bundle changed body at an unchanged 9.2.0 (DoE-claude e0583d5af ->
-    30aa260ca): `queue-grind-profile` 2.1.0 gained the optional `hand_back_types` property
-    (engine side: claude-klabauter e72a7d57c0) and `queue_grind_graph_node.on_fail`'s description
-    was reworded — additive. (2) `queue-grind-profile` 2.2.0: `source` gains an optional `args`
-    object (a widen: `additionalProperties: false` refused it before) and `required: [op]`.
-    The required-add is non-additive — a consumer holding 9.2.0 accepts `source: {}`, which
-    now fails — so MAJOR per the 9.0.0 precedent, although load_profile already refused a
-    source without `op`. `schema_count` 70 and `$defs` 98 unchanged. A 9.3.0 stamp for (1)
-    alone was committed here (8ae164a495) but never published nor carried by any bundle, so
-    it is superseded rather than spent. Sequencing: (1) is violation-closing, like 7.0.0;
-    (2) is constant-moves-first, like 6.0.0 — DoE regenerates once, against this stamp.
+  10.0.0 (2026-09-22) MAJOR: `queue-grind-profile` gains the optional
+    `hand_back_types` property, and `source` gains an optional `args` object plus
+    `required: [op]`. The required-add is non-additive — a consumer holding 9.2.0
+    accepts `source: {}`, which now fails. `schema_count` 70 and `$defs` 98
+    unchanged. Also closes a 9.2.0 stamp collision (an unpublished 9.3.0 stamp for
+    the `hand_back_types`/wording delta alone is superseded by this one).
 Bump rule (unchanged from JS): additive $defs/enum-widen changes stay minor; any
 non-additive change (enum-narrow, field/required removal) bumps MAJOR regardless of
 whether a vendored consumer version-asserts yet — two different bundle bodies must

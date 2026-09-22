@@ -144,11 +144,15 @@ def _extract_manifest(script_text: str) -> list[dict[str, Any]]:
     an object, not a bare array, so `check` reads the SAME const shape the
     composer writes). The composer emits it via `json.dumps`, which is also
     valid JS object-literal syntax, so a plain `json.loads` over the
-    captured span works without a JS parser. The span is found by BALANCING
-    braces from the object's own opening `{` (never a naive `find(';')`),
+    captured span works without a JS parser. The span is found via
+    `json.JSONDecoder().raw_decode` (stdlib incremental parser: reads
+    exactly one JSON value starting at `body_start`, honouring string
+    escapes itself — never a hand-written brace/string-escape balancer),
     since a row's `path`/`row_id` may itself contain a `;`. Raises
     `ValueError` naming the sentinel when it is absent or unparseable —
     never a silent empty manifest."""
+    # Review: overengineering-reviewer finding 4 — json.JSONDecoder().raw_decode
+    # replaces a hand-written brace/string-escape balancer over the same span.
     marker = f"const {_MANIFEST_CONST_NAME} = "
     start = script_text.find(marker)
     if start == -1:
@@ -162,36 +166,8 @@ def _extract_manifest(script_text: str) -> list[dict[str, Any]]:
             f"grind-row check: `{_MANIFEST_CONST_NAME}` sentinel is not a "
             "JSON object"
         )
-    depth = 0
-    end = None
-    in_string = False
-    escape = False
-    for i in range(body_start, len(script_text)):
-        ch = script_text[i]
-        if in_string:
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
-            continue
-        if ch == '"':
-            in_string = True
-        elif ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                end = i + 1
-                break
-    if end is None:
-        raise ValueError(
-            f"grind-row check: `{_MANIFEST_CONST_NAME}` sentinel object never closes"
-        )
-    raw = script_text[body_start:end]
     try:
-        parsed = json.loads(raw)
+        parsed, _end = json.JSONDecoder().raw_decode(script_text, body_start)
     except json.JSONDecodeError as exc:
         raise ValueError(
             f"grind-row check: `{_MANIFEST_CONST_NAME}` sentinel is not valid JSON: {exc}"

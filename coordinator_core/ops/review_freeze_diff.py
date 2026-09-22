@@ -582,14 +582,6 @@ def freeze_diffs_batch(
         )
         per_pair_diff = dict(zip(diff_pending_idx, diff_texts))
 
-    uncovered = _uncovered_paths(diff_result.stdout, paths)
-    if uncovered:
-        return _error(
-            "--paths entries matched no change in the range: "
-            f"{', '.join(uncovered)} — re-run without them.",
-            uncovered_paths=uncovered,
-        )
-
     diffs_dir = repo_root / "state" / "review-trail" / "diffs"
     diffs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -607,6 +599,14 @@ def freeze_diffs_batch(
             continue
 
         diff_text = per_pair_diff[i]
+        uncovered = _uncovered_paths(diff_text, normalized[i]["paths"])
+        if uncovered:
+            results[i] = _error(
+                "--paths entries matched no change in the range: "
+                f"{', '.join(uncovered)} — re-run without them.",
+                uncovered_paths=uncovered,
+            )
+            continue
         diff_path = diffs_dir / f"{slice_id}.diff"
         sha_path = diffs_dir / f"{slice_id}.head.sha"
 
@@ -629,6 +629,7 @@ def freeze_diffs_batch(
             "head_sha_path": str(sha_path),
             "head_sha": head_sha,
             "empty": not diff_text.strip(),
+            "uncovered_paths": [],
             "error": None,
         }
 
