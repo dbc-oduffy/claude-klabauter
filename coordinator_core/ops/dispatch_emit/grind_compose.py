@@ -314,7 +314,9 @@ def run_admission(
         result = _record_call("triage", batch.batch_id)
         batch.triaged = True
         seen: set[str] = set()
-        for rec in result:
+        for rec in result or []:
+            if rec["row"] not in batch.row_ids:
+                continue
             row = rows[rec["row"]]
             seen.add(rec["row"])
             action = route_after_triage(
@@ -329,7 +331,10 @@ def run_admission(
                 _handback(row, "stage-dead", "triage never returned a record for this row")
 
     def _close_batch(batch: _Batch) -> None:
-        result = _record_call("refute-close", batch.batch_id)
+        proposal_ids = [
+            rid for rid in batch.row_ids if rows[rid].node is not None and not rows[rid].done
+        ]
+        result = _record_call("refute-close", batch.batch_id) or {}
         batch.close_called = True
         for item in result.get("confirmed", []):
             row = rows[item["row"]]
@@ -348,10 +353,15 @@ def run_admission(
             if row.node is None or row.done:
                 continue
             _handback(row, "manifest-stale", "refute-close close exited 3 (digest mismatch)")
+        close_node_ids = {nid for nid, node in routing.items() if node["kind"] == "refute-close"}
+        for rid in proposal_ids:
+            row = rows[rid]
+            if not row.done and row.node in close_node_ids:
+                _handback(row, "stage-dead", "refute-close left this proposal unresolved (absent from confirmed/refuted/stale)")
 
     def _fix_row(row: Row) -> None:
         prior_node = row.node
-        result = _record_call("fix", row.row_id)
+        result = _record_call("fix", row.row_id) or {}
         tradeoff = result.get("tradeoff", "")
         outcome = result.get("outcome")
         if result.get("touched_files"):
@@ -383,7 +393,7 @@ def run_admission(
         _apply_route(row, follow_edge(routing, row.node, outcome, row), f"fix outcome {outcome!r}")
 
     def _verify_row(row: Row) -> None:
-        result = _record_call("verify", row.row_id)
+        result = _record_call("verify", row.row_id) or {}
         outcome = result.get("outcome")
         if outcome == "fail":
             if not row.verify_retried:
@@ -399,8 +409,8 @@ def run_admission(
         _apply_route(row, follow_edge(routing, row.node, outcome, row), f"verify outcome {outcome!r}")
 
     def _commit_row(row: Row) -> None:
-        result = _record_call("commit", row.row_id)
-        if result.get("outcome") == "commit-failed":
+        result = _record_call("commit", row.row_id) or {}
+        if result.get("outcome") != "committed":
             _handback(row, "commit-failed", "commit did not land")
             return
         row.done = True
@@ -418,6 +428,8 @@ def run_admission(
         elif kind == "refute-close":
             if not batch.close_called:
                 _close_batch(batch)
+            else:
+                _handback(row, "stage-dead", "refute-close already called for this batch")
         else:
             _handback(row, "stage-dead", f"unhandled node kind {kind!r}")
 
@@ -619,9 +631,15 @@ def _capture(call_text: str, stage_kind: str, *, return_expr: str = "_result", t
     ``return <return_expr>;`` entirely -- for a caller (op-mode verify)
     that must post-process ``_result`` before deciding what to return."""
     prefix = "  await agent("
-    if not call_text.startswith(prefix):
+    suffix = ");"
+    if not call_text.startswith(prefix) or not call_text.endswith(suffix):
         raise ValueError(f"grind_compose._capture: unexpected composer output shape: {call_text[:40]!r}")
-    body = "  const _result = await agent(" + call_text[len(prefix) :]
+    # `|| {}` guards every consumer against a null/undefined agent result --
+    # a null fix/verify/commit/close result then reads as an empty object
+    # (missing `.outcome`/`.confirmed`/etc.) rather than throwing, so the
+    # row routes to `stage-dead` via the normal "unhandled outcome" path
+    # instead of killing the run (finding 1).
+    body = "  const _result = (await agent(" + call_text[len(prefix) : -len(suffix)] + ")) || {};"
     body += f"\n  _recordCall({_js_string_literal(stage_kind)});"
     if tail is not None:
         return body + f"\n{tail}"
@@ -640,17 +658,22 @@ def _ledger_commit_block(
     fn_signature: str,
     *,
     unsettled_expr: str,
-    guarded: bool,
     is_drain: bool,
     profile_name: str,
     agent_type_host: Optional[str],
 ) -> str:
     """One ``async function <fn_signature> { ... }`` ledger-only commit
     block (§ Stage library, batch-end and drain forms) -- shared by both
-    call sites below, which differ only in how ``unsettled`` is computed,
-    whether the commit is guarded behind ``if (unsettled.length)``, and
-    whether it is the drain form (adds the run-cost record clause and
-    interpolates ``RUN_ID``)."""
+    call sites below, which differ only in how ``unsettled`` is computed
+    and whether it is the drain form (adds the run-cost record clause and
+    interpolates ``RUN_ID``). Always guarded behind ``if (unsettled.length)``
+    -- committing zero rows is a no-op, never attempted. A row whose ledger
+    this commit lands for is added to ``_ledgerCommitted`` so neither the
+    drain nor a later batch-end commit re-stages it (nit: `_drainCommit`
+    filtered only on `_settled`, so it re-staged ledgers `_finishBatch`
+    already committed); a `commit-failed` outcome here is recorded in the
+    hand-back, one entry per row of this ledger set, instead of silently
+    dropped."""
     label = "commit-ledger:drain" if is_drain else "commit-ledger:batch"
     raw = stages.compose_commit_ledger_only_call(
         label=label,
@@ -663,19 +686,21 @@ def _ledger_commit_block(
         agent_type_host=agent_type_host,
     )
     call_block = (
-        "  await withLock(lockKeys, async () => {\n"
+        "  const result = await withLock(lockKeys, async () => {\n"
         + _indent_block(_capture(raw, "commit"), "    ")
-        + "\n  });"
+        + "\n  });\n"
+        "  if (result.outcome === 'commit-failed') {\n"
+        "    for (const r of unsettled) { _handedBack.push({ row: r, type: 'commit-failed', reason: 'ledger-only commit did not land' }); }\n"
+        "  } else {\n"
+        "    for (const r of unsettled) { _ledgerCommitted.add(r); }\n"
+        "  }"
     )
     body = (
         f"  const unsettled = {unsettled_expr};\n"
         "  const unsettledPaths = unsettled.map((r) => _ledgerPathFor(r));\n"
         "  const lockKeys = ['@commit'].concat(unsettled.map((r) => `ledger:${r}`));\n"
+        "  if (unsettled.length) {\n" + _indent_block(call_block, "  ") + "\n  }\n"
     )
-    if guarded:
-        body += "  if (unsettled.length) {\n" + _indent_block(call_block, "  ") + "\n  }\n"
-    else:
-        body += call_block + "\n"
     return f"async function {fn_signature} {{\n{body}}}"
 
 
@@ -792,6 +817,7 @@ def compose_grind_script(
     lines.append("let _exhausted = false;")
     lines.append("const _handedBack = [];")
     lines.append("const _settled = [];")
+    lines.append("const _ledgerCommitted = new Set();")
 
     # ONE composed call site per stage kind (verify: one per mode) --
     # row/batch-count-independent. Each function takes the live row/batch
@@ -809,7 +835,10 @@ def compose_grind_script(
         "    const e = QUEUE_GRIND_MANIFEST.entries.find((x) => x.row_id === r);\n"
         "    return { row_id: r, path: e.path, digest: e.digest };\n"
         "  });\n"
-        + _indent_block(_capture(triage_raw, "triage", return_expr="(_result && _result.rows) || []"), "  ")
+        + _indent_block(
+            _capture(triage_raw, "triage", return_expr="{ rows: _result.rows || [], stale: _result.stale || [] }"),
+            "  ",
+        )
         + "\n}"
     )
 
@@ -827,12 +856,21 @@ def compose_grind_script(
     fix_raw = stages.compose_fix_call(
         label="fix", phase_title="Grind", row_id_js="row.rowId", locked_files_js="row.declaredFiles",
         feedback_js="(row.verifyFeedback ? (' Verifier feedback from your last attempt: ' + row.verifyFeedback) : '')",
+        close_note_js=(
+            "(row.closeResult ? (' This row is already closed at ' + row.closeResult.new + "
+            "'; amend the fix only, do not run `grind-row close` again.') : '')"
+        ),
         profile=profile.name, profile_dir_js="PROFILE_DIR", row_path_js="row.path", digest_js="row.digest",
         run_id_js="RUN_ID", agent_type_host=agent_type_host,
     )
     lines.append("async function _fixCall(row) {\n" + _indent_block(_capture(fix_raw, "fix"), "  ") + "\n}")
 
-    verify_agent_raw = stages.compose_verify_agent_call(label="verify-agent", phase_title="Grind", agent_type_host=agent_type_host)
+    verify_agent_raw = stages.compose_verify_agent_call(
+        label="verify-agent", phase_title="Grind",
+        row_id_js="row.rowId", row_path_js="row.path", touched_files_js="row.touchedFiles",
+        evidence_js="row.evidence", fix_plan_js="row.fixPlan",
+        agent_type_host=agent_type_host,
+    )
     verify_op_raw = stages.compose_verify_op_call(
         label="verify-op", phase_title="Grind", run_dir=run_dir_s, op_js="spec.op", batch_id_js="row.batchId",
         agent_type_host=agent_type_host,
@@ -846,7 +884,8 @@ def compose_grind_script(
                 verify_op_raw, "verify",
                 tail=(
                     "  const _failing = (_result.output && _result.output.failing_ids) || [];\n"
-                    "  const _pass = _result.exit_code === 0 || !_failing.includes(row.rowId);\n"
+                    "  const _pass = _result.exit_code === 0 || "
+                    "(Array.isArray(_failing) && _failing.length > 0 && !_failing.includes(row.rowId));\n"
                     "  return { outcome: _pass ? 'pass' : 'fail', reason: JSON.stringify(_result.output) };"
                 ),
             ),
@@ -865,7 +904,9 @@ def compose_grind_script(
     lines.append("async function _commitCall(row) {\n" + _indent_block(_capture(commit_raw, "commit"), "  ") + "\n}")
 
     undo_raw = stages.compose_undo_call(
-        label="undo", phase_title="Grind", touched_files_js="row.touchedFiles", created_files_js="row.createdFiles",
+        label="undo", phase_title="Grind",
+        touched_files_js="row.touchedFiles.concat(row.closeResult ? [row.closeResult.old] : [])",
+        created_files_js="row.createdFiles.concat(row.closeResult ? [row.closeResult.new] : [])",
         agent_type_host=agent_type_host,
     )
     lines.append("async function _undoCall(row) {\n" + _indent_block(_capture(undo_raw, "undo"), "  ") + "\n}")
@@ -881,7 +922,7 @@ def compose_grind_script(
         "    const _path = _entry.path;\n"
         "    _rows[r] = { rowId: r, batchId: b.id, batchKey: b.batch_key, path: _path, digest: _entry.digest, node: null, "
         "declaredFiles: [_path], touchedFiles: [_path], removedFiles: [], createdFiles: [], "
-        "evidence: '', verifyFeedback: '', fixNode: null, "
+        "evidence: '', verifyFeedback: '', fixPlan: '', fixNode: null, closeResult: null, "
         "widened: false, verifyRetried: false, onFailUsed: false, done: false, sha: '' };\n"
         "  }\n"
         "}"
@@ -893,23 +934,33 @@ def compose_grind_script(
         "  return null;\n"
         "}\n"
         "function _batchDone(batch) { return batch.rows.every((r) => _rows[r].done); }\n"
-        "function _batchUnsettledRows(batch) { return batch.rows.filter((r) => _rows[r].done && !_settled.some((s) => s.row === r)); }"
+        "function _batchUnsettledRows(batch) { return batch.rows.filter((r) => _rows[r].done && !_settled.some((s) => s.row === r) && !_ledgerCommitted.has(r)); }"
     )
 
     lines.append(
         "async function _triageBatch(batchState) {\n"
         "  const batch = BATCHES.find((b) => b.id === batchState.id);\n"
-        "  const rowsOut = await _triageCall(batchState.id, batchState.batchKey, batch.rows);\n"
+        "  const _out = await _triageCall(batchState.id, batchState.batchKey, batch.rows);\n"
         "  batchState.triaged = true;\n"
         "  const _seen = new Set();\n"
-        "  for (const rec of rowsOut) {\n"
+        "  for (const rec of (_out.rows || [])) {\n"
+        "    if (!batch.rows.includes(rec.row)) continue;\n"
         "    const row = _rows[rec.row];\n"
         "    if (!row) continue;\n"
         "    _seen.add(rec.row);\n"
         "    row.evidence = rec.evidence || '';\n"
+        "    row.fixPlan = rec.fix_plan || '';\n"
         "    if (rec.declared_files && rec.declared_files.length) { row.declaredFiles = rec.declared_files; row.touchedFiles = rec.declared_files; }\n"
         "    const route = routeAfterTriage(rec.verdict, rec.tshirt_size, rec.tradeoff || '');\n"
         "    applyRoute(row, rec.row, route, `triage verdict ${rec.verdict}`);\n"
+        "  }\n"
+        "  for (const staleId of (_out.stale || [])) {\n"
+        "    if (!batch.rows.includes(staleId)) continue;\n"
+        "    const row = _rows[staleId];\n"
+        "    if (!row || row.done || _seen.has(staleId)) continue;\n"
+        "    _seen.add(staleId);\n"
+        "    row.done = true;\n"
+        "    _handedBack.push({ row: staleId, type: 'manifest-stale', reason: 'grind-row check reported this row stale/vanished' });\n"
         "  }\n"
         "  for (const r of batch.rows) {\n"
         "    if (!_seen.has(r) && !_rows[r].done && !_rows[r].node) {\n"
@@ -924,7 +975,8 @@ def compose_grind_script(
         "async function _closeBatch(batchState) {\n"
         "  const closeNodeIds = Object.keys(ROUTING).filter((n) => ROUTING[n].kind === 'refute-close');\n"
         "  const batch = BATCHES.find((b) => b.id === batchState.id);\n"
-        "  const proposals = batch.rows.filter((r) => closeNodeIds.includes(_rows[r].node)).map((r) => {\n"
+        "  const proposalIds = batch.rows.filter((r) => closeNodeIds.includes(_rows[r].node));\n"
+        "  const proposals = proposalIds.map((r) => {\n"
         "    const row = _rows[r];\n"
         "    return { row_id: r, path: row.path, digest: (QUEUE_GRIND_MANIFEST.entries.find((e) => e.row_id === r) || {}).digest, evidence: row.evidence };\n"
         "  });\n"
@@ -947,6 +999,13 @@ def compose_grind_script(
         "    if (!row || row.done || !row.node) continue;\n"
         "    row.done = true; _handedBack.push({ row: staleId, type: 'manifest-stale', reason: 'refute-close close exited 3 (digest mismatch)' });\n"
         "  }\n"
+        "  for (const r of proposalIds) {\n"
+        "    const row = _rows[r];\n"
+        "    if (!row.done && closeNodeIds.includes(row.node)) {\n"
+        "      row.done = true;\n"
+        "      _handedBack.push({ row: r, type: 'stage-dead', reason: 'refute-close left this proposal unresolved (absent from confirmed/refuted/stale)' });\n"
+        "    }\n"
+        "  }\n"
         "}"
     )
 
@@ -963,6 +1022,7 @@ def compose_grind_script(
         "  if (outcome === 'done' && result.close_result) {\n"
         "    row.removedFiles = row.removedFiles.concat([result.close_result.old || row.path]);\n"
         "    row.touchedFiles = row.touchedFiles.concat([result.close_result.new]);\n"
+        "    row.closeResult = result.close_result;\n"
         "  }\n"
         "  if (tradeoff) { row.done = true; _handedBack.push({ row: rowId, type: 'needs-judgment', reason: 'fix reported a tradeoff' }); return; }\n"
         "  if (outcome === 'NEEDS_PLAN') { row.done = true; _handedBack.push({ row: rowId, type: 'baton', reason: 'fix reported NEEDS_PLAN' }); return; }\n"
@@ -1000,7 +1060,7 @@ def compose_grind_script(
         "async function _commitStage(rowId) {\n"
         "  const row = _rows[rowId];\n"
         "  const result = await withLock(['@commit'], async () => _commitCall(row));\n"
-        "  if (result.outcome === 'commit-failed') { row.done = true; _handedBack.push({ row: rowId, type: 'commit-failed', reason: 'commit did not land' }); return; }\n"
+        "  if (result.outcome !== 'committed') { row.done = true; _handedBack.push({ row: rowId, type: 'commit-failed', reason: 'commit did not land' }); return; }\n"
         "  row.done = true; row.sha = result.sha || '';\n"
         "  _settled.push({ row: rowId, outcome: 'committed', sha: row.sha });\n"
         "}"
@@ -1013,7 +1073,11 @@ def compose_grind_script(
         "  if (kind === 'fix') { await _fixStage(rowId); }\n"
         "  else if (kind === 'verify') { await _verifyStage(rowId); }\n"
         "  else if (kind === 'commit') { await _commitStage(rowId); }\n"
-        "  else if (kind === 'refute-close') { if (!batchState.closeCalled) { await _closeBatch(batchState); } }\n"
+        "  else if (kind === 'refute-close') {\n"
+        "    if (!batchState.closeCalled) { await _closeBatch(batchState); }\n"
+        "    else { row.done = true; _handedBack.push({ row: rowId, type: 'stage-dead', reason: 'refute-close already called for this batch' }); }\n"
+        "  }\n"
+        "  else { row.done = true; _handedBack.push({ row: rowId, type: 'stage-dead', reason: `unhandled node kind ${kind}` }); }\n"
         "}"
     )
 
@@ -1027,7 +1091,6 @@ def compose_grind_script(
         _ledger_commit_block(
             "_finishBatch(batchState)",
             unsettled_expr="_batchUnsettledRows(BATCHES.find((b) => b.id === batchState.id))",
-            guarded=True,
             is_drain=False,
             profile_name=profile.name,
             agent_type_host=agent_type_host,
@@ -1037,8 +1100,7 @@ def compose_grind_script(
         _ledger_commit_block(
             "_drainCommit()",
             unsettled_expr="Object.values(_rows).filter((r) => r.done && "
-            "!_settled.some((s) => s.row === r.rowId)).map((r) => r.rowId)",
-            guarded=False,
+            "!_settled.some((s) => s.row === r.rowId) && !_ledgerCommitted.has(r.rowId)).map((r) => r.rowId)",
             is_drain=True,
             profile_name=profile.name,
             agent_type_host=agent_type_host,
@@ -1058,11 +1120,18 @@ def compose_grind_script(
         "}\n"
         "async function _runBatchWorker(batchState) {\n"
         "  const batch = BATCHES.find((b) => b.id === batchState.id);\n"
-        "  if (!batchState.triaged) { await _triageBatch(batchState); }\n"
-        "  while (!_batchDone(batch)) {\n"
-        "    const pending = _pendingRow(batch);\n"
-        "    if (pending === null) break;\n"
-        "    await _dispatchRow(pending, batchState);\n"
+        "  try {\n"
+        "    if (!batchState.triaged) { await _triageBatch(batchState); }\n"
+        "    while (!_batchDone(batch)) {\n"
+        "      const pending = _pendingRow(batch);\n"
+        "      if (pending === null) break;\n"
+        "      await _dispatchRow(pending, batchState);\n"
+        "    }\n"
+        "  } catch (err) {\n"
+        "    const _msg = err && err.message ? err.message : String(err);\n"
+        "    for (const r of batch.rows) {\n"
+        "      if (!_rows[r].done) { _rows[r].done = true; _handedBack.push({ row: r, type: 'stage-dead', reason: `batch worker threw: ${_msg}` }); }\n"
+        "    }\n"
         "  }\n"
         "  await _finishBatch(batchState);\n"
         "  delete _admitted[batchState.id];\n"

@@ -342,6 +342,27 @@ def test_validate_graph_unknown_edge_target_refused(tmp_path):
     assert exc_info.value.rule == "unknown_edge_target"
 
 
+def test_validate_graph_edge_targeting_triage_node_refused(tmp_path):
+    # a `fix` node routing `done` back onto the triage node makes no
+    # progress and loops forever (composer finding 4) -- refused at
+    # validate_graph time, never emitted.
+    doc = _load_fixture_doc()
+    doc["graph"]["fix"]["edges"]["done"] = "triage"
+    profile = _profile_from_doc(tmp_path, "edge-to-triage", doc)
+    with pytest.raises(gp.ProfileError) as exc_info:
+        gp.validate_graph(profile)
+    assert exc_info.value.rule == "edge_targets_triage_node"
+
+
+def test_validate_graph_on_fail_targeting_triage_node_refused(tmp_path):
+    doc = _load_fixture_doc()
+    doc["graph"]["fix"]["on_fail"] = "triage"
+    profile = _profile_from_doc(tmp_path, "on-fail-to-triage", doc)
+    with pytest.raises(gp.ProfileError) as exc_info:
+        gp.validate_graph(profile)
+    assert exc_info.value.rule == "edge_targets_triage_node"
+
+
 # ---------------------------------------------------------------------------
 # Profile hand-back types (DR-404 § 3) and on_fail to a hand-back type
 # ---------------------------------------------------------------------------

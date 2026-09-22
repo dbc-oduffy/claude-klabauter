@@ -621,8 +621,14 @@ def test_close_prompt_interpolates_proposals_and_close_flags():
 
 
 def test_undo_prompt_interpolates_created_files():
+    """The undo prompt restores the fixer's created files -- plus, on a
+    row whose fix already closed it (`row.closeResult` set), the archived
+    `close_result.new` path so a retried undo cleans that up too (finding
+    9: the undo must also remove `close_result.new` and restore the
+    original row path)."""
     script = _compose()
-    assert "(row.createdFiles).join(', ')" in script
+    assert "(row.createdFiles.concat(row.closeResult ? [row.closeResult.new] : [])).join(', ')" in script
+    assert "(row.touchedFiles.concat(row.closeResult ? [row.closeResult.old] : [])).join(', ')" in script
 
 
 def test_commit_prompt_includes_ledger_path_and_archive_path():
@@ -801,3 +807,348 @@ def test_finish_batch_renders_unsettled_rows_from_the_batches_entry():
     finish = script[script.index("async function _finishBatch"):]
     finish = finish[: finish.index("\n}\n")]
     assert "_batchUnsettledRows(BATCHES.find((b) => b.id === batchState.id))" in finish
+
+
+# ---------------------------------------------------------------------------
+# staff-eng review follow-up (coordinator-staff-eng.af423efe80835b8d2.md):
+# runtime defects found by hand-trace over the golden -- one test per
+# numbered finding.
+# ---------------------------------------------------------------------------
+
+
+def test_finding1_every_captured_agent_result_is_null_guarded():
+    """Every `_result = await agent(...)` capture is wrapped `|| {}` so a
+    null/undefined agent result reads as an empty object instead of
+    throwing on the first `.field` access."""
+    script = _compose()
+    captures = re.findall(r"const _result = \(await agent\(", script)
+    guards = re.findall(r"\)\) \|\| \{\};", script)
+    assert captures
+    assert len(captures) == len(guards) == len(re.findall(r"\bagent\(", script))
+
+
+def test_finding1_null_fix_verify_close_route_to_stage_dead_never_throw():
+    """A null result from fix/verify/close routes its row(s) to stage-dead
+    rather than throwing (driven through the pure-Python admission model,
+    which mirrors the guarded rendered script)."""
+    routing, triage_node = _fixture_routing()
+    budget = _StubBudgetSpender()
+
+    def agent_fn(stage_kind, unit_id):
+        budget.spend(gc.STAGE_OUTPUT_TOKENS.get(stage_kind, 10))
+        if stage_kind == "triage":
+            return [{"row": "r0", "verdict": "confirmed-bug", "tshirt_size": "S", "tradeoff": ""}]
+        return None
+
+    result = gc.run_admission(
+        [("b0", ["r0"])], routing, triage_node, reserve=gc.batch_reserve(1),
+        budget=budget, agent=agent_fn,
+    )
+    assert result["handed_back"] == [{"row": "r0", "type": "stage-dead", "reason": "fix outcome None"}]
+
+
+def test_finding1_null_commit_result_hands_back_commit_failed():
+    routing, triage_node = _fixture_routing()
+    budget = _StubBudgetSpender()
+
+    def agent_fn(stage_kind, unit_id):
+        budget.spend(gc.STAGE_OUTPUT_TOKENS.get(stage_kind, 10))
+        if stage_kind == "triage":
+            return [{"row": "r0", "verdict": "confirmed-bug", "tshirt_size": "S", "tradeoff": ""}]
+        if stage_kind in ("fix",):
+            return {"outcome": "done"}
+        if stage_kind == "verify":
+            return {"outcome": "pass"}
+        if stage_kind == "commit":
+            return None
+        return None
+
+    result = gc.run_admission(
+        [("b0", ["r0"])], routing, triage_node, reserve=gc.batch_reserve(1),
+        budget=budget, agent=agent_fn,
+    )
+    assert any(h["row"] == "r0" and h["type"] == "commit-failed" for h in result["handed_back"])
+
+
+def test_finding1_rendered_commit_stage_treats_anything_but_committed_as_failed():
+    script = _compose()
+    assert "if (result.outcome !== 'committed') { row.done = true; _handedBack.push({ row: rowId, type: 'commit-failed'" in script
+
+
+def test_finding2_run_batch_worker_wraps_body_in_try_catch_and_still_finishes():
+    script = _compose()
+    worker = script[script.index("async function _runBatchWorker"): script.index("async function runGrind")]
+    assert "try {" in worker
+    assert "} catch (err) {" in worker
+    assert "await _finishBatch(batchState);" in worker
+    # the catch and the finish/HANDBACK path are both reached -- the catch
+    # is not itself inside the try it guards, and _finishBatch sits after
+    # the try/catch, not inside it.
+    catch_idx = worker.index("} catch (err) {")
+    finish_idx = worker.index("await _finishBatch(batchState);")
+    assert catch_idx < finish_idx
+
+
+def test_finding2_batch_worker_throw_hands_back_every_not_done_row_stage_dead():
+    worker = _compose()
+    assert "for (const r of batch.rows) {" in worker
+    assert "batch worker threw:" in worker
+
+
+def test_finding3_close_batch_sweeps_unresolved_proposals_to_stage_dead():
+    script = _compose()
+    close_batch = script[script.index("async function _closeBatch"): script.index("async function _fixStage")]
+    assert "for (const r of proposalIds) {" in close_batch
+    assert "refute-close left this proposal unresolved" in close_batch
+
+
+def test_finding3_refute_close_leftover_hands_back_stage_dead_behaviourally():
+    verdicts = _all_close_batches(["r0", "r1"])
+    script_by_kind = {
+        "triage": lambda bid: _triage_script(verdicts)(bid, ["r0", "r1"]),
+        # neither row is confirmed, refuted or stale -- {} is a legal (if
+        # useless) refute-close result.
+        "refute-close": lambda bid: {},
+    }
+    result, _budget = _run([("b0", ["r0", "r1"])], script_by_kind, batch_size=2)
+    handback_types = {(h["row"], h["type"]) for h in result["handed_back"]}
+    assert ("r0", "stage-dead") in handback_types
+    assert ("r1", "stage-dead") in handback_types
+
+
+def test_finding3_dispatch_row_hands_back_when_close_already_called():
+    script = _compose()
+    assert "else { row.done = true; _handedBack.push({ row: rowId, type: 'stage-dead', reason: 'refute-close already called for this batch' }); }" in script
+
+
+def test_finding4_dispatch_row_has_else_branch_for_unhandled_node_kind():
+    script = _compose()
+    dispatch = script[script.index("async function _dispatchRow"): script.index("async function _finishBatch")]
+    assert "else { row.done = true; _handedBack.push({ row: rowId, type: 'stage-dead', reason: `unhandled node kind ${kind}` }); }" in dispatch
+
+
+def test_finding5_triage_batch_filters_records_and_stale_to_its_own_batch():
+    script = _compose()
+    triage_batch = script[script.index("async function _triageBatch"): script.index("async function _closeBatch")]
+    assert "if (!batch.rows.includes(rec.row)) continue;" in triage_batch
+    assert "if (!batch.rows.includes(staleId)) continue;" in triage_batch
+    assert "_out.stale || []" in triage_batch
+
+
+def test_finding5_cross_batch_triage_record_is_ignored_python_model():
+    """A triage record naming a row from another batch never reroutes it
+    (misroute 5) -- the python model already filters by `batch.row_ids`."""
+    routing, triage_node = _fixture_routing()
+    budget = _StubBudgetSpender()
+
+    def agent_fn(stage_kind, unit_id):
+        budget.spend(gc.STAGE_OUTPUT_TOKENS.get(stage_kind, 10))
+        if stage_kind == "triage":
+            # b1's triage call mentions r0, which belongs to b0.
+            if unit_id == "b0":
+                return []
+            return [{"row": "r0", "verdict": "confirmed-bug", "tshirt_size": "S", "tradeoff": ""}]
+        return {"outcome": "n/a"}
+
+    result = gc.run_admission(
+        [("b0", ["r0"]), ("b1", ["r1"])], routing, triage_node, reserve=gc.batch_reserve(1),
+        budget=budget, agent=agent_fn,
+    )
+    # r0's own (b0) triage never mentioned it -- it hands back stage-dead,
+    # never rerouted by b1's mis-scoped record.
+    assert any(h["row"] == "r0" and h["type"] == "stage-dead" for h in result["handed_back"])
+
+
+def test_finding5_triage_stale_rows_hand_back_manifest_stale():
+    script = _compose()
+    assert "'manifest-stale', reason: 'grind-row check reported this row stale/vanished'" in script
+    assert '"stale": {"items": {"type": "string"}, "type": "array"}' in script
+
+
+def test_finding6_verify_agent_prompt_carries_row_context():
+    script = _compose()
+    assert "You are the verify stage for row " + "' + (row.rowId) + '" + " at " in script
+    assert "The fixer touched: [" in script
+    assert "Triage evidence: " in script
+    assert "The fix plan was: " in script
+    assert "(row.fixPlan)" in script
+    assert "(row.evidence)" in script
+
+
+def test_finding6_triage_batch_populates_row_fix_plan():
+    script = _compose()
+    assert "row.fixPlan = rec.fix_plan || '';" in script
+
+
+def test_finding7_op_verify_fails_closed_on_nonzero_exit_no_failing_ids():
+    script = _compose()
+    assert (
+        "const _pass = _result.exit_code === 0 || "
+        "(Array.isArray(_failing) && _failing.length > 0 && !_failing.includes(row.rowId));"
+    ) in script
+
+
+def test_finding8_fix_prompt_names_already_closed_path_on_retry():
+    script = _compose()
+    assert "This row is already closed at " in script
+    assert "amend the fix only, do not run `grind-row close` again." in script
+    assert "row.closeResult = result.close_result;" in script
+
+
+def test_finding8_undo_restores_original_path_and_removes_new_close_path():
+    script = _compose()
+    assert "row.touchedFiles.concat(row.closeResult ? [row.closeResult.old] : [])" in script
+    assert "row.createdFiles.concat(row.closeResult ? [row.closeResult.new] : [])" in script
+
+
+def test_finding9_drain_never_restages_a_ledger_finish_batch_already_committed():
+    script = _compose()
+    assert "!_ledgerCommitted.has(r)" in script
+    assert "!_ledgerCommitted.has(r.rowId)" in script
+    assert "_ledgerCommitted.add(r)" in script
+
+
+def test_finding9_ledger_only_commit_failed_is_recorded_in_handback():
+    script = _compose()
+    assert script.count("type: 'commit-failed', reason: 'ledger-only commit did not land'") == 2
+
+
+def test_finding9_refuted_to_commit_edge_left_alone_by_design():
+    """The fixture profile's refute_close `refuted -> commit` edge is a
+    fixture-authoring choice (both confirmed and refuted proposals settle
+    via commit in this profile), not the break-class defect the review
+    flagged elsewhere -- left unchanged; see grind_profile._check_verify_nodes
+    docstring for the verify-on_fail disposition made instead."""
+    profile = _fixture_profile()
+    assert profile.graph["refute_close"].edges["refuted"] == "commit"
+
+
+# ---------------------------------------------------------------------------
+# Structural safety net (brief: extend it) -- every `agent(` consumer is
+# null-guarded, and every `while` loop has a progress guarantee.
+# ---------------------------------------------------------------------------
+
+
+def test_every_while_loop_has_a_progress_guarantee_reference():
+    """Every `while` loop in the golden sits next to a comment or a call
+    naming the progress mechanism that prevents it spinning forever."""
+    script = _compose()
+    while_lines = [i for i, line in enumerate(script.splitlines()) if re.search(r"\bwhile\s*\(", line)]
+    assert while_lines
+    lines = script.splitlines()
+    progress_markers = ("_pendingRow", "_queue.length", "workers.length")
+    for idx in while_lines:
+        window = "\n".join(lines[max(0, idx - 2): idx + 2])
+        assert any(marker in window for marker in progress_markers), lines[idx]
+
+
+def test_no_row_can_stay_non_done_forever_for_the_fixture_graph_under_every_outcome_including_null():
+    """Drive the pure-Python admission model over the fixture graph under
+    every distinct agent outcome the stage library's own schemas enumerate
+    (including a null/None result) and assert `_pendingRow`'s python
+    mirror -- a row on a node with no runnable kind -- never happens: every
+    row ends up `done` (committed or handed back), never stuck forever."""
+    from coordinator_core.contract import grind_vocab as vocab
+
+    routing, triage_node = _fixture_routing()
+
+    fix_outcomes = list(vocab.STAGE_OUTCOMES["fix"]) + [None]
+    verify_outcomes = ["pass", "fail", None]
+    commit_outcomes = ["committed", "commit-failed", None]
+    close_shapes = [
+        {"confirmed": [{"row": "r0", "new_path": "archive/r0.yaml"}], "refuted": []},
+        {"confirmed": [], "refuted": [{"row": "r0", "reason": "x"}]},
+        {},
+        None,
+    ]
+
+    for fix_outcome in fix_outcomes:
+        budget = _StubBudgetSpender()
+
+        def agent_fn(stage_kind, unit_id, _fo=fix_outcome):
+            budget.spend(gc.STAGE_OUTPUT_TOKENS.get(stage_kind, 10))
+            if stage_kind == "triage":
+                return [{"row": "r0", "verdict": "confirmed-bug", "tshirt_size": "S", "tradeoff": ""}]
+            if stage_kind == "fix":
+                return {"outcome": _fo} if _fo is not None else None
+            if stage_kind == "verify":
+                return {"outcome": "pass"}
+            if stage_kind == "commit":
+                return {"outcome": "committed", "sha": "x"}
+            if stage_kind == "undo":
+                return {"outcome": "undone"}
+            return None
+
+        result = gc.run_admission(
+            [("b0", ["r0"])], routing, triage_node, reserve=gc.batch_reserve(1),
+            budget=budget, agent=agent_fn, max_agent_calls=20,
+        )
+        settled_or_handed_back = {s["row"] for s in result["settled"]} | {h["row"] for h in result["handed_back"]}
+        assert "r0" in settled_or_handed_back, (fix_outcome, result)
+
+    for verify_outcome in verify_outcomes:
+        budget = _StubBudgetSpender()
+
+        def agent_fn(stage_kind, unit_id, _vo=verify_outcome):
+            budget.spend(gc.STAGE_OUTPUT_TOKENS.get(stage_kind, 10))
+            if stage_kind == "triage":
+                return [{"row": "r0", "verdict": "confirmed-bug", "tshirt_size": "S", "tradeoff": ""}]
+            if stage_kind == "fix":
+                return {"outcome": "done"}
+            if stage_kind == "verify":
+                return {"outcome": _vo} if _vo is not None else None
+            if stage_kind == "commit":
+                return {"outcome": "committed", "sha": "x"}
+            if stage_kind == "undo":
+                return {"outcome": "undone"}
+            return None
+
+        result = gc.run_admission(
+            [("b0", ["r0"])], routing, triage_node, reserve=gc.batch_reserve(1),
+            budget=budget, agent=agent_fn, max_agent_calls=20,
+        )
+        settled_or_handed_back = {s["row"] for s in result["settled"]} | {h["row"] for h in result["handed_back"]}
+        assert "r0" in settled_or_handed_back, (verify_outcome, result)
+
+    for commit_outcome in commit_outcomes:
+        budget = _StubBudgetSpender()
+
+        def agent_fn(stage_kind, unit_id, _co=commit_outcome):
+            budget.spend(gc.STAGE_OUTPUT_TOKENS.get(stage_kind, 10))
+            if stage_kind == "triage":
+                return [{"row": "r0", "verdict": "confirmed-bug", "tshirt_size": "S", "tradeoff": ""}]
+            if stage_kind == "fix":
+                return {"outcome": "done"}
+            if stage_kind == "verify":
+                return {"outcome": "pass"}
+            if stage_kind == "commit":
+                return {"outcome": _co} if _co is not None else None
+            return None
+
+        result = gc.run_admission(
+            [("b0", ["r0"])], routing, triage_node, reserve=gc.batch_reserve(1),
+            budget=budget, agent=agent_fn, max_agent_calls=20,
+        )
+        settled_or_handed_back = {s["row"] for s in result["settled"]} | {h["row"] for h in result["handed_back"]}
+        assert "r0" in settled_or_handed_back, (commit_outcome, result)
+
+    for close_shape in close_shapes:
+        budget = _StubBudgetSpender()
+        verdicts = _all_close_batches(["r0"])
+
+        def agent_fn(stage_kind, unit_id, _cs=close_shape):
+            budget.spend(gc.STAGE_OUTPUT_TOKENS.get(stage_kind, 10))
+            if stage_kind == "triage":
+                return _triage_script(verdicts)(unit_id, ["r0"])
+            if stage_kind == "refute-close":
+                return _cs
+            if stage_kind == "commit":
+                return {"outcome": "committed", "sha": "x"}
+            return None
+
+        result = gc.run_admission(
+            [("b0", ["r0"])], routing, triage_node, reserve=gc.batch_reserve(1),
+            budget=budget, agent=agent_fn, max_agent_calls=20,
+        )
+        settled_or_handed_back = {s["row"] for s in result["settled"]} | {h["row"] for h in result["handed_back"]}
+        assert "r0" in settled_or_handed_back, (close_shape, result)

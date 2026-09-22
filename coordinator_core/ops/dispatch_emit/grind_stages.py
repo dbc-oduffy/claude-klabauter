@@ -203,8 +203,9 @@ def compose_triage_call(
         ("lit", " --repo-root ."),
         (
             "lit",
-            "` first, and skip any row it reports as `stale` "
-            "or `vanished`. For every remaining row, decide a verdict, cite the "
+            "` first, and list any row it reports as `stale` "
+            "or `vanished` in `stale` rather than skipping it silently. "
+            "For every remaining row, decide a verdict, cite the "
             "evidence for it, size the row XS through XXL with the evidence for "
             "that size, and write a fix plan. Only fill in a tradeoff statement "
             "when the fix genuinely carries one -- leave it empty otherwise. "
@@ -244,7 +245,10 @@ def compose_triage_call(
     schema = {
         "type": "object",
         "required": ["rows"],
-        "properties": {"rows": {"type": "array", "items": row_schema}},
+        "properties": {
+            "rows": {"type": "array", "items": row_schema},
+            "stale": {"type": "array", "items": {"type": "string"}},
+        },
     }
     return _agent_call(
         _join_prompt_parts(parts),
@@ -363,6 +367,7 @@ def compose_fix_call(
     locked_files: Sequence[str] = (),
     locked_files_js: Optional[str] = None,
     feedback_js: Optional[str] = None,
+    close_note_js: Optional[str] = None,
     profile: str = "",
     profile_dir_js: Optional[str] = None,
     row_path_js: Optional[str] = None,
@@ -438,6 +443,8 @@ def compose_fix_call(
     ))
     if feedback_js:
         parts.append(("expr", feedback_js))
+    if close_note_js:
+        parts.append(("expr", close_note_js))
     parts.append(("lit", " " + _NO_STAGING_CLAUSE))
     schema = {
         "type": "object",
@@ -480,16 +487,42 @@ def compose_verify_agent_call(
     *,
     label: str,
     phase_title: str,
+    row_id_js: Optional[str] = None,
+    row_path_js: Optional[str] = None,
+    touched_files_js: Optional[str] = None,
+    evidence_js: Optional[str] = None,
+    fix_plan_js: Optional[str] = None,
     agent_type_host: Optional[str] = None,
 ) -> str:
     """`verify` in its agent form (general-purpose, sonnet, high). Tries to
-    reject the fix it is handed. Read-only apart from the named tests."""
-    prompt = (
-        "You are the verify stage. Try to reject the fix you are handed -- "
-        "look for a way it fails, not a reason to wave it through. You are "
-        "read-only apart from running the named tests: do not edit any "
-        "file. Report pass only if your attempt to reject it failed. "
-        + _NO_STAGING_CLAUSE
+    reject the fix it is handed. Read-only apart from the named tests.
+
+    ``row_id_js``/``row_path_js``/``touched_files_js``/``evidence_js``/
+    ``fix_plan_js`` name JS runtime expressions -- the row's own id/path,
+    the fixer's touched files, the triage evidence and the fix plan -- so
+    the verifier is handed something to verify rather than a bare
+    "reject the fix" instruction with no row context."""
+    parts: list[tuple[str, str]] = [
+        ("lit", "You are the verify stage for row "),
+        ("expr", row_id_js) if row_id_js else ("lit", "<row id>"),
+        ("lit", " at "),
+        ("expr", row_path_js) if row_path_js else ("lit", "<row path>"),
+        ("lit", ". The fixer touched: ["),
+    ]
+    parts.extend(_list_parts((), touched_files_js))
+    parts.append(("lit", "]. Triage evidence: "))
+    parts.append(("expr", evidence_js) if evidence_js else ("lit", "(none)"))
+    parts.append(("lit", ". The fix plan was: "))
+    parts.append(("expr", fix_plan_js) if fix_plan_js else ("lit", "(none)"))
+    parts.append(
+        (
+            "lit",
+            ". Try to reject the fix you are handed -- "
+            "look for a way it fails, not a reason to wave it through. You are "
+            "read-only apart from running the named tests: do not edit any "
+            "file. Report pass only if your attempt to reject it failed. "
+            + _NO_STAGING_CLAUSE,
+        )
     )
     schema = {
         "type": "object",
@@ -500,13 +533,14 @@ def compose_verify_agent_call(
         },
     }
     return _agent_call(
-        prompt,
+        _join_prompt_parts(parts),
         label=label,
         phase_title=phase_title,
         agent_type=GENERAL_PURPOSE_AGENT_TYPE,
         agent_type_host=agent_type_host,
         effort="high",
         schema=schema,
+        is_expr=True,
     )
 
 

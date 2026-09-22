@@ -436,6 +436,15 @@ def _check_outcome_membership(profile: Profile) -> None:
 
 
 def _check_verify_nodes(profile: Profile) -> None:
+    """Note (does not refuse): a verify node's ``on_fail`` is unreachable
+    dead weight -- the composer's ``_verifyStage`` intercepts the ``fail``
+    outcome itself (one retry to fix, then undo, then
+    ``rejected-after-retry``, per DR-404 § Run authority) before
+    ``followEdge`` is ever consulted, so ``on_fail`` on a verify node is
+    never traversed at run time. Left un-enforced rather than refused: a
+    profile author who sets it (e.g. to a hand-back type, for
+    documentation/intent) is not doing anything harmful, only redundant,
+    and several already-legal fixtures/tests set it deliberately."""
     for node_id, node in profile.graph.items():
         if node.kind != "verify":
             continue
@@ -461,6 +470,13 @@ def _check_edge_targets(profile: Profile) -> None:
                 raise ProfileError(
                     "unknown_edge_target", node=node_id, detail=f"[{outcome!r}]: unknown edge target {target!r}"
                 )
+            if target in profile.graph and profile.graph[target].kind == "triage":
+                raise ProfileError(
+                    "edge_targets_triage_node",
+                    node=node_id,
+                    detail=f"[{outcome!r}]: edge targets triage node {target!r} -- the composer never "
+                    "routes an edge to a triage node, it makes no progress and loops forever",
+                )
         if (
             node.on_fail is not None
             and node.on_fail not in profile.graph
@@ -470,6 +486,13 @@ def _check_edge_targets(profile: Profile) -> None:
                 "unknown_edge_target",
                 node=node_id,
                 detail=f"['on_fail']: unknown edge target {node.on_fail!r}",
+            )
+        if node.on_fail is not None and node.on_fail in profile.graph and profile.graph[node.on_fail].kind == "triage":
+            raise ProfileError(
+                "edge_targets_triage_node",
+                node=node_id,
+                detail=f"['on_fail']: on_fail targets triage node {node.on_fail!r} -- the composer never "
+                "routes on_fail to a triage node, it makes no progress and loops forever",
             )
 
 
