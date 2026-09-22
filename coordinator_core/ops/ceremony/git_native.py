@@ -5699,6 +5699,37 @@ def push(
     return _git(args, cwd=cwd, timeout=timeout)
 
 
+def push_refspec(
+    cwd: Union[str, Path],
+    remote_name: str,
+    local_ref: str,
+    remote_ref: str,
+    *,
+    timeout: float = REMOTE_BUDGET_SECS,
+) -> GitResult:
+    """`git push <remote_name> <local_ref>:<remote_ref>` — push to an
+    upstream whose branch NAME DIFFERS from the local branch's (the standard
+    cloud-harness shape: a local `work/vm/<date>` tracking a differently
+    named `origin/claude/<session>`).
+
+    `push()` above hands git no refspec at all, which under
+    `push.default=simple` git refuses outright the moment the tracked
+    upstream's name disagrees with the current branch's own name ("The
+    upstream branch of your current branch does not match the name of your
+    current branch"). Naming both sides explicitly sidesteps that refusal
+    without touching `push.default` or writing `--set-upstream` (which
+    would silently repoint tracking rather than publish to the one already
+    configured).
+
+    Distinct from `push_set_upstream`: this pushes to an EXISTING tracked
+    upstream and writes no config; `push_set_upstream` is the first-publish
+    form that creates the tracking relationship. No `--force` here either.
+    """
+    return _git(
+        ["push", remote_name, f"{local_ref}:{remote_ref}"], cwd=cwd, timeout=timeout
+    )
+
+
 def push_set_upstream(
     cwd: Union[str, Path],
     remote_name: str,

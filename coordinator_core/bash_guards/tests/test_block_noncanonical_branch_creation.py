@@ -269,3 +269,29 @@ class TestFailOpenOnUnreadableName:
         assert guard.check(
             _payload("git checkout -b work/machine-b/$(date +%F)")
         ) is None
+
+
+class TestDesignatedDayBranch:
+    """`coordinator.dayBranch` (PM ruling 2026-09-22) -- a designated day
+    branch is accepted verbatim, any shape, at creation time."""
+
+    def test_designated_branch_name_passes_whatever_its_shape(self, monkeypatch):
+        import coordinator_core.daily_branch as daily_branch
+
+        monkeypatch.setattr(
+            daily_branch, "read_configured_day_branch",
+            lambda root: "claude/compassionate-pascal-98ncw7",
+        )
+        assert guard.check(
+            _payload("git checkout -b claude/compassionate-pascal-98ncw7")
+        ) is None
+
+    def test_non_designated_noncanonical_name_still_denied(self, monkeypatch):
+        import coordinator_core.daily_branch as daily_branch
+
+        monkeypatch.setattr(
+            daily_branch, "read_configured_day_branch",
+            lambda root: "claude/compassionate-pascal-98ncw7",
+        )
+        out = guard.check(_payload("git checkout -b fix/some-bug"))
+        assert "not canonical" in _reason(out)

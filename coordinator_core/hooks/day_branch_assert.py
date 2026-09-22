@@ -51,10 +51,22 @@ rename-with-remote-delete — stays a PM-gated ask, unchanged.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import time
 from pathlib import Path
 from typing import NamedTuple, Optional
+
+
+def _is_cloud_session() -> bool:
+    """The harness's own cloud-environment declaration — read once, per boot.
+
+    Gates the learn-and-record arm so a workstation session (where a
+    non-`main` branch is ordinary EM traffic, not a harness designation)
+    never mistakes an in-progress workstream branch for a day-branch
+    designation.
+    """
+    return (os.environ.get("CLAUDE_CODE_REMOTE") or "").strip().lower() == "true"
 
 
 #: Every arm of the dispatch table below, named. Nothing falls off the end.
@@ -148,8 +160,30 @@ def assert_day_branch(
 
     The entire non-``main`` arm is owned by :func:`case_b_verdict` (C10); this
     function does not also implement a competing early return for it.
+
+    Designated-day-branch short-circuit (PM ruling 2026-09-22): when
+    `coordinator.dayBranch` is set (cloud pre-boot's own record of the
+    harness-designated branch) and the tree already sits on it, the invariant
+    already holds — silent COMPLIANT, ahead of the main/non-main dispatch, no
+    cut and no warn, whatever the branch's shape.
     """
     branch = _current_branch(repo_root)
+
+    from coordinator_core.daily_branch import (
+        read_configured_day_branch,
+        record_day_branch_designation,
+    )
+
+    configured = read_configured_day_branch(repo_root)
+    if configured is None and _is_cloud_session() and branch and branch != "main":
+        # Learned lazily, inside the session (PM ruling 2026-09-22): the
+        # harness checkout's ordering relative to any pre-boot step is
+        # unmeasured, so SessionStart -- which by construction runs AFTER the
+        # harness checkout -- is the source of this record, not pre-boot.
+        if record_day_branch_designation(repo_root, branch):
+            configured = branch
+    if configured and branch == configured:
+        return DayBranchAssertResult(COMPLIANT, branch, "")
 
     if branch == "main":
         return _case_a(repo_root, machine, today, env=env, stderr=stderr)

@@ -646,6 +646,81 @@ def _created_roots(rows: List[Dict[str, Any]]) -> frozenset:
     return frozenset(created)
 
 
+def _ungated_reads(row: Dict[str, Any], row_id: str) -> "tuple[dict, list]":
+    """Validated ``external_reads_ungated`` entries for ``row``, as
+    ``({(path, owner_repo_folded): entry}, findings)``.
+
+    APM ruling (mirrors DoE-claude ``coordinator/bin/mise-prep-gate.py``): an
+    entry clears a SIBLING-NAME/ROOT-EXISTENCE hit on ``reads:`` only, never
+    ``writes:``/``surface:`` — three shapes are refused here rather than
+    silently ignored, each its own message because each names a different
+    repair: (1) a path this row WRITES, so the field cannot launder a
+    cross-repo write as an examined read; (2) a path absent from this row's
+    ``reads:``, a stale acknowledgment; (3) a blank ``reason`` — the schema
+    types ``reason`` ``minLength: 1``, but this gate reads raw YAML, not a
+    schema-validated document, so the check is restated here the same way
+    ``_external_deps`` already restates ``requires:``'s enum against raw
+    text.
+    """
+    entries = row.get("external_reads_ungated")
+    entries = [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
+    reads = row.get("reads") if isinstance(row.get("reads"), list) else []
+    reads_set = {str(v).strip() for v in reads if isinstance(v, str)}
+    writes = row.get("writes") if isinstance(row.get("writes"), list) else []
+    writes_set = {str(v).strip() for v in writes if isinstance(v, str)}
+    writes_under = row.get("writes_under") if isinstance(row.get("writes_under"), list) else []
+    writes_under_prefixes = [str(v) for v in writes_under if isinstance(v, str)]
+
+    index: Dict[tuple, Dict[str, Any]] = {}
+    findings: List[str] = []
+    for i, entry in enumerate(entries):
+        path = str(entry.get("path") or "").strip()
+        owner_repo = str(entry.get("owner_repo") or "").strip()
+        reason = str(entry.get("reason") or "").strip()
+        if not path:
+            findings.append(f"{row_id}: external_reads_ungated[{i}] has no path")
+            continue
+        if path in writes_set or any(path.startswith(prefix) for prefix in writes_under_prefixes):
+            findings.append(
+                f"{row_id}: external_reads_ungated[{i}] names {path!r}, which this row WRITES — "
+                "the field only acknowledges a read, it never clears a write; declare a write "
+                "with external_gate instead"
+            )
+            continue
+        if path not in reads_set:
+            findings.append(
+                f"{row_id}: external_reads_ungated[{i}] names {path!r}, which is not in this "
+                "row's reads: — a stale acknowledgment"
+            )
+            continue
+        if not reason:
+            findings.append(
+                f"{row_id}: external_reads_ungated[{i}] ({path!r}) has an empty reason"
+            )
+            continue
+        index[(path, owner_repo.casefold())] = entry
+    return index, findings
+
+
+def _matched_sibling(value: str, siblings: Sequence[str]) -> Optional[str]:
+    """The SIBLING-NAME match ``_path_leaves_repo`` would report for ``value``, or
+    None. Restated rather than returned from ``_path_leaves_repo`` (whose contract
+    is a bare reason string, not a structured match) so ``_ungated_reads``
+    correlation can key on the same sibling identity that function's own
+    ``names {sibling}`` reason names — same fold/separator rule, not a second
+    independent guess at it.
+    """
+    stripped = value.strip()
+    if not stripped:
+        return None
+    folded = stripped.casefold()
+    for sibling in siblings:
+        key = sibling.casefold()
+        if folded == key or (folded.startswith(key) and not folded[len(key)].isalnum()):
+            return sibling
+    return None
+
+
 def _external_deps(
     rows: List[Dict[str, Any]], root_names: frozenset, siblings: Sequence[str]
 ) -> Dict[str, Any]:
@@ -708,6 +783,9 @@ def _external_deps(
         # PARTIAL-FIRE excluding 62 rows.
         if _row_is_unschedulable(row):
             continue
+        ungated_index, ungated_findings = _ungated_reads(row, row_id)
+        for finding in ungated_findings:
+            undeclared[finding] = undeclared.get(finding, 0) + 1
         for field, value in _row_declared_paths(row):
             if field != "surface" and _path_is_unresolved_placeholder(value):
                 placeholders.append(
@@ -718,6 +796,18 @@ def _external_deps(
             reason = _path_leaves_repo(
                 field, value, root_names, siblings, created_roots
             )
+            # external_reads_ungated clears a reads: hit only — never writes:/surface: —
+            # per the APM ruling this field exists to serve. Keyed on (path,
+            # case-folded owner_repo) against the matched sibling identity, mirroring
+            # DoE's SIBLING-NAME correlation; a value with no sibling match (the
+            # ROOT-EXISTENCE leg) is not cleared by this field, matching DoE's own
+            # acknowledged blind spot there.
+            if reason and field == "reads":
+                sibling = _matched_sibling(value, siblings)
+                if sibling is not None:
+                    key = (value.strip(), sibling.casefold())
+                    if key in ungated_index:
+                        reason = None
             if reason and not gates:
                 # One line per DISTINCT fact, with a count. This leg reports a first
                 # SEGMENT, so a row writing eleven files under one new directory

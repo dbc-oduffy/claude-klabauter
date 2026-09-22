@@ -855,7 +855,14 @@ _RESOLVER_FAMILY_BY_FILE = {
     "tests/test_checked_repo_resolver_c4.py": frozenset({"env_first"}),
     "validate-fast-and-packageability.py": frozenset({"self_location"}),
     "whats-next.py": frozenset({"env_first"}),
-    "with-suite-mutex": frozenset({"env_first"}),
+    # FAMILY CHANGED 2026-09-22, deliberately, per this map's own contract: both
+    # wrappers import `coordinator_core.testing.*` -- the test helper belonging to
+    # the checkout they live in -- so self-location is the only ladder that can
+    # answer correctly. Env-first sent a run from the claude-klabauter checkout to whatever
+    # COORDINATOR_ENGINE_ROOT named, which on a cloud box is a published mirror
+    # pinned at clone time, and the import died on a helper not yet published there.
+    "with-suite-mutex": frozenset({"self_location"}),
+    "with-tier-t-slot": frozenset({"self_location"}),
     "workday-complete-args-and-validate.py": frozenset({"env_first"}),
     "workday-complete-backfill-inject-anchor.py": frozenset({"env_first"}),
     "workday-complete-close.py": frozenset({"self_location"}),

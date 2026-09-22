@@ -15,6 +15,8 @@ from coordinator_core.daily_branch import (
     is_allowed_branch,
     is_canonical_branch,
     parse_branch_span,
+    read_configured_day_branch,
+    record_day_branch_designation,
     rename_target,
     sanitize_slug,
     should_prompt_rename,
@@ -241,3 +243,63 @@ def test_should_prompt_span_branch_not_covering_today():
     assert should_prompt_rename(
         "work/machine-a/2026-05-06to09", "2026-05-12", now - 3600, now_epoch=now
     ) is True
+
+
+# --- configured_day_branch (PM ruling 2026-09-22) -----------------------------
+
+
+def test_is_allowed_accepts_designated_branch_any_shape():
+    assert is_allowed_branch("claude/compassionate-pascal-98ncw7", "claude/compassionate-pascal-98ncw7") is True
+
+
+def test_is_allowed_rejects_non_matching_when_designated():
+    # Designation present but this name doesn't match it, and it's not an
+    # ordinary work/* shape either -- still rejected.
+    assert is_allowed_branch("feature/foo", "claude/compassionate-pascal-98ncw7") is False
+
+
+def test_is_allowed_unaffected_when_no_designation():
+    assert is_allowed_branch("work/machine-a/2026-05-06", None) is True
+
+
+def test_is_canonical_accepts_designated_branch_verbatim_case():
+    # Designated branches are accepted verbatim -- no lowercase requirement,
+    # unlike the work/* shape (that fleet-wide invariant is unrelated: a
+    # harness-designated name is not this fleet's to re-case).
+    assert is_canonical_branch("Claude/Mixed-Case", "Claude/Mixed-Case") is True
+
+
+def test_is_canonical_still_rejects_mixed_case_work_branch_when_designation_absent():
+    assert is_canonical_branch("Work/Machine-A/2026-05-06", None) is False
+
+
+# --- read/record_configured_day_branch -----------------------------------
+
+
+def _init_bare_gitdir(tmp_path):
+    gitdir = tmp_path / ".git"
+    gitdir.mkdir()
+    (gitdir / "config").write_text("[core]\n\trepositoryformatversion = 0\n", encoding="utf-8")
+    return tmp_path
+
+
+def test_read_configured_day_branch_absent(tmp_path):
+    repo = _init_bare_gitdir(tmp_path)
+    assert read_configured_day_branch(repo) is None
+
+
+def test_record_then_read_configured_day_branch(tmp_path):
+    repo = _init_bare_gitdir(tmp_path)
+    assert record_day_branch_designation(repo, "claude/compassionate-pascal-98ncw7") is True
+    assert read_configured_day_branch(repo) == "claude/compassionate-pascal-98ncw7"
+
+
+def test_record_is_idempotent(tmp_path):
+    repo = _init_bare_gitdir(tmp_path)
+    assert record_day_branch_designation(repo, "claude/foo") is True
+    assert record_day_branch_designation(repo, "claude/foo") is True
+    assert read_configured_day_branch(repo) == "claude/foo"
+
+
+def test_read_configured_day_branch_no_git_dir(tmp_path):
+    assert read_configured_day_branch(tmp_path) is None

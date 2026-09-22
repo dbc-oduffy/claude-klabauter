@@ -260,10 +260,16 @@ def _looks_unsafe(name: str) -> bool:
     return False
 
 
-def _deny(name: str) -> bool:
+def _deny(name: str, configured_day_branch: Optional[str] = None) -> bool:
     """The canonical-shape predicate. See module docstring "THE
-    CANONICAL-SHAPE PREDICATE"."""
-    if is_canonical_branch(name):
+    CANONICAL-SHAPE PREDICATE".
+
+    ``configured_day_branch`` (a `coordinator.dayBranch` designation, PM
+    ruling 2026-09-22) is accepted verbatim, any shape — a repo whose day
+    branch is harness-designated is not creating a rogue ref when a command
+    names that exact branch.
+    """
+    if is_canonical_branch(name, configured_day_branch):
         return False
     if name.startswith(SANCTIONED_LONGLIVED_PREFIXES):
         return False
@@ -300,7 +306,9 @@ def _extract_branch_target(tokens: List[str]) -> Optional[str]:
     return positional[0]
 
 
-def _classify_segment(tokens: List[str]) -> Optional[str]:
+def _classify_segment(
+    tokens: List[str], configured_day_branch: Optional[str] = None
+) -> Optional[str]:
     """Return the offending (denied) branch name for one resolved
     command-position segment's `tokens`, or `None` (allow -- not a
     creation-shaped git invocation, or the target name is safe/unsafe to
@@ -322,7 +330,7 @@ def _classify_segment(tokens: List[str]) -> Optional[str]:
 
     if name is None or _looks_unsafe(name):
         return None
-    if not _deny(name):
+    if not _deny(name, configured_day_branch):
         return None
     return name
 
@@ -430,8 +438,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if _bncbc_ps_tokens is not None:
             cmd = " ".join(expand_start_process_invocations(_bncbc_ps_tokens))
 
+    from coordinator_core.daily_branch import read_configured_day_branch
+
+    configured_day_branch = read_configured_day_branch(git_root) if git_root else None
+
     for resolved in resolve_command_positions(cmd):
-        name = _classify_segment(resolved.tokens)
+        name = _classify_segment(resolved.tokens, configured_day_branch)
         if name is not None:
             return {
                 "hookSpecificOutput": {

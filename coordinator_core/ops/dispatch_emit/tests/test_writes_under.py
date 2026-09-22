@@ -291,7 +291,7 @@ def test_the_preflight_checks_prefixes_for_ignore_rules_not_claims():
     )
     preflight = script.split("phase('Preflight: commit claimability')", 1)[1]
     preflight = preflight.split("phase(", 1)[0]
-    assert "every path in [a.py]" in preflight
+    assert "every path in [a.py" in preflight
     assert "write PREFIXES" in preflight
     assert _AUDITS in preflight
 

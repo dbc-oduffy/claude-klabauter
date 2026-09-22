@@ -1300,6 +1300,17 @@ class _UpstreamInfo(Tuple[str, str, str]):
     def ref_path(self) -> str:
         return self[2]
 
+    @property
+    def branch_ref(self) -> str:
+        """`refs/heads/<branch-basename>` on the REMOTE side -- the exact
+        refspec target `git push <remote> HEAD:<this>` needs to reach the
+        tracked upstream, derived from `ref_path` (`refs/remotes/<remote>/
+        <basename>`) rather than re-parsing `abbrev`, which is ambiguous
+        for a basename containing `/`.
+        """
+        prefix = f"refs/remotes/{self.remote_name}/"
+        return "refs/heads/" + self.ref_path[len(prefix):]
+
 
 #: NOT `(?i)`. The keyword `branch` is case-insensitive in git config, but a
 #: SUBSECTION name is case-sensitive -- `[branch "Main"]` and `[branch "main"]`
@@ -1602,11 +1613,39 @@ def push_with_retry(
                 ],
                 attempts=attempt,
             )
-        push_result = (
-            git_native.push(root)
-            if leg_timeout is None
-            else git_native.push(root, timeout=leg_timeout)
-        )
+        # A configured upstream is pushed by EXPLICIT refspec
+        # (`HEAD:<upstream_info.branch_ref>`), never a bare `git push`: under
+        # `push.default=simple`, a bare push refuses outright the moment the
+        # tracked upstream's name differs from the local branch's own name --
+        # the standard cloud-harness shape (a local `work/vm/<date>` tracking
+        # a differently-named `origin/claude/<session>`). Naming both sides
+        # resolves the SAME upstream `_resolve_upstream_local` already read
+        # (0 extra spawns) without writing `--set-upstream`, which would
+        # silently repoint tracking rather than publish to what is already
+        # configured. No configured upstream (`upstream_info is None`, a
+        # genuine first push) keeps the prior bare-push behaviour unchanged
+        # -- that shape is handled entirely by the no-upstream-refusal /
+        # `publish_day_branch` arm below.
+        if upstream_info is not None:
+            push_result = (
+                git_native.push_refspec(
+                    root, upstream_info.remote_name, "HEAD", upstream_info.branch_ref
+                )
+                if leg_timeout is None
+                else git_native.push_refspec(
+                    root,
+                    upstream_info.remote_name,
+                    "HEAD",
+                    upstream_info.branch_ref,
+                    timeout=leg_timeout,
+                )
+            )
+        else:
+            push_result = (
+                git_native.push(root)
+                if leg_timeout is None
+                else git_native.push(root, timeout=leg_timeout)
+            )
         if push_result.ok:
             new_sha: Optional[str] = None
             head_result = git_native.rev_parse_head(root)

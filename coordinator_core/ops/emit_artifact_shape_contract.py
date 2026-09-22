@@ -718,7 +718,7 @@ LIVENESS_MAPPING: dict = {
             # check the way a bare regex match on a literal dict would have.
             "mapping": _derive_status_mapping(
                 "plan",
-                ["draft", "reviewed", "approved", "executing", "landed", "implemented", "deferred", "abandoned", "superseded"],
+                ["draft", "reviewed", "approved", "executing", "landed", "implemented", "closed_partial", "deferred", "abandoned", "superseded"],
             ),
             "default": "LIVE",
         },

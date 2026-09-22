@@ -99,6 +99,36 @@ _DATA_ERRORS = (
 )
 
 
+class _ProfileDirUnresolved(Exception):
+    """No ``--profile-dir`` given and the default location holds no such profile."""
+
+
+def _default_profile_dir(profile: str) -> str:
+    """``<coordinator content root>/queue-profiles`` — where the plugin payload
+    carries the DoE-authored profiles every published command emits against
+    without naming a directory. Refuses when ``<profile>.yaml`` is not there, so
+    the error names the probed path rather than surfacing as a bare
+    FileNotFoundError from ``load_profile``."""
+    from coordinator_core.resolve_coordinator_clone import (
+        ResolveCoordinatorCloneError,
+        resolve_content_root,
+    )
+
+    try:
+        content_root = resolve_content_root()
+    except ResolveCoordinatorCloneError as exc:
+        raise _ProfileDirUnresolved(
+            f"--profile-dir omitted and no coordinator content root resolved: {exc}"
+        ) from exc
+    profile_dir = Path(content_root) / "queue-profiles"
+    if not (profile_dir / f"{profile}.yaml").is_file():
+        raise _ProfileDirUnresolved(
+            f"--profile-dir omitted and {profile_dir / (profile + '.yaml')} does not exist; "
+            "pass --profile-dir <dir holding the profile>"
+        )
+    return str(profile_dir)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="emit-dispatch-workflow",
@@ -129,7 +159,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--profile", default=None, help="queue-grind profile name (queue route)")
     parser.add_argument(
-        "--profile-dir", default=None, help="directory <profile>.yaml lives under (queue route)"
+        "--profile-dir",
+        default=None,
+        help="directory <profile>.yaml lives under (queue route; default: "
+        "<coordinator content root>/queue-profiles)",
     )
     parser.add_argument(
         "--appetite", default="standard", help="queue-grind appetite preset (queue route)"
@@ -227,13 +260,19 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         )
         return EXIT_USAGE
 
-    if is_queue_route and (not args.queue or not args.profile or not args.profile_dir):
+    if is_queue_route and (not args.queue or not args.profile):
         print(
-            "emit-dispatch-workflow: ERROR — the queue route requires --queue, "
-            "--profile, and --profile-dir",
+            "emit-dispatch-workflow: ERROR — the queue route requires --queue and --profile",
             file=sys.stderr,
         )
         return EXIT_USAGE
+
+    if is_queue_route and not args.profile_dir:
+        try:
+            args.profile_dir = _default_profile_dir(args.profile)
+        except _ProfileDirUnresolved as exc:
+            print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
+            return EXIT_USAGE
 
     if not args.out_path:
         print("emit-dispatch-workflow: ERROR — --out is required", file=sys.stderr)

@@ -53,6 +53,11 @@ def _always_reject(monkeypatch, stderr: str, push_calls: list, *, returncode: in
         return GitResult(returncode=returncode, stdout="", stderr=stderr)
 
     monkeypatch.setattr(git_native, "push", _fake_push)
+    # `init_push_repo`'s default fixture carries a configured (same-name)
+    # upstream, so `push_with_retry` now pushes by explicit refspec (see
+    # `push.push_with_retry`'s upstream_info branch) -- both call shapes
+    # must reject identically for these attempt-count assertions to hold.
+    monkeypatch.setattr(git_native, "push_refspec", _fake_push)
 
 
 def test_ref_lock_rejection_is_cadence_pending_single_attempt(tmp_path, monkeypatch):

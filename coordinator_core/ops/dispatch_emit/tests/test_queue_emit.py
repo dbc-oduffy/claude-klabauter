@@ -384,6 +384,47 @@ def test_cli_round_trip_produces_same_bytes_as_the_op(tmp_path):
     assert cli_output.read_bytes() == op_bytes
 
 
+def test_cli_omitted_profile_dir_defaults_to_content_root_queue_profiles(tmp_path, monkeypatch):
+    # klabauter#51: every published command emits without --profile-dir.
+    result, output_path, repo_root, queue_dir = _dispatch_queue_emit(tmp_path)
+    content_root = tmp_path / "plugin-root"
+    (content_root / "queue-profiles").mkdir(parents=True)
+    (content_root / "queue-profiles" / "fixture.yaml").write_bytes(
+        (_FIXTURE_PROFILE_DIR / "fixture.yaml").read_bytes()
+    )
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(content_root))
+    monkeypatch.delenv("COORDINATOR_SOURCE_MODE", raising=False)
+    cli_output = output_path.parent / "cli-default-dir.mjs"
+    argv = [
+        "--queue", str(queue_dir),
+        "--profile", "fixture",
+        "--out", str(cli_output),
+        "--repo-root", str(repo_root),
+    ]
+    assert cli_module.main(argv) == cli_module.EXIT_OK
+    receipt = json.loads(emission_receipt_path(cli_output.resolve()).read_text(encoding="utf-8"))
+    reemit = receipt["reemit"]
+    assert reemit[reemit.index("--profile-dir") + 1] == str(content_root / "queue-profiles")
+
+
+def test_cli_omitted_profile_dir_with_no_default_profile_names_the_probed_path(
+    tmp_path, monkeypatch, capsys
+):
+    repo_root, queue_dir, _run_dir = _setup_repo(tmp_path)
+    content_root = tmp_path / "plugin-root"
+    content_root.mkdir()
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(content_root))
+    monkeypatch.delenv("COORDINATOR_SOURCE_MODE", raising=False)
+    argv = [
+        "--queue", str(queue_dir),
+        "--profile", "fixture",
+        "--out", str(tmp_path / "out.mjs"),
+        "--repo-root", str(repo_root),
+    ]
+    assert cli_module.main(argv) == cli_module.EXIT_USAGE
+    assert str(content_root / "queue-profiles" / "fixture.yaml") in capsys.readouterr().err
+
+
 def test_cli_malformed_where_json_is_exit_usage(tmp_path):
     repo_root, queue_dir, _run_dir = _setup_repo(tmp_path)
     argv = [

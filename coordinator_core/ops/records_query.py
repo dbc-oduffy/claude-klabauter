@@ -716,7 +716,7 @@ def liveness(fm: dict, record_type: str) -> str:
     if record_type == 'plan':
         if status == 'deferred':
             return 'BLOCKED'
-        if status in ('implemented', 'abandoned', 'superseded'):
+        if status in ('implemented', 'abandoned', 'superseded', 'closed_partial'):
             return 'DONE'
         return 'LIVE'
 

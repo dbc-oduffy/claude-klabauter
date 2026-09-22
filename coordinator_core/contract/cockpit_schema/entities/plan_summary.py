@@ -34,6 +34,7 @@ PlanStatus = Literal[
     "executing",
     "landed",
     "implemented",
+    "closed_partial",
     "deferred",
     "abandoned",
     "superseded",

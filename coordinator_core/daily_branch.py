@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import re
 import time
+from pathlib import Path
 from typing import Optional, Tuple
 
 # work/<machine-segment>/<YYYY-MM-DD>[to<DD>] — the accepted daily/span shape.
@@ -146,7 +147,81 @@ def parse_branch_span(name: str) -> Optional[Tuple[str, str]]:
     return (start_date, start_date)
 
 
-def is_allowed_branch(name: str) -> bool:
+#: `.git/config` section/key `coordinator.dayBranch` — an environment-designated
+#: day branch (e.g. a cloud harness's checkout branch) that overrides the
+#: work/{machine}/{date-or-span} default shape entirely. PM ruling
+#: (2026-09-22): "coordinator shouldn't require work/, especially not when
+#: there's a schema in the cloud to which we must be able to adapt" — where a
+#: designation is present, the oracles judge against it exactly, any shape.
+#: work/{machine}/{date} stays the default only when nothing designates one.
+_DAY_BRANCH_CONFIG_RE = re.compile(
+    r'(?im)^\s*\[coordinator\]\s*$.*?^\s*dayBranch\s*=\s*(\S+)\s*$',
+    re.DOTALL,
+)
+
+
+def read_configured_day_branch(repo_root) -> Optional[str]:
+    """`coordinator.dayBranch` off `.git/config`, zero git spawns.
+
+    Tolerant line/section scan (same posture as
+    `coordinator_core/ops/ceremony/push.py::_read_git_config_text` — presence
+    of one scalar key, not a faithful configparser read). Returns None on any
+    read failure, an absent key, or a repo with no `.git`. Never raises.
+    """
+    try:
+        from coordinator_core.lifecycle import git_common_dir
+
+        text = (git_common_dir(Path(repo_root)) / "config").read_text(
+            encoding="utf-8", errors="replace"
+        )
+    except Exception:  # noqa: BLE001 - config presence is best-effort
+        return None
+    match = _DAY_BRANCH_CONFIG_RE.search(text)
+    return match.group(1) if match else None
+
+
+def record_day_branch_designation(repo_root, branch: str) -> bool:
+    """Write `coordinator.dayBranch = branch` into `.git/config`, zero spawns.
+
+    The SessionStart path is the source of this record (harness checkout
+    ordering relative to any pre-boot step is unmeasured — see
+    `read_configured_day_branch`'s sibling caller in
+    `coordinator_core/hooks/day_branch_assert.py`): learned lazily, inside the
+    session, the first time a cloud session's HEAD is observed on a named
+    non-default branch with nothing yet designated.
+
+    Idempotent, plain-text append/insert — mirrors the tolerant-scan posture
+    of `read_configured_day_branch`, not a faithful configparser rewrite. If
+    a `[coordinator]` section already exists the key is inserted right after
+    its header; otherwise a new section is appended. Returns False (never
+    raises) on any read/write failure, so a session that cannot write its
+    own `.git/config` degrades to re-resolving lazily on every boot rather
+    than failing to start.
+    """
+    try:
+        from coordinator_core.lifecycle import git_common_dir
+
+        config_path = git_common_dir(Path(repo_root)) / "config"
+        text = config_path.read_text(encoding="utf-8", errors="replace")
+        if _DAY_BRANCH_CONFIG_RE.search(text):
+            return True  # already recorded
+        section_re = re.compile(r'(?im)^(\s*\[coordinator\]\s*)$')
+        m = section_re.search(text)
+        if m:
+            insert_at = m.end()
+            new_text = (
+                text[:insert_at] + f"\n\tdayBranch = {branch}" + text[insert_at:]
+            )
+        else:
+            sep = "" if text.endswith("\n") or not text else "\n"
+            new_text = text + sep + f"[coordinator]\n\tdayBranch = {branch}\n"
+        config_path.write_text(new_text, encoding="utf-8")
+        return True
+    except Exception:  # noqa: BLE001 - best-effort; caller falls back to lazy re-resolve
+        return False
+
+
+def is_allowed_branch(name: str, configured_day_branch: Optional[str] = None) -> bool:
     """Port of cs_is_allowed_branch — the SHAPE oracle (case-insensitive).
 
     True iff <name> is main, or any work/{machine}/{date-or-span} that parses via
@@ -155,26 +230,38 @@ def is_allowed_branch(name: str) -> bool:
     wrong case" and fix it. For creation-time canonical-case enforcement use
     is_canonical_branch.
 
+    When ``configured_day_branch`` is given (a `coordinator.dayBranch`
+    designation), an EXACT match against it is allowed regardless of shape —
+    the designated branch IS the day branch, whatever schema minted it.
+
     Negative spec: rejects feature/foo, work/machine-a/feature-X, hotfix/*, etc.
     """
     if name is None:
         return False
+    if configured_day_branch and name == configured_day_branch:
+        return True
     lc = name.lower()
     if lc == "main":
         return True
     return parse_branch_span(lc) is not None
 
 
-def is_canonical_branch(name: str) -> bool:
+def is_canonical_branch(name: str, configured_day_branch: Optional[str] = None) -> bool:
     """Port of cs_is_canonical_branch — the CREATION oracle.
 
     True iff <name> is allowed AND already in canonical (lowercase) form. Distinct
     from is_allowed_branch because remediation paths need to recognise mixed-case
     input in order to fix it; this oracle rejects mixed-case so the hook can block
     its creation in the first place (Windows case-insensitive-FS ref hazard).
+
+    ``configured_day_branch`` (see is_allowed_branch) is accepted verbatim, case
+    included — a harness-designated branch name is not this fleet's to
+    re-case.
     """
     if name is None:
         return False
+    if configured_day_branch and name == configured_day_branch:
+        return True
     if not is_allowed_branch(name):
         return False
     return name == name.lower()

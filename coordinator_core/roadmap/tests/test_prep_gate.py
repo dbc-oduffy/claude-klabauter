@@ -745,6 +745,103 @@ def test_an_unreplaced_placeholder_path_is_its_own_defect_no_gate_clears(tmp_pat
 
 
 # ---------------------------------------------------------------------------
+# EXTERNAL_DEPS — external_reads_ungated (mirrors DoE-claude
+# coordinator/bin/mise-prep-gate.py's "Declaration 3b" cases)
+# ---------------------------------------------------------------------------
+
+
+def _reads_spine(entries: str, *, owner: str = "example-retrieval-repo") -> str:
+    """A one-row spine reading a sibling path, with `entries` (already-indented
+    YAML for `external_reads_ungated:`, or empty) spliced onto the row."""
+    return (
+        "- id: C1\n  title: t\n  change_kind: code-edit\n"
+        "  surface: docs/x.md\n  writes: [docs/x.md]\n"
+        f"  reads: [{owner}/coordinator_core/x.py]\n"
+        f"{entries}"
+        "  queue_scope: project\n  disposition: open\n"
+    )
+
+
+def test_a_matching_ungated_reads_entry_clears_the_reads_hit(tmp_path):
+    entries = (
+        "  external_reads_ungated:\n"
+        "    - path: example-retrieval-repo/coordinator_core/x.py\n"
+        "      owner_repo: example-retrieval-repo\n"
+        "      reason: read-only, examined, nothing to land\n"
+    )
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=_reads_spine(entries)))
+    assert report["classes"]["EXTERNAL_DEPS"]["status"] == "PASS", report["message"]
+
+
+def test_a_reads_hit_with_no_ungated_entry_is_still_a_defect(tmp_path):
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=_reads_spine("")))
+    assert report["classes"]["EXTERNAL_DEPS"]["kind"] == "external-dep-undeclared"
+
+
+def test_an_ungated_entry_naming_a_written_path_is_refused(tmp_path):
+    """The field only acknowledges a READ; an entry naming a path the row WRITES
+    must not launder a cross-repo write as an examined read."""
+    spine = (
+        "- id: C1\n  title: t\n  change_kind: code-edit\n"
+        "  surface: docs/x.md\n"
+        "  writes: [example-retrieval-repo/coordinator_core/w.py]\n"
+        "  reads: [example-retrieval-repo/coordinator_core/x.py]\n"
+        "  external_reads_ungated:\n"
+        "    - path: example-retrieval-repo/coordinator_core/w.py\n"
+        "      owner_repo: example-retrieval-repo\n"
+        "      reason: examined\n"
+        "  queue_scope: project\n  disposition: open\n"
+    )
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
+    assert report["classes"]["EXTERNAL_DEPS"]["kind"] == "external-dep-undeclared"
+    assert "WRITES" in report["classes"]["EXTERNAL_DEPS"]["detail"]
+    assert "example-retrieval-repo/coordinator_core/w.py" in report["classes"]["EXTERNAL_DEPS"]["detail"]
+
+
+def test_an_ungated_entry_naming_a_path_not_in_reads_is_refused(tmp_path):
+    entries = (
+        "  external_reads_ungated:\n"
+        "    - path: example-retrieval-repo/coordinator_core/other.py\n"
+        "      owner_repo: example-retrieval-repo\n"
+        "      reason: examined\n"
+    )
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=_reads_spine(entries)))
+    assert report["classes"]["EXTERNAL_DEPS"]["kind"] == "external-dep-undeclared"
+    assert "not in this row's reads" in report["classes"]["EXTERNAL_DEPS"]["detail"]
+    assert "no external_gate" in report["classes"]["EXTERNAL_DEPS"]["detail"]
+
+
+def test_an_ungated_entry_with_an_empty_reason_is_refused(tmp_path):
+    entries = (
+        "  external_reads_ungated:\n"
+        "    - path: example-retrieval-repo/coordinator_core/x.py\n"
+        "      owner_repo: example-retrieval-repo\n"
+        "      reason: ''\n"
+    )
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=_reads_spine(entries)))
+    assert report["classes"]["EXTERNAL_DEPS"]["kind"] == "external-dep-undeclared"
+    assert "empty reason" in report["classes"]["EXTERNAL_DEPS"]["detail"]
+
+
+def test_an_ungated_entry_never_clears_a_writes_hit(tmp_path):
+    """Negative spec: the field is `reads:`-only. A row whose `writes:` leaves
+    the repo must stay a defect even when `external_reads_ungated` names the
+    exact same path and owner_repo."""
+    spine = (
+        "- id: C1\n  title: t\n  change_kind: code-edit\n"
+        "  surface: docs/x.md\n"
+        "  writes: [example-retrieval-repo/coordinator_core/w.py]\n"
+        "  external_reads_ungated:\n"
+        "    - path: example-retrieval-repo/coordinator_core/w.py\n"
+        "      owner_repo: example-retrieval-repo\n"
+        "      reason: examined\n"
+        "  queue_scope: project\n  disposition: open\n"
+    )
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
+    assert report["classes"]["EXTERNAL_DEPS"]["kind"] == "external-dep-undeclared"
+
+
+# ---------------------------------------------------------------------------
 # The attest, read back
 # ---------------------------------------------------------------------------
 

@@ -97,6 +97,11 @@ _WRAPPER_INVOCATIONS = [
     (git_native.remote, ("/tmp/repo",), {}),
     (git_native.push, ("/tmp/repo",), {}),
     (git_native.push_set_upstream, ("/tmp/repo", "origin", "work/day"), {}),
+    (
+        git_native.push_refspec,
+        ("/tmp/repo", "origin", "HEAD", "refs/heads/claude/session"),
+        {},
+    ),
     (git_native.fetch, ("/tmp/repo", "origin"), {}),
     (git_native.rebase_onto, ("/tmp/repo", "origin/main", "abc123"), {}),
     (git_native.rebase_abort, ("/tmp/repo",), {}),
@@ -531,6 +536,43 @@ def test_push_set_upstream_reports_rejection_without_raising():
     assert result.ok is False
     assert result.returncode == 1
     assert "[rejected]" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# push_refspec -- pushes to an EXISTING tracked upstream whose remote branch
+# name differs from the local one (the mismatched-upstream-name fix,
+# 2026-09-22). Same mocked-seam discipline as push_set_upstream above.
+# ---------------------------------------------------------------------------
+
+
+def test_push_refspec_builds_the_explicit_two_sided_refspec_argv():
+    """Both sides named explicitly, no `--set-upstream`, no `--force`."""
+    with patch.object(git_native.subprocess, "run", return_value=_make_completed()) as mock_run:
+        git_native.push_refspec(
+            "/tmp/repo", "origin", "HEAD", "refs/heads/claude/session"
+        )
+
+    assert mock_run.call_count == 1
+    argv = mock_run.call_args.args[0]
+    assert argv == ["git", "push", "origin", "HEAD:refs/heads/claude/session"]
+    assert "--set-upstream" not in argv
+    assert "--force" not in argv
+    assert "--force-with-lease" not in argv
+    assert not any(token.startswith("+") for token in argv if isinstance(token, str))
+
+
+def test_push_refspec_reports_success():
+    with patch.object(
+        git_native.subprocess,
+        "run",
+        return_value=_make_completed(0, "", "To origin\n   abc123..def456  HEAD -> claude/session\n"),
+    ):
+        result = git_native.push_refspec(
+            "/tmp/repo", "origin", "HEAD", "refs/heads/claude/session"
+        )
+
+    assert result.ok is True
+    assert result.returncode == 0
 
 
 # ---------------------------------------------------------------------------
