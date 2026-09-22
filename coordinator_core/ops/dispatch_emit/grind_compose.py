@@ -1026,7 +1026,7 @@ def compose_grind_script(
     lines.append(
         _ledger_commit_block(
             "_finishBatch(batchState)",
-            unsettled_expr="_batchUnsettledRows(batchState)",
+            unsettled_expr="_batchUnsettledRows(BATCHES.find((b) => b.id === batchState.id))",
             guarded=True,
             is_drain=False,
             profile_name=profile.name,

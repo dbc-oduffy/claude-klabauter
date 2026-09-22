@@ -777,3 +777,27 @@ def test_drain_commit_is_handed_the_run_cost_record_body():
     for key in ("profile:", "appetite:", "resolved_knobs: RESOLVED_KNOBS", "manifest_digest: MANIFEST_DIGEST",
                 "counts: _counts()", "spend: _spend()"):
         assert key in record_fn, key
+
+
+def test_batch_helpers_receive_a_batches_entry_never_batch_state():
+    """`batchState` ({id, batchKey, triaged, closeCalled}) has no `.rows`; a
+    helper typed on a BATCHES entry that is handed batchState throws at run
+    time (every grind died at _finishBatch this way). Node is barred, so the
+    call sites are checked statically over the rendered script."""
+    import re
+    script = _compose()
+    helpers = re.findall(r"function (\w+)\(batch\)", script)
+    assert {"_pendingRow", "_batchDone", "_batchUnsettledRows"} <= set(helpers)
+    for name in helpers:
+        for arg in re.findall(rf"\b{name}\(([^()]*(?:\([^()]*\)[^()]*)*)\)", script):
+            if arg == "batch":
+                continue
+            assert arg.startswith("BATCHES.find("), f"{name}({arg})"
+    assert "batchState.rows" not in script
+
+
+def test_finish_batch_renders_unsettled_rows_from_the_batches_entry():
+    script = _compose()
+    finish = script[script.index("async function _finishBatch"):]
+    finish = finish[: finish.index("\n}\n")]
+    assert "_batchUnsettledRows(BATCHES.find((b) => b.id === batchState.id))" in finish

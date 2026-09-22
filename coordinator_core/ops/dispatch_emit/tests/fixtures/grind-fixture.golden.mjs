@@ -308,7 +308,7 @@ async function _dispatchRow(rowId, batchState) {
 }
 
 async function _finishBatch(batchState) {
-  const unsettled = _batchUnsettledRows(batchState);
+  const unsettled = _batchUnsettledRows(BATCHES.find((b) => b.id === batchState.id));
   const unsettledPaths = unsettled.map((r) => _ledgerPathFor(r));
   const lockKeys = ['@commit'].concat(unsettled.map((r) => `ledger:${r}`));
   if (unsettled.length) {
