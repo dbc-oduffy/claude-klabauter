@@ -86,6 +86,7 @@ from coordinator_core.git.divergence import (
 )
 from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
 from coordinator_core.ops.ceremony.commit_admission import governed_surface_refusal
+from coordinator_core.ops.ceremony.commit_path_legality import illegal_path_refusal
 from coordinator_core.git.commit_signing import (
     commit_signing_enabled,
     sign_flag_args,
@@ -4817,6 +4818,13 @@ def _commit_via_head_spine(
                 f"{caller}: refused -- this commit grows a governed doctrine surface "
                 f"that its admission ledger does not admit:\n{admission_refusal}"
             ),
+        )
+    legality_refusal = illegal_path_refusal(assembled)
+    if legality_refusal is not None:
+        return GitResult(
+            returncode=1,
+            stdout="",
+            stderr=f"{caller}: refused -- this commit lands a path Windows cannot check out:\n{legality_refusal}",
         )
 
     root_tree_sha = _git_state_head_tree_sha(root)

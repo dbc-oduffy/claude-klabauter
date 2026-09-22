@@ -190,11 +190,29 @@ def _python_syntax_error(scratch_path: str) -> Optional[str]:
     return None
 
 
+def _config_target_refusal(hook_path: str) -> Optional[str]:
+    """Hook configuration is not a hook. `settings.json` and `hooks.json` are
+    the subject of `guard_settings_integrity`, which runs only at SessionStart,
+    so a swap here would sit unchecked until the next boot -- and `sh -n`
+    accepts a multi-line JSON object, so the syntax gate would not stop it."""
+    if Path(hook_path).suffix.lower() != ".json":
+        return None
+    return (
+        f"{PROG}: REFUSED -- {hook_path} is hook configuration, not a hook script. "
+        "Edit it with the Edit tool, where the settings guards run."
+    )
+
+
 def cmd_stage(argv: List[str]) -> int:
     if not argv:
         print(f"{PROG}: stage requires <hook-path>", file=sys.stderr)
         return EXIT_USAGE
     hook_path = argv[0]
+
+    refusal = _config_target_refusal(hook_path)
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
+        return EXIT_VALIDATION_FAILED
 
     if not os.path.isfile(hook_path):
         print(f"{PROG}: stage: no such file: {hook_path}", file=sys.stderr)
@@ -233,6 +251,11 @@ def cmd_commit(argv: List[str]) -> int:
         print(f"{PROG}: commit requires <hook-path> <scratch-path>", file=sys.stderr)
         return EXIT_USAGE
     hook_path, scratch_path = argv[0], argv[1]
+
+    refusal = _config_target_refusal(hook_path)
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
+        return EXIT_VALIDATION_FAILED
 
     if not os.path.isfile(scratch_path):
         print(f"{PROG}: commit: no such scratch file: {scratch_path}", file=sys.stderr)

@@ -310,3 +310,23 @@ class TestStageCommitRoundTrip:
         assert hook.read_text(encoding="utf-8") == "#!/bin/bash\necho v2\n"
         assert stat.S_IMODE(os.stat(hook).st_mode) == mode_before
         assert not scratch.exists()
+
+
+class TestConfigTargetRefused:
+    """`sh -n` accepts a multi-line JSON object, so without this refusal the
+    helper would swap `settings.json` in, where only a SessionStart guard looks."""
+
+    def test_stage_refuses_json(self, tmp_path, capsys):
+        target = tmp_path / "settings.json"
+        target.write_text('{\n  "hooks": {}\n}\n', encoding="utf-8")
+        assert elh.main(["stage", str(target)]) == elh.EXIT_VALIDATION_FAILED
+        assert "hook configuration" in capsys.readouterr().err
+        assert list(tmp_path.iterdir()) == [target]
+
+    def test_commit_refuses_json_and_leaves_it_untouched(self, tmp_path):
+        target = tmp_path / "hooks.json"
+        target.write_text('{\n  "hooks": {}\n}\n', encoding="utf-8")
+        scratch = tmp_path / "scratch.json"
+        scratch.write_text('{\n  "hooks": {"x": 1}\n}\n', encoding="utf-8")
+        assert elh.main(["commit", str(target), str(scratch)]) == elh.EXIT_VALIDATION_FAILED
+        assert target.read_text(encoding="utf-8") == '{\n  "hooks": {}\n}\n'
