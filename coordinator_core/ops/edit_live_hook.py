@@ -40,9 +40,15 @@ Behavior-preservation notes (read alongside the bash source):
     has no analog here (this module runs under Python, not bash) — omitted,
     not silently dropped: the guard existed to protect bash *syntax parsing*
     of the script itself, which is moot for a Python module.
-  - Narrowed 2026-07-21 (plan `2026-07-21-claude-klabauter-pure-python-shop-retire-all-bash.md`,
-    chunk C5b, PM ruling): the syntax-check gate moved from `bash -n` to
-    `sh -n`. This module validates a git-hook artifact before an atomic live
+  - The syntax check follows the hook's language. A Python hook (a `.py`
+    live path, or a `python` shebang on the scratch copy) is compiled
+    in-process with `compile()` -- zero spawn -- and a SyntaxError refuses the
+    swap exactly as a shell syntax error does. Every live coordinator hook is
+    Python, so a shell-only gate refused all of them and left the unsafe
+    direct edit as the only route.
+  - For a shell hook, the gate is `sh -n` (plan
+    `2026-07-21-claude-klabauter-pure-python-shop-retire-all-bash.md`, chunk C5b, PM
+    ruling moved it from `bash -n`). This module validates a git-hook artifact before an atomic live
     swap — any machine that runs git hooks at all already has the `sh` git
     itself execs hooks through, so `sh -n` adds ZERO new dependency beyond
     what git already imposes (git-hook carve-out, sanctioned residual (b), NOT
@@ -86,7 +92,8 @@ PROG = "edit-live-hook.sh"  # literal program-name prefix — matches bash oracl
 # Exit codes (parity-critical):
 #   0 — success
 #   1 — usage/argument error
-#   2 — `sh -n` validation failure on commit (or `sh` unavailable) — the
+#   2 — syntax validation failure on commit (or `sh` unavailable for a
+#       shell hook) — the
 #       swap did NOT happen; live hook untouched.
 EXIT_OK = 0
 EXIT_USAGE = 1
@@ -161,6 +168,28 @@ def is_live_bash_matcher_hook(hook_path: str) -> bool:
     return False
 
 
+def _is_python_hook(hook_path: str, scratch_path: str) -> bool:
+    if hook_path.endswith(".py"):
+        return True
+    try:
+        with open(scratch_path, "rb") as fh:
+            first = fh.readline(256)
+    except OSError:
+        return False
+    return first.startswith(b"#!") and b"python" in first
+
+
+def _python_syntax_error(scratch_path: str) -> Optional[str]:
+    """Compile the scratch copy in-process; return the error text, or None when it compiles."""
+    try:
+        with open(scratch_path, "rb") as fh:
+            source = fh.read()
+        compile(source, scratch_path, "exec", dont_inherit=True)
+    except (SyntaxError, ValueError) as exc:
+        return f"{type(exc).__name__}: {exc}"
+    return None
+
+
 def cmd_stage(argv: List[str]) -> int:
     if not argv:
         print(f"{PROG}: stage requires <hook-path>", file=sys.stderr)
@@ -209,6 +238,21 @@ def cmd_commit(argv: List[str]) -> int:
         print(f"{PROG}: commit: no such scratch file: {scratch_path}", file=sys.stderr)
         return EXIT_USAGE
 
+    if _is_python_hook(hook_path, scratch_path):
+        error = _python_syntax_error(scratch_path)
+        if error is not None:
+            print(
+                f"{PROG}: commit: REFUSED -- scratch copy does not compile as Python:",
+                file=sys.stderr,
+            )
+            print(f"  {error}", file=sys.stderr)
+            print(
+                f"  Live hook {hook_path} was NOT modified. Fix {scratch_path} and re-run commit.",
+                file=sys.stderr,
+            )
+            return EXIT_VALIDATION_FAILED
+        return _swap(hook_path, scratch_path)
+
     sh_exe = shutil.which("sh")
     if sh_exe is None:
         print(
@@ -249,6 +293,10 @@ def cmd_commit(argv: List[str]) -> int:
         )
         return EXIT_VALIDATION_FAILED
 
+    return _swap(hook_path, scratch_path)
+
+
+def _swap(hook_path: str, scratch_path: str) -> int:
     hook_dir = str(Path(hook_path).resolve().parent)
     scratch_dir = str(Path(scratch_path).resolve().parent)
     if hook_dir != scratch_dir:

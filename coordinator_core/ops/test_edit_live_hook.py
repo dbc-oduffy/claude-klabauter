@@ -252,6 +252,42 @@ class TestCommit:
         assert hook.read_text(encoding="utf-8") == "#!/bin/bash\necho new\n"
 
 
+class TestCommitPythonHook:
+    def test_valid_python_hook_swaps_without_sh(self, tmp_path, monkeypatch):
+        hook = tmp_path / "guard.py"
+        _write_hook(hook, body="import sys\nsys.exit(0)\n")
+        scratch = tmp_path / ".guard.py.edit-live-hook.1.scratch"
+        scratch.write_text("import sys\n\ndef main():\n    return 0\n", encoding="utf-8")
+        monkeypatch.setattr(elh.shutil, "which", lambda *_a, **_kw: None)
+
+        rc = elh.cmd_commit([str(hook), str(scratch)])
+        assert rc == elh.EXIT_OK
+        assert "def main():" in hook.read_text(encoding="utf-8")
+        assert not scratch.exists()
+
+    def test_broken_python_hook_refuses_swap(self, tmp_path, capsys):
+        hook = tmp_path / "guard.py"
+        _write_hook(hook, body="import sys\n")
+        scratch = tmp_path / ".guard.py.edit-live-hook.1.scratch"
+        scratch.write_text("def main(:\n    return 0\n", encoding="utf-8")
+
+        rc = elh.cmd_commit([str(hook), str(scratch)])
+        assert rc == elh.EXIT_VALIDATION_FAILED
+        assert hook.read_text(encoding="utf-8") == "import sys\n"
+        assert scratch.exists()
+        assert "does not compile as Python" in capsys.readouterr().err
+
+    def test_python_shebang_without_py_suffix_is_compiled(self, tmp_path):
+        hook = tmp_path / "pre-commit"
+        _write_hook(hook, body="#!/usr/bin/env python3\nimport sys\n")
+        scratch = tmp_path / "pre-commit.scratch"
+        scratch.write_text("#!/usr/bin/env python3\nif True\n    pass\n", encoding="utf-8")
+
+        rc = elh.cmd_commit([str(hook), str(scratch)])
+        assert rc == elh.EXIT_VALIDATION_FAILED
+        assert hook.read_text(encoding="utf-8") == "#!/usr/bin/env python3\nimport sys\n"
+
+
 class TestStageCommitRoundTrip:
     def test_full_workflow_end_to_end(self, tmp_path, capsys):
         # Windows has no POSIX mode bits; os.stat().st_mode & 0o777 is
