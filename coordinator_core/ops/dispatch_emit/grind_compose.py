@@ -343,6 +343,11 @@ def run_admission(
             if row.node is None or row.done:
                 continue
             _apply_route(row, follow_edge(routing, row.node, "refuted", row), "refute-close refuted")
+        for stale_row_id in result.get("stale", []):
+            row = rows[stale_row_id]
+            if row.node is None or row.done:
+                continue
+            _handback(row, "manifest-stale", "refute-close close exited 3 (digest mismatch)")
 
     def _fix_row(row: Row) -> None:
         prior_node = row.node
@@ -364,6 +369,9 @@ def run_admission(
             return
         if outcome == "PEER_DIRTY":
             _handback(row, "peer-dirty", "fix reported PEER_DIRTY")
+            return
+        if outcome == "MANIFEST_STALE":
+            _handback(row, "manifest-stale", "fix reported MANIFEST_STALE")
             return
         if outcome == "NEEDS_WIDER_SCOPE":
             if not row.widened:
@@ -590,7 +598,16 @@ def _manifest_const(manifest: Manifest) -> str:
         {"row_id": e.row_id, "path": e.path, "digest": e.digest, "batch_key": e.batch_key}
         for e in manifest.entries
     ]
-    return "const QUEUE_GRIND_MANIFEST = " + json.dumps({"entries": entries, "digest": manifest.digest}, sort_keys=True) + ";"
+    declined = [
+        {"row_id": d.row_id, "path": d.path, "reason": d.reason} for d in manifest.declined
+    ]
+    return (
+        "const QUEUE_GRIND_MANIFEST = "
+        + json.dumps(
+            {"entries": entries, "digest": manifest.digest, "declined": declined}, sort_keys=True
+        )
+        + ";"
+    )
 
 def _capture(call_text: str, stage_kind: str, *, return_expr: str = "_result", tail: Optional[str] = None) -> str:
     """Wrap a ``grind_stages.compose_*`` call (which returns a bare
@@ -642,6 +659,7 @@ def _ledger_commit_block(
         unsettled_row_ids_js="unsettledPaths",
         run_id_js="RUN_ID" if is_drain else None,
         is_drain=is_drain,
+        record_js="JSON.stringify(_runCostRecord())" if is_drain else None,
         agent_type_host=agent_type_host,
     )
     call_block = (
@@ -853,6 +871,9 @@ def compose_grind_script(
     lines.append("async function _undoCall(row) {\n" + _indent_block(_capture(undo_raw, "undo"), "  ") + "\n}")
 
     lines.append(
+        "function _counts() {\n  const by_type = {};\n  for (const h of _handedBack) { by_type[h.type] = (by_type[h.type] || 0) + 1; }\n  const by_outcome = {};\n  for (const s of _settled) { by_outcome[s.outcome] = (by_outcome[s.outcome] || 0) + 1; }\n  return { by_type, by_outcome };\n}\nfunction _spend() {\n  return { output_tokens: budget.spent() - _startSpent, agent_calls_total: _callCount, agent_calls_by_stage_kind: _agentCallsByStageKind };\n}\nfunction _runCostRecord() {\n  return { profile: PROFILE_NAME, appetite: APPETITE_NAME, run_id: RUN_ID, resolved_knobs: RESOLVED_KNOBS, manifest_digest: MANIFEST_DIGEST, counts: _counts(), spend: _spend() };\n}"
+    )
+    lines.append(
         "const _rows = {};\n"
         "for (const b of BATCHES) {\n"
         "  for (const r of b.rows) {\n"
@@ -921,6 +942,11 @@ def compose_grind_script(
         "    if (!row || row.done || !row.node) continue;\n"
         "    applyRoute(row, entry.row, followEdge(row.node, 'refuted', row), 'refute-close refuted');\n"
         "  }\n"
+        "  for (const staleId of (result.stale || [])) {\n"
+        "    const row = _rows[staleId];\n"
+        "    if (!row || row.done || !row.node) continue;\n"
+        "    row.done = true; _handedBack.push({ row: staleId, type: 'manifest-stale', reason: 'refute-close close exited 3 (digest mismatch)' });\n"
+        "  }\n"
         "}"
     )
 
@@ -941,6 +967,7 @@ def compose_grind_script(
         "  if (tradeoff) { row.done = true; _handedBack.push({ row: rowId, type: 'needs-judgment', reason: 'fix reported a tradeoff' }); return; }\n"
         "  if (outcome === 'NEEDS_PLAN') { row.done = true; _handedBack.push({ row: rowId, type: 'baton', reason: 'fix reported NEEDS_PLAN' }); return; }\n"
         "  if (outcome === 'PEER_DIRTY') { row.done = true; _handedBack.push({ row: rowId, type: 'peer-dirty', reason: 'fix reported PEER_DIRTY' }); return; }\n"
+        "  if (outcome === 'MANIFEST_STALE') { row.done = true; _handedBack.push({ row: rowId, type: 'manifest-stale', reason: 'fix reported MANIFEST_STALE' }); return; }\n"
         "  if (outcome === 'NEEDS_WIDER_SCOPE') {\n"
         "    if (!row.widened) { row.widened = true; row.declaredFiles = row.declaredFiles.concat(result.extra_files || []); return; }\n"
         "    row.done = true; _handedBack.push({ row: rowId, type: 'widen-exhausted', reason: 'second NEEDS_WIDER_SCOPE' }); return;\n"
@@ -1074,25 +1101,14 @@ def compose_grind_script(
     )
 
     lines.append(
-        "const _countsByType = {};\n"
-        "for (const h of _handedBack) { _countsByType[h.type] = (_countsByType[h.type] || 0) + 1; }\n"
-        "const _countsByOutcome = {};\n"
-        "for (const s of _settled) { _countsByOutcome[s.outcome] = (_countsByOutcome[s.outcome] || 0) + 1; }"
-    )
-
-    lines.append(
         "const HANDBACK = {\n"
         "  schema: 'queue-grind-handback/1',\n"
         "  profile: PROFILE_NAME,\n"
         "  appetite: APPETITE_NAME,\n"
         "  handed_back: _handedBack,\n"
         "  settled: _settled,\n"
-        "  counts: { by_type: _countsByType, by_outcome: _countsByOutcome },\n"
-        "  spend: {\n"
-        "    output_tokens: budget.spent() - _startSpent,\n"
-        "    agent_calls_total: _callCount,\n"
-        "    agent_calls_by_stage_kind: _agentCallsByStageKind,\n"
-        "  },\n"
+        "  counts: _counts(),\n"
+        "  spend: _spend(),\n"
         "};"
     )
     lines.append("return HANDBACK;")

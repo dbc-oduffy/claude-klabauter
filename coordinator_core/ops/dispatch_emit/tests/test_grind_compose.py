@@ -274,7 +274,8 @@ def test_fix_commit_undo_interpolate_live_row_state_not_static_manifest_path():
 
 def test_handback_rows_are_row_ids_and_counts_populated():
     script = _compose()
-    assert "counts: { by_type: _countsByType, by_outcome: _countsByOutcome }" in script
+    assert "counts: _counts()," in script
+    assert "return { by_type, by_outcome };" in script
     assert "_handedBack.push({ row: rowId" in script or "_handedBack.push({ row: rec.row" in script
 
 
@@ -637,6 +638,68 @@ def test_fix_close_result_and_refute_close_confirmed_feed_touched_removed_files(
     assert "result.close_result.new" in script
     assert "result.close_result.old" in script
     assert "item.new_path" in script
+
+
+# ---------------------------------------------------------------------------
+# MANIFEST_STALE (grind-row close exit 3) -- fix outcome + refute-close stale
+# ---------------------------------------------------------------------------
+
+
+def test_fix_manifest_stale_outcome_hands_back_manifest_stale():
+    verdicts = _all_fix_batches(["r0"])
+    script_by_kind = {
+        "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
+        "fix": lambda rid: {"outcome": "MANIFEST_STALE"},
+    }
+    result, _budget = _run([("b0", ["r0"])], script_by_kind, batch_size=1)
+    assert any(h["type"] == "manifest-stale" and h["row"] == "r0" for h in result["handed_back"])
+
+
+def test_refute_close_stale_row_hands_back_manifest_stale():
+    verdicts = _all_close_batches(["r0", "r1"])
+    script_by_kind = {
+        "triage": lambda bid: _triage_script(verdicts)(bid, ["r0", "r1"]),
+        "refute-close": lambda bid: {
+            "confirmed": [],
+            "refuted": [{"row": "r1", "reason": "still broken"}],
+            "stale": ["r0"],
+        },
+        "commit": lambda rid: {"outcome": "committed", "sha": "x"},
+    }
+    result, _budget = _run([("b0", ["r0", "r1"])], script_by_kind, batch_size=2)
+    assert any(h["type"] == "manifest-stale" and h["row"] == "r0" for h in result["handed_back"])
+
+
+def test_rendered_js_fix_stage_maps_manifest_stale():
+    script = _compose()
+    assert "if (outcome === 'MANIFEST_STALE')" in script
+    assert "type: 'manifest-stale', reason: 'fix reported MANIFEST_STALE'" in script
+
+
+def test_rendered_js_close_batch_maps_stale_to_manifest_stale():
+    script = _compose()
+    assert "result.stale || []" in script
+    assert "type: 'manifest-stale', reason: 'refute-close close exited 3" in script
+
+
+def test_fix_schema_enum_includes_manifest_stale():
+    script = _compose()
+    assert '"NEEDS_PLAN", "MANIFEST_STALE"' in script
+
+
+def test_close_schema_carries_stale_field():
+    script = _compose()
+    assert '"stale": {"items": {"type": "string"}, "type": "array"}' in script
+
+
+def test_fix_prompt_names_manifest_stale_on_close_exit_3():
+    script = _compose()
+    assert "report MANIFEST_STALE and stop" in script
+
+
+def test_close_prompt_names_stale_on_close_exit_3():
+    script = _compose()
+    assert "put that row\\'s id in `stale` instead" in script
     assert "row.removedFiles.concat([row.path])" in script
 
 
@@ -701,3 +764,16 @@ def test_triage_rows_omitted_from_result_hand_back_stage_dead_not_stranded():
         budget=budget, agent=agent_fn,
     )
     assert any(h["row"] == "r0" and h["type"] == "stage-dead" for h in result["handed_back"])
+
+
+def test_drain_commit_is_handed_the_run_cost_record_body():
+    """The drain agent writes runs/<run-id>.json; it must be given the body
+    (profile, appetite, resolved_knobs, manifest_digest, counts, spend), not
+    just the file name."""
+    script = _compose()
+    assert "Its content is exactly this JSON, byte for byte: ' + (JSON.stringify(_runCostRecord()))" in script
+    record_fn = script[script.index("function _runCostRecord()"):]
+    record_fn = record_fn[: record_fn.index("\n}") ]
+    for key in ("profile:", "appetite:", "resolved_knobs: RESOLVED_KNOBS", "manifest_digest: MANIFEST_DIGEST",
+                "counts: _counts()", "spend: _spend()"):
+        assert key in record_fn, key

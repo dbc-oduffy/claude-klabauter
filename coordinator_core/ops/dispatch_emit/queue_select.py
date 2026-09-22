@@ -44,6 +44,7 @@ from coordinator_core.frontmatter import schema_validate
 
 __all__ = [
     "ManifestEntry",
+    "DeclinedEntry",
     "SourceOpResult",
     "Manifest",
     "select_rows",
@@ -111,6 +112,18 @@ class ManifestEntry:
 
 
 @dataclass(frozen=True)
+class DeclinedEntry:
+    """One row EXCLUDED from the manifest rather than raising — a
+    `route-to-*` ledger mark or hand-back mark (DR-404: never re-entered
+    into another selector, but a re-emit/resume must not fail because of
+    it)."""
+
+    row_id: str
+    path: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class SourceOpResult:
     """`{source op, args, output sha256}` — recorded only when `source` is set."""
 
@@ -124,14 +137,18 @@ class Manifest:
     """The frozen manifest `select_rows` returns.
 
     `digest` is a sha256 over the canonical (sorted-keys) JSON of
-    `entries`/`batch_sizes`/`source` — the value the receipt records instead
-    of the manifest itself (§ Design § Selector, "Frozen means frozen").
+    `entries`/`batch_sizes`/`source`/`declined` — the value the receipt
+    records instead of the manifest itself (§ Design § Selector, "Frozen
+    means frozen"). `declined` is every row EXCLUDED for carrying a
+    `route-to-*` mark, sorted by `row_id` for determinism — never raised
+    (DR-404).
     """
 
     entries: tuple[ManifestEntry, ...]
     batch_sizes: Mapping[str, int]
     source: Optional[SourceOpResult]
     digest: str
+    declined: tuple[DeclinedEntry, ...] = ()
 
 
 def _repo_relative(path: Path, repo_root: Path) -> str:
@@ -204,8 +221,15 @@ def _read_handback_marks(profile: str, repo_root: Path) -> dict[str, str]:
 
 def _fold_in_ledger(
     row_id: str, digest: str, ledger_by_row: Mapping[str, list[dict]]
-) -> tuple[str, ...]:
-    """Return the stages `row_id` already passed, or refuse a `route-to-*` row.
+) -> tuple[tuple[str, ...], Optional[str]]:
+    """Return `(skip_stages, declined_reason)` for `row_id`.
+
+    `declined_reason` is `None` unless the row's ledger carries a
+    `route-to-*` mark, in which case it names the mark and `skip_stages` is
+    empty — the row is EXCLUDED from the manifest and recorded in
+    `Manifest.declined` rather than raising (DR-404: a `route-to-*` row must
+    never re-enter another selector, but a re-emit/resume must not fail
+    because of it either).
 
     Matching last digest -> skip the stages recorded against it. Mismatched
     last digest -> re-run (empty skip set; the row content changed since the
@@ -213,19 +237,18 @@ def _fold_in_ledger(
     """
     lines = ledger_by_row.get(row_id)
     if not lines:
-        return ()
+        return (), None
     for line in lines:
         verdict = line.get("verdict")
         outcome = line.get("outcome")
         for marker in (verdict, outcome):
             if isinstance(marker, str) and marker.startswith("route-to-"):
-                raise RouteToRefusedError(
-                    f"queue_select: row {row_id!r} carries a route-to-* ledger mark "
-                    f"({marker!r}) — refused, never re-entered into another selector"
+                return (), (
+                    f"row {row_id!r} carries a route-to-* ledger mark ({marker!r})"
                 )
     last_digest = lines[-1].get("digest")
     if last_digest != digest:
-        return ()
+        return (), None
     passed: list[str] = []
     seen: set[str] = set()
     for line in lines:
@@ -235,7 +258,7 @@ def _fold_in_ledger(
         if stage not in seen:
             seen.add(stage)
             passed.append(stage)
-    return tuple(passed)
+    return tuple(passed), None
 
 
 def _normalise_sentinels(
@@ -470,8 +493,9 @@ def select_rows(
     keeps read order. `batch_key` is an ordered coalesce list; a row missing
     every key batches under the reserved `'@unkeyed'`. `profile` names the
     ledger directory (`state/queue-grind/<profile>/*.jsonl`) the fold-in
-    reads; a row whose ledger carries a `route-to-*` mark is refused
-    (`RouteToRefusedError`). `source`, when given, is `{"op": ..., "args":
+    reads; a row whose ledger carries a `route-to-*` mark is EXCLUDED from
+    the manifest and recorded in `Manifest.declined` — never raised
+    (DR-404). `source`, when given, is `{"op": ..., "args":
     ...}`; `op` must be a member of `grind_vocab.SOURCE_OPS` and is resolved
     and called in-process through the op registry (`UnknownSourceOpError`
     otherwise).
@@ -485,6 +509,8 @@ def select_rows(
     for queue_dir in queue:
         queue_dir = Path(queue_dir)
         for name in sorted(os.listdir(queue_dir)):
+            if name.startswith(".") or not (name.endswith(".yaml") or name.endswith(".yml")):
+                continue
             row_path = queue_dir / name
             if not row_path.is_file():
                 continue
@@ -561,18 +587,27 @@ def select_rows(
     handback_marks = _read_handback_marks(profile, repo_root)
 
     entries: list[ManifestEntry] = []
+    declined: list[DeclinedEntry] = []
     for row_id, row_path, digest, normalised in filtered:
+        rel_path = _repo_relative(row_path, repo_root)
         mark = handback_marks.get(row_id, "")
         if mark.startswith("route-to-"):
-            raise RouteToRefusedError(
-                f"queue_select: row {row_id!r} carries a route-to-* hand-back mark "
-                f"({mark!r}) — refused, never re-entered into another selector"
+            declined.append(
+                DeclinedEntry(
+                    row_id=row_id,
+                    path=rel_path,
+                    reason=f"row carries a route-to-* hand-back mark ({mark!r})",
+                )
             )
-        skip_stages = _fold_in_ledger(row_id, digest, ledger_by_row)
+            continue
+        skip_stages, declined_reason = _fold_in_ledger(row_id, digest, ledger_by_row)
+        if declined_reason is not None:
+            declined.append(DeclinedEntry(row_id=row_id, path=rel_path, reason=declined_reason))
+            continue
         entries.append(
             ManifestEntry(
                 row_id=row_id,
-                path=_repo_relative(row_path, repo_root),
+                path=rel_path,
                 digest=digest,
                 batch_key=_coalesce_batch_key(normalised, batch_key),
                 skip_stages=skip_stages,
@@ -596,33 +631,62 @@ def select_rows(
         # `SourceOpResult` provenance.
         source_records = output.get("records") if isinstance(output, Mapping) else None
         if source_records:
+            seen_source_ids: dict[str, int] = {}
             for i, record in enumerate(source_records):
                 if not isinstance(record, Mapping):
                     continue
                 normalised = _normalise_sentinels(record, absent_sentinels)
                 if not _matches_where(normalised, checked_where):
                     continue
-                raw_row_id = record.get(row_id_key) if row_id_key != "@stem" else None
-                row_id = str(raw_row_id) if raw_row_id is not None else f"@source-{op_name}-{i}"
                 record_digest = hashlib.sha256(
                     json.dumps(record, sort_keys=True, default=str).encode("utf-8")
                 ).hexdigest()
+                if row_id_key == "@stem":
+                    row_id = f"@source-{op_name}-{record_digest[:16]}"
+                    if row_id in seen_source_ids:
+                        raise DuplicateStemError(
+                            f"queue_select: source rows {seen_source_ids[row_id]} and {i} "
+                            f"from op {op_name!r} resolve to the same content-derived id "
+                            f"{row_id!r}"
+                        )
+                    seen_source_ids[row_id] = i
+                else:
+                    raw_row_id = record.get(row_id_key)
+                    if raw_row_id is None:
+                        raise MissingRowIdError(
+                            f"queue_select: source row {i} from op {op_name!r} carries "
+                            f"no {row_id_key!r} field — refused, never coerced to a "
+                            "positional id"
+                        )
+                    row_id = str(raw_row_id)
+                source_path = f"@source:{op_name}:{i}"
                 mark = handback_marks.get(row_id, "")
                 if mark.startswith("route-to-"):
-                    raise RouteToRefusedError(
-                        f"queue_select: source row {row_id!r} carries a route-to-* "
-                        f"hand-back mark ({mark!r}) — refused"
+                    declined.append(
+                        DeclinedEntry(
+                            row_id=row_id,
+                            path=source_path,
+                            reason=f"row carries a route-to-* hand-back mark ({mark!r})",
+                        )
                     )
-                skip_stages = _fold_in_ledger(row_id, record_digest, ledger_by_row)
+                    continue
+                skip_stages, declined_reason = _fold_in_ledger(row_id, record_digest, ledger_by_row)
+                if declined_reason is not None:
+                    declined.append(
+                        DeclinedEntry(row_id=row_id, path=source_path, reason=declined_reason)
+                    )
+                    continue
                 entries.append(
                     ManifestEntry(
                         row_id=row_id,
-                        path=f"@source:{op_name}:{i}",
+                        path=source_path,
                         digest=record_digest,
                         batch_key=_coalesce_batch_key(normalised, batch_key),
                         skip_stages=skip_stages,
                     )
                 )
+
+    declined_sorted = tuple(sorted(declined, key=lambda d: d.row_id))
 
     canonical = {
         "entries": [
@@ -645,6 +709,9 @@ def select_rows(
             if source_result is not None
             else None
         ),
+        "declined": [
+            {"row_id": d.row_id, "path": d.path, "reason": d.reason} for d in declined_sorted
+        ],
     }
     manifest_digest = hashlib.sha256(
         json.dumps(canonical, sort_keys=True).encode("utf-8")
@@ -655,4 +722,5 @@ def select_rows(
         batch_sizes=dict(batch_sizes),
         source=source_result,
         digest=manifest_digest,
+        declined=declined_sorted,
     )

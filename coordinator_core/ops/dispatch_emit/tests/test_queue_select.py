@@ -17,6 +17,7 @@ from coordinator_core.ops import queue_family
 from coordinator_core.ops.dispatch_emit.queue_select import (
     DuplicateStemError,
     Manifest,
+    MissingRowIdError,
     RouteToRefusedError,
     WhereTermError,
     select_rows,
@@ -175,6 +176,89 @@ def test_duplicate_stem_refused(tmp_path):
     _write_row(dir_b / "row-1.yaml", **_base_row())
     with pytest.raises(DuplicateStemError):
         _select(queue=[dir_a, dir_b], repo_root=tmp_path)
+
+
+def test_non_yaml_files_ignored(tmp_path):
+    queue_dir = tmp_path / "state" / "bug-backlog"
+    queue_dir.mkdir(parents=True)
+    (queue_dir / ".gitkeep").write_text("", encoding="utf-8")
+    (queue_dir / "README.md").write_text("not a row", encoding="utf-8")
+    _write_row(queue_dir / "row-1.yaml", **_base_row())
+    _write_row(queue_dir / "row-2.yml", **_base_row())
+    manifest = _select(queue=[queue_dir], repo_root=tmp_path)
+    assert len(manifest.entries) == 2
+    assert {e.row_id for e in manifest.entries} == {"row-1", "row-2"}
+
+
+def test_source_record_missing_row_id_field_refused(tmp_path, monkeypatch):
+    from coordinator_core.contract import grind_vocab as _grind_vocab
+    from coordinator_core.ops.dispatch_emit import queue_select as _qs
+
+    monkeypatch.setattr(_grind_vocab, "SOURCE_OPS", frozenset({"fake.source"}))
+
+    def _fake_call_source_op(op_name, args, repo_root):
+        return {"records": [{"title": "no id field here"}]}
+
+    monkeypatch.setattr(_qs, "_call_source_op", _fake_call_source_op)
+
+    with pytest.raises(MissingRowIdError):
+        _select(
+            queue=[],
+            repo_root=tmp_path,
+            row_id_key="row_id",
+            source={"op": "fake.source", "args": {}},
+        )
+
+
+def test_source_record_at_stem_derives_stable_content_id(tmp_path, monkeypatch):
+    from coordinator_core.contract import grind_vocab as _grind_vocab
+    from coordinator_core.ops.dispatch_emit import queue_select as _qs
+
+    monkeypatch.setattr(_grind_vocab, "SOURCE_OPS", frozenset({"fake.source"}))
+
+    records = [{"title": "first"}, {"title": "second"}]
+
+    def _fake_call_source_op(op_name, args, repo_root):
+        return {"records": records}
+
+    monkeypatch.setattr(_qs, "_call_source_op", _fake_call_source_op)
+
+    manifest = _select(
+        queue=[], repo_root=tmp_path, row_id_key="@stem", source={"op": "fake.source", "args": {}}
+    )
+    ids_forward = [e.row_id for e in manifest.entries]
+
+    def _fake_call_source_op_reordered(op_name, args, repo_root):
+        return {"records": list(reversed(records))}
+
+    monkeypatch.setattr(_qs, "_call_source_op", _fake_call_source_op_reordered)
+    manifest_reordered = _select(
+        queue=[], repo_root=tmp_path, row_id_key="@stem", source={"op": "fake.source", "args": {}}
+    )
+    ids_reversed = [e.row_id for e in manifest_reordered.entries]
+
+    assert set(ids_forward) == set(ids_reversed)
+    assert len(set(ids_forward)) == 2
+
+
+def test_source_record_at_stem_duplicate_content_refused(tmp_path, monkeypatch):
+    from coordinator_core.contract import grind_vocab as _grind_vocab
+    from coordinator_core.ops.dispatch_emit import queue_select as _qs
+
+    monkeypatch.setattr(_grind_vocab, "SOURCE_OPS", frozenset({"fake.source"}))
+
+    def _fake_call_source_op(op_name, args, repo_root):
+        return {"records": [{"title": "same"}, {"title": "same"}]}
+
+    monkeypatch.setattr(_qs, "_call_source_op", _fake_call_source_op)
+
+    with pytest.raises(DuplicateStemError):
+        _select(
+            queue=[],
+            repo_root=tmp_path,
+            row_id_key="@stem",
+            source={"op": "fake.source", "args": {}},
+        )
 
 
 def test_unparseable_row_raises_named_error(tmp_path):
@@ -338,7 +422,7 @@ def test_ledger_fold_in_rerun_on_digest_mismatch(tmp_path):
     assert manifest.entries[0].skip_stages == ()
 
 
-def test_ledger_route_to_refused(tmp_path):
+def test_ledger_route_to_excluded_and_declined(tmp_path):
     queue_dir = tmp_path / "state" / "bug-backlog"
     queue_dir.mkdir(parents=True)
     row_path = queue_dir / "a.yaml"
@@ -346,8 +430,25 @@ def test_ledger_route_to_refused(tmp_path):
     digest = __import__("hashlib").sha256(row_path.read_bytes()).hexdigest()
     _append_ledger(tmp_path, "fixture", "a", digest=digest, outcome="route-to-learn-lessons")
 
-    with pytest.raises(RouteToRefusedError):
-        _select(queue=[queue_dir], repo_root=tmp_path)
+    manifest = _select(queue=[queue_dir], repo_root=tmp_path)
+    assert manifest.entries == ()
+    assert len(manifest.declined) == 1
+    assert manifest.declined[0].row_id == "a"
+    assert "route-to-learn-lessons" in manifest.declined[0].reason
+
+
+def test_ledger_route_to_re_emit_is_idempotent(tmp_path):
+    queue_dir = tmp_path / "state" / "bug-backlog"
+    queue_dir.mkdir(parents=True)
+    row_path = queue_dir / "a.yaml"
+    _write_row(row_path, **_base_row())
+    digest = __import__("hashlib").sha256(row_path.read_bytes()).hexdigest()
+    _append_ledger(tmp_path, "fixture", "a", digest=digest, outcome="route-to-learn-lessons")
+
+    first = _select(queue=[queue_dir], repo_root=tmp_path)
+    second = _select(queue=[queue_dir], repo_root=tmp_path)
+    assert first.digest == second.digest
+    assert first.declined == second.declined
 
 
 # ---------------------------------------------------------------------------

@@ -306,9 +306,11 @@ def compose_refute_close_call(
         (
             "lit",
             "`, and report the `{old,new}` path pair it prints as that "
-            "row's `new_path`. Report every proposal you refuted along "
-            "with why, and never run `grind-row close` for one of those. "
-            + _NO_STAGING_CLAUSE,
+            "row's `new_path`. If `grind-row close` exits 3 (digest mismatch "
+            "-- the row changed since the manifest was emitted), put that "
+            "row's id in `stale` instead. Report every proposal you refuted "
+            "along with why, and never run `grind-row close` for one of "
+            "those. " + _NO_STAGING_CLAUSE,
         ),
     ]
     schema = {
@@ -337,6 +339,7 @@ def compose_refute_close_call(
                     },
                 },
             },
+            "stale": {"type": "array", "items": {"type": "string"}},
         },
     }
     return _agent_call(
@@ -414,6 +417,10 @@ def compose_fix_call(
             "when they pass run `grind-row close --profile-dir ",
         )
     )
+    _manifest_stale_note = (
+        " If `grind-row close` exits 3 (digest mismatch -- the row changed "
+        "since the manifest was emitted), report MANIFEST_STALE and stop."
+    )
     parts.append(("expr", profile_dir_js) if profile_dir_js else ("lit", "<profile dir>"))
     parts.append(("lit", f" --profile {profile} --row "))
     parts.append(("expr", row_path_js) if row_path_js else ("lit", "<row path>"))
@@ -426,7 +433,8 @@ def compose_fix_call(
     parts.append(("expr", run_id_js) if run_id_js else ("lit", "<run-id>"))
     parts.append((
         "lit",
-        f" --repo-root {repo_root}`, reporting the `{{old,new}}` path pair it prints as `close_result`.",
+        f" --repo-root {repo_root}`, reporting the `{{old,new}}` path pair it prints as "
+        f"`close_result`.{_manifest_stale_note}",
     ))
     if feedback_js:
         parts.append(("expr", feedback_js))
@@ -443,6 +451,7 @@ def compose_fix_call(
                     "PEER_DIRTY",
                     "NOT_REPRODUCED",
                     "NEEDS_PLAN",
+                    "MANIFEST_STALE",
                 ],
             },
             "extra_files": {"type": "array", "items": {"type": "string"}},
@@ -651,6 +660,7 @@ def compose_commit_ledger_only_call(
     run_id: Optional[str] = None,
     run_id_js: Optional[str] = None,
     is_drain: bool = False,
+    record_js: Optional[str] = None,
     agent_type_host: Optional[str] = None,
 ) -> str:
     """`commit` (ledger-only) (`coordinator:git-commit-agent`, sonnet, low).
@@ -681,6 +691,10 @@ def compose_commit_ledger_only_call(
         else:
             parts.append(("lit", str(run_id)))
         parts.append(("lit", ".json in this same commit."))
+        if record_js:
+            parts.append(("lit", " Its content is exactly this JSON, byte for byte: "))
+            parts.append(("expr", record_js))
+            parts.append(("lit", "."))
     parts.append(("lit", _COMMIT_TAIL_LIT))
     return _compose_commit_agent_call(
         parts, label=label, phase_title=phase_title, agent_type_host=agent_type_host
