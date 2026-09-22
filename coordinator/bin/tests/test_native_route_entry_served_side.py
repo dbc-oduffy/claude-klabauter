@@ -11,8 +11,9 @@ read deadline, for ~0.5s of real work).
 
 Pinned here:
   - inside a pool worker the implementation runs and nothing is routed;
-  - outside one the route is exactly today's;
-  - the env spelling cannot drift from the engine's own constant.
+  - a cold-served entrypoint (no route declared) runs the implementation too;
+  - outside both the route is exactly today's;
+  - neither env spelling can drift from the engine's own constant.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ import cc_invoke  # noqa: E402
 import entry_point_shim  # noqa: E402
 
 _ROUTE_ENV = "COORDINATOR_EXECUTION_ROUTE"
+_SERVED_ENV = "COORDINATOR_SERVED_ENTRYPOINT"
 
 
 @pytest.fixture
@@ -81,3 +83,43 @@ def test_the_route_spelling_matches_the_engine():
 
     assert op_latency.ROUTE_ENV == _ROUTE_ENV
     assert op_latency.WARM_SERVER == "warm_server"
+
+
+def test_a_cold_served_entrypoint_runs_the_implementation_and_nothing_routes(entry, monkeypatch):
+    """A cold `python -m coordinator_core.invoke invoke.from_argv` declares no
+    route; routing again from there spawned the next cold rung, forever."""
+    fn, calls = entry
+    monkeypatch.delenv(_ROUTE_ENV, raising=False)
+    monkeypatch.setenv(_SERVED_ENV, "workstream-complete-assemble")
+
+    assert fn(["--help"]) == 0
+    assert calls["legacy"] == [["--help"]]
+    assert calls["route"] == []
+
+
+def test_the_served_spelling_matches_the_engine():
+    from coordinator_core.ops import invoke_from_argv
+
+    assert invoke_from_argv.SERVED_ENTRYPOINT_ENV == _SERVED_ENV
+
+
+def test_run_entrypoint_marks_the_served_span_and_restores_it(monkeypatch, tmp_path):
+    from coordinator_core.ops import invoke_from_argv
+
+    seen = []
+
+    def _main(_argv=None):
+        seen.append(invoke_from_argv.os.environ.get(_SERVED_ENV))
+        return 0
+
+    script = tmp_path / "pickup-assemble.py"
+    script.write_text("def main(argv=None):\n    return 0\n", encoding="utf-8")
+    monkeypatch.setattr(invoke_from_argv, "_resolve_entrypoint_script", lambda _n: script)
+    monkeypatch.setattr(invoke_from_argv, "_load_entrypoint_main", lambda _s, _n: _main)
+    monkeypatch.delenv(_SERVED_ENV, raising=False)
+
+    result = invoke_from_argv._run_entrypoint("pickup-assemble", ["brief"], str(tmp_path))
+
+    assert result["exit_code"] == 0
+    assert seen == ["pickup-assemble"]
+    assert _SERVED_ENV not in invoke_from_argv.os.environ

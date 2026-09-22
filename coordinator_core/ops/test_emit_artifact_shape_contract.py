@@ -418,10 +418,10 @@ class TestRealTreeParity:
         # fresh from the emitter, so asserting against the constant that produced it
         # is a tautology that catches nothing. The literal is the pin: a version bump
         # must be an explicit two-place edit, never a silent side effect. Bumped to
-        # 10.0.0 alongside CONTRACT_VERSION (emit_artifact_shape_contract.py's history
-        # comment, 2026-09-22 stamp collision plus queue-grind-profile source required-add)
-        # — this is the second of the two places.
-        assert bundle["version"] == "10.0.0"
+        # 11.0.0 alongside CONTRACT_VERSION (emit_artifact_shape_contract.py's history
+        # comment, 2026-09-22 queue-grind-profile where-clause narrowing) — this is the
+        # second of the two places.
+        assert bundle["version"] == "11.0.0"
 
     def test_queue_grind_profile_registered(self, bundle):
         # DoE's queue-grind-profile.schema.json enters the bundle by directory

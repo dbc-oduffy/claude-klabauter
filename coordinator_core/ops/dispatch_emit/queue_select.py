@@ -474,6 +474,76 @@ def _run_awaitable_sync(awaitable: Any) -> Any:
     return box["result"]
 
 
+def _file_row_id(row_path: Path, parsed: Mapping[str, Any], row_id_key: str) -> str:
+    """A queue file's row id: its stem under `'@stem'`, else its `row_id_key`
+    field. The one derivation `select_rows` and `live_row_ids` share, so a
+    ledger's key and the sweep's liveness test cannot drift apart."""
+    if row_id_key == "@stem":
+        return row_path.stem
+    raw_row_id = parsed.get(row_id_key)
+    if raw_row_id is None:
+        raise MissingRowIdError(
+            f"queue_select: row {row_path!s} carries no {row_id_key!r} "
+            "field — refused, never coerced to the literal string 'None'"
+        )
+    return str(raw_row_id)
+
+
+def _source_row_id(
+    op_name: str, record: Mapping[str, Any], record_digest: str, row_id_key: str, index: int
+) -> str:
+    """A source-op record's row id — the `_file_row_id` twin for `source` rows."""
+    if row_id_key == "@stem":
+        return f"@source-{op_name}-{record_digest[:16]}"
+    raw_row_id = record.get(row_id_key)
+    if raw_row_id is None:
+        raise MissingRowIdError(
+            f"queue_select: source row {index} from op {op_name!r} carries "
+            f"no {row_id_key!r} field — refused, never coerced to a "
+            "positional id"
+        )
+    return str(raw_row_id)
+
+
+def _record_digest(record: Mapping[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(record, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+
+def live_row_ids(
+    queue: Sequence[Path],
+    *,
+    row_id_key: str,
+    repo_root: Path,
+    source: Optional[Mapping[str, Any]] = None,
+) -> set[str]:
+    """Every row id the named queue dirs (and `source` op) yield today, before
+    `where`/`limit` — the liveness set `grind-row sweep` settles ledgers
+    against. A row filtered out by `where` is still live."""
+    ids: set[str] = set()
+    for queue_dir in queue:
+        queue_dir = Path(queue_dir)
+        for name in sorted(os.listdir(queue_dir)):
+            if name.startswith(".") or not (name.endswith(".yaml") or name.endswith(".yml")):
+                continue
+            row_path = queue_dir / name
+            if not row_path.is_file():
+                continue
+            if row_id_key == "@stem":
+                ids.add(row_path.stem)
+                continue
+            parsed = schema_validate.parse_yaml(row_path.read_text(encoding="utf-8"))
+            if not isinstance(parsed, dict):
+                raise UnparseableRowError(f"queue_select: row {row_path!s} did not parse to a mapping")
+            ids.add(_file_row_id(row_path, parsed, row_id_key))
+    if source is not None:
+        output = _call_source_op(source["op"], source.get("args") or {}, Path(repo_root))
+        records = output.get("records") if isinstance(output, Mapping) else None
+        for i, record in enumerate(records or []):
+            if isinstance(record, Mapping):
+                ids.add(_source_row_id(source["op"], record, _record_digest(record), row_id_key, i))
+    return ids
+
+
 def select_rows(
     queue: Sequence[Path],
     *,
@@ -540,28 +610,15 @@ def select_rows(
                     f"(got {type(parsed).__name__})"
                 )
 
-            if row_id_key == "@stem":
-                row_id = row_path.stem
-                if row_id in seen_stems and seen_stems[row_id] != row_path:
-                    raise DuplicateStemError(
-                        f"queue_select: stem {row_id!r} is yielded by both "
-                        f"{seen_stems[row_id]!s} and {row_path!s}"
-                    )
-                seen_stems[row_id] = row_path
-            else:
-                raw_row_id = parsed.get(row_id_key)
-                if raw_row_id is None:
-                    raise MissingRowIdError(
-                        f"queue_select: row {row_path!s} carries no {row_id_key!r} "
-                        "field — refused, never coerced to the literal string 'None'"
-                    )
-                row_id = str(raw_row_id)
-                if row_id in seen_stems and seen_stems[row_id] != row_path:
-                    raise DuplicateRowIdError(
-                        f"queue_select: row_id {row_id!r} is yielded by both "
-                        f"{seen_stems[row_id]!s} and {row_path!s}"
-                    )
-                seen_stems[row_id] = row_path
+            row_id = _file_row_id(row_path, parsed, row_id_key)
+            if row_id in seen_stems and seen_stems[row_id] != row_path:
+                error = DuplicateStemError if row_id_key == "@stem" else DuplicateRowIdError
+                label = "stem" if row_id_key == "@stem" else "row_id"
+                raise error(
+                    f"queue_select: {label} {row_id!r} is yielded by both "
+                    f"{seen_stems[row_id]!s} and {row_path!s}"
+                )
+            seen_stems[row_id] = row_path
 
             normalised = _normalise_sentinels(parsed, absent_sentinels)
             rows.append((row_id, row_path, digest, normalised))
@@ -654,11 +711,9 @@ def select_rows(
                 normalised = _normalise_sentinels(record, absent_sentinels)
                 if not _matches_where(normalised, checked_where):
                     continue
-                record_digest = hashlib.sha256(
-                    json.dumps(record, sort_keys=True, default=str).encode("utf-8")
-                ).hexdigest()
+                record_digest = _record_digest(record)
+                row_id = _source_row_id(op_name, record, record_digest, row_id_key, i)
                 if row_id_key == "@stem":
-                    row_id = f"@source-{op_name}-{record_digest[:16]}"
                     if row_id in seen_source_ids:
                         raise DuplicateStemError(
                             f"queue_select: source rows {seen_source_ids[row_id]} and {i} "
@@ -666,15 +721,6 @@ def select_rows(
                             f"{row_id!r}"
                         )
                     seen_source_ids[row_id] = i
-                else:
-                    raw_row_id = record.get(row_id_key)
-                    if raw_row_id is None:
-                        raise MissingRowIdError(
-                            f"queue_select: source row {i} from op {op_name!r} carries "
-                            f"no {row_id_key!r} field — refused, never coerced to a "
-                            "positional id"
-                        )
-                    row_id = str(raw_row_id)
                 source_path = f"@source:{op_name}:{i}"
                 mark = handback_marks.get(row_id, "")
                 if mark.startswith("route-to-"):

@@ -1671,6 +1671,45 @@ def compute_supersession_gate(root: Path, artifact_path: str, fm: dict[str, Any]
     }
 
 
+_SUCCESSORLESS_TERMINAL_DEPLOYMENT = frozenset({"closed", "abandoned"})
+
+
+def compute_terminal_gate(artifact_path: str, fm: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """`gates.terminal` — a `closed`/`abandoned` baton has no successor to
+    redirect to and `handoff_transition._claim` refuses it at apply, so it is
+    never a pickup target. `continued` is `compute_supersession_gate`'s and
+    `shipped` is `jshipped`'s; `None` (inert) for every other state."""
+    deployment = fm.get("deployment_state")
+    if deployment not in _SUCCESSORLESS_TERMINAL_DEPLOYMENT:
+        return None
+    jp = _shared_build_judgment_point(
+        None,
+        id="j-terminal",
+        question=(
+            f"{artifact_path} is deployment_state: {deployment} — a finished baton with no "
+            "successor. Mint a new handoff if work remains?"
+        ),
+        evidence=f"deployment_state: {deployment}; closed_reason: {fm.get('closed_reason')!r}",
+        dispositions=[
+            {
+                "value": "stand-down", "resolves": [],
+                "guidance": "Nothing to pick up; the baton already reached its end state.",
+            },
+            {
+                "value": "mint-new-handoff", "resolves": [],
+                "guidance": "Remaining work goes in a new handoff, never a re-armed one.",
+            },
+        ],
+        reason="insufficient-evidence",
+    )
+    return {
+        "gate": {"deployment_state": deployment, "verdict": "blocked"},
+        "judgment_point": jp,
+        "narration": f"{artifact_path} is deployment_state: {deployment} — a terminal record, not a pickup target.",
+        "next_move": "Stand down, or mint a new handoff for any remaining work.",
+    }
+
+
 def compute_coast(
     judgment_points: list[dict[str, Any]],
     claim_grant: Optional[dict[str, Any]] = None,
@@ -3914,21 +3953,25 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_
         }, EXIT_OK)
 
     if classification in ("handoff", "spinoff"):
-        supersession = compute_supersession_gate(root, display_path, fm)
-        if supersession is not None:
-            jp = supersession["judgment_point"]
-            supersession_judgment_points = [jp]
+        early_gate = compute_supersession_gate(root, display_path, fm)
+        gate_name = "supersession"
+        if early_gate is None:
+            early_gate = compute_terminal_gate(display_path, fm)
+            gate_name = "terminal"
+        if early_gate is not None:
+            jp = early_gate["judgment_point"]
+            early_judgment_points = [jp]
             tree_quiescence = compute_tree_quiescence(root, [])
             return _emit({
                 "artifact": artifact,
                 "gates": {
-                    "supersession": supersession["gate"],
-                    "coast": compute_coast(supersession_judgment_points, tree_quiescence=tree_quiescence),
+                    gate_name: early_gate["gate"],
+                    "coast": compute_coast(early_judgment_points, tree_quiescence=tree_quiescence),
                 },
                 "directives": [],
-                "judgment_points": supersession_judgment_points,
-                "narration": supersession["narration"],
-                "next_move": supersession["next_move"],
+                "judgment_points": early_judgment_points,
+                "narration": early_gate["narration"],
+                "next_move": early_gate["next_move"],
                 "preflight": {"tree_quiescence": tree_quiescence},
             }, EXIT_BUSINESS_FAIL)
 

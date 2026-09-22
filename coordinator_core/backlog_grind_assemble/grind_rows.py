@@ -38,6 +38,10 @@ Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md § Design
   `state/queue-grind/<P>/<R>.jsonl` if present — idempotent (already-settled
   is not an error). Only the committer calls this, immediately before the
   settling commit (§ Design § Stage library, `commit` (ledger-only)).
+- `sweep --profile-dir D --profile P --queue Q [--queue Q ...] --repo-root R`:
+  settles (deletes) every ledger and `_handback` mark whose row id the named
+  queue dirs no longer yield — the settle for a row that left the queue by a
+  hand closure or a denied committer rather than the committer's own settle.
 - `run-record --profile P --run-id T --record-file F --repo-root D`: writes
   `state/queue-grind/<P>/runs/<T>.json` atomically (temp file + `os.replace`),
   contained under `--repo-root`, from the JSON at `--record-file` (or stdin
@@ -558,6 +562,78 @@ def cmd_settle(rest: list[str]) -> int:
 
 
 # ---------------------------------------------------------------------------
+# sweep
+# ---------------------------------------------------------------------------
+
+
+def cmd_sweep(rest: list[str]) -> int:
+    """`sweep --profile-dir D --profile P --queue Q [--queue Q ...] --repo-root R`:
+    settles every ledger and hand-back mark under `state/queue-grind/<P>/`
+    whose row id no named queue dir (nor the profile's source op) yields.
+
+    Trap: a row that leaves the queue by any route but the committer's settle
+    (a hand closure after a hand-back, a denied committer) orphans its ledger,
+    and a later row restored at the same id inherits it — including a
+    `route-to-*` mark that declines the row regardless of digest. The caller
+    names the FULL queue set, as for emit; a queue dir left out reads as
+    closed and its rows' ledgers are settled. Prints `{"settled": [...]}`."""
+    from coordinator_core.ops.dispatch_emit.queue_select import live_row_ids
+
+    queue: list[str] = []
+    others: list[str] = []
+    i = 0
+    while i < len(rest):
+        if rest[i] == "--queue" and i + 1 < len(rest):
+            queue.append(rest[i + 1])
+            i += 2
+            continue
+        others.append(rest[i])
+        i += 1
+    flags = _parse_flags(others, required=("profile-dir", "profile", "repo-root"))
+    if flags is None or not queue:
+        return _usage(
+            "usage: grind-row sweep --profile-dir D --profile P --queue Q [--queue Q ...] --repo-root R"
+        )
+
+    repo_root = Path(flags["repo-root"])
+    queue_dirs: list[Path] = []
+    for q in queue:
+        guarded = contained_path(Path(q), [repo_root])
+        if guarded is None or not guarded.is_dir():
+            return _usage(f"grind-row sweep: --queue is not a directory under --repo-root: {q!r}")
+        queue_dirs.append(guarded)
+    try:
+        profile = grind_profile.load_profile(flags["profile"], Path(flags["profile-dir"]))
+    except Exception as exc:  # noqa: BLE001 -- surfaced as a refusal, never swallowed
+        print(f"grind-row sweep: profile refused: {exc}", file=sys.stderr)
+        return EXIT_REFUSAL
+    live = live_row_ids(
+        queue_dirs, row_id_key=profile.row_id_key, repo_root=repo_root, source=profile.source
+    )
+
+    ledger_dir = repo_root / "state" / "queue-grind" / profile.name
+    candidates = [(p.stem, p) for p in sorted(ledger_dir.glob("*.jsonl"))]
+    # Keyed by the record's `row` field, as `queue_select._read_handback_marks`
+    # reads it — the file name is not the key.
+    for p in sorted((ledger_dir / "_handback").glob("*.json")):
+        try:
+            row = json.loads(p.read_text(encoding="utf-8")).get("row")
+        except (json.JSONDecodeError, UnicodeDecodeError, AttributeError):
+            continue
+        if isinstance(row, str):
+            candidates.append((row, p))
+    settled: list[str] = []
+    for row_id, path in candidates:
+        if row_id in live or not path.is_file():
+            continue
+        _declare_before_unlink(path, repo_root)
+        path.unlink()
+        settled.append(path.relative_to(repo_root).as_posix())
+    print(json.dumps({"settled": settled}, sort_keys=True))
+    return EXIT_OK
+
+
+# ---------------------------------------------------------------------------
 # run-record
 # ---------------------------------------------------------------------------
 
@@ -625,13 +701,14 @@ _VERBS = {
     "append": cmd_append,
     "close": cmd_close,
     "settle": cmd_settle,
+    "sweep": cmd_sweep,
     "run-record": cmd_run_record,
 }
 
 
 def main(argv: list[str]) -> int:
     if not argv:
-        return _usage("usage: grind-row check|append|close|settle [...]")
+        return _usage("usage: grind-row check|append|close|settle|sweep|run-record [...]")
     verb, rest = argv[0], argv[1:]
     handler = _VERBS.get(verb)
     if handler is None:

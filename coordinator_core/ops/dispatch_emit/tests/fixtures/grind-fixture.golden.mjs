@@ -265,7 +265,7 @@ async function _closeBatch(batchState) {
     applyRoute(row, itemRow, route, 'refute-close confirmed');
     if (route.kind === 'handback') {
       const _cresult = await withLock(['@commit'], async () => _commitCall(row));
-      if (_cresult.outcome !== 'committed') { _handBack(itemRow, 'commit-failed', "close's archive-move commit did not land"); }
+      if (_cresult.outcome !== 'committed') { _handBack(itemRow, 'commit-failed', "close's archive-move commit did not land -- settle ledgers with grind-row sweep; never commit them"); }
       else { row.sha = _cresult.sha || ''; _ledgerCommitted.add(itemRow); _settled.push({ row: itemRow, outcome: 'committed', sha: row.sha }); }
     }
   }
@@ -338,7 +338,7 @@ async function _verifyStage(rowId) {
 async function _commitStage(rowId) {
   const row = _rows[rowId];
   const result = await withLock(['@commit'], async () => _commitCall(row));
-  if (result.outcome !== 'committed') { row.done = true; _handBack(rowId, 'commit-failed', 'commit did not land'); return; }
+  if (result.outcome !== 'committed') { row.done = true; _handBack(rowId, 'commit-failed', 'commit did not land -- settle ledgers with grind-row sweep; never commit them'); return; }
   row.done = true; row.sha = result.sha || '';
   _settled.push({ row: rowId, outcome: 'committed', sha: row.sha });
 }
@@ -367,7 +367,7 @@ async function _finishBatch(batchState) {
         return _result;
     });
     if (result.outcome === 'commit-failed') {
-      for (const r of unsettled) { _handBack(r, 'commit-failed', 'ledger-only commit did not land'); }
+      for (const r of unsettled) { _handBack(r, 'commit-failed', 'ledger-only commit did not land -- settle ledgers with grind-row sweep; never commit them'); }
     } else {
       for (const r of unsettled) { _ledgerCommitted.add(r); }
     }
@@ -384,7 +384,7 @@ async function _drainCommit() {
       return _result;
   });
   if (result.outcome === 'commit-failed') {
-    for (const r of unsettled) { _handBack(r, 'commit-failed', 'ledger-only commit did not land'); }
+    for (const r of unsettled) { _handBack(r, 'commit-failed', 'ledger-only commit did not land -- settle ledgers with grind-row sweep; never commit them'); }
     _handBack(RUN_ID, 'commit-failed', `drain commit did not land; run-cost record not written: state/queue-grind/fixture/runs/${RUN_ID}.json`);
   } else {
     for (const r of unsettled) { _ledgerCommitted.add(r); }

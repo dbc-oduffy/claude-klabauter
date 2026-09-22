@@ -530,9 +530,15 @@ def _native_route_entry(name: str, dotted: str) -> Callable[[List[str]], int]:
         # again would re-enter this same shim through the door (this `main`
         # IS what `invoke.from_argv` serves) -- unbounded self-recursion, cut
         # only by the mutation read deadline. The pool worker declares its
-        # route (`server._worker_process_init`); the caller side, undeclared,
-        # still routes exactly as before.
-        if os.environ.get("COORDINATOR_EXECUTION_ROUTE") == "warm_server":
+        # route (`server._worker_process_init`); a COLD-served
+        # `invoke.from_argv` declares none, so `_run_entrypoint` marks the
+        # served span itself (`SERVED_ENTRYPOINT_ENV`) -- without it each cold
+        # rung spawns the next, forever. The caller side, undeclared, still
+        # routes exactly as before.
+        if (
+            os.environ.get("COORDINATOR_EXECUTION_ROUTE") == "warm_server"
+            or os.environ.get("COORDINATOR_SERVED_ENTRYPOINT")
+        ):
             return legacy_entry(list(argv))
 
         lib_dir = str(BIN_DIR / "lib")

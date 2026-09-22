@@ -710,3 +710,49 @@ class TestRunRecordVerb:
             ]
         )
         assert exit_code == grind_rows.EXIT_USAGE
+
+
+class TestSweepSettlesOrphanedLedgers:
+    def test_sweep_settles_only_rows_the_queue_no_longer_yields(self, tmp_path):
+        # A hand closure `git mv`s the row out without settling; a restored row
+        # at the same id would inherit the stale ledger's route-to-* mark.
+        profile_dir = tmp_path / "queue-profiles"
+        _write_profile(profile_dir, archive_path="archive/bug-backlog", schema_rel="schema/bug.schema.json")
+        queue = tmp_path / "state" / "bug-backlog"
+        queue.mkdir(parents=True)
+        (queue / "live.yaml").write_text("id: bug-live\nstatus: open\n", encoding="utf-8")
+        (queue / "filtered.yaml").write_text("id: bug-filtered\nstatus: parked\n", encoding="utf-8")
+        ledger_dir = tmp_path / "state" / "queue-grind" / "bug"
+        (ledger_dir / "_handback").mkdir(parents=True)
+        for row_id in ("bug-live", "bug-filtered", "bug-gone"):
+            (ledger_dir / f"{row_id}.jsonl").write_text('{"row_id": "%s"}\n' % row_id, encoding="utf-8")
+        (ledger_dir / "_handback" / "mark-gone.json").write_text(
+            json.dumps({"row": "bug-gone", "type": "route-to-debt", "reason": "x"}), encoding="utf-8"
+        )
+        (ledger_dir / "_handback" / "mark-live.json").write_text(
+            json.dumps({"row": "bug-live", "type": "park", "reason": "x"}), encoding="utf-8"
+        )
+
+        rc = grind_rows.main(
+            [
+                "sweep",
+                "--profile-dir", str(profile_dir),
+                "--profile", "bug",
+                "--queue", str(queue),
+                "--repo-root", str(tmp_path),
+            ]
+        )
+
+        assert rc == grind_rows.EXIT_OK
+        assert sorted(p.name for p in ledger_dir.glob("*.jsonl")) == ["bug-filtered.jsonl", "bug-live.jsonl"]
+        assert sorted(p.name for p in (ledger_dir / "_handback").glob("*.json")) == ["mark-live.json"]
+
+    def test_sweep_without_a_queue_is_a_usage_error_and_deletes_nothing(self, tmp_path):
+        ledger = tmp_path / "state" / "queue-grind" / "bug" / "bug-1.jsonl"
+        ledger.parent.mkdir(parents=True)
+        ledger.write_text("{}\n", encoding="utf-8")
+        rc = grind_rows.main(
+            ["sweep", "--profile-dir", str(tmp_path), "--profile", "bug", "--repo-root", str(tmp_path)]
+        )
+        assert rc == grind_rows.EXIT_USAGE
+        assert ledger.is_file()

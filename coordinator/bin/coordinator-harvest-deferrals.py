@@ -1530,11 +1530,30 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _resolve_archived_plan(plan: str) -> str:
+    """A `docs/plans/<name>` path that no longer exists resolves to its
+    `archive/specs/<YYYY-MM>/<name>` home when that exists, else unchanged.
+
+    Trap: workstream_complete's `d-stamp-plan-implemented` archives the plan
+    before `d-harvest-deferrals-<n>` dispatches with the path captured at build
+    time, and a replay re-fires the harvest after the move landed. The harvest
+    only reads the plan and keys on its stem, so the archived copy is equivalent.
+    """
+    path = Path(plan)
+    if path.exists() or path.parent.parts[-2:] != ("docs", "plans"):
+        return plan
+    from coordinator_core.ops.fleet.archive_plans import plan_archive_dest
+
+    dest = plan_archive_dest(path.parent.parent.parent, path)
+    return str(dest) if dest is not None and dest.is_file() else plan
+
+
 def main(argv: list[str] | None = None) -> int:
     _bootstrap_engine()
 
     parser = _build_parser()
     args = parser.parse_args(argv)
+    args.plan = _resolve_archived_plan(args.plan)
 
     try:
         with open(args.plan, encoding="utf-8") as fh:

@@ -311,6 +311,13 @@ preserved there as the historical record; this port carries only the CURRENT pin
     accepts `source: {}`, which now fails. `schema_count` 70 and `$defs` 98
     unchanged. Also closes a 9.2.0 stamp collision (an unpublished 9.3.0 stamp for
     the `hand_back_types`/wording delta alone is superseded by this one).
+  11.0.0 (2026-09-22) MAJOR: `queue-grind-profile` 3.0.0 -> 4.0.0 narrows
+    `appetite.*.where` from a bare array to DNF AND-clauses of
+    `[field, queue_grind_where_operator, value?]` tuples, and wires or deletes the
+    unreferenced `queue_grind_regenerate_op` and `queue_grind_knob` $defs. A narrowing is
+    non-additive — a consumer holding 10.0.0 accepts a malformed clause, which now fails —
+    so MAJOR, although every shipped profile's clauses already conform. Sequencing:
+    constant-moves-first, like 6.0.0 — DoE regenerates against this stamp.
 Bump rule (unchanged from JS): additive $defs/enum-widen changes stay minor; any
 non-additive change (enum-narrow, field/required removal) bumps MAJOR regardless of
 whether a vendored consumer version-asserts yet — two different bundle bodies must
@@ -375,7 +382,7 @@ from coordinator_core.session.declared_writes import declare_write
 # Constants
 # ---------------------------------------------------------------------------
 
-CONTRACT_VERSION = "10.0.0"
+CONTRACT_VERSION = "11.0.0"
 
 # Generator-provenance: emits artifact-shape-contract/artifact-shape-contract.
 # schema.json under the DoE-claude coordinator/ tree, explicitly NOT claude-klabauter

@@ -48,6 +48,30 @@ import subprocess
 import sys
 from typing import List, Optional, Tuple
 
+
+def _wants_help(argv: List[str]) -> bool:
+    """True for `--help`/`-h` among this wrapper's own flags. Tokens after `--`
+    belong to the child: `with-tier-t-slot -- pytest -h` runs pytest's help."""
+    flags = argv[: argv.index("--")] if "--" in argv else argv
+    return "--help" in flags or "-h" in flags
+
+
+# `--help` exits 0 with usage on stdout, rather than joining
+# `percolate.engine._USAGE_NONZERO_ENTRYPOINTS`. That list exists for CLIs
+# whose `--help` reaches their own parser and exits non-zero, and its own
+# comment block records the cost of membership: the gate classifies ANY
+# non-zero exit from a listed entry as a usage hit, so a regression that
+# turns the CLI into one that crashes on startup is silently reported as a
+# PASS. Answering `--help` honestly keeps this entrypoint genuinely gated
+# instead of permanently excused.
+#
+# Answered BEFORE the engine bootstrap below: the entrypoint gate runs
+# `--help` with no machine-local registry, where `require_engine_on_path`
+# raises. Help text must not depend on an engine it does not use.
+if __name__ == "__main__" and _wants_help(sys.argv[1:]):
+    print(__doc__.strip())
+    sys.exit(0)
+
 _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
@@ -99,19 +123,6 @@ def _parse_args(argv: List[str]) -> Tuple[Optional[str], float, List[str]]:
     Returns (None, 0.0, []) with an error already printed on a malformed
     invocation — no `--`, a `--` with nothing after it, or an unknown flag.
     """
-    # `--help` exits 0 with usage on stdout, rather than joining
-    # `percolate.engine._USAGE_NONZERO_ENTRYPOINTS`. That list exists for CLIs
-    # whose `--help` reaches their own parser and exits non-zero, and its own
-    # comment block records the cost of membership: the gate classifies ANY
-    # non-zero exit from a listed entry as a usage hit, so a regression that
-    # turns the CLI into one that crashes on startup is silently reported as a
-    # PASS. Answering `--help` honestly keeps this entrypoint genuinely gated
-    # instead of permanently excused. `with-suite-mutex` is on that list; that
-    # is a reason to not copy it here, not a precedent to follow.
-    if "--help" in argv or "-h" in argv:
-        print(__doc__.strip())
-        return None, 0.0, []
-
     if "--" not in argv:
         print(
             "with-tier-t-slot: missing required `--` separator before the command.\n" + _USAGE,
@@ -177,10 +188,6 @@ def _parse_args(argv: List[str]) -> Tuple[Optional[str], float, List[str]]:
 
 
 def main(argv: List[str]) -> int:
-    if "--help" in argv or "-h" in argv:
-        _parse_args(argv)
-        return 0
-
     owner_label, wait, command = _parse_args(argv)
     if not command:
         return 2

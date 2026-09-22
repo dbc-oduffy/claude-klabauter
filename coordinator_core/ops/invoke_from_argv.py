@@ -172,6 +172,31 @@ class EntrypointNotWarmLoadableError(ValueError):
 #: read from or written to under a directory it wasn't told about.
 _ENTRYPOINT_CWD_LOCK = threading.Lock()
 
+#: Set to the entrypoint name for the span `_run_entrypoint` runs its `main`,
+#: warm- OR cold-served. A native-route shim (`entry_point_shim.
+#: _native_route_entry`) reads it to run its implementation instead of routing
+#: back through this op. `COORDINATOR_EXECUTION_ROUTE=warm_server` alone does
+#: not cover it: a cold `python -m coordinator_core.invoke invoke.from_argv`
+#: declares no route, so its shim routed again, missed warm, spawned another
+#: cold child, and so on -- a self-perpetuating chain (~7 spawns/s, 430+ deep)
+#: whose every rung also queued on the warm door. Spelling pinned by
+#: `coordinator/bin/tests/test_native_route_entry_served_side.py`.
+SERVED_ENTRYPOINT_ENV = "COORDINATOR_SERVED_ENTRYPOINT"
+
+#: (entrypoint, leading verb) pairs whose run reaches
+#: `workday-complete-step1-validate.py`, which waits up to
+#: `suite_mutex.MUTEX_WAIT_SECS` on the machine-wide suite mutex and then runs a
+#: full test suite. Served here, that pins a shared pool worker for minutes and
+#: outlives the door's 30s deadline: every call ends -32004 with the validator
+#: still running unread, and a few concurrent close ceremonies starve the pool
+#: for every session on the box. Refused with -32007 before anything loads, so
+#: the door runs them cold in the caller's own process tree, where the mutex
+#: wait costs nobody else a worker.
+_POOL_REFUSED_VERBS = frozenset({
+    ("workday-complete-assemble", "apply"),
+    ("workday-complete-args-and-validate", "run-step1"),
+})
+
 
 def _resolve_entrypoint_script(entrypoint: str) -> Path:
     """Validates `entrypoint` against the committed allowlist and against
@@ -585,6 +610,11 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str, stdin: str = "") -> d
     own `--help` by then, so it renders its real usage like any other shape.
     """
     script = _resolve_entrypoint_script(entrypoint)
+    if argv and (entrypoint, argv[0]) in _POOL_REFUSED_VERBS:
+        raise EntrypointNotWarmLoadableError(
+            f"invoke.from_argv: {entrypoint} {argv[0]} runs a test suite behind the "
+            "machine-wide suite mutex; it runs cold, never in the shared pool."
+        )
     shape = _entrypoint_argv_shape(script)
 
     help_requested = any(a in ("--help", "-h") for a in argv)
@@ -609,7 +639,9 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str, stdin: str = "") -> d
         previous_sys_path = list(sys.path)
         previous_sys_argv = list(sys.argv)
         previous_stdin = sys.stdin
+        previous_served = os.environ.get(SERVED_ENTRYPOINT_ENV)
         try:
+            os.environ[SERVED_ENTRYPOINT_ENV] = entrypoint
             os.chdir(cwd)
             # WHY sys.argv IS SET, not just passed as a parameter. Served
             # in-process, `sys.argv` is the warm SERVER's own command line --
@@ -659,6 +691,10 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str, stdin: str = "") -> d
             sys.path[:] = previous_sys_path
             sys.argv[:] = previous_sys_argv
             sys.stdin = previous_stdin
+            if previous_served is None:
+                os.environ.pop(SERVED_ENTRYPOINT_ENV, None)
+            else:
+                os.environ[SERVED_ENTRYPOINT_ENV] = previous_served
 
     if help_requested:
         # Uniform with the cold door (`entry_point_shim.run_target`): a help
