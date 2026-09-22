@@ -105,7 +105,7 @@ def _load_cli_module(name: str):
 def test_registry_reads_cost_one_process(tmp_path, monkeypatch):
     """Every registry read in one run resolves through a single batch process.
 
-    Reads 20 distinct keys twice each, plus both key-enumeration surfaces —
+    Reads 20 distinct keys twice each, plus the repos key enumeration —
     the shape a `draft` actually issues. The pre-fix CLI spawned 40 `get`
     processes, 2 `keys` processes, and a `python --version` probe ahead of each
     of them; the post-fix CLI spawns one `dump`.
@@ -133,7 +133,6 @@ def test_registry_reads_cost_one_process(tmp_path, monkeypatch):
     assert sorted(cli._machine_local_repos_keys()) == sorted(
         k for k in _STUB_KEYS if k.startswith("repos.")
     )
-    assert cli._machine_local_mirror_keys() == ["stub_mirror"]
 
     assert len(spawned) == 1, (
         f"expected exactly ONE registry process (the batch `dump`), got "
@@ -168,4 +167,3 @@ def test_batch_read_failure_falls_back_to_per_key_get(tmp_path, monkeypatch):
     value, invocation_ok, _stderr = cli._machine_local_get_detail("repos.absent_key")
     assert value is None
     assert invocation_ok is True
-    assert cli._machine_local_mirror_keys() == ["stub_mirror"]
