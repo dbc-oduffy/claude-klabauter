@@ -60,7 +60,7 @@ def measure_floor(n: int) -> dict[str, float]:
 
     cold_start_floor_ms = min(samples_ms)
     mean_ms = statistics.mean(samples_ms)
-    # Review: code-reviewer (Slice B F4, nit) — a zero-or-negative mean spawn-
+    # A zero-or-negative mean spawn-
     # to-exit wall-clock time across N real subprocess invocations is not a
     # legitimate benchmark outcome; it signals a broken clock/harness, not a
     # benign "perfectly stable floor." Fail loud instead of silently

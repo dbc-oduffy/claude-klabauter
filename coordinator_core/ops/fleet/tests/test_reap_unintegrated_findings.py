@@ -64,7 +64,7 @@ def _dated(days_ago: int) -> str:
 
 def _write(root: Path, days_ago: int, *, integrated: bool = False,
            stem: str = "a-finding") -> Path:
-    # Review: overengineering-reviewer -- scan_findings is single-root
+    # scan_findings is single-root
     # (current, post-C7 `.coordinator-local/review-trail/`) now; the legacy
     # `state/review-trail/` root this helper used to write under measurably
     # holds zero files for this leg's corpus, so a fixture writing there no

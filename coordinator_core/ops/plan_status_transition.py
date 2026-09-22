@@ -281,6 +281,7 @@ from coordinator_core.frontmatter.primitives import (
     read_fm_field,
     read_fm_field_unquoted,
     rebuild,
+    remove_fm_field,
     replace_fm_field,
     split_frontmatter,
     unquote_yaml_scalar,
@@ -356,6 +357,13 @@ _FROZEN_STATUSES = frozenset({"implemented", "superseded", "abandoned", "deferre
 # placed in that same slot here.
 _FLIPPABLE_STATUSES_ORDER = ["draft", "reviewed", "approved", "executing", "landed"]
 _FLIPPABLE_STATUSES = frozenset(_FLIPPABLE_STATUSES_ORDER)
+
+# Mirrors execute_plan_assemble.close_out_and_stamp._CLOSE_OUT_PARTIAL_FIELD
+# (same literal, not imported -- that module imports THIS one, so the
+# reverse import would cycle). `_stamp_implemented`'s already-terminal
+# no-op branch below is the ONLY other writer that ever needs this name;
+# every other close-out reader/writer of the field lives in that module.
+_CLOSE_OUT_PARTIAL_FIELD = "close_out_last_partial"
 
 
 class _Opts:
@@ -542,7 +550,7 @@ def _run_cascade(plan_path: str, deliverable_id: Optional[str]) -> int:
                 f"{artifact.get('path') or artifact.get('handoff_path')}: {artifact.get('reason')}",
                 file=sys.stderr,
             )
-        # Review: coordinator:code-reviewer -- `commit_error` (AC8) landed in
+        # `commit_error` (AC8) landed in
         # this result dict but was never read here; a commit failure with a
         # non-empty `advanced` list returned 0 in silence. Surface it without
         # touching exit_code, which stays keyed off `advanced` alone.
@@ -1293,6 +1301,7 @@ def _stamp_implemented(opts: _Opts) -> int:
         "prior_status": None,
         "deliverable_id": None,
         "override_applied": False,
+        "cleared_stale_marker": False,
     }
 
     def mutate(old_text: str) -> str:
@@ -1366,6 +1375,26 @@ def _stamp_implemented(opts: _Opts) -> int:
         if status in _FROZEN_STATUSES:
             _state["flipped"] = False
             _state["prior_status"] = status
+            # An already-`implemented` plan that still carries a stale
+            # `close_out_last_partial:` marker took this branch identically
+            # to a genuinely clean terminal plan -- the marker is otherwise
+            # only ever cleared by close_out_and_stamp's own certified-ship
+            # call site, never by a caller (such as workstream_complete's
+            # stamp-implemented directive) that reaches an ALREADY-terminal
+            # plan through this verb. Clear it here too, so
+            # gates.consumed_handoff_completeness leg A
+            # (coordinator_core/workstream_complete/__init__.py) stops
+            # reading a shipped plan as indeterminate forever. Scoped to
+            # "implemented" only -- the certified-ship clear this mirrors
+            # never ran for the other frozen statuses either, so this must
+            # not invent a new guarantee for them.
+            if (
+                status == "implemented"
+                and read_fm_field(split.fm_text, _CLOSE_OUT_PARTIAL_FIELD) is not None
+            ):
+                cleared_fm = remove_fm_field(split.fm_text, _CLOSE_OUT_PARTIAL_FIELD)
+                _state["cleared_stale_marker"] = True
+                return rebuild(split, cleared_fm)
             return old_text  # byte-identical -> locked_rmw skips the write; no cascade
 
         if status not in _FLIPPABLE_STATUSES:
@@ -1480,6 +1509,42 @@ def _stamp_implemented(opts: _Opts) -> int:
             untracked_reason = "not tracked in git (absent from HEAD)"
 
     if not _state["flipped"]:
+        if _state.get("cleared_stale_marker"):
+            # This run's own mutate cleared close_out_last_partial (see that
+            # branch's comment) without flipping status -- the plan was
+            # already implemented. Commit that clear now, scoped to exactly
+            # this path, the same "writer commits its own write" discipline
+            # the real-flip branch below follows; written_text is this run's
+            # own locked_rmw return value, never a re-read of the worktree.
+            if worktree_root is not None and relpath is not None:
+                if untracked_reason is not None:
+                    print(
+                        f"{_PROG}: {opts.plan} is {untracked_reason} -- stale "
+                        "close_out_last_partial marker cleared on disk but left "
+                        "uncommitted (this op mutates an existing tracked file in "
+                        "place; it does not first-commit a new one into git)",
+                        file=sys.stderr,
+                    )
+                else:
+                    message = (
+                        f"{_PROG}: clear stale close_out_last_partial marker on "
+                        f"{relpath} (status already \"{_state['prior_status']}\")\n"
+                    )
+                    commit_result = _commit_plan_flip(
+                        worktree_root, relpath, message, written_text, _state["deliverable_id"],
+                    )
+                    if not commit_result.ok:
+                        print(
+                            f"{_PROG}: {opts.plan} cleared a stale close_out_last_partial "
+                            f"marker but committing it failed: {commit_result.stderr}",
+                            file=sys.stderr,
+                        )
+                        return 1
+            print(
+                f"{_PROG}: {opts.plan} status \"{_state['prior_status']}\" is terminal — "
+                "cleared a stale close_out_last_partial marker"
+            )
+            return 0
         # Finding 1 (code-reviewer, c6169575 review): the ORIGINAL no-op branch
         # here gated committing entirely on "did THIS invocation flip the
         # file" -- a commit failure on a real flip leaves `status: implemented`

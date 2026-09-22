@@ -275,7 +275,7 @@ class TestRecord:
     def test_skipped_field_absent_from_result(self, tmp_path: Path) -> None:
         """record() must NOT return a 'skipped' field (vestigial fleet-walk field removed).
 
-        Review: code-reviewer (S3-F4) — `skipped: []` was a permanent empty field implying
+        `skipped: []` was a permanent empty field implying
         a code path that no longer exists. Field removed; this test proves its absence.
         """
         ctx = _make_ctx(tmp_path)
@@ -318,7 +318,7 @@ class TestRecord:
     def test_result_summary_keys(self, tmp_path: Path) -> None:
         """record() returns a dict with the expected summary keys.
 
-        Review: code-reviewer (S3-F4) — 'skipped' removed from expected keys;
+        'skipped' removed from expected keys;
         the field was a vestigial fleet-walk artifact that no longer belongs in
         single-repo mode.
         """
@@ -346,7 +346,7 @@ class TestRecord:
 
 # ---------------------------------------------------------------------------
 # _backlog_record IPC handler: AC5 fail-loud + wiring tests
-# Review: code-reviewer (S3-F3 / S4-F2) — mirrors TestArtifactEmitContextDerivation /
+# Mirrors TestArtifactEmitContextDerivation /
 # TestGoalAppendExplicitOverrides in test_c4a_handler_wiring.py; proves the handler's
 # fail-loud guard and that resolve_context is called with the DERIVED main_worktree_root,
 # not the raw repo_root (common_dir). Plan C4b: "internal resolve_context() fallback NOT reached".

@@ -569,13 +569,13 @@ def _parse_one(path: Path) -> tuple[str, RegistryRecord] | None:
 
     raw_pid = data.get("pid")
     if isinstance(raw_pid, bool) or not isinstance(raw_pid, int):
-        # Review: coordinator:code-reviewer — a non-int pid (e.g. a JSON
+        # A non-int pid (e.g. a JSON
         # float) must yield None per the module docstring's "non-`int` pid"
         # negative-spec case, not silently truncate via int().
         return None
     pid = raw_pid
     if pid <= 0:
-        # Review: coordinator:code-reviewer — no OS ever assigns a
+        # No OS ever assigns a
         # non-positive pid; same defensive class as the FILETIME sanity band.
         return None
 

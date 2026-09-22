@@ -797,7 +797,7 @@ def _normalize_minted_ids(text: str) -> str:
 
 
 def test_main_only_kind_absent_is_byte_identical_to_default(tmp_path: Path):
-    """Review: coordinator:code-reviewer — the original version of this test
+    """The original version of this test
     only ran `--dry-run` and only compared the `Mode:` line, so the actual
     "unscoped run is unaffected by the --only-kind machinery" claim its name
     promised was established by code inspection, not by this test. This

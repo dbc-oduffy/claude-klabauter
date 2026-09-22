@@ -24,7 +24,7 @@ It also does not assert on the 3 CHANGED sites (`warm/skew.py`, `forwarder_drift
 `coordinator_core/plugin_health/tests/test_forwarder_drift_skip_line_rewrite.py`,
 `coordinator/bin/tests/test_cc_invoke_foreign_identity.py`).
 
-# Review: overengineering-reviewer (findings 1/2) — the `# foreign-identity:` declaration
+# The `# foreign-identity:` declaration
 # vocabulary in the falsifier had exactly one reader, which retires with the plan
 # (`promotion_reason` states it is not promoted), so 29 in-source declarations — 15 of them
 # NOT-REACHABLE, changing no rendered byte — would go unread the moment the plan closes. This
@@ -127,7 +127,7 @@ def test_row_14_ruling_is_recorded_and_left_alone():
 
 
 # ---------------------------------------------------------------------------
-# Review: overengineering-reviewer (findings 1/2) -- durable reader for the
+# Durable reader for the
 # `# foreign-identity:` declaration vocabulary. Source-text based, no new
 # module, no new file: this suite scans the same two trees the falsifier's
 # corroboration leg scans, and pins (a) every declaration is well-formed and
@@ -183,7 +183,7 @@ def test_every_foreign_identity_declaration_is_well_formed():
     )
 
 
-# Review: code-reviewer (finding 1) -- `declaration_for` must not credit a
+# `declaration_for` must not credit a
 # declaration above one class method to a sibling method's site; a false
 # "declared" verdict is the one direction this instrument must never fail in.
 def test_declaration_for_does_not_cross_a_class_method_boundary():

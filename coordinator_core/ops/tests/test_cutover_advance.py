@@ -41,7 +41,7 @@ pytestmark = [
 def git_repo_root(tmp_path: Path) -> Path:
     """A real git-init'd worktree root.
 
-    Review: code-reviewer — locked_rmw (routed through on the PASS/write
+    locked_rmw (routed through on the PASS/write
     path as of the P2 unlocked-RMW fix) resolves its lock sidecar via
     `git rev-parse --git-common-dir`, which requires a real git repository
     at repo_root; a bare non-existent `.git` path (as several REFUSE/
@@ -260,7 +260,7 @@ def test_advance_preserves_existing_derivation_history_entries(git_repo_root: Pa
 
 
 def test_advance_writes_via_locked_rmw(git_repo_root: Path, monkeypatch) -> None:
-    """Review: code-reviewer — every sibling lifecycle verb in
+    """Every sibling lifecycle verb in
     handoff_transition.py routes its write through locked_rmw; this op
     previously wrote via a bare write_text with no lock. Assert the write
     now goes through locked_rmw (not a direct write_text call)."""

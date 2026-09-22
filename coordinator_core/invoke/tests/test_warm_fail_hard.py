@@ -323,6 +323,90 @@ def test_boot_wait_never_sends_a_mutation_the_server_did_not_answer_for(monkeypa
     assert methods and set(methods) == {"ping"}
 
 
+def _boot_wait_harness(monkeypatch, *, mutating, dispatch):
+    monkeypatch.setenv("COORDINATOR_WARM_BOOT_WAIT_SECS", "0.3")
+    monkeypatch.setattr("coordinator_core.warm.client.last_cold_reason", lambda: None)
+    monkeypatch.setattr("coordinator_core.warm.client._op_may_mutate", lambda m: mutating)
+    monkeypatch.setattr("coordinator_core.warm.client.try_warm_dispatch", dispatch)
+    monkeypatch.setattr(
+        "coordinator_core.warm.telemetry.record_client_boot_wait", lambda **kwargs: None
+    )
+
+
+def test_boot_wait_cannot_outrun_its_bound_when_an_attempt_blocks(monkeypatch):
+    """(d) of the warm-pool P0: the bound gated only whether a NEW attempt
+    started, so an attempt's own blocking read ran past it -- the 15s wait
+    served at a median 30.11s. Each attempt now gets what is left of the bound
+    as its read deadline. An attempt handed no deadline blocks 30s here, so a
+    regression fails on the elapsed assertion rather than passing slowly."""
+    import time
+
+    from coordinator_core.invoke.__main__ import _wait_for_warm_boot
+
+    deadlines = []
+
+    def _blocks_to_its_deadline(msg, *, read_deadline_secs=None):
+        deadlines.append(read_deadline_secs)
+        time.sleep(30 if read_deadline_secs is None else read_deadline_secs)
+        return None
+
+    _boot_wait_harness(monkeypatch, mutating=False, dispatch=_blocks_to_its_deadline)
+
+    t0 = time.monotonic()
+    response, waited = _wait_for_warm_boot({"jsonrpc": "2.0", "id": 1, "method": "x"})
+    elapsed = time.monotonic() - t0
+
+    assert response is None
+    assert deadlines and all(d is not None and 0 < d <= 0.3 for d in deadlines)
+    assert waited <= 0.3 + 0.1
+    assert elapsed <= 0.3 + 0.1
+
+
+def test_boot_wait_polls_a_mutation_with_ping_and_sends_it_once(monkeypatch):
+    """A delivered mutation's read cannot be cut at the boot bound without
+    minting a false indeterminate, so the mutation is never the poll: a capped
+    `ping` finds the server, then the mutation goes once, uncapped."""
+    from coordinator_core.invoke.__main__ import _wait_for_warm_boot
+
+    calls = []
+
+    def _dispatch(msg, *, read_deadline_secs=None):
+        calls.append((msg["method"], read_deadline_secs))
+        if msg["method"] == "ping":
+            return None if len(calls) < 2 else {"jsonrpc": "2.0", "id": 1, "result": {}}
+        return {"jsonrpc": "2.0", "id": 1, "result": {"appended": True}}
+
+    _boot_wait_harness(monkeypatch, mutating=True, dispatch=_dispatch)
+
+    response, _ = _wait_for_warm_boot(
+        {"jsonrpc": "2.0", "id": 1, "method": "queue.append", "params": {}}
+    )
+
+    assert response == {"jsonrpc": "2.0", "id": 1, "result": {"appended": True}}
+    assert [m for m, _ in calls] == ["ping", "ping", "queue.append"]
+    assert all(d is not None for m, d in calls if m == "ping")
+    assert calls[-1][1] is None
+
+
+def test_boot_wait_never_sends_a_mutation_the_server_did_not_answer_for(monkeypatch):
+    from coordinator_core.invoke.__main__ import _wait_for_warm_boot
+
+    methods = []
+
+    def _dispatch(msg, *, read_deadline_secs=None):
+        methods.append(msg["method"])
+        return None
+
+    _boot_wait_harness(monkeypatch, mutating=True, dispatch=_dispatch)
+
+    response, _ = _wait_for_warm_boot(
+        {"jsonrpc": "2.0", "id": 1, "method": "queue.append", "params": {}}
+    )
+
+    assert response is None
+    assert methods and set(methods) == {"ping"}
+
+
 def test_boot_wait_knob_parsing(monkeypatch):
     """`0` is the only way to switch the wait off. A malformed or negative
     value falls back to the default rather than silently disabling it --

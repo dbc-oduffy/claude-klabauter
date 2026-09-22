@@ -173,7 +173,7 @@ from typing import Optional
 from coordinator_core.ipc import register_op
 
 _PLACEHOLDER_VALUES = {"n/a", "na", "", "tbd", "unknown", "null", "none"}
-# Review: code-reviewer Finding (2026-08-06) — "misc"/"other" were previously
+# "misc"/"other" were previously
 # included here, which made this denylist their PRIMARY (and only) gating
 # mechanism, contradicting the module's own Negative-spec claim that a
 # denylist is never the primary mechanism, and making the corresponding

@@ -54,7 +54,7 @@ class TestScopedCommitAcquisitionCountIsPinned:
 
         assert sha == "deadbeef" * 5
         assert run_git.lock_taking_calls == 2
-        # Review: code-reviewer (P3) — the loop-shaped variant of this test
+        # The loop-shaped variant of this test
         # allocated a fresh `_CountingRunGit()` per iteration, so it never
         # accumulated a count across calls; it was byte-identical coverage
         # to this test run three times and its docstring overclaimed a

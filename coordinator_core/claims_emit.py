@@ -179,7 +179,7 @@ def _write_atomic_pair(
         meta_replaced = True
         tmp_meta = None
 
-        # Review: coordinator:code-reviewer (A-writer-module P1) — backup
+        # Backup
         # discard moved out of a shared `finally` and gated on the outcome:
         # this branch only runs once BOTH destinations have replaced
         # successfully, so the backups are genuinely superseded and safe to
@@ -280,7 +280,7 @@ def emit_claims(
         try:
             errors = validate_frontmatter(record, resolved_schema_path)
         except (FileNotFoundError, json.JSONDecodeError) as exc:
-            # Review: coordinator:code-reviewer (A-writer-module P2) — a
+            # A
             # missing/malformed schema file is an environment/deployment
             # defect, not a per-record content failure; misreporting it as
             # "record [i] failed validation" hides the real fault.

@@ -454,7 +454,6 @@ def resolve_environment_root(
         # registry key) must still surface as FleetEnvError, never a raw
         # exception — callers (including scripts/setup.py) catch only
         # FleetEnvError per the install-never-fails-outside-it contract.
-        # Review: coordinatorcode-reviewer-97d5c433 finding 4.
         raise FleetEnvError(
             f"fleet_env: C1 resolver ({_C1_RESOLVER_PATH}) raised "
             f"{type(exc).__name__}: {exc}"

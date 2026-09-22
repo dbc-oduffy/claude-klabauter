@@ -212,7 +212,6 @@ def test_directory_and_file_within_it_treated_as_overlapping():
 
 
 def test_case_insensitive_paths_treated_as_overlapping():
-    # Review: coordinator:code-reviewer (wsc-A, ecb99d36) P2 — PurePosixPath
     # comparison is case-sensitive, but the fleet's dominant dev box
     # (macOS, case-insensitive HFS+/APFS by default) treats these as the
     # same file on disk.
@@ -222,7 +221,7 @@ def test_case_insensitive_paths_treated_as_overlapping():
 
 
 def test_dotdot_segment_normalized_for_overlap():
-    # Review: coordinator:code-reviewer (wsc-A, ecb99d36) P2 — `..` segments
+    # `..` segments
     # were not collapsed, so `dir/../other.py` and `other.py` were
     # never recognized as the same surface.
     rows = [_row("C1", ["dir/../other.py"]), _row("C2", ["other.py"])]
@@ -231,7 +230,7 @@ def test_dotdot_segment_normalized_for_overlap():
 
 
 def test_cycle_message_names_predecessor_in_deterministic_order():
-    # Review: coordinator:code-reviewer (wsc-A, ecb99d36) P2 — with `preds`
+    # With `preds`
     # a set, iteration order (and so which cycle path lands in the raised
     # message) depended on PYTHONHASHSEED; a sorted() visit order fixes the
     # cycle path/message to a single, reproducible shape for a given input.

@@ -107,7 +107,7 @@ from coordinator_core.ops.ceremony.branch_resolution import (
     ScopingVerdict,
     _detect_foreign_commits,
     _range_is_contiguous_suffix,
-    # Review: code-reviewer — _read_session_shape was imported but never used; removed.
+    # _read_session_shape was imported but never used; removed.
     # _session_added_plans is kept — exercised by the direct unit tests below.
     _read_started_at,
     _resolve_in_repo,
@@ -360,7 +360,7 @@ def repo(tmp_path) -> WscResolveRepo:
 def git_repo(tmp_path) -> WscResolveRepo:
     """Provide a WscResolveRepo whose root is a live git repository.
 
-    Review: code-reviewer F13 — extracted from the duplicated git-init boilerplate
+    Extracted from the duplicated git-init boilerplate
     in tests (e), (f), (g).  Each of those tests required a real git repo for the
     grep-based L1b fallback to work; the setup was copy-pasted three times.
 
@@ -438,7 +438,7 @@ def git_repo(tmp_path) -> WscResolveRepo:
 # ---------------------------------------------------------------------------
 
 
-    # Review: code-reviewer — removed tautological assertion
+    # Removed tautological assertion
     # `disposition in ("single-session","chain-terminal")` which was always True
     # regardless of the specific value; the == "single-session" check above is the real gate.
 
@@ -708,7 +708,7 @@ items:
 
 
 # ---------------------------------------------------------------------------
-# Review: code-reviewer — STEP_1B/STEP_2_4B D-node emission integration test
+# STEP_1B/STEP_2_4B D-node emission integration test
 # Finding 1 (P2): reclassified F→D under Option B (memo 2026-07-08); locks the
 # D-node type + resolving_op + disk_first evidence shape this diff exists to fix.
 # ---------------------------------------------------------------------------
@@ -717,7 +717,7 @@ items:
 
 
 # ---------------------------------------------------------------------------
-# Review: code-reviewer — new direct unit tests for _session_added_plans
+# New direct unit tests for _session_added_plans
 # Findings 6, 7, 8, 9 (P2/nit): cover --diff-filter=A ADDED-not-MODIFIED
 # semantic, --since temporal boundary, graceful-empty on non-zero git exit,
 # and dedup logic — none of these were exercised by the existing positive tests.
@@ -738,7 +738,7 @@ def test_session_added_plans_since_boundary_excludes_old_commit(git_repo):
     The existing positive test uses started_at="2000-01-01" making --since a
     no-op; this test is the complementary gate.
 
-    Review: code-reviewer Finding 7 — real --since temporal boundary test.
+    Real --since temporal boundary test.
     """
     import os
 
@@ -774,7 +774,7 @@ def test_session_added_plans_graceful_on_nonzero_git(tmp_path):
     Calls _session_added_plans against a non-git directory so git log exits 128.
     Asserts the function returns [] without raising.
 
-    Review: code-reviewer Finding 8 — graceful-empty on non-zero git exit (P2).
+    graceful-empty on non-zero git exit (P2).
     """
     sid = "sess-sap-fail-001"
     non_git_dir = tmp_path / "not-a-git-repo"
@@ -791,7 +791,7 @@ def test_session_added_plans_graceful_on_nonzero_git(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Review: code-reviewer — new unit tests for _read_completeness_mirror
+# New unit tests for _read_completeness_mirror
 # Finding 10 (nit): quoted-scalar (state: "open") and column-0 (state: open)
 # anchor cases — the regex must not match either.
 # ---------------------------------------------------------------------------
@@ -820,7 +820,7 @@ items:
 
 
 # ---------------------------------------------------------------------------
-# Review: code-reviewer — new unit test for _read_started_at
+# New unit test for _read_started_at
 # Finding 11 (nit): whitespace-only file should be treated as absent/None.
 # ---------------------------------------------------------------------------
 
@@ -831,7 +831,7 @@ def test_read_started_at_whitespace_only(tmp_path):
     A file written by a buggy producer as '   \\n   ' is distinct from an empty
     file but must be treated as absent.
 
-    Review: code-reviewer Finding 11 — whitespace-only file → None.
+    whitespace-only file → None.
     """
     sid = "sess-sa-ws-001"
     common_dir = tmp_path / ".git"
@@ -928,7 +928,7 @@ def test_scan_session_scratch_d_path_untracked_scratch(git_repo):
     os.utime(scratch_file, (file_mtime, file_mtime))
 
     with _tz_forced_to_us_pacific():
-        # Review: code-reviewer F2 — sid param removed from _scan_session_scratch
+        # the Game Dev Reviewer param removed from _scan_session_scratch
         result = _scan_session_scratch(git_repo.root, started_at)
 
     assert result == 1, (
@@ -963,7 +963,7 @@ def test_scan_session_scratch_keep_list_excluded(git_repo):
     )
 
 
-# Review: code-reviewer F4 — add *.plan.md endswith exclusion and .completion
+# Add *.plan.md endswith exclusion and .completion
 # substring exclusion tests (both branches were uncovered).
 
 
@@ -974,7 +974,7 @@ def test_scan_session_scratch_plan_md_suffix_excluded(git_repo):
     must be excluded by the endswith('.plan.md') branch.  A refactor that accidentally
     breaks this (e.g. typo '.planmd') would fail here.
 
-    Review: code-reviewer F4 — endswith('.plan.md') branch coverage gap.
+    endswith('.plan.md') branch coverage gap.
     """
     started_at = "2026-07-06T12:00:00Z"
     started_epoch_utc = datetime.fromisoformat(
@@ -999,7 +999,7 @@ def test_scan_session_scratch_completion_substring_excluded(git_repo):
     A file named tasks/<feat>/wsc-2026.completion.md has '.completion' at a non-suffix
     position and must still be excluded by the 'in name' substring filter.
 
-    Review: code-reviewer F4 — .completion substring-match (all positions) coverage gap.
+    .completion substring-match (all positions) coverage gap.
     """
     started_at = "2026-07-06T12:00:00Z"
     started_epoch_utc = datetime.fromisoformat(
@@ -1019,7 +1019,7 @@ def test_scan_session_scratch_completion_substring_excluded(git_repo):
     )
 
 
-# Review: code-reviewer F5 — add ValueError-on-parse graceful-negative test.
+# Add ValueError-on-parse graceful-negative test.
 
 
 def test_scan_session_scratch_graceful_negative_unparseable_started_at(git_repo):
@@ -1029,7 +1029,7 @@ def test_scan_session_scratch_graceful_negative_unparseable_started_at(git_repo)
     for a malformed started_at sentinel produced by a buggy upstream writer.  The
     function must return None without raising.
 
-    Review: code-reviewer F5 — ValueError-on-parse graceful-negative branch coverage gap.
+    ValueError-on-parse graceful-negative branch coverage gap.
     """
     result = _scan_session_scratch(git_repo.root, "not-a-date")
     assert result is None, (
@@ -1154,12 +1154,12 @@ def test_scan_session_scratch_git_tracked_excluded(git_repo):
 
 
 
-# Review: code-reviewer F1 — added missing test for the handoff-path-does-not-
+# Added missing test for the handoff-path-does-not-
 # exist-on-disk rejection sub-case (guard's hf_abs.exists() short-circuit was
 # untested; both prior tests use handoffs that exist on disk).
 
 
-# Review: code-reviewer F2 — added missing test for the handoff-exists-but-no-
+# Added missing test for the handoff-exists-but-no-
 # consumed_by-field rejection sub-case (distinct code path from the mismatch
 # test — _get_handoff_consumed_by returns None here, not a different sid).
 
@@ -1169,7 +1169,7 @@ def test_scan_session_scratch_git_tracked_excluded(git_repo):
 # ---------------------------------------------------------------------------
 # _resolve_in_repo — direct unit tests
 #
-# Review: code-reviewer F8 — prior coverage of _resolve_in_repo came only
+# Prior coverage of _resolve_in_repo came only
 # through the full resolve_session_branches -> _resolve_branches integration path (the
 # traversal/absolute regression tests below).  That proves the end-to-end
 # behavior but doesn't pin the helper's own contract, including a case no
@@ -1766,7 +1766,7 @@ _SKIP_CHMOD_UNRELIABLE = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 # (T9) detector_b_production_path — Detector B via branch_resolution.resolve_session_branches
 # ---------------------------------------------------------------------------
-# Review: code-reviewer 2026-07-22 slice1 finding #4 — wsc_resolve.py's own
+# wsc_resolve.py's own
 # Detector-B consolidation branch (~:1769-1805), the actual
 # /workstream-complete production entry point, had zero end-to-end coverage.
 # test_resolver_git_provenance.py exercises detect_git_provenance_consumed

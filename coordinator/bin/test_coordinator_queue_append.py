@@ -150,7 +150,7 @@ def _minimal_yaml_parse(content: str) -> dict:
             key = key.strip()
             value = rest.strip()
             if value in ("|", "|-"):
-                # Review: code-reviewer Slice-B — (F2) recognize |- (strip chomping)
+                # Recognize |- (strip chomping)
                 # alongside | (clip chomping); same collection logic for both.
                 # Block scalar — collect subsequent indented lines.
                 block_lines = []
@@ -263,6 +263,24 @@ def test_help_exits_zero() -> None:
         return
     if not result.stdout.strip():
         raise AssertionError(f"{name}: " + ("--help produced empty stdout"))
+        return
+
+
+# ---------------------------------------------------------------------------
+# Test 1b — --help names the caller-quoting contract for shell metacharacters
+# ---------------------------------------------------------------------------
+
+def test_help_names_caller_quoting_contract() -> None:
+    name = "Test 1b — --help tells callers to quote values containing shell metacharacters"
+    result = _run_cli(["--help"])
+    if result.returncode != 0:
+        raise AssertionError(f"{name}: " + (f"--help exited {result.returncode}, expected 0"))
+        return
+    normalized_stdout = " ".join(result.stdout.split())
+    if "quoted by the caller" not in normalized_stdout:
+        raise AssertionError(
+            f"{name}: " + ("--help does not tell callers that metacharacter-bearing values must be quoted")
+        )
         return
 
 
@@ -933,7 +951,7 @@ def test_central_scope_writes_to_claude_klabauter_root() -> None:
                 raise AssertionError(f"{name}: " + (f"YAML written to sibling cwd (wrong): {sibling_files}"))
                 return
 
-        # Review: code-reviewer — F4: verify YAML content, not just file location.
+        # Verify YAML content, not just file location.
         # queue_scope must be "central" and from_repo must match the passed value.
         yaml_path = os.path.join(expected_dir, yaml_files[0])
         try:
@@ -1010,7 +1028,7 @@ def test_project_scope_still_writes_cwd_relative() -> None:
                 raise AssertionError(f"{name}: " + (f"YAML written to CLAUDE_HOME (wrong for project scope): {home_files}"))
                 return
 
-        # Review: code-reviewer — F5: verify queue_scope is absent or None in project-scope output.
+        # Verify queue_scope is absent or None in project-scope output.
         # _build_yaml skips None-valued optional fields, so queue_scope must not appear in the YAML.
         yaml_path = os.path.join(expected_dir, yaml_files[0])
         try:
@@ -1031,7 +1049,7 @@ def test_project_scope_still_writes_cwd_relative() -> None:
 # ---------------------------------------------------------------------------
 
 def test_queue_scope_central_rejected_for_non_improvement_schemas() -> None:
-    """Review: code-reviewer — F1: --schema debt-backlog --queue-scope central must exit non-zero.
+    """Schema debt-backlog --queue-scope central must exit non-zero.
 
     Without the schema guard, a caller could silently redirect debt-backlog entries
     into ~/.claude/state/debt-backlog/ — wrong semantics, undocumented behaviour.
@@ -1209,7 +1227,7 @@ def test_unified_shape_proposed_action_no_id() -> None:
 # ---------------------------------------------------------------------------
 
 def test_wontfix_status_acceptance() -> None:
-    """Review: code-reviewer — F6: wontfix is a valid bug-backlog status but NOT
+    """Wontfix is a valid bug-backlog status but NOT
     valid for debt-backlog. Verify both sides of the enum gate.
     """
     name = "Test F6 — --status wontfix accepted for bug-backlog, rejected for debt-backlog"
@@ -1264,7 +1282,7 @@ def test_wontfix_status_acceptance() -> None:
 # ---------------------------------------------------------------------------
 
 def test_multiline_body_roundtrip() -> None:
-    """Review: code-reviewer — F7: multi-line body must roundtrip without trailing
+    """multi-line body must roundtrip without trailing
     newline. Uses |- (strip chomping) so 'First line.\\nSecond line.' parses back
     as exactly that string with NO trailing newline.
 
@@ -1976,7 +1994,7 @@ def test_lessons_facets_absent_when_not_passed() -> None:
         for facet_key in ("trigger", "why", "how_to_apply"):
             # Key must be ABSENT entirely from the parsed dict — a null-valued key
             # (e.g. `trigger: null`) is a writer regression and must also be caught.
-            # Review: code-reviewer F1 — prior guard `parsed[k] not in (None, "", "null")`
+            # Prior guard `parsed[k] not in (None, "", "null")`
             # passed null-key silently; spec requires the key to be absent, not null.
             if facet_key in parsed:
                 raise AssertionError(f"{name}: " + (f"facet key {facet_key!r} should be ABSENT when not passed; "
@@ -2055,7 +2073,7 @@ def test_lesson_add_facet_threading() -> None:
     C3a–c test coordinator-queue-append directly and do not cover the wrapper's
     argparse + `cmd +=` threading path. This test closes that gap.
 
-    Review: code-reviewer F2 — add integration test for coordinator-lesson-add facet threading.
+    Add integration test for coordinator-lesson-add facet threading.
     Spec backlink: docs/plans/2026-06-30-lesson-structured-facets-and-emit-metadata-fix.md § C3
     """
     name = "Test C3d — coordinator-lesson-add wrapper threads --trigger/--why/--how-to-apply to YAML"
@@ -2583,7 +2601,7 @@ def test_native_provenance_parity() -> None:
         expected_from_repo = "test-repo-em"
         expected_session_id = "test-session-r4-abc123"
 
-        # Review: code-reviewer — F6: pass --created-by-agent so we can assert it threads
+        # Pass --created-by-agent so we can assert it threads
         # into op params. Lines 1274-1276 in the CLI add created_by_agent explicitly to
         # _op_params; this arg exercises that line and would catch its accidental removal.
         result = _run_cli(
@@ -2620,7 +2638,7 @@ def test_native_provenance_parity() -> None:
                 f"(param-first as of claude-klabauter a9f0a9e — not via os.environ mutation)."))
             return
 
-        # Review: code-reviewer — F6: assert created_by_agent threads into op params.
+        # Assert created_by_agent threads into op params.
         expected_created_by_agent = "test-agent-em"
         got_agent = params.get("created_by_agent")
         if got_agent != expected_created_by_agent:
@@ -2645,7 +2663,7 @@ def test_native_queue_scope_param_threading() -> None:
 
     Spec backlink: DoE-claude:pln-strang-08-arm-the-doe-queue-fa-36567b § C2 / AC11
     """
-    # Review: code-reviewer — F5: AC11 gap — queue_scope="central" on native path is untested.
+    # AC11 gap — queue_scope="central" on native path is untested.
     name = "Test R4b — AC11: --queue-scope central appears in native op params"
     with _engine_root_tmpdir() as claude_klabauter_dir, \
          tempfile.TemporaryDirectory() as git_root:
@@ -2730,7 +2748,7 @@ def test_skipped_envelope_emits_warn_no_path() -> None:
             return
 
         # WARN must appear in stderr.
-        # Review: code-reviewer — F4: require warn: unconditionally (case-insensitive). The prior
+        # Require warn: unconditionally (case-insensitive). The prior
         # disjunction (warn: OR CLAUDE_KLABAUTER_ROOT) would pass on any error mentioning CLAUDE_KLABAUTER_ROOT without
         # a WARN line present, defeating the AC12 assertion. AC12 requires the legacy WARN message
         # parity — warn: must always be present on the skipped path.
@@ -2756,7 +2774,7 @@ def test_output_root_bypass_skips_native() -> None:
 
     Spec backlink: DoE-claude:pln-strang-08-arm-the-doe-queue-fa-36567b § C2
     """
-    # Review: code-reviewer — F8: QUEUE_APPEND_OUTPUT_ROOT bypass has no seam-present test.
+    # QUEUE_APPEND_OUTPUT_ROOT bypass has no seam-present test.
     name = "Test R6 — QUEUE_APPEND_OUTPUT_ROOT bypass skips native path when seam present"
     with _engine_root_tmpdir() as claude_klabauter_dir, \
          tempfile.TemporaryDirectory() as output_root, \
@@ -2837,7 +2855,7 @@ def test_output_root_relative_path_rejected() -> None:
 # Test C3b-1 — cross-repo-commitment: valid write, file exists, required fields present
 # ---------------------------------------------------------------------------
 
-# Review: code-reviewer — B-F5 (nit): keep in sync with
+# Keep in sync with
 # coordinator/schemas/cross-repo-commitment.yaml `required:` — deriving this at test
 # time via `schema-cli.js --describe cross-repo-commitment` was considered but is
 # more than a small change (subprocess call + JSON parse + required-list extraction
@@ -2904,7 +2922,7 @@ def test_cross_repo_commitment_valid_write() -> None:
 # Test C3b-2 — cross-repo-commitment: missing domain-required field exits non-zero
 # ---------------------------------------------------------------------------
 
-# Review: code-reviewer — B-F3 (nit): extracted from the C3b-2 body (was a double-call,
+# Extracted from the C3b-2 body (was a double-call,
 # double-`pair`-name comprehension) — one call, one flag/value-pair filter pass.
 def _args_without_flag(args: list, flag: str) -> list:
     return [
@@ -2954,7 +2972,7 @@ def test_cross_repo_commitment_status_enum() -> None:
     if result_bad.returncode == 0:
         raise AssertionError(f"{name}: " + ("expected --status closed to be rejected (schema pins its own enum); got exit 0"))
         return
-    # Review: code-reviewer — B-F4 (nit): assert stderr names the schema's actual pinned
+    # Assert stderr names the schema's actual pinned
     # enum values, not just that SOME non-zero exit occurred — matches this file's
     # established enum-rejection test convention (see test_invalid_enum_value_exits_nonzero).
     if "fulfilled" not in result_bad.stderr or "withdrawn" not in result_bad.stderr:

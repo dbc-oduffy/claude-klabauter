@@ -116,7 +116,7 @@ _INVENTORY_REL_PARTS = ("docs", "install", "bin-inventory.json")
 # set itself).
 _KNOWN_OLD_PATH_EXTENSIONS = (".py", ".js", ".sh", ".cmd", ".ps1")
 
-# Review: code-reviewer (Finding 1, P1) -- the `old_repo` value a ledger
+# The `old_repo` value a ledger
 # entry must carry to be treated as recording CLAUDE-KLABAUTER'S OWN history for this
 # gate's disposition-match purposes. `relocation-ledger.json`'s own
 # `_entry_shape` doc calls `old_repo` "informational only, not resolved" --

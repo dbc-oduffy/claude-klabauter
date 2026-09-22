@@ -697,7 +697,15 @@ def _backlog_grind_assemble_entry(argv: List[str]) -> int:
     if subcommand == "apply":
         return apply_mod.main_apply(rest)
     if subcommand == "grind-row":
-        return grind_rows_mod.main(rest)
+        # DR-276: `grind-row` writes/moves/deletes files (append, close,
+        # settle, run-record) through a plain in-process call, never through
+        # `ipc.dispatch_message` -- so without an explicit declared-writes
+        # collection here, every one of those writes carries no session
+        # touch-claim and lands in `orphans` at the `scoped_git_commit` sink.
+        from coordinator_core.cli_entry import recording_declared_writes
+
+        with recording_declared_writes():
+            return grind_rows_mod.main(rest)
     return apply_mod.main_drop(rest)
 
 
@@ -1061,7 +1069,7 @@ def run_gate_target(name: str, argv: List[str]) -> int:
     _record_invocation(name)
 
     if name in GATE_ENGINE_ENTRIES:
-        # Review: code-reviewer — sys.argv asymmetry, audited empirically.
+        # sys.argv asymmetry, audited empirically.
         # Grepped run_op_main and all 5 GATE_ENGINE_ENTRIES op modules
         # (assert_no_dangling_plan_backlinks, assert_plan_sizing_citation,
         # check_em_environment, check_posix_exec_assumptions,
@@ -1258,7 +1266,7 @@ def run_target(name: str, argv: List[str]) -> int:
         finally:
             sys.argv = original_argv
 
-    # Review: code-reviewer — sys.argv asymmetry, audited empirically. This
+    # sys.argv asymmetry, audited empirically. This
     # branch, unlike BY_PATH_TARGETS above, never sets sys.argv before
     # calling the target. Grepped all 12 engine-mapped ASSEMBLE_TARGETS
     # modules (coordinator_core.{backlog_grind_assemble,baton_assemble,

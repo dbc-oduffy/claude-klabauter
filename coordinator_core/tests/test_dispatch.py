@@ -9,7 +9,7 @@ These tests exercise ipc.dispatch_message (the routing/keying layer), NOT the ha
 internals. Handler-level guard tests (None raises ValueError; resolve_context called with
 main_worktree_root) live in test_c4a_handler_wiring.py and test_recorder.py.
 
-Review: code-reviewer (S2-F1/F2/F3 + S4-F2) — plan C3 deliverable: dispatch tests asserting
+Plan C3 deliverable: dispatch tests asserting
 the 3 reclassified emit ops receive non-None repo_root when _origin_worktree is present and
 return INVALID_PARAMS when absent. Neither path was covered before this file.
 

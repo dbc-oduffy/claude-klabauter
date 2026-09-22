@@ -2043,7 +2043,7 @@ def check_bump_foreign_repo_write(
     agent_id = payload.get("agent_id") or "" if isinstance(payload, dict) else ""
 
     for target_dir, write_verb_label, raw_target in candidates:
-        # Review: coordinator:code-reviewer -- keyword args at both call
+        # Keyword args at both call
         # sites give this shared eight-parameter predicate a reorder-safe
         # net across the Bash and PowerShell legs.
         result = _evaluate_foreign_repo_candidate(

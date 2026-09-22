@@ -238,7 +238,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     block/deny) for a read-only-shaped dispatch to a doctrine-carrying
     agent, once per session."""
     try:
-        # Review: coordinator-code-reviewer — normalize the two params
+        # Normalize the two params
         # shapes both engine doors and the cold chain send (see
         # block_worktree_tool).
         return _handle(payload_of(params))

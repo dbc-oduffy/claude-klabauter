@@ -832,14 +832,75 @@ def _has_python_shebang(file_path: pathlib.Path) -> bool:
     return bool(_SHEBANG_PYTHON_RE.search(text))
 
 
-def _is_python_source(file_path: pathlib.Path) -> bool:
-    """True for a `*.py` file, or an extensionless/non-`.py` file with a
-    `#!...python` shebang — the naked-Python-script shape used throughout
-    `coordinator/bin/`.
+_PYTHON_PREAMBLE_STARTS = (b'"""', b"'''")
+
+
+def _has_python_preamble(file_path: pathlib.Path) -> bool:
+    """True if `file_path`'s first line opens a module docstring
+    (`\"\"\"`/`'''`) or is a `#`-prefixed comment that is not a `#!` shebang.
+
+    Same bounded-read shape as `_has_python_shebang` — a preamble check, not
+    a parse. This is the naked-Python-CLI convention used under `coordinator/
+    bin/` for scripts invoked as `python3 coordinator/bin/<name>` rather than
+    executed directly, so they carry neither a `.py` suffix nor a shebang.
+    """
+    try:
+        with file_path.open("rb") as f:
+            head = f.read(_SHEBANG_PROBE_BYTES)
+    except OSError:
+        return False
+
+    newline = head.find(b"\n")
+    first_line = head if newline == -1 else head[:newline]
+    stripped = first_line.strip()
+    if stripped.startswith(_PYTHON_PREAMBLE_STARTS):
+        return True
+    return stripped.startswith(b"#") and not stripped.startswith(b"#!")
+
+
+def _parses_as_python(file_path: pathlib.Path) -> bool:
+    """True if `file_path`'s full contents parse as Python source.
+
+    Only reached for an already-preamble-matched extensionless `bin/` file
+    (see `_is_python_source`) — a non-Python config file that merely opens
+    with a `#` comment, e.g. `bin/.percolate-ignore`, would otherwise be
+    admitted by `_has_python_preamble` alone and then blow up as a
+    `SpawnParseError` once `walk_repo` tried to actually parse it. This is
+    the final gate, not a preview: never raises, treats an unreadable or
+    unparseable file as "not Python" the same way the shebang path does.
+    """
+    try:
+        text = file_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    try:
+        ast.parse(text)
+    except SyntaxError:
+        return False
+    return True
+
+
+def _is_python_source(file_path: pathlib.Path, rel: pathlib.Path | None = None) -> bool:
+    """True for a `*.py` file, an extensionless/non-`.py` file with a
+    `#!...python` shebang, or — when `rel` places it under a `bin/`
+    directory — an extensionless file whose head has a Python module
+    preamble (docstring or non-shebang comment) AND whose full contents
+    parse as Python.
+
+    The `bin/`-only carve-out bounds the preamble/parse pair to the naked-
+    Python-CLI convention it exists for, rather than running it (and
+    risking a false-positive admit, or an expensive parse) against every
+    extensionless file in the repo. The parse step is what tells a real
+    naked-Python CLI apart from a non-Python file that merely starts with
+    `#`, like a `.percolate-ignore` list.
     """
     if file_path.suffix == ".py":
         return True
-    return _has_python_shebang(file_path)
+    if _has_python_shebang(file_path):
+        return True
+    if rel is not None and file_path.suffix == "" and "bin" in rel.parts:
+        return _has_python_preamble(file_path) and _parses_as_python(file_path)
+    return False
 
 
 def discover_source_files(
@@ -887,7 +948,7 @@ def discover_source_files(
                 suppressed_count += 1
             continue
 
-        if not _is_python_source(file_path):
+        if not _is_python_source(file_path, rel):
             continue
 
         discovered.append((rel.as_posix(), file_path))

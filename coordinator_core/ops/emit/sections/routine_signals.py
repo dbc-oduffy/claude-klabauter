@@ -515,7 +515,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
         _build_signal(ctx, "dormant-repo", "unknown", False,
                       {"note": "cross-repo commit scan requires tc-4 connector; "
                                "emitting unknown from tc-3"}, _THRESHOLD_DORMANT),
-        # Review: code-reviewer — distill-backlog is the one signal here where `overdue`
+        # distill-backlog is the one signal here where `overdue`
         # can be True while `computed_state` is "unknown" rather than "stale" (the
         # skipped-subtree case above); every sibling signal above ties overdue directly
         # to its own computed_state == "stale" branch. Deliberate (see distill_overdue

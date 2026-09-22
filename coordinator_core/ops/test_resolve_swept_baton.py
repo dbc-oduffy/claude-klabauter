@@ -236,7 +236,7 @@ def test_double_invocation_identical_result(repo):
 
 
 def test_archiving_commit_git_call_carries_hardening_kwargs(repo, monkeypatch):
-    """Review: code-reviewer (F4, P2) — the one subprocess call in this
+    """The one subprocess call in this
     module was the odd one out relative to every sibling git-wrapper in
     this wave (missing timeout/creationflags/stdin hardening)."""
     archive_dir = repo / "cross-repo" / "archive"

@@ -118,7 +118,7 @@ def liveness_basis(holder_sid: str, cwd: Optional[str] = None) -> str:
     § C3. `_liveness_basis` is kept below as an alias for this module's own
     internal caller (`holder_evidence`).
 
-    Vocabulary (seven values; see `live_session_verdicts`'s docstring for the
+    Vocabulary (eight values; see `live_session_verdicts`'s docstring for the
     full per-arm derivation):
       "harness-registry"      — harness-written process identity, stronger
                                  evidence than `"stable-pid"`; `age_sec` is
@@ -137,6 +137,13 @@ def liveness_basis(holder_sid: str, cwd: Optional[str] = None) -> str:
                                  present and parseable.
       "recency-window-mtime"  — Layer 2 recency fallback with the meta-less/
                                  mid-write mtime-substitution recency source.
+      "no-record"              — no harness-registry entry and no non-empty
+                                 file anywhere under the session dir, so the
+                                 recency fallback above had nothing but the
+                                 bare directory's own mtime to substitute —
+                                 not evidence of a process. `live` is always
+                                 False here and `age_sec` is always `None`,
+                                 same as `"harness-registry"`.
       "harness-registry-elsewhere" — `session_verdict`-ONLY (never produced
                                  by `live_session_verdicts`'s whole-corpus
                                  scan, which never leaves this repo's own
@@ -414,7 +421,8 @@ def holder_evidence(
     Always returns a dict with these keys (each `None` when unknown):
       liveness_basis        - "harness-registry" | "stable-pid" |
                                  "recency-window" | "recency-window-mtime" |
-                                 "harness-registry-elsewhere" | "unknown"
+                                 "no-record" | "harness-registry-elsewhere" |
+                                 "unknown"
       last_activity_age_sec  - int seconds since meta.json's last_activity
       holder_goal            - meta.json's "goal" field
       holder_goal_state       - "declared" | "undeclared" | "unreadable" —
@@ -559,7 +567,7 @@ def holder_evidence(
         )
         return result
     except Exception as exc:  # noqa: BLE001 - fail-soft is the contract here
-        # Review: code-reviewer P3 (2026-08-13) — only clobber fields that
+        # Only clobber fields that
         # were never resolved before the exception fired. A transcript/
         # recent-paths hiccup after holder_goal/holder_goal_state/
         # holder_branch were already read must not discard a genuinely

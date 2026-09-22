@@ -513,7 +513,7 @@ def test_distill_fate_absent_undeterminable_blocks(tmp_path: Path):
 
 
 def test_distill_fate_absent_real_file_no_git_history_blocks_retain(git_repo: Path):
-    # Review: code-reviewer Finding 1 (2026-08-06) — a real, on-disk file inside a
+    # A real, on-disk file inside a
     # WORKING git repo (git log succeeds, returncode 0) but with ZERO commit
     # history for that exact path is the `_UNTRACKED` fast-path. This must
     # fail-closed (retain), not PASS: a shallow clone, a `git gc` after a
@@ -861,7 +861,7 @@ def test_evaluate_candidate_open_commitment_blocks(tmp_path: Path):
 
 @_requires_rg
 def test_evaluate_candidate_uses_repo_relative_needle_not_bare_filename(tmp_path: Path):
-    # Review: workflow-review (2026-07-12) — evaluate_candidate previously passed
+    # evaluate_candidate previously passed
     # candidate.path.name (bare filename) to check_active_reference, a strictly
     # looser rg needle than sidecar_sweep's sibling caller of the same shared
     # guard (which passes the repo-relative path). This test pins the fix: a

@@ -459,6 +459,40 @@ def _dir_recency_fallback_epoch(sdir: str) -> int:
         return 0
 
 
+def _dir_has_recorded_evidence(sdir: str) -> bool:
+    """True iff ``sdir`` holds at least one non-empty regular file -- the SAME
+    predicate ``_dir_recency_fallback_epoch`` uses to prefer a file's own
+    mtime over the bare directory's. A directory answering False here is a
+    pure shell: nothing was ever written into it, so its own mtime (bumped by
+    whatever touches the sessions root, not by this session doing anything --
+    see ``_dir_recency_fallback_epoch``'s docstring) is not evidence a
+    process exists, only that the directory does.
+
+    This is the positive-existence-signal gate ``_verdict_for_sdir`` consults
+    before trusting ``_dir_recency_fallback_epoch``'s directory-mtime
+    fallback as liveness recency (state/bug-backlog/2026-08-27-session-
+    liveness-by-directory-mtime-repo-f8e5d28047bb.yaml): a claim held by a
+    session directory with no meta.json, no harness-registry entry, and no
+    content anywhere used to read a confident "live" verdict purely off the
+    directory's own mtime, which flapped with every unrelated touch of the
+    sessions root rather than tracking any process.
+    """
+    try:
+        with os.scandir(sdir) as it:
+            for entry in it:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                try:
+                    if entry.stat(follow_symlinks=False).st_size == 0:
+                        continue
+                except OSError:
+                    return True
+                return True
+    except OSError:
+        return False
+    return False
+
+
 # ---------------------------------------------------------------------------
 # THE shared claim-layer liveness key — O(1) single-session
 # ---------------------------------------------------------------------------
@@ -566,7 +600,7 @@ def session_live(sid: str, cwd: Optional[str] = None) -> bool:
     except Exception:
         record = None
     if record is not None:
-        # Review: fail-open parity with live_session_verdicts' registry arm —
+        # fail-open parity with live_session_verdicts' registry arm —
         # a raise from the compare (e.g. MissingPsutilError) must fall
         # through to Layer 1/2 unchanged, never propagate out of
         # session_live and never itself mean DEAD.
@@ -598,7 +632,7 @@ def session_live(sid: str, cwd: Optional[str] = None) -> bool:
         # (dca0e3e80) but still writes stable_pid_start_epoch, which
         # core.stable_pid_alive already accepts as a sufficient witness.
         if stable_pid_lstart or stable_pid_start_epoch:
-            # Review: staff-eng-review B — a raise here (e.g. MissingPsutilError)
+            # A raise here (e.g. MissingPsutilError)
             # must fail OPEN (True), matching live_session_verdicts' own
             # Layer-1 arm exactly ((True, "unknown", None)). Do NOT fall
             # through to Layer 2 on the exception — that would create a new
@@ -771,7 +805,7 @@ def claim_held_by_me(
         raise ValueError("claim_dir required")
     my = my_sid or ""
     if not my:
-        # Review: overengineering-reviewer (finding 2) — routed through the
+        # Routed through the
         # one shared accessor (session.core.attributable_session_id). The
         # prior warm-empty early `return False` is redundant, not a
         # behavior change: `bool(my) and recorded == my` below already
@@ -826,6 +860,20 @@ def claim_held_by_me(
 #:                              was absent/unparseable so the recency SOURCE
 #:                              was substituted via ``_dir_recency_fallback_epoch``
 #:                              (the meta-less/mid-write case).
+#:   "no-record"              — no harness-registry entry AND no non-empty
+#:                              file anywhere under ``sdir`` (checked via
+#:                              ``_dir_has_recorded_evidence``): the recency
+#:                              fallback above would have had nothing to
+#:                              substitute but the bare directory's OWN
+#:                              mtime, which is not evidence of a process —
+#:                              only that ``mkdir`` happened at some point.
+#:                              `live` is always False here (never a fail-open
+#:                              basis) and `age_sec` is always ``None``, same
+#:                              as "harness-registry" — no elapsed figure is
+#:                              trustworthy when there is nothing to measure
+#:                              it from. See state/bug-backlog/2026-08-27-
+#:                              session-liveness-by-directory-mtime-repo-
+#:                              f8e5d28047bb.yaml.
 #:   "unknown"               — ``stable_pid``/``stable_pid_lstart`` were
 #:                              present but the underlying process check
 #:                              itself raised; never launder this into a
@@ -1064,6 +1112,8 @@ def _verdict_for_sdir(
         last_iso = core.read_meta_field(sdir, "last_activity")
         last_epoch = core.iso_to_epoch(last_iso)
         if not last_iso:
+            if record is None and not _dir_has_recorded_evidence(sdir):
+                return (False, "no-record", None)
             last_epoch = _dir_recency_fallback_epoch(sdir)
             basis = "recency-window-mtime"
         else:
@@ -1079,6 +1129,8 @@ def _verdict_for_sdir(
     last_iso = core.read_meta_field(sdir, "last_activity")
     last_epoch = core.iso_to_epoch(last_iso)
     if not last_iso:
+        if record is None and not _dir_has_recorded_evidence(sdir):
+            return (False, "no-record", None)
         last_epoch = _dir_recency_fallback_epoch(sdir)
         basis = "recency-window-mtime"
     else:
@@ -1543,7 +1595,6 @@ def session_abandoned(sid: str, cwd: Optional[str] = None) -> bool:
     # `dir_record` without moving `last_activity`, and vice versa.
     candidates: list[tuple[str, int]] = []
 
-    # Review: coordinator:code-reviewer P2 (coordinatorcode-reviewer-
     # 1da5144e.md) — `core.iso_to_epoch` returns 0 on BOTH empty input and
     # parse failure. `last_iso` is already known non-empty here, so a `0`
     # epoch can only mean a corrupted-but-present value (e.g.

@@ -48,10 +48,15 @@ parsing:
      Counts as evidence ONLY IF it resolves to a REAL commit object in this
      repo's own history AND `git merge-base --is-ancestor` proves that
      commit is an ancestor of `HEAD` -- the anti-self-attestation gate that
-     keeps this from becoming "write a field, get a stamp". An absent,
-     malformed, unresolvable, or non-ancestor ref is REJECTED (one of
-     `DISPOSITION_REF_ABSENT`/`_MALFORMED`/`_UNRESOLVABLE`/`_NOT_ANCESTOR`
-     -- see `_disposition_ref_evidence`'s own returned rejection map).
+     keeps this from becoming "write a field, get a stamp" -- AND the row
+     itself carries no uncleared `external_gate` that `blocks: execution`
+     (the same predicate `/execute-plan` Phase 1.5 already applies at
+     wave-build time -- `coordinator_core.ops.dispatch_emit.spine_read.
+     _has_uncleared_execution_gate`, reused rather than re-read). An absent,
+     malformed, unresolvable, or non-ancestor ref, or a verified ref on a
+     still-gated row, is REJECTED (one of `DISPOSITION_REF_ABSENT`/
+     `_MALFORMED`/`_UNRESOLVABLE`/`_NOT_ANCESTOR`/`_GATED` -- see
+     `_disposition_ref_evidence`'s own returned rejection map).
   2. For a plan that predates the `## Tasks` spine entirely (`## Dispatch
      Ledger` fallback, Defect fix 2026-08-06): the plan's own `## Dispatch
      Ledger` markdown table, whose `status` column carries a literal
@@ -172,6 +177,7 @@ from coordinator_core.git.commit import hash_worktree_blobs_via_spawn
 from coordinator_core.ops.ceremony import git_native, post_commit_tail
 from coordinator_core.ops.ceremony.commit_message import compose_message
 from coordinator_core.ops.ceremony.push import PUSH_STATUS_NOT_ATTEMPTED
+from coordinator_core.ops.dispatch_emit.spine_read import _has_uncleared_execution_gate
 from coordinator_core.ops.extract_scope_paths import _extract_scope_paths
 from coordinator_core.ops.fleet._common import plan_claim_dir
 from coordinator_core.ops.handoff_close_origin_stub import _handler as _close_origin_stub_handler
@@ -373,7 +379,7 @@ def _parse_dispatch_ledger_table(
     chunk_idx = header_cells.index("chunk-id")
     status_idx = header_cells.index("status")
 
-    # Review: coordinator:code-reviewer -- `table_lines[1]` is assumed to be
+    # `table_lines[1]` is assumed to be
     # the markdown header/data separator row purely by position. Validate
     # its shape before skipping it; a real data row landing there (a
     # separator-less or differently-shaped table) must fail loud rather
@@ -827,6 +833,19 @@ DISPOSITION_REF_MALFORMED = "malformed"
 DISPOSITION_REF_UNRESOLVABLE = "unresolvable"
 DISPOSITION_REF_NOT_ANCESTOR = "non-ancestor"
 
+#: A `coded` row's `disposition_ref` verified as a real, ancestor commit, but
+#: the row itself carries an uncleared `external_gate` that `blocks:
+#: execution` -- the same predicate `coordinator_core.ops.dispatch_emit.
+#: spine_read._has_uncleared_execution_gate` applies at wave-build time
+#: (`/execute-plan` Phase 1.5 refuses to schedule such a row). Landing a
+#: commit does not clear a gate the plan itself declared open, so this
+#: verdict is reported alongside the other three rejection reasons rather
+#: than counted as shipped evidence -- close-out and the scheduler must read
+#: `external_gate` the same way (see the bug-backlog row that named this
+#: defect: `state/bug-backlog/2026-08-20-close-out-and-stamp-discharges-
+#: chunks-th-3d8b1bda44c2.yaml`).
+DISPOSITION_REF_GATED = "uncleared-execution-gate"
+
 #: A `disposition_ref` is always written by this module (or a human
 #: following the same convention) as a bare hex commit sha -- never a
 #: symbolic ref, branch name, or tag. Bounding the shape BEFORE ever handing
@@ -879,6 +898,65 @@ def _verify_disposition_ref(
     return sha, None
 
 
+#: `baseline_ref` alone may additionally carry a `<repo>:<sha>` cross-repo
+#: qualifier -- `disposition_ref` never does (`_verify_disposition_ref`
+#: above stays the same-repo-only check `_disposition_ref_evidence` and
+#: every `disposition_ref` caller uses). `<repo>` is a bare machine-local
+#: registry key (`registry_get("repos.<repo>")`, the same resolution rung
+#: `discover_working_repos`/`ensure_doe_clone` already use for a sibling
+#: repo lookup) -- never a filesystem path, so a plan file never embeds a
+#: machine-specific path.
+_BASELINE_REF_CROSS_REPO_RE = re.compile(r"^([a-z][a-z0-9_-]*):([0-9a-fA-F]{4,40})$")
+
+
+def _verify_baseline_ref(
+    repo_root: Path, ref: Optional[str]
+) -> tuple[Optional[str], Optional[str]]:
+    """Verifies `falsifier.baseline_ref` (AC6) -- a strict superset of
+    `_verify_disposition_ref`'s own bare-hex-sha, same-repo, ancestor-of-
+    HEAD form, plus a `<repo>:<sha>` cross-repo form for a publisher-side
+    plan whose baseline necessarily lives in the mirror repo (see this
+    module's own "§ The goal-falsifier stamp-decision gate" comment
+    block). A bare hex sha is delegated to `_verify_disposition_ref`
+    unchanged; `disposition_ref` never reaches this function.
+
+    The cross-repo form resolves `<repo>` through the machine-local
+    registry and verifies `<sha>` names a real commit object IN THAT
+    REPO's OWN history -- `merge-base --is-ancestor HEAD` is deliberately
+    never run for this form: the sha belongs to a different repo's commit
+    graph than this plan's own `HEAD`, so "reachable from this repo's
+    HEAD" is a category error, not a stricter check. A plan's baseline
+    commit either exists in the repo it was taken from, or it does not;
+    that this repo has since advanced past it is not this check's concern.
+
+    Returns the same `(sha, reason)` shape as `_verify_disposition_ref`.
+    `DISPOSITION_REF_UNRESOLVABLE` covers an unregistered repo key, a
+    registered key whose path does not exist on disk, and a sha the
+    sibling repo cannot resolve to a commit object -- the same "this
+    checkout cannot prove it" bucket `_verify_disposition_ref` already
+    uses for its own same-repo unresolvable case. Never raises."""
+    if not isinstance(ref, str) or not ref.strip():
+        return None, DISPOSITION_REF_ABSENT
+    stripped = ref.strip()
+    qualified = _BASELINE_REF_CROSS_REPO_RE.match(stripped)
+    if qualified is None:
+        return _verify_disposition_ref(repo_root, stripped)
+
+    repo_key, sha_token = qualified.group(1), qualified.group(2)
+    sibling_root_raw = registry_get(f"repos.{repo_key}")
+    if not sibling_root_raw:
+        return None, DISPOSITION_REF_UNRESOLVABLE
+    sibling_root = Path(sibling_root_raw)
+    if not sibling_root.is_dir():
+        return None, DISPOSITION_REF_UNRESOLVABLE
+
+    resolve_result = _run_git(["rev-parse", "--verify", f"{sha_token}^{{commit}}"], sibling_root)
+    sha = (resolve_result.stdout or "").strip()
+    if resolve_result.returncode != 0 or not sha:
+        return None, DISPOSITION_REF_UNRESOLVABLE
+    return sha, None
+
+
 def _disposition_ref_evidence(
     spine_rows: list[Any], repo_root: Path
 ) -> tuple[set[str], dict[str, str]]:
@@ -902,6 +980,16 @@ def _disposition_ref_evidence(
     genuine, reportable gap rather than "this plan predates the field
     entirely".
 
+    A verified `disposition_ref` is still NOT counted as shipped evidence
+    when the row itself carries an uncleared `external_gate` that `blocks:
+    execution` -- `_has_uncleared_execution_gate` (`coordinator_core.ops.
+    dispatch_emit.spine_read`, the SAME predicate `/execute-plan` Phase 1.5
+    already applies to refuse scheduling such a row) is reused here rather
+    than re-read, so close-out and the scheduler can never disagree about
+    what one `external_gate` field means. A row that fails this check is
+    reported as `DISPOSITION_REF_GATED`, alongside the other three rejection
+    reasons.
+
     Returns `(verified_ids, rejections)`. `verified_ids` is consumed
     directly by `_determine_shipped`'s own `missing` computation -- no
     sub-chunk-suffix coverage matching is needed here (that matching
@@ -909,10 +997,11 @@ def _disposition_ref_evidence(
     is evidence for the exact row it lives on, never a prefix that might
     cover a sub-chunk or dash-tag variant. `rejections` maps every `coded`
     chunk-id whose ref did NOT
-    verify to its own `_verify_disposition_ref` reason string -- callers
-    report this ONLY for ids that remain in `missing_chunk_ids` after every
-    evidence path has been unioned in, per this module's docstring's
-    "unhappy-path-only" posture for its other diagnostics."""
+    verify to its own `_verify_disposition_ref` reason string (or
+    `DISPOSITION_REF_GATED`) -- callers report this ONLY for ids that remain
+    in `missing_chunk_ids` after every evidence path has been unioned in,
+    per this module's docstring's "unhappy-path-only" posture for its other
+    diagnostics."""
     verified: set[str] = set()
     rejections: dict[str, str] = {}
     for row in spine_rows:
@@ -927,10 +1016,12 @@ def _disposition_ref_evidence(
             continue
         chunk_id = str(chunk_id)
         sha, reason = _verify_disposition_ref(repo_root, row.get("disposition_ref"))
-        if sha is not None:
-            verified.add(chunk_id)
-        else:
+        if sha is None:
             rejections[chunk_id] = reason
+        elif _has_uncleared_execution_gate(row):
+            rejections[chunk_id] = DISPOSITION_REF_GATED
+        else:
+            verified.add(chunk_id)
     return verified, rejections
 
 
@@ -946,9 +1037,11 @@ def _disposition_ref_evidence(
 # `prime_exit_criterion.falsifier` names an observation is not allowed to
 # ship implemented on the strength of the spine oracle alone when that
 # observation was never recorded, was recorded inert (`asserted: false`),
-# has a baseline that cannot be trusted (`baseline_ref` fails the same
-# ancestor check `_verify_disposition_ref` already applies to
-# `disposition_ref`), or recorded a verdict other than `pass`.
+# has a baseline that cannot be trusted (`baseline_ref` fails `_verify_
+# baseline_ref` -- the same same-repo ancestor check `_verify_disposition_
+# ref` applies to `disposition_ref`, extended with a `<repo>:<sha>`
+# cross-repo form only `baseline_ref` accepts), or recorded a verdict
+# other than `pass`.
 #
 # VERDICT, NOT DELTA (the defect this closes -- see the dispatch brief's own
 # replay against a real plan): the gate reads `exit_criterion_met.
@@ -1281,7 +1374,7 @@ def _evaluate_goal_falsifier_gate(
       2. `exit_criterion_met` absent, or present with `asserted: false` ->
          refuse (AC4), unless a current `status_override_*` attestation is
          present (AC19).
-      3. `falsifier.baseline_ref` fails `_verify_disposition_ref` -> refuse,
+      3. `falsifier.baseline_ref` fails `_verify_baseline_ref` -> refuse,
          naming which of its four reasons (AC6), same override exception.
       4. `exit_criterion_met.falsifier_verdict != "pass"` -> refuse (AC5) --
          one enum read, never a comparison of `falsifier_output` against
@@ -1421,7 +1514,7 @@ def _evaluate_goal_falsifier_gate(
         return result
 
     baseline_ref = falsifier.get("baseline_ref")
-    sha, ref_reason = _verify_disposition_ref(root, baseline_ref)
+    sha, ref_reason = _verify_baseline_ref(root, baseline_ref)
     if sha is None:
         if override is None:
             result["refused"] = True
@@ -1507,7 +1600,7 @@ def _assert_stamp_fidelity(
     original line vanishing outright) is refused unconditionally, since
     stamping never removes a line.
 
-    Review: code-reviewer -- F3: matching `_STAMP_LINE_RE` against an
+    Matching `_STAMP_LINE_RE` against an
     already-`.strip()`-ed line made its own `^[ \\t]*` prefix vacuous, and
     even matched against the raw line the pattern's `[ \\t]*` is a
     wildcard -- neither form alone can tell a correctly-indented stamp
@@ -1663,7 +1756,7 @@ def _stamp_plan_landed(
     `timeout` (seconds) is forwarded to `locked_write.locked_rmw`'s own
     `timeout` on the disk-read path only (see below) -- test-only knob,
     live callers rely on the default `LOCK_TIMEOUT_SECS`."""
-    # Review: code-reviewer (P2 #1) -- C1 (plan_tasks_mutate.resolve) now
+    # C1 (plan_tasks_mutate.resolve) now
     # calls this function from a hot path reached far more frequently and
     # from more concurrent contexts than the low-frequency close-out
     # ceremony it previously served alone, on a machine whose own doctrine
@@ -2467,9 +2560,10 @@ def close_out_and_stamp(
         `{chunk_id: reason}` map, one entry per still-missing chunk-id whose
         row carried a `disposition_ref` that did NOT verify, `reason` being
         one of `DISPOSITION_REF_ABSENT`/`DISPOSITION_REF_MALFORMED`/
-        `DISPOSITION_REF_UNRESOLVABLE`/`DISPOSITION_REF_NOT_ANCESTOR` -- the
-        specific cause a rejected disposition_ref did not count, present
-        alongside `missing_chunk_ids` for the same reason.
+        `DISPOSITION_REF_UNRESOLVABLE`/`DISPOSITION_REF_NOT_ANCESTOR`/
+        `DISPOSITION_REF_GATED` -- the specific cause a rejected
+        disposition_ref did not count, present alongside `missing_chunk_ids`
+        for the same reason.
         `partial_evaluation_stamped` (2026-08-06, Defect 2 fix -- see
         `_stamp_close_out_partial_evaluation`'s own docstring) is `True`
         whenever this run wrote the plan's `close_out_last_partial:`
@@ -2688,7 +2782,7 @@ def close_out_and_stamp(
         # instead materialized into the (already-existing) throwaway scratch
         # copy below, which picks it up the same way.
         #
-        # Review: code-reviewer -- P2 finding, 2026-08-08: this pre-stamp
+        # 2026-08-08: this pre-stamp
         # live-file write is not transactional with the stamp call
         # succeeding. `pre_clear_marker_value` captures the marker's raw
         # value (before the clear) so a failed stamp can restore it -- see
@@ -2742,7 +2836,7 @@ def close_out_and_stamp(
         # handoff carrying its deliverable_id). That is not a stamp failure and must
         # not be reported as one -- only rc=1 (a genuine stamp error) is fatal here.
         if stamp_rc not in (0, 2):
-            # Review: code-reviewer -- P2 finding, 2026-08-08: restore the
+            # 2026-08-08: restore the
             # marker this branch cleared before the stamp call, since a
             # failed stamp does not undo it. Re-reads the LIVE file (never
             # `text`) because `_stamp_implemented` may itself have written

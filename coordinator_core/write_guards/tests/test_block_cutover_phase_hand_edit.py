@@ -150,7 +150,7 @@ class TestFlagsPhaseHandEdit:
         assert "permissionDecision" not in result["hookSpecificOutput"]
 
     def test_write_omitting_phase_line_entirely_flagged(self, tmp_path, monkeypatch):
-        """Review: code-reviewer — a Write that replaces the whole file with
+        """A Write that replaces the whole file with
         content that DROPS the phase: line (rather than changing its value)
         must also be flagged. The old check only inspected the new content
         for a phase:-shaped line, so a deletion went undetected; this uses

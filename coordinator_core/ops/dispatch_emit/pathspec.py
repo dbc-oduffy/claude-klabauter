@@ -582,6 +582,54 @@ def commit_pathspec_or_none(wave: list[WaveRow]) -> list[str] | None:
         return None
 
 
+def candidate_test_additions(pathspec: list[str]) -> list[str]:
+    """The co-located test-file path each ``.py`` entry in ``pathspec`` would
+    be paired with, by this repo's own ``tests/test_<stem>.py`` convention —
+    the same one ``_candidate_test_targets`` encodes for ``terminal_test_
+    scope``, narrowed to its nearest rung (``candidate.parent / "tests" /
+    test_name``) only.
+
+    ``commit_pathspec`` derives strictly from a wave's declared ``writes:``
+    (module docstring's one derivation rule) and that return is pinned —
+    callers besides ``emit.py``'s commit-prompt composition read it as an
+    exact, unwidened set. This function is a SEPARATE, additive derivation a
+    caller may fold into the pathspec IT hands to a dispatched committer,
+    never something ``commit_pathspec`` computes for itself.
+
+    Exists because an AC-satisfying executor's actual touched-files set is
+    reliably a strict superset of a wave's ``writes:``-derived pathspec — the
+    spine declares production surfaces, but an executor is required to write
+    the test covering them. Handed only the narrower pathspec, the commit
+    agent reads the executor's own reported test file as an unaccounted-for
+    path and refuses (state/bug-backlog/2026-08-26-emitted-wave-commit-legs-
+    are-handed-a-wr-c0f443ac1fdb.yaml). A path this function names but the
+    executor never wrote is harmless: the commit brief's own "UNCHANGED
+    DECLARED PATHS" rule drops an unchanged declared path rather than
+    refusing over it, and the preflight phase already treats a nonexistent
+    declared path as expected, not a refusal — widening costs nothing on the
+    miss and closes the refusal on the hit.
+
+    Narrowed to the nearest rung ON PURPOSE, not the full ancestor walk
+    ``_candidate_test_targets`` offers ``terminal_test_scope``: every
+    incident this exists for paired a module with a test in its own
+    co-located ``tests/`` directory, and the full ladder would multiply the
+    per-``.py``-path candidate count into the rendered commit prompt that
+    ``test_commit_brief_stays_bounded.py`` holds to a byte ceiling. A path
+    that is already a test file (``_is_test_file``) is excluded — it is its
+    own target, not a source a test is derived FOR — and this module's
+    negative spec still holds: every candidate is stem-derived from a path
+    the caller already declared, never a directory listing or a git query.
+    """
+    candidates: list[str] = []
+    for path in pathspec:
+        candidate = PurePosixPath(path)
+        if candidate.suffix != ".py" or _is_test_file(candidate):
+            continue
+        nearest = _candidate_test_targets(candidate)[0]
+        candidates.append(nearest.as_posix())
+    return _dedupe(candidates)
+
+
 def commit_prefixes(wave: list[WaveRow]) -> list[tuple[str, tuple[str, ...]]]:
     """``(row id, its writes_under prefixes)`` for every row in ``wave``
     declaring any, in row order.

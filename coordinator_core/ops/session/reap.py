@@ -541,7 +541,7 @@ def _reap_stale_sessions(
         if inactive_for <= _SESSION_STALE_SECONDS:
             continue  # active within threshold — keep
 
-        # Review: code-reviewer F1 — removed dead re-check. live_sids is a frozenset
+        # Removed dead re-check. live_sids is a frozenset
         # captured once via resolve_live_session_ids; it cannot be updated by a
         # concurrent session-init. The 24h _SESSION_STALE_SECONDS threshold is the
         # actual freshness guard: a brand-new session has a recent last_activity and
@@ -1054,7 +1054,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # Substrate lives inside .git/coordinator-sessions/ (inside the git dir), not the
     # worktree.  main_worktree_root() is NOT called here: it is a pure path calculation
     # (returns common_dir.parent) that does not validate or raise on any input.
-    # Review: code-reviewer F2 — removed discarded main_worktree_root() call whose
+    # Removed discarded main_worktree_root() call whose
     # "validates" comment was incorrect; sessions_dir derives from common_dir directly.
     sessions_dir = _sessions_dir(common_dir)
 
@@ -1194,7 +1194,7 @@ async def _handler_reap_claims_for_repos(
                               any target_root that was empty/non-string/blank
                               or failed to resolve to an existing path.
 
-    Review: code-reviewer F1 (2026-07-14 slice2) — this previously called
+    This previously called
     cartography._guard.path_guard(raw_target, ".") as a documented "security
     guard", but joining "." onto target_root always collapses back to
     target_root itself, so the containment check could never actually fail

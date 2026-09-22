@@ -441,6 +441,63 @@ def test_max_agent_calls_is_the_deterministic_secondary_bound():
     assert "budget-exhausted" in handback_types
 
 
+def test_budget_tokens_ceiling_halts_admission_independent_of_budget_total():
+    # Parity for the
+    # rendered `.mjs`'s BUDGET_TOKENS ceiling: exercised here with
+    # budget.total left None, so only the new `budget_tokens` param can be
+    # responsible for the halt.
+    batches = [(f"b{i}", [f"r{i}"]) for i in range(5)]
+    verdicts = _all_fix_batches([f"r{i}" for i in range(5)])
+    script_by_kind = {
+        "triage": lambda bid: _triage_script(verdicts)(bid, [bid.replace("b", "r")]),
+        "fix": lambda rid: {"outcome": "done"},
+        "verify": lambda rid: {"outcome": "pass"},
+        "commit": lambda rid: {"outcome": "committed", "sha": "x"},
+    }
+    routing, triage_node = _fixture_routing()
+    budget = _StubBudgetSpender(total=None)
+    agent_fn = _agent_stub(script_by_kind, budget)
+    result = gc.run_admission(
+        batches, routing, triage_node,
+        reserve=gc.batch_reserve(1),
+        budget_tokens=1,
+        budget=budget,
+        agent=agent_fn,
+    )
+    handback_types = {h["type"] for h in result["handed_back"]}
+    assert "budget-exhausted" in handback_types
+
+
+def test_close_confirmed_routed_straight_to_handback_commits_inline_and_settles():
+    # Parity for the
+    # rendered `.mjs`'s inline archive-move-commit branch: a profile graph
+    # where refute-close's `confirmed` edge has no explicit `commit` node
+    # between it and its terminal type still commits, and the successful
+    # commit is recorded in `settled` (never silently dropped).
+    routing = {
+        "triage": {"kind": "triage", "edges": {"confirmed-bug": "fix", "not-reproduced": "close"}, "on_fail": None},
+        "close": {"kind": "refute-close", "edges": {"confirmed": "settled-direct", "refuted": "settled-direct"}, "on_fail": None},
+    }
+    script_by_kind = {
+        "triage": lambda bid: [{"row": "r0", "verdict": "not-reproduced", "tshirt_size": "S", "tradeoff": ""}],
+        "refute-close": lambda bid: {"confirmed": [{"row": "r0", "new_path": "archive/r0.yaml"}], "refuted": []},
+        "commit": lambda rid: {"outcome": "committed", "sha": "deadbeef"},
+    }
+    budget = _StubBudgetSpender()
+    agent_fn = _agent_stub(script_by_kind, budget)
+    result = gc.run_admission(
+        [("b0", ["r0"])], routing, "triage",
+        reserve=gc.batch_reserve(1),
+        budget=budget,
+        agent=agent_fn,
+    )
+    assert {"row": "r0", "outcome": "committed", "sha": "deadbeef"} in result["settled"]
+    assert ("commit", "r0") in result["call_log"]
+    # applyRoute's own handback (the routed-to terminal type) still fires --
+    # the inline commit is additional, never a substitute for it.
+    assert any(h["row"] == "r0" and h["type"] == "settled-direct" for h in result["handed_back"])
+
+
 def test_widen_release_reacquire_exactly_once_then_widen_exhausted():
     calls = {"fix": 0}
     verdicts = _all_fix_batches(["r0"])
@@ -669,7 +726,7 @@ def test_drain_commit_is_handed_the_run_cost_record_body():
     (profile, appetite, resolved_knobs, manifest_digest, counts, spend), not
     just the file name."""
     script = _compose()
-    assert "Its content is exactly this JSON, byte for byte: ' + (JSON.stringify(_runCostRecord()))" in script
+    assert "Pass this JSON on stdin, byte for byte: ' + (JSON.stringify(_runCostRecord()))" in script
     record_fn = script[script.index("function _runCostRecord()"):]
     record_fn = record_fn[: record_fn.index("\n}") ]
     for key in ("profile:", "appetite:", "resolved_knobs: RESOLVED_KNOBS", "manifest_digest: MANIFEST_DIGEST",

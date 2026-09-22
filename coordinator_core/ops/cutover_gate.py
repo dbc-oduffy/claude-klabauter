@@ -763,7 +763,7 @@ def _iter_candidate_files(root: Path, rel_path: str) -> Iterable[Path]:
             yield resolved
         return
     if resolved.is_dir():
-        # Review: code-reviewer — rglob follows symlinked subdirectories, so a
+        # Rglob follows symlinked subdirectories, so a
         # symlink anywhere under this directory that resolves outside `root`
         # would otherwise be walked and read with no second containment
         # check. Re-gate every child through contained_path, mirroring the
@@ -1816,7 +1816,7 @@ async def _cutover_gate(params: dict, repo_root: Optional[Path] = None) -> dict:
     # set and the foreign-repo/signal-2 fail-closed clauses.
     if unknown_count > 0:
         notes.append(
-            # Review: code-reviewer — F3: unknown_ids is already sorted by
+            # unknown_ids is already sorted by
             # `_derive_value_vocabulary` before it reaches `derivation`; re-sorting
             # here was a harmless but pointless no-op.
             f"cutover.gate: derivation could NOT classify {unknown_ids} as writer "

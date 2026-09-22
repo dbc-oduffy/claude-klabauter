@@ -126,6 +126,32 @@ def test_fallback_case_insensitive_trailer(git_repo, monkeypatch):
     assert rc == 0
 
 
+def test_fallback_tool_failure_diagnosed_not_silently_zero(git_repo, monkeypatch, capsys):
+    """A failed `git interpret-trailers --parse` must not read as an
+    indistinguishable zero-trailers commit: `run()` keeps its vacuous-pass
+    contract (empty list, rc 0) but now names the tool failure on stderr
+    instead of collapsing it into silence."""
+    monkeypatch.chdir(git_repo)
+    sha = _commit(git_repo, "no resolves trailer here at all")
+    real_run = subprocess.run
+
+    def fake_run(cmd, *args, **kwargs):
+        if cmd[:2] == ["git", "interpret-trailers"]:
+            return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="fatal: boom\n")
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.parse_resolves_trailer.subprocess.run", fake_run
+    )
+    lines, rc = run(sha)
+    captured = capsys.readouterr()
+
+    assert lines == []
+    assert rc == 0
+    assert "git interpret-trailers --parse failed" in captured.err
+    assert "fatal: boom" in captured.err
+
+
 def test_cli_no_args_usage_exit_1(capsys):
     rc = main([])
     captured = capsys.readouterr()

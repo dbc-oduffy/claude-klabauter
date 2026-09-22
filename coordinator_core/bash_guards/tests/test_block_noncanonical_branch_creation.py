@@ -121,7 +121,7 @@ class TestGitBranchRenameVsCreate:
         ],
     )
     def test_long_form_non_create_flags_allow(self, command):
-        # Review: coordinator:code-reviewer P1, Finding 2 -- pre-fix, the
+        # pre-fix, the
         # short-flags-only `_BRANCH_NON_CREATE_FLAGS` set missed every
         # long-form spelling, so e.g. `git branch --delete
         # stray-fix-branch` was misclassified as a CREATION of
@@ -153,7 +153,7 @@ class TestSwitchAndUppercaseFlags:
         _reason(guard.check(_payload("git checkout -B bad")))
 
     def test_switch_long_form_create_denies(self):
-        # Review: coordinator:code-reviewer P1, Finding 3 -- pre-fix,
+        # pre-fix,
         # `_SWITCH_CREATE_FLAGS` was `{-c, -C}` only, so `git switch
         # --create bad-name` bypassed the guard entirely.
         _reason(guard.check(_payload("git switch --create bad-name")))
@@ -178,7 +178,7 @@ class TestSanctionedLonglivedPrefixes:
 
 class TestDenyMessageRemediation:
     def test_remediation_offers_checkout_dash_b(self):
-        # Review: coordinator:code-reviewer P1, Finding 4 -- pre-fix, the
+        # pre-fix, the
         # message offered bare `git checkout <name>`, which errors with
         # "did not match any file(s) known to git" in the common case:
         # this deny fires while the user is CREATING a branch, so today's
@@ -253,7 +253,7 @@ class TestFailOpenOnUnreadableName:
         assert guard.check(_payload('git checkout -b "unterminated')) is None
 
     def test_partial_substitution_quoted_form_passes(self):
-        # Review: coordinator:code-reviewer P1, Finding 1 -- would DENY
+        # Would DENY
         # pre-fix: `_extract_command_substitutions` neutralizes the
         # `$(...)` span to a space before `_looks_unsafe` runs, leaving
         # `"work/machine-b/ "`, which then fails `is_canonical_branch`

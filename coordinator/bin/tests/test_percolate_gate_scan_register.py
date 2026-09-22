@@ -18,7 +18,7 @@ from pathlib import Path
 
 import yaml
 
-# Review: code-reviewer — no `cadence` marker: `_cmd_scan_secrets` (the only
+# No `cadence` marker: `_cmd_scan_secrets` (the only
 # command this file drives) never calls `subprocess.run` — that lives only
 # in `_git_log_batched`/`_cmd_inverse_drift`, untouched here — so this suite
 # belongs in the per-commit tier, not deferred to cadence gates.
@@ -142,7 +142,7 @@ def test_registry_codename_guard_informational_panel_excluded_from_gate_count(tm
     split) renders that hit under the always-present gating panel, so the
     gate count is 1.
 
-    Review: code-reviewer — the expected per-run count is derived
+    The expected per-run count is derived
     independently of ``_count_medium_hits`` (by counting the peer-repo-name
     occurrence directly in the source fixture), not by parsing both CLI
     outputs with the same function under test elsewhere — a systematic bug

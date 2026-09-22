@@ -130,7 +130,7 @@ def test_repo_flag_passed_through_for_worktree_scoped_op(mock_run):
 
 @mock.patch("coordinator_core.benchmarks.timer.subprocess.run")
 def test_exit_0_with_non_dict_json_body_is_rejected(mock_run):
-    """Review: code-reviewer (Slice C F2, nit) -- a parsable-but-non-dict JSON
+    """A parsable-but-non-dict JSON
     body (a bare list or scalar) on exit 0 is not a valid JSON-RPC envelope
     either; only a dict without an 'error' key is accepted. Covers both the
     list and scalar shapes."""
@@ -150,7 +150,7 @@ def test_exit_0_with_scalar_json_body_is_rejected(mock_run):
 
 @mock.patch("coordinator_core.benchmarks.timer.subprocess.run")
 def test_subprocess_timeout_is_rejected_as_invalid_sample(mock_run):
-    """Review: code-reviewer (Slice B F3, P2) -- a hung child process must
+    """A hung child process must
     fail loud like any other invalid sample, not wedge the run forever."""
     mock_run.side_effect = subprocess.TimeoutExpired(cmd=["invoke"], timeout=SUBPROCESS_TIMEOUT_S)
 

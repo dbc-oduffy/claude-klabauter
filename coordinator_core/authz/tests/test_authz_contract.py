@@ -50,7 +50,7 @@ from coordinator_core.authz.classification import (
 # ---------------------------------------------------------------------------
 
 class TestClassify:
-    # Review: code-reviewer — parametrize so each op gets its own pass/fail signal; a broken
+    # Parametrize so each op gets its own pass/fail signal; a broken
     # "ping" classification no longer masks a simultaneously broken "cutover.gate".
     # handoff.has_live_children was the third pcore-03 beachhead op until it was
     # DELETED 2026-08-27 (kill ledger K-113, 200ms sweep). Its compute survives
@@ -146,7 +146,7 @@ class TestDriftGuard:
     def test_no_stale_classification_entries(self) -> None:
         """Every name in OP_CLASSIFICATION has a corresponding op in the live _REGISTRY.
 
-        Review: code-reviewer — converse of test_all_registered_ops_are_classified. Guards
+        Converse of test_all_registered_ops_are_classified. Guards
         the other direction: an op removed from coordinator_core.ops without removing its
         OP_CLASSIFICATION entry would leave dead config that classify() still serves, creating
         an authz surface for an op that cannot actually be dispatched. Both directions must pass.
@@ -252,7 +252,7 @@ class TestOpModuleMapRegistrationCoverage:
         of silent drift C3 was asked to reconcile, so this pins the map complete
         against whatever is live in _REGISTRY at test time.
 
-        Review: code-reviewer (P3) -- largely redundant with
+        Largely redundant with
         coordinator_core.authz.registration_quad.check_registration_quad(), which is
         itself run live and asserted green (against the frozen known-debt allowlists)
         by test_registration_quad.py::TestKnownIncompleteRegistrationsLedger::

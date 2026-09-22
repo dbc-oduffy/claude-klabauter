@@ -391,7 +391,7 @@ def test_marketplace_install_with_missing_install_path_still_arms(tmp_path: Path
 def test_marketplace_install_stale_first_record_live_second_record_stays_silent(
     tmp_path: Path, monkeypatch
 ):
-    """Review: code-reviewer (Finding 1) regression. `installed_plugins.json`
+    """
     stores a LIST of records per key (e.g. user-scope + project-scope
     installs under the same key) -- a stale/destroyed FIRST record must not
     shadow a live, healthy SECOND record. Iterating only `plugins[key][0]`

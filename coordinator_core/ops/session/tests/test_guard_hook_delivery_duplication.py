@@ -461,7 +461,7 @@ def test_double_fire_unchanged_by_settings_only_presence(tmp_path, monkeypatch):
 
 
 def test_banner_renders_settings_only_danger_when_disjoint(tmp_path, monkeypatch):
-    """Review: code-reviewer (Finding 1) -- the settings-only danger section
+    """The settings-only danger section
     must render even when `double_fire` is False (disjoint surfaces, zero
     script overlap), not only when both conditions hold together."""
     content_root = tmp_path / "plugin-root"
@@ -774,7 +774,7 @@ def test_degraded_banner_renders_when_no_manifest_and_no_other_finding(
 
 
 def test_standalone_degraded_banner_when_nothing_else_to_report(tmp_path, monkeypatch):
-    # Review: coordinator:code-reviewer (P2) -- this test previously
+    # This test previously
     # asserted the standalone-degraded state was "not achievable without
     # settings entries" and unit-tested `format_hook_delivery_banner`
     # against a hand-built `HookDeliveryReport` on that premise. That claim
@@ -909,7 +909,7 @@ def test_standalone_stale_banner_names_unaccounted_command():
     `format_hook_delivery_banner` (same convention as the standalone
     degraded test above) as a fast, isolated check of the renderer alone.
 
-    Review: coordinator:code-reviewer (P2) -- this test previously claimed
+    This test previously claimed
     `stale`-with-zero-findings was "not reachable through
     `detect_hook_delivery_duplication`" because "any settings entry that
     does not overlap always becomes a settings-only finding". That claim

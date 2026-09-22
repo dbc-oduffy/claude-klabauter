@@ -3,7 +3,7 @@ Tests for coordinator_core.ops.normalize_claimed_frontmatter.
 
 Port source: coordinator/bin/normalize-consumed-frontmatter.js (DoE-claude)
 
-Review: code-reviewer -- A6 finding: this file-mutating op shipped with zero
+A6 finding: this file-mutating op shipped with zero
 test coverage. Covers the 8 cases the reviewer enumerated: status/deployment
 flip, terminal-state preservation, shipped_in insert, shipped_in refusal,
 gate_dependency strip, untracked-file skip, block-scalar per-file fail-loud

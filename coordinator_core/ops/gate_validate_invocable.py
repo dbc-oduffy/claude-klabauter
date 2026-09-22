@@ -311,7 +311,7 @@ def _overall_verdict(results: list[DimensionResult]) -> Verdict:
     state/lessons/2026-08-07-a-gate-that-measures-a-corpus-must-not-l-*.yaml
     on gates that measure nothing and still say pass).
     """
-    # Review: coordinatorcode-reviewer-4e66fb35 P2 — an empty `results` list
+    # An empty `results` list
     # falls through every any() check to a vacuous PASS on zero measurements,
     # the same bug class be57f525e fixed for all-UNAVAILABLE/SKIPPED. Not
     # reachable from the shipped handler (DIMENSION_NAMES is fixed at 5), but
@@ -374,7 +374,7 @@ def _gate_validate_invocable(params: dict, repo_root: Optional[Path] = None) -> 
     """
     if "changed_files" not in params:
         raise ValueError("gate.validate_invocable requires param: changed_files")
-    # Review: coordinatorcode-reviewer-4e66fb35 P2 — a bare string param would
+    # A bare string param would
     # silently pass isinstance-free `list(str)` and split into one
     # single-character "file" per character; police shape at the same
     # boundary that already polices presence.

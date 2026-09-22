@@ -188,7 +188,7 @@ class TestSelfClaim:
             repo / ".git" / "coordinator-sessions" / "sidA" / scope._TOUCH_RECORD_FILENAME
         )
         assert sink.is_file()
-        # Review: coordinatorcode-reviewer-7ca5d82a Finding 1 — event-line format,
+        # event-line format,
         # parse rather than assert exact-membership of the bare path.
         # Read through the C0 union seam rather than the raw sink: `self_claim`
         # emits the jsonl dialect since C6, and the seam re-renders both

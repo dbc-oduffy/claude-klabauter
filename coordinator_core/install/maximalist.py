@@ -517,7 +517,7 @@ def _collect_writer_declarations(
     the module and exception) and returned as a synthetic id in the second
     tuple element, for the caller to fold into `unreported_writer_ids`.
 
-    Review: code-reviewer (P2) -- this previously silently `continue`d on
+    This previously silently `continue`d on
     such a failure with zero logging, and the failed module landed in
     neither `derivations` nor `unreported` -- indistinguishable from a
     writer that was never part of the install target set at all. That is
@@ -897,7 +897,7 @@ class _Orchestrator:
         plain Python function instead of a ``["bash", ...]`` subprocess --
         fail-loud on non-zero, identical FATAL messaging and exit behavior.
 
-        Review: code-reviewer (Lane B install F1) -- the subprocess model this
+        The subprocess model this
         replaces gave the orchestrator an implicit guarantee for free: a
         spawned script's own crash only ever surfaced as a returncode, never
         a raised exception. Wrap the in-process call so an unexpected
@@ -933,7 +933,7 @@ class _Orchestrator:
     ) -> None:
         """In-process analogue of ``run_advisory``: log failure but continue.
 
-        Review: code-reviewer (Lane B install F1) -- see `run_required_py`'s
+        See `run_required_py`'s
         docstring; the same unguarded-exception exposure applies here, except
         advisory phases must never abort the chain, so an unexpected
         exception is logged and treated as an advisory failure, not a
@@ -1252,7 +1252,7 @@ def _install_claude_doe_wrapper(
     os.makedirs(local_bin, exist_ok=True)
     already_correct = os.path.islink(wrapper_dst) and os.readlink(wrapper_dst) == link_target
     if not already_correct:
-        # Review: code-reviewer (Finding 1) -- build the new link at a temp
+        # Build the new link at a temp
         # sibling path and `os.replace()` it onto wrapper_dst, rather than
         # `unlink` then `symlink` in two separate syscalls. The unlink-then-
         # symlink shape has a window where, if the symlink call itself raises
@@ -1973,12 +1973,12 @@ def _run_body(
                 f"{len(_scaffold_result.satisfied_elsewhere)} declared-eager entries satisfied "
                 "elsewhere (produced_by)"
             )
-            # Review: code-reviewer -- Step 7 previously hand-rolled a summary
+            # Step 7 previously hand-rolled a summary
             # that never read dropped_entries/satisfied_elsewhere, defeating the
             # docstring's claim that this live path surfaces a genuine orphan
             # (manifest/parser disagreement); now folded into the summary line.
     except Exception as exc:
-        # Review: code-reviewer -- widened from `except ScaffoldError` to catch
+        # Widened from `except ScaffoldError` to catch
         # unwrapped OSError/PermissionError from scaffold_structure's raw fs
         # writes (mkdir/touch/write_text/copyfile), matching probe_p12's
         # `except Exception` for the identical call so this advisory phase

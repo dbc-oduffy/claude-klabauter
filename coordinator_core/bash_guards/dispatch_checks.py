@@ -189,7 +189,7 @@ from coordinator_core.bash_guards._shape_classifier import (
 
 _CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-# Review: code-reviewer (Finding 3) -- `coordinator_core.session.{liveness,
+# `coordinator_core.session.{liveness,
 # core,scope}` are deliberately NOT imported at module scope. A module-level
 # ImportError in any of those (unrelated future edits) would break THIS
 # module's own import, taking down `dispatch.py`'s whole dispatcher process --
@@ -2710,7 +2710,18 @@ def check_destructive_git_orphan(
         cmd, "destructive-git-orphan", payload
     ) or []
 
-    for seg in list(_split_segments(cmd)) + _orphan_ps_segments:
+    _orphan_bash_segments = list(_split_segments(cmd))
+    _orphan_payload_cwd = (payload or {}).get("cwd") or None
+    # Precomputed ONCE, not re-walked per git segment: `_bt_cd_chain_cwds_
+    # by_segment` is a single forward pass, so a many-segment command stays
+    # linear here. Calling `_bt_cd_chain_cwd_before` fresh per segment would
+    # turn this into an O(n^2) rescan -- measured blowing the dispatch
+    # latency budget on the `many_segments_git` corpus shape at the
+    # tokenizer ceiling.
+    _orphan_cd_chain_cwds = _bt_cd_chain_cwds_by_segment(
+        _orphan_bash_segments, _orphan_payload_cwd
+    )
+    for _seg_idx, seg in enumerate(_orphan_bash_segments + _orphan_ps_segments):
         if not seg.strip():
             continue
         # `_word_present`, not a raw scan: the quote-split verb class reaches
@@ -2719,7 +2730,22 @@ def check_destructive_git_orphan(
             continue
 
         c_dir = _extract_git_c_dir(seg)
-        git_cwd = _orphan_c_cwd(c_dir)
+        # `-C` on THIS segment still wins where present. Failing that, a
+        # synthetic PowerShell-bypass segment (appended past
+        # `_orphan_bash_segments`, so it has no position in that list) falls
+        # back to the single-leading-`cd` resolution the sibling guard
+        # already uses; a real bash segment gets the full `cd`-chain walk --
+        # see `_bt_cd_chain_cwds_by_segment`'s docstring for why this guard
+        # needs more than a leading `cd`.
+        if _seg_idx < len(_orphan_bash_segments):
+            git_cwd = (
+                _orphan_c_cwd(c_dir, _orphan_payload_cwd or git_root)
+                or _orphan_cd_chain_cwds[_seg_idx]
+            )
+        else:
+            git_cwd = _orphan_c_cwd(
+                c_dir, _orphan_payload_cwd or git_root
+            ) or _bt_leading_cd_prefix_cwd(cmd, _orphan_payload_cwd)
 
         # CHECK 1 -- git reset <target>, any ref-moving mode
         #
@@ -3012,12 +3038,39 @@ def _local_branch_names(
     return set(out.splitlines())
 
 
-def _orphan_c_cwd(c_dir: str) -> Optional[str]:
+def _orphan_c_cwd(c_dir: str, base_cwd: Optional[str] = None) -> Optional[str]:
     """F0: per-segment `git -C <dir>` becomes subprocess `cwd=<dir>` (git -C
     is directory-scoped identically to running the git binary FROM that
     directory for the purposes of this dispatcher's checks). Empty c_dir ->
-    None (bare cwd-relative `git rev-parse`, mirrors the bash `GOPT=()` case)."""
-    return c_dir or None
+    None (bare cwd-relative `git rev-parse`, mirrors the bash `GOPT=()` case).
+
+    Bug row: state/bug-backlog/2026-09-12-check-1-skips-verification-on-a-
+    relative-c-dir-91b4c7de20a3.yaml. A RELATIVE `c_dir` (`git -C reset` or
+    `git -C ./reset`) used to be returned unchanged and handed to the probe
+    subprocess as `cwd=`. That resolves against the GUARD PROCESS's own
+    directory, not the invoking session's, so it names the wrong repository
+    (or nothing at all) and the `rev-parse --verify`/`rev-list --count`
+    probes fail unverifiable -- which this guard's callers then treat as
+    "nothing to deny" instead of "could not check". An absolute `-C <dir>`
+    naming the identical target was verified correctly the whole time, so
+    the bypass was reachable only via the ordinary, non-adversarial spelling
+    of a sibling checkout.
+
+    `base_cwd` -- the invoking session's own cwd (payload `cwd`, falling
+    back to `git_root`) -- resolves a relative `c_dir` against the directory
+    the command actually ran from, matching `-C`'s own resolution rule.
+    `base_cwd` unavailable -> the bare pre-fix return, deliberately: probing
+    against the WRONG base would answer confidently about a different
+    repository's history, which is worse than the unverifiable case this
+    guard already fails safely on."""
+    if not c_dir:
+        return None
+    if os.path.isabs(c_dir) or not base_cwd:
+        return c_dir
+    try:
+        return os.path.normpath(os.path.join(base_cwd, c_dir))
+    except (OSError, ValueError):
+        return c_dir
 
 
 _BT_LEADING_CD_RE = re.compile(r"^\s*cd\s+(\S+)\s*(?:&&|;)")
@@ -3062,6 +3115,74 @@ def _bt_leading_cd_prefix_cwd(cmd: str, base_cwd: Optional[str]) -> Optional[str
         return os.path.normpath(os.path.join(base_cwd or os.getcwd(), raw))
     except (OSError, ValueError):
         return None
+
+
+_BT_PURE_CD_SEGMENT_RE = re.compile(r"^\s*cd\s+(\S+)\s*$")
+
+
+def _bt_cd_chain_cwds_by_segment(
+    segments: List[str], base_cwd: Optional[str]
+) -> List[Optional[str]]:
+    """For EVERY index in ``segments``, the effective cwd once every prior
+    segment that is PURELY ``cd <dir>`` (nothing else on that segment) has
+    been applied in order -- leaving cwd unchanged across an intervening
+    non-``cd`` command (``rm``, ``mkdir``, an earlier ``git`` call, ...).
+    One forward pass, so a caller needing this for every segment of a
+    command (the `check_destructive_git_orphan` loop) stays linear in
+    segment count -- calling a single-index version of this per segment
+    would turn one segment walk into an O(n^2) rescan on a many-segment
+    command.
+
+    Bug row: state/bug-backlog/2026-09-11-destructive-git-orphan-judges-a-
+    reset-ha-096ab8220a8a.yaml. `_bt_leading_cd_prefix_cwd` only follows a
+    `cd` at the very START of the command, so a repro of the shape `cd
+    <scratch> && rm -rf x && mkdir x && cd x && git reset --hard <ref>`
+    resolves only the OUTER `cd <scratch>` -- never the inner `cd x` where
+    the target repo actually lives -- and this guard's per-segment probe
+    falls through to the guard process's own cwd, judging a reset against
+    the wrong repository.
+
+    Widens `_bt_leading_cd_prefix_cwd`'s SAME shape (narrow on a miss, never
+    guess) across the whole chain instead of one leading segment: an
+    unresolvable `cd` target (a glob, an unexpanded `$VAR`) POISONS every
+    later index for the rest of the command and each becomes `None` rather
+    than guessing past it -- a later literal `cd` cannot be trusted once an
+    earlier hop in the same chain is unknown, since it resolves relative to
+    that unknown directory. An index with no prior pure `cd` segment at all
+    is also `None`, matching `_bt_leading_cd_prefix_cwd`'s no-match return
+    so callers can OR the two fallbacks together uniformly."""
+    out: List[Optional[str]] = []
+    cur: Optional[str] = None
+    poisoned = False
+    for seg in segments:
+        out.append(None if poisoned else cur)
+        if poisoned:
+            continue
+        m = _BT_PURE_CD_SEGMENT_RE.match(seg)
+        if not m:
+            continue
+        raw = m.group(1).strip("'\"")
+        if not raw or "*" in raw or "?" in raw or raw.startswith("$"):
+            poisoned = True
+            continue
+        if os.path.isabs(raw):
+            cur = os.path.normpath(raw)
+            continue
+        try:
+            cur = os.path.normpath(os.path.join(cur or base_cwd or os.getcwd(), raw))
+        except (OSError, ValueError):
+            poisoned = True
+    return out
+
+
+def _bt_cd_chain_cwd_before(
+    segments: List[str], idx: int, base_cwd: Optional[str]
+) -> Optional[str]:
+    """Single-index convenience wrapper over
+    `_bt_cd_chain_cwds_by_segment` -- see that function's docstring for the
+    batch shape a many-segment caller needs instead of this one, called
+    once per segment."""
+    return _bt_cd_chain_cwds_by_segment(segments[: idx + 1], base_cwd)[idx]
 
 
 # ---------------------------------------------------------------------------
@@ -3640,7 +3761,7 @@ def _rm_flush_touch(paths: List[str], session_id: str, root: Optional[str]) -> N
         rels = []
         for tgt_abs in paths:
             if not _is_within(tgt_abs, root):
-                # Review: C2 code-reviewer — the `_is_within` gate above already
+                # The `_is_within` gate above already
                 # rejects any target `os.path.relpath` would raise `ValueError`
                 # on (cross-drive on Windows; POSIX has no drive concept for
                 # relpath to raise over), so a bare `except ValueError: continue`
@@ -3977,7 +4098,7 @@ def check_destructive_rm(
                 t = t[:-1]
             if t.endswith("}"):
                 t = t[:-1]
-            # Review: code-reviewer (Finding 1) -- `t_raw` is the AS-TYPED
+            # `t_raw` is the AS-TYPED
             # token (captured BEFORE any `$HOME`/`${HOME}` expansion above),
             # kept separate from `t` (which is already expanded for the
             # $HOME leg). For a plain or `~`-spelled token the two are
@@ -4062,7 +4183,7 @@ def check_destructive_rm(
             # one for the same command. A silent `continue` is the required
             # shape; the allow IS the message.
             is_git_store_target = norm.endswith("/.git") or "/.git/" in norm or os.path.basename(tgt_abs) == ".git"
-            # Review: code-reviewer (dispatch d6708a9c, findings 1-2) -- the
+            # The
             # allow is scoped to a lock FILE only; a `.lock`-suffixed
             # directory has no place in the rename-onto-index safety
             # argument above and must fall through to the general git-store
@@ -4089,7 +4210,7 @@ def check_destructive_rm(
             ):
                 continue
 
-            # Review: code-reviewer (Finding 4) -- a target whose basename is
+            # A target whose basename is
             # literally `.git` is caught HERE and denied with the generic
             # git-store message below, before it ever reaches the bare-repo
             # probe further down (`tgt_is_bare` / `--is-bare-repository`).
@@ -4145,7 +4266,7 @@ def check_destructive_rm(
                     # branch and the dirty-work branch below (which also has
                     # no dirty-state fallback for a bare repo) undenied.
                     #
-                    # Review: code-reviewer (Finding 3) -- `--show-toplevel`
+                    # `--show-toplevel`
                     # also fails for the OVERWHELMINGLY common case of "a
                     # plain, non-repo scratch directory" -- not just for a
                     # bare repo. Spawning a second git process to rule out
@@ -4526,7 +4647,7 @@ def _rm_peer_claim_of(
     if not tgt_rel:
         return ""
 
-    # Review: code-reviewer (Finding 3) -- lazy, per-call import. An
+    # lazy, per-call import. An
     # ImportError here (or any other exception) degrades identically to the
     # pre-existing "unresolvable identity" path: cur_sid = "" -> the
     # self-exclusion guard below simply does not fire (never widens to
@@ -4537,7 +4658,7 @@ def _rm_peer_claim_of(
     except Exception:
         cur_sid = ""
 
-    # Review: code-reviewer (Finding 3) -- lazy, per-call import. An
+    # lazy, per-call import. An
     # ImportError here degrades identically to a raising `live_session_ids`
     # call: live_ok=False forces every sid through the mtime backstop below
     # (fail-CLOSED for the destructive guard -- never "canonical says dead,
@@ -4550,7 +4671,7 @@ def _rm_peer_claim_of(
         live_sids = frozenset()
         live_ok = False
 
-    # Review: code-reviewer (Finding 4) -- hoisted once per call rather than
+    # Hoisted once per call rather than
     # per-sid (bash re-reads epoch per sid); skew is sub-millisecond across
     # the loop, far below the 30-minute backstop window -- intentional.
     now = time.time()
@@ -4578,7 +4699,7 @@ def _rm_peer_claim_of(
             continue
 
         meta_path = os.path.join(sid_dir, "meta.json")
-        # Review: code-reviewer (Finding 1) -- a raising live_session_ids call
+        # A raising live_session_ids call
         # must degrade EVERY sid (covered or not) to the mtime backstop, per
         # this function's own docstring; gating solely on meta.json presence
         # silently reopened a false-allow for covered sids when the try/except
@@ -5208,7 +5329,7 @@ def _check_destructive_git_revert_full(
         _gr_ps_tokens = tokenize_command(cmd, _gr_dialect, guard_name="destructive-git-revert")
         if _gr_ps_tokens is not None:
             cmd = " ".join(expand_start_process_invocations(_gr_ps_tokens))
-    # Review: code-reviewer -- Finding 3 (P2, 2026-07-28): normalize a
+    # 2026-07-28): normalize a
     # head-position Windows-exe/case-varied git spelling to the bare `git`
     # token BEFORE verb resolution -- see `_normalize_git_exe_head_to_bare`
     # docstring for why this was a live entrypoint-level gap distinct from
@@ -5360,9 +5481,9 @@ def _check_destructive_git_revert_full(
         # 295928a71726.yaml (the `cd <fixture> && git checkout -q .` shape
         # that blocked a harmless command on a foreign repo's uncommitted
         # files). `-C <dir>` on THIS segment still wins where present.
-        git_cwd = _orphan_c_cwd(c_dir) or _bt_leading_cd_prefix_cwd(
-            cmd, (hook_payload or {}).get("cwd") or None
-        )
+        git_cwd = _orphan_c_cwd(
+            c_dir, (hook_payload or {}).get("cwd") or git_root
+        ) or _bt_leading_cd_prefix_cwd(cmd, (hook_payload or {}).get("cwd") or None)
         after = re.sub(r".*(^|\s)" + verb + r"(\s|$)", " ", seg, count=1)
 
         affected: List[str] = []
@@ -5749,7 +5870,7 @@ def _check_destructive_git_revert_full(
     # fills `pending_advisory` if a segment above did not already produce
     # one, preserving deny-over-advisory precedence across both loops.
     #
-    # Review: code-reviewer, Finding 2 -- this is first-found-wins, NOT the
+    # This is first-found-wins, NOT the
     # size-ranked "most destructive advisory wins" rule the segment loop
     # above applies within a single scan pass (`len(affected)` compared
     # across segments). That ranking is deliberately scoped to one scan
@@ -6628,7 +6749,7 @@ def _extract_commit_subject(command: str) -> str:
     on its own line, body ``-m`` on a later line), bash picks the subject's
     OWN line, not the last ``-m`` anywhere in the command. Within a single
     line, bash's greedy ``.*`` still means the LAST ``-m`` on that line wins.
-    Review: code-reviewer (Finding 1) -- a bare `re.findall(...)[-1]` over
+    A bare `re.findall(...)[-1]` over
     the whole (possibly multi-line) string does not reproduce this: `\\s`
     matches newlines and `[^"']*` spans across them too, so it picks the
     last match in the ENTIRE command (the body), not the first LINE's match
@@ -7371,7 +7492,7 @@ def check_validate_commit(
             sessions_root = os.path.join(git_root, ".git", "coordinator-sessions")
             session_dir = os.path.join(sessions_root, session_id)
             if os.path.isdir(session_dir):
-                # Review: code-reviewer (Finding 3) -- lazy, per-call import.
+                # lazy, per-call import.
                 # AC7 (docs/plans/2026-08-03-check5-owner-attribution-
                 # liveness.md): a raising compute_scope() must degrade
                 # toward CONTESTED, never toward silence -- silence is
@@ -8403,6 +8524,20 @@ def check_validate_commit(
             "COORDINATOR_OVERRIDE_UNDECLARED_DELETION", payload=payload
         ):
             warnings.append(undeclared_deletion_violation)
+
+    # Check 15 -- trailer-demoted-to-body -- TRAILER-DEMOTED-TO-BODY.
+    # Advisory only -- see commit_tripwires.check_trailer_demoted_to_body's
+    # own module comment block for the recorded incident (state/bug-backlog/
+    # 2026-09-19-a-blank-line-turns-a-git-trailer-into-bo-964db9e54ea6.yaml).
+    # Reuses `_commit_seg_tokens` already resolved above: this check adds
+    # ZERO processes to the commit hot path.
+    trailer_demoted_violation = commit_tripwires.check_trailer_demoted_to_body(
+        _commit_seg_tokens, payload=payload
+    )
+    if trailer_demoted_violation and not _override(
+        "COORDINATOR_OVERRIDE_TRAILER_DEMOTED_TO_BODY", payload=payload
+    ):
+        warnings.append(trailer_demoted_violation)
 
     # PIPED-EXIT-CODE-IS-THE-PIPES, chained form. Static, no spawn, and placed
     # here rather than in its own guard because the shape that matters is a git
@@ -11123,7 +11258,7 @@ def check_git_commit_safe_commit_advise(
     """
     if not cmd:
         return None
-    # Review: overengineering-reviewer (nitpick) -- the fail-open reasons
+    # The fail-open reasons
     # buffer used to be cleared a second time mid-cascade (just before the
     # index-probe predicates), which meant a reader had to reconstruct
     # which of two clearing sites ran, and in what order relative to the
@@ -11711,7 +11846,7 @@ def check_multiprobe_banner_rewrite(
         lines.append('    elif _l.startswith("#"):')
         lines.append("        continue")
         lines.append("    else:")
-        # Review: code-reviewer (Finding 7) -- porcelain=v2's kind-"2"
+        # porcelain=v2's kind-"2"
         # (renamed/copied) record appends a rename-score field the kind-"1"
         # record doesn't have, THEN the two paths joined by a literal TAB
         # (`new\told`), not another space -- a blind `_l.split(" ")` doesn't
@@ -11755,7 +11890,7 @@ def check_multiprobe_banner_rewrite(
         elif kind == "whoami":
             lines.append("print(getpass.getuser())")
         elif kind == "date":
-            # Review: code-reviewer (Finding 3) -- `%e` (space-padded
+            # `%e` (space-padded
             # day-of-month) is a glibc/BSD `strftime` EXTENSION, not part of
             # the C89 set Python's own docs guarantee portable; the Windows
             # CRT does not implement it and `time.strftime` raises
@@ -11790,7 +11925,7 @@ def check_multiprobe_banner_rewrite(
         elif kind == "uname":
             lines.append("print(platform.uname().system)")
         elif kind == "uname_a":
-            # Review: code-reviewer (Finding 8, nit) -- GNU coreutils'
+            # GNU coreutils'
             # `uname -a` appends processor/hardware-platform/operating-
             # system fields this rewrite omits. NOT adding `platform.uname()
             # .processor` here despite that suggestion: differential
@@ -11810,7 +11945,7 @@ def check_multiprobe_banner_rewrite(
         elif kind == "echo":
             lines.append("print(%s)" % json.dumps(extra))
         elif kind == "git:branch":
-            # Review: code-reviewer (Finding 2) -- `# branch.head` prints
+            # `# branch.head` prints
             # the literal sentinel `(detached)` on a detached HEAD, which
             # neither original command actually outputs verbatim: `git
             # rev-parse --abbrev-ref HEAD` prints `HEAD` there, while `git
@@ -11827,7 +11962,7 @@ def check_multiprobe_banner_rewrite(
                     'print("" if _branch in (None, "(detached)") else _branch)'
                 )
         elif kind == "git:head_sha":
-            # Review: code-reviewer (Finding 2) -- `# branch.oid` prints the
+            # `# branch.oid` prints the
             # literal sentinel `(initial)` on an unborn/initial branch (no
             # commits yet), where the real `git rev-parse HEAD` instead
             # exits non-zero with NO stdout. Map the sentinel to empty

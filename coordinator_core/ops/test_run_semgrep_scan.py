@@ -199,7 +199,7 @@ def test_semgrep_genuine_error_raises(tmp_path):
 
 
 def test_git_diff_and_semgrep_calls_carry_timeout(tmp_path):
-    """Review: code-reviewer (F2, P1) — neither subprocess.run call carried
+    """Neither subprocess.run call carried
     a timeout; a stuck git/semgrep invocation would wedge this op's worker
     thread forever."""
     changed = tmp_path / "changed.py"
@@ -228,7 +228,7 @@ def test_git_diff_timeout_raises_value_error(tmp_path):
 
 
 def test_diff_base_leading_dash_rejected(tmp_path):
-    """Review: code-reviewer (F5, nit) — diff_base is passed positionally
+    """diff_base is passed positionally
     to `git diff` with no `--` separator; a value starting with '-' would
     be misparsed as a git option."""
     with pytest.raises(ValueError, match="looks like a git option"):

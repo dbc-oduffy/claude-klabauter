@@ -148,7 +148,7 @@ def test_default_no_recommendation_matches_pre_c7_shape() -> None:
         {"value": "not-cleared", "resolves": []},
     ]
     assert all(d.get("guidance") for d in jp["dispositions"])
-    # Review: staff-eng finding 6 — keep the shape guard the prior `==`
+    # Keep the shape guard the prior `==`
     # comparison gave (an unexpected extra key on a disposition), even
     # though `guidance`'s prose content is only truthiness-checked above.
     assert all(set(d) == {"value", "resolves", "guidance"} for d in jp["dispositions"])

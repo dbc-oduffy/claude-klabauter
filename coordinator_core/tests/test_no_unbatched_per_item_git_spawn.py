@@ -323,6 +323,23 @@ KNOWN BLIND SPOTS (false-negative-biased, matching every sibling gate's stated p
     dedup silently keeps whichever route was appended first. This can only suppress route
     diversity in a report, never lose a true violation or admit a false one -- acceptable per
     this module's stated false-negative-biased design.
+  - `review_coverage_core.classify_pending_records`'s default-resolver fan-out (`with
+    ThreadPoolExecutor(...) as pool: pool.map(_resolve_one, _distinct_ranges)`) is a per-item
+    `git rev-list` spawn with no syntactic `for`/`while`/comprehension loop BODY for any of the
+    seven routes above to walk -- every route here resolves a loop TARGET inside a loop AST node,
+    and a `ThreadPoolExecutor.map` callback is invisible to all seven by construction, not by any
+    single route's own restriction. Structurally out of scope; named here rather than fabricated
+    as a `_KNOWN_SITES` key no run of this collector can ever emit
+    (`state/bug-backlog/2026-08-08-the-amplification-gate-cannot-see-the-th-a4f2e77dc787.yaml`).
+  - `readers_clean_ops._read_worktree_sweep`'s `for idx, wt in enumerate(worktrees):
+    classify_worktree(wt.path, compare_ref)` loop IS route c-cross-module shaped --
+    `classify_worktree` is imported directly from `agent_worktree_sweep` -- but
+    `classify_worktree`'s own body contains no direct spawn call: it calls `_commits_ahead` and
+    `_status_porcelain_lines`, and the real `git rev-list --count` / `git status --porcelain`
+    calls sit two hops further down, inside THOSE. Excluded by the one-hop-only
+    high-precision-stratum restriction this module states under SCOPE, the same restriction the
+    transitive-deep-tail bullet above names; the same bug row above names this as the audit's
+    other silently undischarged site.
 """
 
 from __future__ import annotations
@@ -728,7 +745,7 @@ _CLASS_TAG = re.compile(r"#\s*class:\s*([a-zA-Z0-9-]+)")
     # only because that function merged its two binding maps with the argv0-HEAD map last, so
     # `argv` resolved to the bare `sys.executable` and nothing could look past the interpreter.
     # One merge order, measured: exactly this key, zero collateral.
-_EXEMPT_SITES: frozenset[tuple[str, str, str]] = frozenset(
+_EXEMPT_SITES: frozenset[tuple[str, str, str, int]] = frozenset(
     {
         # 2026-09-18 -- # class: measurement-is-the-loop. `stable-suite-run.py::_triage_isolation`
         # re-runs each already-FAILED node id alone, in its own process, to decide GENUINE
@@ -739,7 +756,7 @@ _EXEMPT_SITES: frozenset[tuple[str, str, str]] = frozenset(
         # isolate it -- the triage would then be unable to tell "fails alone" from "fails alongside
         # the other batched node". No batch primitive can substitute: this is `pytest`, not `git`,
         # and there is no cross-node "run each in its own process but report together" form.
-        ("coordinator/bin/stable-suite-run.py", "_triage_isolation", "run"),
+        ("coordinator/bin/stable-suite-run.py", "_triage_isolation", "run", 0),
         # 2026-09-18 -- # class: structural-floor. `mise-census-revalidate.py::run_entry` runs
         # each `census[]` entry's own INDEPENDENTLY AUTHORED shell `command` -- one row of a
         # plan's frontmatter, recorded when the plan's premises were mise-prepped, with its own
@@ -747,7 +764,7 @@ _EXEMPT_SITES: frozenset[tuple[str, str, str]] = frozenset(
         # across entries to fold into one spawn (each is arbitrary shell text drawn from a
         # different plan author, run through a named POSIX shell -- never shell=True/cmd.exe).
         # Relocating the call only moves the flag.
-        ("coordinator/bin/mise-census-revalidate.py", "revalidate", "run_entry"),
+        ("coordinator/bin/mise-census-revalidate.py", "revalidate", "run_entry", 0),
     }
 )
 
@@ -1989,7 +2006,7 @@ def _build_func_index(records: list[_FileRecord]) -> _FuncIndex:
         spawn_sites = record.spawn_sites
 
         spawning_enclosing = {s.enclosing for s in spawn_sites}
-        # Review: reviewer -- keyed by the spawn's OWN dotted enclosing scope (e.g.
+        # Keyed by the spawn's OWN dotted enclosing scope (e.g.
         # "outer._forward"), not the bare top-level function name a lookup by `name` alone
         # would use. A runner candidate's forwarding call can sit inside a nested closure
         # (own_spawn_linenos below matches `name` itself AND any dotted scope nested under
@@ -2024,7 +2041,7 @@ def _build_func_index(records: list[_FileRecord]) -> _FuncIndex:
             index.func_defs[(relpath, name)] = node
             index.funcs_by_name.setdefault(name, []).append((relpath, name))
 
-            # Review: reviewer -- `name` is this function's own bare (top-level) name, but a
+            # `name` is this function's own bare (top-level) name, but a
             # spawn the function reaches only through a nested closure is filed under a
             # DOTTED scope ("name.inner"), not bare "name" -- matching `spawn_linenos_by_func`
             # by exact key alone would miss it (`_generic_runner_param` walks into nested
@@ -4460,7 +4477,7 @@ def find_unbatched_per_item_spawns(
                 default_name = index.param_runner_defaults.get((relpath, enclosing), {}).get(
                     callee
                 )
-                # Review: reviewer -- a parameter default can only bind a name resolvable in
+                # A parameter default can only bind a name resolvable in
                 # the DEFINING MODULE's own scope: either a same-module function, or a name
                 # imported into this file. The prior unscoped `default_name in
                 # index.direct_spawn_funcs` fallback was a repo-wide bare-name lookup with no
@@ -5263,6 +5280,30 @@ def test_every_exemption_still_names_a_live_site(monkeypatch):
     )
 
 
+def test_thread_pool_and_two_hop_sites_are_named_in_known_blind_spots():
+    """Regression pin for `state/bug-backlog/
+    2026-08-08-the-amplification-gate-cannot-see-the-th-a4f2e77dc787.yaml`: two of the row's
+    three named sites -- `review_coverage_core.classify_pending_records`'s
+    `ThreadPoolExecutor.map` fan-out and `readers_clean_ops._read_worktree_sweep` ->
+    `agent_worktree_sweep.classify_worktree`'s two-hop gap -- are real per-item git-spawn shapes
+    this collector structurally cannot see, and neither carries a `_KNOWN_SITES` key (the row's
+    own `proposed_action` forbids fabricating one for a site no run of this collector can ever
+    produce). The row's accepted discharge is a citation in this module's own KNOWN BLIND SPOTS
+    register instead. Scoped to that register specifically, not the whole docstring, so a marker
+    surviving elsewhere in the file while the citing bullet is deleted still goes red."""
+    doc = __doc__ or ""
+    start = doc.index("KNOWN BLIND SPOTS")
+    blind_spots = doc[start:]
+    assert "ThreadPoolExecutor" in blind_spots and "classify_pending_records" in blind_spots, (
+        "classify_pending_records's ThreadPoolExecutor.map fan-out is no longer named in "
+        "KNOWN BLIND SPOTS"
+    )
+    assert "classify_worktree" in blind_spots and "_read_worktree_sweep" in blind_spots, (
+        "readers_clean_ops._read_worktree_sweep -> agent_worktree_sweep.classify_worktree's "
+        "two-hop gap is no longer named in KNOWN BLIND SPOTS"
+    )
+
+
 #: The closed set of exemption classes. An executor who cannot pick one of these four has just
 #: learned their row is not unbatchable-by-construction -- which is the point of a CLOSED set:
 #: wave 4 drifted two ad-hoc names into the sidecars (`fallback-path-residue`,
@@ -5413,6 +5454,18 @@ def test_every_exemption_carries_a_dated_rationale():
         "these _EXEMPT_SITES entries name a class outside the closed set "
         f"{sorted(_EXEMPTION_CLASSES)}:\n"
         + "\n".join(f"  {key} -- {cls}" for key, cls in bad_class)
+    )
+
+
+def test_exempt_sites_match_amp_site_key_shape():
+    """`_EXEMPT_SITES` is checked against `AmpSite.key` -- `(path, enclosing, callee, ordinal)`,
+    a 4-tuple -- at the membership test in `find_unbatched_per_item_spawns`. A 3-tuple entry
+    here can never equal a 4-tuple key, so it silently stops suppressing its site instead of
+    raising; this pins the shape so that regression fails loudly instead."""
+    wrong_shape = sorted(key for key in _EXEMPT_SITES if len(key) != 4)
+    assert not wrong_shape, (
+        "these _EXEMPT_SITES entries are not 4-tuples and can never match an AmpSite.key "
+        "lookup:\n" + "\n".join(f"  {key}" for key in wrong_shape)
     )
 
 
@@ -6331,7 +6384,7 @@ def test_route_f_negative_default_is_not_a_spawner(tmp_path):
 
 
 def test_route_e_generic_runner_positive_spawn_in_nested_closure(tmp_path):
-    """Review: reviewer -- a runner candidate whose forwarding call sits inside a NESTED
+    """A runner candidate whose forwarding call sits inside a NESTED
     closure (`_run(argv): def _forward(): subprocess.run(argv); _forward()`) must still be
     recognized. `SpawnSite.enclosing` is a DOTTED scope path (`"_run._forward"`, not bare
     `"_run"`), so `_build_func_index`'s own-spawn-lineno lookup has to match the function's
@@ -6362,7 +6415,7 @@ def test_route_e_generic_runner_positive_spawn_in_nested_closure(tmp_path):
 
 
 def test_route_f_negative_unscoped_default_name_collision(tmp_path):
-    """Review: reviewer -- route f's `default_name in index.direct_spawn_funcs` fallback was
+    """Route f's `default_name in index.direct_spawn_funcs` fallback was
     unscoped by file, so a same-named, unrelated, UNIMPORTED spawning function in another file
     would false-positive route f purely off a bare-name repo-wide match. A parameter default
     can only bind a name resolvable in the defining module's own scope: same-module, or

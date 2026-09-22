@@ -180,7 +180,7 @@ def test_missing_scaffold_manifest_is_advisory_not_fatal(tmp_path, monkeypatch, 
     bash oracle's separate scaffold-script-not-found prereq check, which was a
     stage-0 fatal precondition on the .sh file itself).
 
-    Review: code-reviewer (Finding 1) -- must also neutralize the rung 2-4
+    Must also neutralize the rung 2-4
     fallback's ambient machine state (real `~/.claude/.doe-root` + machine-local
     registry), or this test silently passes/fails depending on whether the
     executing machine happens to carry a real DoE-claude checkout."""
@@ -217,7 +217,7 @@ def test_missing_scaffold_manifest_is_advisory_not_fatal(tmp_path, monkeypatch, 
 # ---------------------------------------------------------------------------
 # `_resolve_scaffold_manifest_root` — direct unit coverage of the rung ladder
 #
-# Review: code-reviewer (Finding 1/2) -- the two tests above only exercise this
+# The two tests above only exercise this
 # function indirectly and (before this diff) not hermetically. These pin the
 # ladder itself with all ambient rungs neutralized by default: rung-1 hit
 # (fast path, fallback never consulted), rung-1 miss -> rung-2 hit (the actual
@@ -576,7 +576,7 @@ def test_dry_run_scaffold_failure_is_advisory_not_propagated(tmp_path, monkeypat
     advisory (caught + logged), matching install.maximalist's Step 7 handling
     of the identical call. This test locks in the NEW contract.
 
-    Review: code-reviewer (Finding 1) -- same ambient-state neutralization as
+    Same ambient-state neutralization as
     test_missing_scaffold_manifest_is_advisory_not_fatal above; without it the
     rung 2-4 fallback can find a real manifest via this machine's actual
     `~/.claude/.doe-root`, making the manifest-genuinely-missing case

@@ -155,7 +155,7 @@ async def test_bwfe_no_receipt_no_advisory(tmp_path):
 
 @pytest.mark.asyncio
 async def test_bwfe_sha_mismatch_denies_through_the_wrapped_envelope(tmp_path):
-    """Review: coordinator-code-reviewer — pins the same wrapped-envelope
+    """Pins the same wrapped-envelope
     fix as `test_bwt_denies_enter_worktree_through_the_wrapped_envelope`."""
     script = tmp_path / "plan.workflow.mjs"
     script.write_text("console.log('a');\n", encoding="utf-8")
@@ -291,7 +291,7 @@ async def test_bwt_no_advisory_on_other_tool():
 
 @pytest.mark.asyncio
 async def test_bwt_denies_enter_worktree_through_the_wrapped_envelope():
-    """Review: coordinator-code-reviewer — both engine doors send `params`
+    """Both engine doors send `params`
     as `{"payload": <event>}`, not the flat event this module used to read
     directly (`params.get("tool_name")`). Through the wrapped door the guard
     was a structural no-op; this pins the fix."""
@@ -440,7 +440,7 @@ async def test_bdsi_env_override_suppresses():
 
 @pytest.mark.asyncio
 async def test_bdsi_denies_imperative_suite_command_through_the_wrapped_envelope():
-    """Review: coordinator-code-reviewer — pins the same wrapped-envelope
+    """Pins the same wrapped-envelope
     fix as `test_bwt_denies_enter_worktree_through_the_wrapped_envelope`."""
     result = await bdsi._handler(
         {"payload": {"tool_name": "Agent", "tool_input": {"prompt": _BDSI_FIRING_PROMPT}}}

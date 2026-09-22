@@ -467,7 +467,7 @@ class TestSplitUnquotedNewlines:
         assert _command_tokenizer.split_unquoted_newlines('echo "a\nb"') == 'echo "a\nb"'
 
     def test_backslash_newline_inside_double_quotes_is_a_line_continuation(self):
-        # Review: coordinator:code-reviewer P2 -- `\<newline>` (LF, not
+        # `\<newline>` (LF, not
         # preceded by CR) is a real shell line continuation EVEN inside
         # double quotes, confirmed empirically against real bash
         # (`x="line one \`<newline>`line two"` -> `x=line one line two`,

@@ -968,7 +968,7 @@ def _build_wave_path_directives(
     for raw in wave_paths:
         _assert_in_repo_root(Path(raw), repo_root)
 
-    # Review: code-reviewer — F4: this was a cross-module reach into a
+    # This was a cross-module reach into a
     # module-private (underscore-prefixed) constant with no __all__/export;
     # readers_blitz.py now exports COMMIT_READINESS_JP_ID publicly.
     depends_on = readers_bug_blitz.COMMIT_READINESS_JP_ID if cadence == "bug-blitz" else None
@@ -1080,7 +1080,7 @@ def main_apply(argv: list[str]) -> int:
             session_id = tail[i + 1]
             i += 2
         elif tok == "--run-id":
-            # Review: code-reviewer — F1: apply.py's recomputed brief()
+            # apply.py's recomputed brief()
             # never threaded --run-id, so mise Phase-6 deterministically
             # resolved to the "missing --run-id" judgment point on every
             # `apply mise-en-place` call once records existed. Mirrors

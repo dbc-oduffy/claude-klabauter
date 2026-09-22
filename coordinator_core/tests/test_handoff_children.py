@@ -157,7 +157,7 @@ class TestLiveChildDetected:
         scanned <worktree>/.git/state/handoffs/ — which does not exist → live_paths
         empty → indeterminate exit_code=2.
 
-        Review: code-reviewer (F6) — prior version only asserted the wrong path does
+        Prior version only asserted the wrong path does
         not exist (fixture-setup sanity check), not that the function returns [].
         This exercises the actual pre-fix behavior directly.
         """
@@ -239,7 +239,7 @@ class TestNoLiveChildren:
 class TestArchiveSubtree:
     """Cross-subtree cases: candidate in archive, child in state (and vice versa).
 
-    Review: code-reviewer (F4) — archive/handoffs/ subtree was never exercised by any
+    archive/handoffs/ subtree was never exercised by any
     test; a regression in the archive scan would be invisible.
     """
 
@@ -358,7 +358,7 @@ class TestArchiveSubtree:
 class TestIndeterminate:
     """Both repo roots None → fail-closed exit_code=2.
 
-    Review: code-reviewer (F5) — the indeterminate branch was entirely untested.
+    The indeterminate branch was entirely untested.
     For a data-loss-adjacent archival-safety guard, the fail-closed path is load-bearing.
     """
 
@@ -401,7 +401,7 @@ class TestIndeterminate:
 # Test: repo_root=None fail-closed on initiatives_serve and roadmap_serve (Finding 4)
 # ---------------------------------------------------------------------------
 #
-# Review: code-reviewer — W3 removed TestCtxRepoRootFallback (correctly — it tested the
+# W3 removed TestCtxRepoRootFallback (correctly — it tested the
 # removed ctx fallback), but the repo_root=None → fail-closed invariant on all three ops
 # (handoff_children, initiatives_serve, roadmap_serve) now had no test for the latter two.
 # handoff_children is covered by TestIndeterminate above. This section covers the other two.
@@ -827,7 +827,7 @@ class TestBlockedByDependents:
     def test_malformed_blocked_by_shape_fails_closed_to_indeterminate(
         self, worktree: Path
     ) -> None:
-        """Review: code-reviewer (P2, Finding 5) — a LIVE handoff whose
+        """A LIVE handoff whose
         `blocked_by` field is present but not a str/list/tuple (e.g. a dict,
         from malformed YAML) must fail CLOSED to state=="indeterminate", not
         be silently treated as "does not reference the candidate". Conflating

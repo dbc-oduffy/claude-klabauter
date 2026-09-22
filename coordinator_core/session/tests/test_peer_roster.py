@@ -254,6 +254,39 @@ class TestSelfRow:
         assert rows[0].self_determination == "unresolved"
 
 
+class TestWarmServedSelfRow:
+    """Regression coverage for `state/bug-backlog/2026-08-30-self-record-
+    decides-self-inside-the-warm-door-3c91d0af7e42.yaml`: under a warm-
+    served request `harness_registry.self_record()` is pid-keyed off the
+    SERVER's own environment, i.e. whoever spawned it -- so before this fix
+    a warm-served request marked the spawner's row `is_self=True` and left
+    the real caller's own row reading as a peer."""
+
+    def test_carried_identity_wins_over_spawner_pid_match(self, monkeypatch):
+        from coordinator_core.session import core as session_core
+
+        caller_sid = "11111111-1111-1111-1111-111111111111"
+        spawner_sid = "spawner-sid"
+        snap = {
+            caller_sid: _record("caller-11", "/sock/caller.sock", cwd="/repo/claude-klabauter"),
+            spawner_sid: _record("spawner-22", "/sock/spawner.sock", cwd="/repo/claude-klabauter"),
+        }
+        monkeypatch.setattr(hr, "snapshot", lambda: snap)
+        # The spawner's own ambient CLAUDE_PID still resolves via
+        # self_record() -- exactly the live defect: it is a real, correctly
+        # pid-keyed match, just for the wrong session.
+        monkeypatch.setattr(hr, "self_record", lambda: (spawner_sid, snap[spawner_sid]))
+
+        with session_core.warm_served_request(True):
+            with session_core.session_identity_override(caller_sid):
+                rows = peer_roster.build_roster("/repo/claude-klabauter")
+
+        by_id = {r.session_id: r for r in rows}
+        assert by_id[caller_sid].is_self is True
+        assert by_id[spawner_sid].is_self is False
+        assert all(r.self_determination == "resolved" for r in rows)
+
+
 class TestDegradedAddress:
     def test_missing_name_or_socket_degrades_to_none_address_never_bare_uuid(
         self, monkeypatch
@@ -346,7 +379,6 @@ class TestEmptyOrAbsentRegistry:
         assert peer_roster.build_roster("/repo/claude-klabauter", raise_on_failure=True) == []
 
     def test_empty_snapshot_raises_when_raise_on_empty_snapshot(self, monkeypatch):
-        # Review: coordinatorcode-reviewer.a933f243c20654e60, Finding 2 --
         # the owning module's own suite must prove this contract directly,
         # not only via the integration test two modules away
         # (test_watch.py::test_an_empty_box_wide_snapshot_raises_rather_than_reading_as_a_drained_fleet).

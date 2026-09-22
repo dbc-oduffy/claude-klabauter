@@ -231,7 +231,7 @@ __all__ = [
 # Bounded at _MAX_FRONTMATTER_CACHE entries; oldest half evicted on overflow.
 # Rationale: docs/decisions/DR-236-state-is-disk-truth-workstate-store-is-pro.md
 # (successor to docs/decisions/2026-07-03-tri-plane-ownership-boundary.md § DD#1)
-# Review: code-reviewer — F7: separation from cache._REVALIDATED_CACHE is intentional.
+# Separation from cache._REVALIDATED_CACHE is intentional.
 # _FRONTMATTER_CACHE is dag-local for independent clearability in tests and dedicated
 # eviction footprint. pcore-06/10/11 consumers use cache._REVALIDATED_CACHE; the two
 # caches coexist — the same file can be cached in both if both paths are exercised.
@@ -384,7 +384,7 @@ _BLOCK_SCALAR_RE = re.compile(r'^([|>])([+-]?[0-9]?|[0-9]?[+-]?)\s*(#.*)?$')
 def _consume_block_scalar(lines: List[str], start: int, key_indent: int) -> tuple:
     """Consume a YAML block-scalar body (`|`/`>`) starting at ``start``.
 
-    Review: code-reviewer P1 — dag.py's mapping parser previously had no
+    dag.py's mapping parser previously had no
     block-scalar branch at all, so a `field: |` block whose body contained
     markdown bullets or colon-bearing lines was misparsed: the key was set to
     the literal string "|", colon-less body lines were silently dropped, and
@@ -470,7 +470,7 @@ def _parse_yaml_list_block(lines: List[str], base_indent: int) -> List[Any]:
     continuation lines follow, so a lone ``- key: value`` with no
     continuation is still a one-key mapping, not a string.
 
-    Review: code-reviewer / DAG-401 — this function previously appended
+    This function previously appended
     every ``- `` line as an opaque single-line scalar via ``_parse_scalar``,
     silently dropping every more-indented continuation line of a
     sequence-of-mappings entry (e.g. a second/third key on a
@@ -750,9 +750,9 @@ def _read_meta(file_path: str) -> dict:
     Returns {} on any error.
     """
     try:
-        # Review: code-reviewer — F5: normalize path to prevent spurious cache misses on equivalent paths
+        # Normalize path to prevent spurious cache misses on equivalent paths
         file_path = os.path.abspath(file_path)
-        # Review: code-reviewer — F2: read bytes once; compute stamp in-memory; decode from same buffer
+        # Read bytes once; compute stamp in-memory; decode from same buffer
         # (eliminates TOCTOU window between stamp read and content read, halves per-miss I/O)
         raw = Path(file_path).read_bytes()
         stamp = hashlib.sha256(raw).hexdigest()

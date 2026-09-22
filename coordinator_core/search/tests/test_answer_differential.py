@@ -54,7 +54,7 @@ FIXTURE_FILES = {
         """
     ),
     "nested/deep.txt": "alpha nested\nbeta nested\n",
-    # Review: coordinator:code-reviewer -- F7(d): matches spaced >1 line apart within
+    # Matches spaced >1 line apart within
     # one file, to exercise -A/-B/-C group-separator ("--") insertion (F4). Deliberately
     # uses a pattern ("zeta") not shared with any other fixture, so these files don't
     # perturb the "alpha"-recursive-walk cases (e.g. `grep -rn alpha . | head -2`,

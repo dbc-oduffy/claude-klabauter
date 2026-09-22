@@ -2530,8 +2530,9 @@ _THREAD_HOP_ATTRS = frozenset({"to_thread", "run_in_executor"})
 #: not track, or a missing argument. AC15's own requirement: "a call whose callee argument is not
 #: statically resolvable yields no edge and is NOT silently dropped -- it is counted and reported,
 #: so the residual gap has a number rather than an assumption." Cleared at the start of every
-#: `_build_corpus()` call so a caller always reads counts for the run it just built, never a stale
-#: accumulation from a prior test in the same process.
+#: cache-miss `_build_corpus()` call so a caller always reads counts for the scan that actually
+#: ran, never a stale accumulation from a prior test in the same process -- a cache HIT replays a
+#: corpus, not a scan, so it leaves this list untouched (see `_CORPUS_CACHE`).
 _UNRESOLVED_THREAD_HOP_CALLEES: list[tuple[str, str, int]] = []
 
 
@@ -2846,6 +2847,17 @@ def _scope_roots() -> tuple[pathlib.Path, ...]:
     return tuple(_REPO_ROOT / root for root in _GATE_SCOPE_ROOTS)
 
 
+#: Memoizes `_build_corpus_with_dispatch_tables` by `(_REPO_ROOT, _GATE_SCOPE_ROOTS,
+#: _with_tables)` at call time -- not a bare no-arg cache -- because both module-level globals
+#: are monkeypatched to a synthetic `tmp_path` scope by several `test_spawn_bearing_ops.py`
+#: fixtures that share this function; keying on their live values means a synthetic-scope call
+#: can never return the wrong tree's corpus, and each distinct real-tree/synthetic-tree pairing
+#: still pays its own scan exactly once. This is the fix for the row this module's own history
+#: names: nine call sites across this file (`_build_corpus()`, five hops in) each paid a fresh
+#: ~26s repo-wide AST index build with no sharing between them.
+_CORPUS_CACHE: dict[tuple, tuple] = {}
+
+
 def _build_corpus_with_dispatch_tables(*, _with_tables: bool = True):
     """The full corpus build: everything `_build_corpus()` returns, PLUS the by-reference
     dispatch-table indexes this chunk adds (`module_callable_tables_by_file`,
@@ -2855,10 +2867,26 @@ def _build_corpus_with_dispatch_tables(*, _with_tables: bool = True):
     spawn_sites_by_file, import_aliases_by_file, func_aliases_by_file, local_aliases_by_file,
     module_callable_tables_by_file, table_aliases_by_file)`.
 
-    Clears `_UNRESOLVED_THREAD_HOP_CALLEES` at the start of every build -- `_reachable_functions`
-    calls made against this corpus append to that list as they walk, and a caller inspecting it
-    (`_unresolved_thread_hop_report`) after its own BFS is reading counts for the run it just
-    built, never a stale accumulation left over from an earlier corpus/test in the same process."""
+    Memoized in `_CORPUS_CACHE` (see that dict's own docstring for the cache-key reasoning): a
+    repeat call against the same scope returns the prior build's tuple unchanged rather than
+    re-scanning. Every corpus dict returned is read-only downstream (`_reachable_functions` and
+    its helpers only look values up, never mutate them), so replaying the same tuple to a second
+    caller is safe.
+
+    Clears `_UNRESOLVED_THREAD_HOP_CALLEES` at the start of every cache-MISS build only --
+    `_reachable_functions` calls made against this corpus append to that list as they walk, and a
+    caller inspecting it (`_unresolved_thread_hop_report`) after its own BFS is reading counts for
+    the scan it just built, never a stale accumulation left over from an earlier corpus/test in
+    the same process. A cache HIT runs no scan and appends nothing new to that list by
+    construction, so leaving it untouched on a hit does not reintroduce the stale-accumulation gap
+    the clear exists to close; the one live reader of the report (`test_spawn_bearing_ops.py`'s
+    unresolvable-thread-hop test) always calls through a fresh `tmp_path` scope, which is always a
+    cache miss."""
+    cache_key = (_REPO_ROOT, _GATE_SCOPE_ROOTS, _with_tables)
+    cached = _CORPUS_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     _UNRESOLVED_THREAD_HOP_CALLEES.clear()
     files = _discover_scope_files(_scope_roots())
     records = _load_file_records(files)
@@ -2899,7 +2927,7 @@ def _build_corpus_with_dispatch_tables(*, _with_tables: bool = True):
             )
 
     spawn_sites_by_file = {record.relpath: record.spawn_sites for record in records}
-    return (
+    result = (
         index,
         spawn_sites_by_file,
         import_aliases_by_file,
@@ -2908,6 +2936,8 @@ def _build_corpus_with_dispatch_tables(*, _with_tables: bool = True):
         module_callable_tables_by_file,
         table_aliases_by_file,
     )
+    _CORPUS_CACHE[cache_key] = result
+    return result
 
 
 def _build_corpus():
@@ -2927,6 +2957,46 @@ def _build_corpus():
     return _build_corpus_with_dispatch_tables(_with_tables=False)[:5]
 
 
+def test_build_corpus_is_cached_across_repeat_calls_at_the_same_scope(tmp_path, monkeypatch):
+    """The fix for this row: this file calls `_build_corpus()` nine times across its own tests,
+    each paying a fresh repo-wide AST index build (~26s at HEAD against the live tree) with no
+    sharing between them. Proven directly against `_discover_scope_files`'s own call count, not
+    wall-clock, since a timing assertion on a tiny synthetic fixture would say nothing about the
+    live-tree cost this row measured -- a second `_build_corpus()` call at the same scope must
+    reuse `_CORPUS_CACHE` rather than re-scanning."""
+    scope_root = tmp_path / "coordinator_core"
+    scope_root.mkdir()
+    (scope_root / "handler.py").write_text(
+        "def handler():\n    return None\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sys.modules[__name__], "_REPO_ROOT", tmp_path)
+    monkeypatch.setattr(sys.modules[__name__], "_GATE_SCOPE_ROOTS", ("coordinator_core",))
+
+    scan_calls: list[int] = []
+    real_discover_scope_files = _discover_scope_files
+
+    def _counting_discover_scope_files(roots):
+        scan_calls.append(1)
+        return real_discover_scope_files(roots)
+
+    monkeypatch.setattr(
+        sys.modules[__name__], "_discover_scope_files", _counting_discover_scope_files
+    )
+
+    first = _build_corpus()
+    second = _build_corpus()
+
+    assert len(scan_calls) == 1, (
+        "a second _build_corpus() call at the same (repo_root, scope_roots) scanned the "
+        "filesystem again instead of reusing the cached corpus"
+    )
+    # `_build_corpus()` itself always returns a freshly-sliced 5-tuple (`[:5]` on the cached
+    # 7-tuple), so its own identity differs call to call by design -- the cache hit is proven by
+    # the shared `_FuncIndex` inside it, the object `_CORPUS_CACHE` actually stores and replays.
+    assert first[0] is second[0], "a cache hit must replay the prior build's exact _FuncIndex"
+
+
 def _format_violation(op_key: str, site) -> str:
     return (
         f"  [{op_key}] {site.path}:{site.lineno} enclosing={site.enclosing!r} "
@@ -2934,11 +3004,71 @@ def _format_violation(op_key: str, site) -> str:
     )
 
 
+def _orphaned_function_literals(
+    entries: typing.Iterable[tuple[str, str, str, int]],
+    func_defs: typing.Mapping[tuple[str, str], object],
+) -> list[tuple[str, str]]:
+    """`(relpath, func_name)` pairs from a `(relpath, func_name, argv0, ordinal)` entry set (the
+    frozen unenrolled inventory or an exemption-map key set) whose `func_name` no longer resolves
+    against `func_defs`. A dot-qualified `func_name` (a nested function's own site_key, e.g.
+    `_git._invoke`) resolves on its top-level enclosing name, matching how the rest of this gate
+    looks such sites up (`enclosing.split(".")[0]` in the reused BFS module)."""
+    return [
+        (relpath, func_name)
+        for relpath, func_name, _argv0, _ordinal in entries
+        if (relpath, func_name.split(".")[0]) not in func_defs
+    ]
+
+
+def test_orphaned_function_literals_detects_renamed_and_deleted_subjects():
+    """Unit-level pin on `_orphaned_function_literals` itself: a renamed or deleted subject is
+    reported, a live top-level subject is not, and a dot-qualified nested-function `func_name`
+    (e.g. `_git._invoke`) resolves on its top-level portion rather than being misreported."""
+    func_defs = {("mod.py", "_git"): object(), ("mod.py", "_other"): object()}
+    entries = [
+        ("mod.py", "_git", "git", 0),
+        ("mod.py", "_git._invoke", "<dynamic>", 0),
+        ("mod.py", "_renamed_away", "git", 0),
+    ]
+    assert _orphaned_function_literals(entries, func_defs) == [("mod.py", "_renamed_away")]
+
+
+#: Pre-existing orphaned literals this check's own first run (2026-09-21) surfaced, both from a
+#: whole-FILE deletion rather than the in-file rename the row this check closes was filed against
+#: -- same defect class, one level down from `_BUDGETED_ENTRYPOINTS`/`_LEGITIMIZED_SITES`, just
+#: undiscovered until this resolution check existed to look. `coordinator_core/ops/review_trail_
+#: write.py`'s 5 entries are an ALREADY-DOCUMENTED, deliberate deferral -- see
+#: `_NAMED_ARGV0_DISPOSITIONS_C`'s own `len(...) == 25` assertion below: "Draining it properly is
+#: 8+ coupled edits across the op map, the inventory, both disposition dicts and their pins;
+#: queued rather than half-done inside an unrelated close." `coordinator_core/ops/cartography_
+#: churn.py`'s 2 entries (deleted under the 2026-08-27 fourteen-ops kill-bar sweep) have no such
+#: record and are the same shape of residual, named here rather than silently left passing.
+#: Deliberately a named-literal set, not a file-glob or a "deleted file" carve-out: a FUTURE
+#: orphaned literal -- the rot this check exists to catch -- still fails loudly here.
+_KNOWN_ORPHANED_FUNCTION_LITERALS: frozenset[tuple[str, str]] = frozenset({
+    ("coordinator_core/ops/cartography_churn.py", "_git_ls_files"),
+    ("coordinator_core/ops/cartography_churn.py", "_git_name_only"),
+    ("coordinator_core/ops/review_trail_write.py", "_batch_resolve_ref_pair"),
+    ("coordinator_core/ops/review_trail_write.py", "_git_runner"),
+    ("coordinator_core/ops/review_trail_write.py", "_resolve_ref_to_sha"),
+})
+
+
 def test_budgeted_entrypoints_resolve_to_live_functions():
     """Registry-rot guard: every `_BUDGETED_ENTRYPOINTS` row must resolve to an actual top-level
     function definition, checked fresh against the live tree -- never trusted from a comment. A
     row whose subject no longer exists fails loudly here, the same defect class C2 closes for the
-    manifest's own orphan-row gap on a different file."""
+    manifest's own orphan-row gap on a different file.
+
+    Extends to the frozen unenrolled inventory (`_FROZEN_UNENROLLED_SPAWN_SITES`) and the
+    exemption maps keyed on the same `(relpath, func_name, argv0, ordinal)` shape
+    (`_DYNAMIC_ARGV0_DISPOSITIONS`, `_NAMED_ARGV0_DISPOSITIONS*`,
+    `_UNINVENTORIED_SITE_DISPOSITION`): a rename that repoints
+    `_BUDGETED_ENTRYPOINTS`/`_LEGITIMIZED_SITES` but misses one of these leaves its function-name
+    literal orphaned, silently, with no test failing to say so -- the same rot this guard already
+    catches for entrypoints, one level down. A dot-qualified `func_name` (a nested function's own
+    site_key, e.g. `_git._invoke`) resolves on its top-level enclosing name, matching how the rest
+    of this gate looks such sites up (see `enclosing.split(".")[0]` in the reused BFS module)."""
     index, _sites, _imp, _func_imp, _loc = _build_corpus()
     missing = []
     for op_key, (relpath, func_names) in _BUDGETED_ENTRYPOINTS.items():
@@ -2960,6 +3090,32 @@ def test_budgeted_entrypoints_resolve_to_live_functions():
         "legitimized site(s) name an op that is not a live budgeted entrypoint. An exemption "
         "whose op key no longer matches is dead weight that suppresses nothing today and would "
         "silently start suppressing if the key were ever reused:\n" + "\n".join(orphaned)
+    )
+
+    unresolved = [
+        f"_FROZEN_UNENROLLED_SPAWN_SITES: {relpath}::{func_name}"
+        for relpath, func_name in _orphaned_function_literals(
+            _FROZEN_UNENROLLED_SPAWN_SITES, index.func_defs
+        )
+        if (relpath, func_name) not in _KNOWN_ORPHANED_FUNCTION_LITERALS
+    ]
+    for disposition_name, dispositions in (
+        ("_DYNAMIC_ARGV0_DISPOSITIONS", _DYNAMIC_ARGV0_DISPOSITIONS),
+        ("_NAMED_ARGV0_DISPOSITIONS", _NAMED_ARGV0_DISPOSITIONS),
+        ("_NAMED_ARGV0_DISPOSITIONS_B", _NAMED_ARGV0_DISPOSITIONS_B),
+        ("_NAMED_ARGV0_DISPOSITIONS_C", _NAMED_ARGV0_DISPOSITIONS_C),
+        ("_UNINVENTORIED_SITE_DISPOSITION", _UNINVENTORIED_SITE_DISPOSITION),
+    ):
+        unresolved.extend(
+            f"{disposition_name}: {relpath}::{func_name}"
+            for relpath, func_name in _orphaned_function_literals(dispositions, index.func_defs)
+            if (relpath, func_name) not in _KNOWN_ORPHANED_FUNCTION_LITERALS
+        )
+    assert not unresolved, (
+        "frozen-inventory or exemption-map entry(ies) name a function that no longer resolves -- "
+        "the subject moved, was renamed, or was deleted, and the literal orphaned silently "
+        "(and it is not one of _KNOWN_ORPHANED_FUNCTION_LITERALS' already-tracked residuals):\n"
+        + "\n".join(sorted(unresolved))
     )
 
 
@@ -3770,7 +3926,6 @@ _FROZEN_UNENROLLED_SPAWN_SITES: frozenset = frozenset(
         ("coordinator_core/plugin_health/sentinel.py", "probe_p10", "<dynamic>", 0),
         ("coordinator_core/plugin_health/sentinel.py", "probe_p2", "<dynamic>", 0),
         ("coordinator_core/plugin_health/sentinel.py", "probe_p20", "bash", 0),
-        ("coordinator_core/plugin_health/sentinel.py", "probe_p3", "<dynamic>", 0),
         ("coordinator_core/plugin_health/sentinel.py", "probe_p4", "<dynamic>", 0),
         ("coordinator_core/plugin_health/sentinel.py", "probe_p6", "<dynamic>", 0),
         ("coordinator_core/plugin_health/sentinel.py", "probe_p6s", "<dynamic>", 0),
@@ -3821,7 +3976,11 @@ _FROZEN_UNENROLLED_SPAWN_SITES: frozenset = frozenset(
 #: named-argv0 sites (`_plan_worktree_dirty`, `_plan_worktree_dirty_batch`)
 #: out of the frozen inventory entirely (the code no longer exists, so
 #: there is nothing left to enroll or legitimize). Net -2.
-_FROZEN_UNENROLLED_INVENTORY_HIGH_WATER = 137
+#: 137 -> 136 (2026-09-22): `plugin_health/sentinel.py::probe_p3` drained --
+#: its body makes no `subprocess.run`/`Popen` call (confirmed by direct
+#: read of the function, corroborated by its own docstring), so the site
+#: this entry named no longer exists to be enrolled or legitimized. Net -1.
+_FROZEN_UNENROLLED_INVENTORY_HIGH_WATER = 136
 
 
 def _op_keyed_uncovered_pairs():
@@ -3966,15 +4125,13 @@ def test_frozen_unenrolled_inventory_is_monotonically_non_growing():
 #:     resolved `machine_local_bin`). This is the real methodological limit
 #:     AC9c anticipates -- it is never "we stopped here".
 #:
-#: `plugin_health/sentinel.py::probe_p3` is the one entry that is neither
-#: shape: its current body (read by hand, 2026-08-23) makes no
-#: `subprocess.run`/`Popen` call at all -- its own docstring says exactly
-#: that ("it no longer spawns `machine-local keys`"). The site key is
-#: retained here rather than silently dropped (dropping it would shrink
-#: `_FROZEN_UNENROLLED_SPAWN_SITES` without the matching high-water/ratchet
-#: bookkeeping that drain requires, which is this sub-chunk's write scope to
-#: do, not its job to do informally) -- its rationale below names the
-#: anomaly instead of asserting a program that was never seen to run.
+#: `plugin_health/sentinel.py::probe_p3` was originally carried here under
+#: neither shape, as an ANOMALY entry: its body made no `subprocess.run`/
+#: `Popen` call at all, confirmed by its own docstring ("it no longer spawns
+#: `machine-local keys`"). 2026-09-22: drained -- both this entry and its
+#: paired `_FROZEN_UNENROLLED_SPAWN_SITES` member removed, and
+#: `_FROZEN_UNENROLLED_INVENTORY_HIGH_WATER` lowered to match, per the
+#: ratchet-drain procedure this module documents.
 _DYNAMIC_ARGV0_DISPOSITIONS: dict[tuple[str, str, str, int], str] = {
     (
         "coordinator_core/goals/reassess_krs.py",
@@ -4380,21 +4537,6 @@ _DYNAMIC_ARGV0_DISPOSITIONS: dict[tuple[str, str, str, int], str] = {
     ),
     (
         "coordinator_core/plugin_health/sentinel.py",
-        "probe_p3",
-        "<dynamic>",
-        0,
-    ): (
-        "2026-08-23 ANOMALY, not a program resolution -- `probe_p3`'s current "
-        "body (read by hand) makes no `subprocess.run`/`Popen` call at all; "
-        "its own docstring says it 'no longer spawns `machine-local keys`'. "
-        "Retained rather than silently dropped from the frozen inventory "
-        "(shrinking that set is this file's own ratchet-and-ceiling "
-        "bookkeeping, out of this sub-chunk's scope); flagged here for a "
-        "follow-up trace of why the live detector still reports a spawn-"
-        "bearing site here."
-    ),
-    (
-        "coordinator_core/plugin_health/sentinel.py",
         "probe_p4",
         "<dynamic>",
         0,
@@ -4451,15 +4593,17 @@ def test_dynamic_argv0_sites_are_dispositioned_on_their_own_terms():
         "sub-chunk's job) or this entry is a leftover that should be removed:\n"
         + "\n".join(f"  {k}" for k in stale)
     )
-    assert len(_DYNAMIC_ARGV0_DISPOSITIONS) == 42, (
+    assert len(_DYNAMIC_ARGV0_DISPOSITIONS) == 41, (
         f"_DYNAMIC_ARGV0_DISPOSITIONS carries {len(_DYNAMIC_ARGV0_DISPOSITIONS)} "
-        "entries, not the 42 <dynamic>-argv0 sites tranche dyn's inventory now "
-        "names -- the dispatch brief's EM-measured figure was 43, and the 2026-08-29 "
+        "entries, not the 41 <dynamic>-argv0 sites tranche dyn's inventory now "
+        "names -- the dispatch brief's EM-measured figure was 43, the 2026-08-29 "
         "gravestone deletion of review_trail_readjudication_report.py "
         "(docs/plans/2026-08-29-the-gravestoned-review-trail-surface-is-deleted.md, "
         "DR-374's last row) removed its `_run` site along with the whole module, "
-        "taking the count from 43 to 42 -- a count drift here means either a "
-        "site was missed or one was double-counted."
+        "taking the count from 43 to 42, and the 2026-09-22 drain of "
+        "`plugin_health/sentinel.py::probe_p3` (no longer a spawn site at all) "
+        "took it from 42 to 41 -- a count drift here means either a site was "
+        "missed or one was double-counted."
     )
 
 

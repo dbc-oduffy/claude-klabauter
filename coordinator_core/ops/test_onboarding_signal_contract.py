@@ -93,7 +93,7 @@ def test_signals_agree_across_both_gates(tmp_path: Path) -> None:
 
 
 def test_signals_agree_on_archive_only_repo(tmp_path: Path) -> None:
-    """Review: coordinator:code-reviewer (P2 drift finding) -- this is the
+    """This is the
     case that actually disagreed before `archive/` was added to
     `_is_onboarded`: an archive/-only repo (no state/workstreams/) used to
     report `_is_onboarded() is False` while `completion_archive_predicate()
@@ -107,7 +107,7 @@ def test_signals_agree_on_archive_only_repo(tmp_path: Path) -> None:
 
 
 def test_onboarded_shaped_like_real_sibling_repo(tmp_path: Path) -> None:
-    """Review: coordinator:code-reviewer (P1) -- shape a fixture the way the
+    """Shape a fixture the way the
     real fleet actually looks: no `docs/project-tracker.md`, no
     `state/workstreams/`, only `archive/` (11 of 12 currently-onboarded
     sibling repos surveyed under the fleet had exactly this shape). Both

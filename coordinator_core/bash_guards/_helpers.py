@@ -423,7 +423,7 @@ def resolve_override_keys_doc_display() -> str:
     entry point; the underscore-prefixed original is kept working unchanged
     for ``operator_override_note`` and any other in-package caller.
 
-    # Review: coordinator:code-reviewer -- Finding 2, private cross-package
+    # Private cross-package
     # import (write_guards.engine importing bash_guards._helpers's
     # underscore-prefixed name directly, unexposed via __all__).
     """

@@ -231,7 +231,7 @@ def test_atomicity_no_tmp_files_remain(tmp_path: Path) -> None:
     ctx = _make_ctx()
     emit_receipt(ctx, repo_root=tmp_path, sid="test-sid")
     ceremony_dir = tmp_path / "state" / "ceremony"
-    # Review: code-reviewer F9 — previous glob "*.tmp.json" never matched actual temp names;
+    # Previous glob "*.tmp.json" never matched actual temp names;
     # mkstemp produces ".wsc-receipt.tmp.<random>.json" (dot-prefixed, random suffix between
     # prefix and .json), so the pattern must anchor on the known prefix and use a wildcard
     # for the random suffix.  Using iterdir() for the robust form.
@@ -288,7 +288,7 @@ def test_phase2_overwrites_phase1(tmp_path: Path) -> None:
 def test_emit_receipt_mints_fresh_path_for_new_sid(tmp_path: Path) -> None:
     """A brand-new sid with no existing shard takes the mint-fresh (default_receipt_path) branch.
 
-    Review: code-reviewer 2026-07-08 Finding 4 (nit) — test_phase2_overwrites_phase1
+    test_phase2_overwrites_phase1
     only proves the reuse-existing-shard order works; this asserts the OTHER side of
     the ternary (existing = resolve_latest_receipt_path(...); out_path = existing or
     default_receipt_path(...)) — a fresh sid with no shard mints via default_receipt_path.
@@ -601,7 +601,7 @@ def test_op_tail_unknown_always_present_even_when_empty(tmp_path: Path) -> None:
 def test_resolve_latest_receipt_path_short_sid_no_cross_match(tmp_path: Path) -> None:
     """A short sid ("a1") must resolve ONLY its own shard, never "a1-x"'s shard.
 
-    Review: code-reviewer 2026-07-08 Finding 1 — _sid_short("a1") == "a1" (well
+    _sid_short("a1") == "a1" (well
     under _SID_SHORT_LEN), and the raw glob "a1-*.json" would previously also
     match a shard written for sid="a1-x" (filename "a1-x-<ts>.json" starts with
     "a1-"). resolve_latest_receipt_path must anchor the match so each sid only

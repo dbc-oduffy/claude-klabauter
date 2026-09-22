@@ -146,7 +146,7 @@ def _resolve_ledger_first_holder(
         state = resolve_claim_state(repo_root / artifact_path, common_dir=common_dir, repo_root=repo_root)
         holder = state.holder
     except Exception as exc:
-        # Review: code-reviewer (Finding 2) — align with the sibling
+        # Align with the sibling
         # ledger-first migration (review_trail_write._scan_workstream),
         # which logs a warning on the equivalent resolve_claim_state
         # failure. Fail-closed behavior (holder=None, falling through to
@@ -289,7 +289,7 @@ def _resolve_send_message_addresses(
             holder_sids, snapshot
         )
     except Exception as exc:  # noqa: BLE001
-        # Review: staff-eng (Finding 6) named the risk as SILENCE, not the
+        # staff-eng (Finding 6) named the risk as SILENCE, not the
         # degrade itself: a bare swallow around a PRIVATE cross-module call
         # let a rename there blank every held row's `send_message_address`
         # fleet-wide with a green suite. The private reach is what got fixed
@@ -400,7 +400,6 @@ def build_work_state(
         emitted — into the third top-level `review_due` bucket this function
         returns (AC3a: "review_due is its own bucket — never `unclaimed`,
         never blocked" is satisfied by a dedicated bucket, not by omission;
-        Review: staff-eng, Finding 1).
       - `basis="off-gate-axis"` -> a lifecycle POSITION
         (`in_flight`/`shipped`/`continued`/`closed`), not readiness; never
         reaches the readiness axis at all — same omission treatment.
@@ -431,7 +430,7 @@ def build_work_state(
         _collect_all_handoffs_for_gate_index,
     )
 
-    # Review: staff-eng (Finding 5) -- `_collect_all_handoffs_for_gate_index`
+    # `_collect_all_handoffs_for_gate_index`
     # calls `collect_live_handoff_paths(repo_root)` internally to build its
     # own live half; a standalone first call to the same function here (that
     # was wrapped in its own `except OSError`) was dead-guard duplicated I/O

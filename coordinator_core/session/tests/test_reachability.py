@@ -77,7 +77,7 @@ class TestReachableOutcome:
 
 class TestRefWideningLoop:
     def test_widens_past_six_hex_chars_on_prefix_collision(self, monkeypatch):
-        # Review: code-reviewer -- P2, replaces a probe-and-`pytest.skip`
+        # Replaces a probe-and-`pytest.skip`
         # search for a real sha256 collision with a monkeypatched
         # `_full_hash12` carrying a HARDCODED 6-hex-prefix collision, so the
         # widening branch is deterministically exercised on every run and
@@ -139,7 +139,7 @@ class TestAmbiguousContractShape:
     """
 
     def test_unresolvable_candidate_address_is_none_not_the_raw_uuid(self, monkeypatch):
-        # Review: code-reviewer -- P3, a candidate lacking a usable
+        # A candidate lacking a usable
         # name/socket must never surface its raw session id as `.address`,
         # which would print as though it were a real SendMessage address.
         snap = {
@@ -161,7 +161,7 @@ class TestAmbiguousContractShape:
     def test_unresolvable_candidate_name_and_ref_are_empty_string_not_none(
         self, monkeypatch
     ):
-        # Review: review-integrator -- P3, pins Candidate's stated contract:
+        # Pins Candidate's stated contract:
         # `name`/`ref` are "" (not None) for the same unresolvable slot whose
         # `.address` is None -- the two fields signal differently on purpose.
         snap = {
@@ -702,3 +702,54 @@ class TestNoSubstituteRefWhenSocketAbsent:
         assert reachability.resolve_addresses_bulk(["sid-unbound"]) == {
             "sid-unbound": ""
         }
+
+
+class TestWarmServedOwnSession:
+    """Regression coverage for `state/bug-backlog/2026-08-30-self-record-
+    decides-self-inside-the-warm-door-3c91d0af7e42.yaml`: under a warm-
+    served request `harness_registry.self_record()` is pid-keyed off the
+    SERVER's own environment, i.e. whoever spawned it -- so before this fix
+    a warm-served request resolved the SPAWNER's id as `own_session` and
+    left the real caller's own id reading as `reachable` (a peer)."""
+
+    def test_resolve_address_own_session_follows_carried_identity(self, monkeypatch):
+        from coordinator_core.session import core as session_core
+
+        caller_sid = "11111111-1111-1111-1111-111111111111"
+        spawner_sid = "spawner-sid"
+        snap = {
+            caller_sid: _record("claude-klabauter-11", "/sock/caller.sock"),
+            spawner_sid: _record("claude-klabauter-22", "/sock/spawner.sock"),
+        }
+        monkeypatch.setattr(hr, "snapshot", lambda: snap)
+        # The spawner's own ambient CLAUDE_PID still resolves via
+        # self_record() -- a real, correctly pid-keyed match, just for the
+        # wrong session.
+        monkeypatch.setattr(hr, "self_record", lambda: (spawner_sid, snap[spawner_sid]))
+
+        with session_core.warm_served_request(True):
+            with session_core.session_identity_override(caller_sid):
+                caller_result = reachability.resolve_address(caller_sid)
+                spawner_result = reachability.resolve_address(spawner_sid)
+
+        assert caller_result.outcome == "own_session"
+        assert spawner_result.outcome == "reachable"
+
+    def test_resolve_addresses_bulk_marker_follows_carried_identity(self, monkeypatch):
+        from coordinator_core.session import core as session_core
+
+        caller_sid = "11111111-1111-1111-1111-111111111111"
+        spawner_sid = "spawner-sid"
+        snap = {
+            caller_sid: _record("claude-klabauter-11", "/sock/caller.sock"),
+            spawner_sid: _record("claude-klabauter-22", "/sock/spawner.sock"),
+        }
+        monkeypatch.setattr(hr, "snapshot", lambda: snap)
+        monkeypatch.setattr(hr, "self_record", lambda: (spawner_sid, snap[spawner_sid]))
+
+        with session_core.warm_served_request(True):
+            with session_core.session_identity_override(caller_sid):
+                result = reachability.resolve_addresses_bulk([caller_sid, spawner_sid])
+
+        assert result[caller_sid] == "<this session>"
+        assert result[spawner_sid] != "<this session>"

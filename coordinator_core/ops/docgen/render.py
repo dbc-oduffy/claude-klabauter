@@ -124,7 +124,7 @@ def _render_value(spec: dict, values: Mapping[str, Any]) -> str:
 def _render_keyed_value(spec: dict, value: Any) -> str:
     """Shared truthy-branch shape: quote-or-str, then ``key: rendered+suffix``.
 
-    Review: code-reviewer — this line was byte-identical across
+    This line was byte-identical across
     ``_render_present_as_null``, ``_render_optional_omit``, and
     ``_render_value_or_literal_fallback``; each idiom's distinct behavior lives
     entirely in its ABSENT branch, which stays separate per caller below.
@@ -255,7 +255,7 @@ def _template_index(directory: str | Path | None) -> dict[str, dict]:
         data = template_format.load_template(f)
         doc_type = data["doc_type"]
         if doc_type in index:
-            # Review: code-reviewer — was silent last-wins (whichever file sorts
+            # Was silent last-wins (whichever file sorts
             # last alphabetically won with zero signal); fail loud instead, since
             # this is the render path's own runtime surface, not just a
             # test-module cross-check.

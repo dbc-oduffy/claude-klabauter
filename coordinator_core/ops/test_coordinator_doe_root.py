@@ -502,6 +502,25 @@ def test_f1_marketplace_cache_rung_newest_version_wins(tmp_path, monkeypatch):
     assert result == str(cache_parent / "4.0.0")
 
 
+def test_f1_marketplace_cache_rung_excludes_unparseable_version_dirs(tmp_path, monkeypatch):
+    """Opaque hash-named cache dirs (e.g. a github-sourced install's commit
+    SHAs) must not out-rank a real semver dir via leading-digit coercion --
+    only strictly numeric, <=3-segment dot-versions are ranking candidates.
+    Pre-fix, `021d0d725330` parsed as (21, 0, 0) and `0371a29ed35d` as
+    (371, 0, 0), so the hash with the longer leading-digit run won on an
+    ordering that reflects nothing about install recency. Mirrors both
+    bin/-side twins' own version-compare regression test."""
+    fake_home = tmp_path / "f1-mktcache-hash-fake-home"
+    cache_parent = fake_home / ".claude" / "plugins" / "cache" / "coordinator-claude" / "coordinator"
+    (cache_parent / "0371a29ed35d").mkdir(parents=True)
+    (cache_parent / "021d0d725330").mkdir(parents=True)
+    (cache_parent / "1.2.3").mkdir(parents=True)
+
+    monkeypatch.setenv("CLAUDE_HOME", str(fake_home))
+
+    assert mod._cf_marketplace_cache_rung() == str(cache_parent / "1.2.3")
+
+
 def test_f1_marketplace_cache_rung_ordered_ahead_of_flat_layout(tmp_path, monkeypatch):
     """F1: the marketplace-cache rung must be tried BEFORE the flat-layout
     rung (matching both bin/-side twins' rung order: pointer -> marketplace

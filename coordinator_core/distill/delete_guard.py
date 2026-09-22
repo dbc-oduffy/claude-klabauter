@@ -628,7 +628,7 @@ def check_distill_fate(frontmatter_text: str, path: Path, repo_root: Path) -> Gu
                 "distill_fate absent and actioned-date undeterminable — fail-closed retain",
             )
         if actioned_date == _UNTRACKED:
-            # Review: code-reviewer Finding 1 (2026-08-06) — fail-closed, matching
+            # fail-closed, matching
             # _candidate_actioned_date's docstring: a zero-history result is
             # indistinguishable from a shallow clone / gc-pruned / sparse-checkout
             # false negative on a genuinely old, fully-committed candidate. The
@@ -670,7 +670,7 @@ def check_distill_fate(frontmatter_text: str, path: Path, repo_root: Path) -> Gu
         target = Path(capture)
         if not target.is_absolute():
             target = repo_root / target
-        # Review: code-reviewer — Finding 2: `.exists()` alone is also True for a
+        # `.exists()` alone is also True for a
         # directory (whose `.stat().st_size` is platform-dependent, often non-zero),
         # so a mis-stamped `in_repo_capture:` pointing at a directory could pass this
         # guard despite capturing no actual content. `.is_file()` closes that.
@@ -843,7 +843,7 @@ def evaluate_candidate_detailed(
     fm_split = split_frontmatter(text)
     frontmatter_text = fm_split.fm_text if fm_split is not None else ""
 
-    # Review: workflow-review (2026-07-12) — previously passed candidate.path.name
+    # Previously passed candidate.path.name
     # (bare filename), a strictly looser rg needle than sidecar_sweep.py's sibling
     # caller of the same shared guard (which passes the repo-relative path). A bare
     # filename over-matches for generically-named candidates; normalized to

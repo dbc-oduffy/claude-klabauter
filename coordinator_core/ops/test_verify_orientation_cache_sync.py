@@ -1,7 +1,6 @@
 """
 Tests for coordinator_core.ops.verify_orientation_cache_sync.
 
-Review: code-reviewer F5 (2026-07-17 BIG_PORT Wave A verification pass) —
 this module shipped with zero automated coverage despite being the most
 edge-case-dense item in its slice (8 schema-shape regexes + a 3-branch
 `*.uproject` detector). Covers: one PASS fixture, one violation per
@@ -244,7 +243,7 @@ def test_workstream_line_exceeds_body_cap(tmp_path):
     body = _PASS_BODY.replace("1. Some workstream name\n", long_line + "\n")
     cache_path = _write(tmp_path, body)
     violations, _ = verify(str(cache_path), str(tmp_path))
-    # Review: code-reviewer F4 — message cites the live constant (84), not a
+    # Message cites the live constant (84), not a
     # stale "80-char" literal; this test pins the two staying in sync.
     assert any("exceeds 84-char body cap" in v for v in violations)
 

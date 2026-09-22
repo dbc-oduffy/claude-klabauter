@@ -93,7 +93,7 @@ def _git_mv(repo_root: str, src: str, dst: str) -> bool:
         ["git", "-C", repo_root, "mv", src, dst],
         capture_output=True,
         text=True,
-        # Review: code-reviewer — Windows portability convention applied
+        # Windows portability convention applied
         # inconsistently across this wave's siblings; align this call site.
         **no_console_creationflags(),
     )
@@ -133,7 +133,7 @@ def main(argv: List[str]) -> int:
     """CLI entry: arg parse, root resolution, scan, migrate, print, return rc."""
     explicit_root: Optional[str] = None
 
-    # Review: code-reviewer — `--root ""` (empty explicit value) previously fell
+    # `--root ""` (empty explicit value) previously fell
     # through unconsumed and silently degraded to env/git-auto-discovery instead
     # of erroring on the operator's explicit (if empty) flag. Now an explicit
     # usage error, matching `--root=` below.

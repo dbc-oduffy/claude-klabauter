@@ -117,7 +117,7 @@ def test_read_memo_body_none_on_non_string_path(tmp_path):
     assert _read_memo_body(ctx, "") is None
 
 
-# Review: code-reviewer (F1) — UnicodeDecodeError (a ValueError subclass) was not caught
+# UnicodeDecodeError (a ValueError subclass) was not caught
 # by the original `except OSError` guard, so a non-UTF-8 memo body crashed the whole
 # section's collect() rather than fail-opening to None. Regression test for the widened
 # `except (OSError, UnicodeDecodeError)` guard.

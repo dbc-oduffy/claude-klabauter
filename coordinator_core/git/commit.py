@@ -741,7 +741,7 @@ def _cas_target(repo: Union[str, Path]) -> Optional[Tuple[Path, str]]:
     writes a loose ref that shadows it, which is what git itself does on the
     first ref update after a pack.
 
-    # Review: coordinator-code-reviewer -- the loose-or-packed existence
+    # The loose-or-packed existence
     # check is shared with the sibling resolver in git_native.py via
     # `git_objects._ref_exists_loose_or_packed`, so the two stay in sync
     # rather than drifting as hand-kept-identical copies.
@@ -1131,6 +1131,17 @@ def commit_paths(
                 declared_absent_from_head.append(p)
         elif head_entry == val:
             no_delta.append(p)
+
+    # UNDECLARED STAGED DELETION (op-route leg of `state/bug-backlog/
+    # 2026-08-31-four-bug-blitz-commits-deleted-five-file-6216c89502b9.
+    # yaml`): a genuine, HEAD-tracked deletion -- `delete_list` minus the
+    # phantom-already-absent members just split into `declared_absent_
+    # from_head` above -- whose message never says so. Reuses the spine
+    # walk just finished rather than probing again: zero added spawns,
+    # zero added reads. Sits before any tree or commit object is written,
+    # same as every other refusal on this route.
+    genuine_deletions = [p for p in delete_list if p not in declared_absent_from_head]
+    action_guard.assert_no_undeclared_staged_deletion(genuine_deletions, message)
 
     if not allow_empty and len(no_delta) == len(assembled):
         raise NothingToCommit(

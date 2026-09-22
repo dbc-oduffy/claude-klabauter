@@ -597,7 +597,7 @@ def test_every_suppressed_peer_gets_its_own_declination(tmp_path):
     """DoE's wording: a declination for every roster entry it does not message,
     naming which gate failed. One suppressed peer, one row, carrying its reason.
 
-    Review: overengineering-reviewer (finding #4, EM-ratified partial) -- the
+    The
     per-peer declination is a projection of `suppressed`, folded in there
     (`obligation`/`dwell_seconds` on the row itself) rather than round-tripped
     through `declined`, which now names only tick-level declinations.
@@ -730,7 +730,7 @@ def test_the_share_paths_are_one_owners_answer_not_three_copies(tmp_path):
     ledger written at `machinery_paths.ledger_path` is readable through both
     `send_pass.undischarged_obligations` and `obligations.for_peer`.
 
-    Review: overengineering-reviewer (finding #2, minor, accepted) -- this
+    This
     used to compare three separately-bound private aliases for equality;
     the aliases are gone, so the meaningful check is that a producer and a
     reader land on the same file, not that two names for one function match.

@@ -191,7 +191,7 @@ def _select_highest_tag(tags) -> Optional[str]:
     tiebreak — mirrors the bash `awk '{split(...,a,/[.+-]/); printf "%010d..."}
     | sort | tail -1'` pipeline. Prerelease/build suffixes are stripped by the split
     and never consulted for ordering (the Staff Engineer F4 — do not use PEP440 semantics)."""
-    # Review: code-reviewer -- dedup only; `sorted()` is dead preprocessing, the
+    # Dedup only; `sorted()` is dead preprocessing, the
     # 4-tuple `key` below (numeric parts + tag string) already fully determines
     # both the numeric ordering and the lexical tie-break for `max`.
     uniq = set(tags)

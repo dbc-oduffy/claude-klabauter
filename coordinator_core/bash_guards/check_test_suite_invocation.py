@@ -1913,7 +1913,7 @@ def _segment_contains(cfg_seg: Sequence[str], inv_seg: Sequence[str]) -> bool:
     ``coordinator/tests`` token at all, so it does not match and stays
     Tier T.
 
-    Review: code-reviewer — a zero-argument configured segment (a bare
+    A zero-argument configured segment (a bare
     ``fast_test_cmd: pytest`` declaration) constrains nothing, so
     ``set().issubset(x)`` was vacuously True for EVERY invocation of that
     runner, including a genuinely narrower one (``pytest
@@ -1940,7 +1940,7 @@ def _cfg_segments_satisfied(cfg_segments: Sequence[Tuple[str, ...]],
     one command's ``_normalized_segments``) appear somewhere in
     ``invocation_segments``?
 
-    Review: code-reviewer — factored out of ``_matches_configured_cmd`` and
+    Factored out of ``_matches_configured_cmd`` and
     ``_classify_command_core``, which independently built the identical
     ``all(any(_segment_contains ...))`` shape; the module's own stated
     principle is that ``check()`` and the public ``classify_command`` API
@@ -1952,7 +1952,7 @@ def _cfg_segments_satisfied(cfg_segments: Sequence[Tuple[str, ...]],
     R6 authority-widening exit, which must keep exact-equality semantics)
     over the default containment (every classification leg).
 
-    Review: code-reviewer (2026-08-04, Finding 1, tierf-s2-guards) -- the
+    The
     ``exact`` branch used to be one-directional (every CFG segment present
     somewhere in the invocation), never checking the reverse: an invocation
     carrying an EXTRA segment beyond the declared command's own segments
@@ -2083,7 +2083,7 @@ def _configured_test_cmds(repo_root: Optional[str]) -> List[ConfiguredCmd]:
     this function would break that pinned suite without authorization to
     edit it. Tracked as a follow-up, not silently dropped.
 
-    Review: code-reviewer — the fallback is PER TIER, not all-or-nothing.
+    The fallback is PER TIER, not all-or-nothing.
     ``_configured_test_cmds_native`` can resolve ``fast_test_cmd`` and still
     fail on ``full_test_cmd`` (a transient import hiccup inside its per-tier
     ``try/except Exception: continue``, or a future divergence between the
@@ -2311,7 +2311,7 @@ def _command_wrapped_in_suite_mutex(
     """Does the SUITE-SHAPED segment of ``cmd`` -- the one that actually
     invokes the runner -- route through ``with-suite-mutex``?
 
-    Review: code-reviewer -- the former implementation asked "does ANY
+    The former implementation asked "does ANY
     segment of this chained command start with ``with-suite-mutex``", which
     a decoy leg satisfies for free: ``with-suite-mutex -- true &&
     python -m pytest`` wrapped a no-op ``true`` while the real ``pytest``
@@ -3013,6 +3013,39 @@ def _pytest_module_args(argv: Sequence[str]) -> Optional[Sequence[str]]:
     return argv[idx + 2:]
 
 
+#: pytest's collection-only flag and its short alias (``pytest --help``:
+#: ``--collect-only, --co``). Unlike ``_PYTEST_SCOPING_FLAGS`` (a SELECTION
+#: signal that a wide positional can still launder into a full-body run, per
+#: the 2026-08-14 correction above), collect-only runs no test body at ANY
+#: breadth -- there is no full-body-execution shape for it to disguise -- so
+#: its presence is read directly off the raw argv rather than threaded
+#: through ``_walk_pytest_args``'s positional-breadth override.
+_PYTEST_COLLECT_ONLY_FLAGS = frozenset({"--collect-only", "--co"})
+
+
+def _is_pytest_collect_only_segment(argv: Sequence[str]) -> bool:
+    """Is ``argv`` (one already prefix-stripped command segment) a bare
+    ``pytest``/``py.test``/``python[3] -m pytest`` invocation carrying
+    ``--collect-only``/``--co``?
+
+    Collection is bounded work: pytest walks and reports the collection
+    tree, then exits, without running a single test body. The Tier-U grant
+    and ``with-suite-mutex`` machinery in ``check()``'s grant leg exists to
+    bound the cost of an unbounded RUN, which this shape by construction is
+    not -- see that call site's own comment for where this is consulted.
+    """
+    if not argv:
+        return False
+    if _base(argv[0]) in _PYTEST_HEADS:
+        args: Sequence[str] = argv[1:]
+    else:
+        module_args = _pytest_module_args(argv)
+        if module_args is None:
+            return False
+        args = module_args
+    return any(a.split("=", 1)[0] in _PYTEST_COLLECT_ONLY_FLAGS for a in args)
+
+
 def _agent_touched_test_files(raw_agent_id: str, session_id: str,
                               repo_root: Optional[str]) -> List[str]:
     """This agent's own touched test files, for the R9 deny text's
@@ -3260,7 +3293,7 @@ def _matches_declared_fast_test_cmd(segments_argv: Sequence[Sequence[str]],
     answers "is this literally the declared string," which is all R6's
     authority exit needs.
 
-    Review: code-reviewer (2026-08-04, Finding 1, tierf-s2-guards) -- a
+    A
     CHAINED invocation (``;``/``&&``/``|``) whose first segment is the bare
     declared ``fast_test_cmd`` and whose second segment is a DIFFERENT,
     scoped segment (e.g. this repo's own configured ``fast_test_cmd`` with a
@@ -3476,7 +3509,17 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         else cmd
     )
     matched_tiers = _matched_tiers(cmd_for_tiering, cwd, testpaths, configured)
-    if matched_tiers & {"U", "F"}:
+    # Collect-only carve-out (2026-09-21): a collection pass never runs a
+    # test body, so it never needs the Tier-U grant + `with-suite-mutex`
+    # machinery below -- that machinery exists to bound an unbounded RUN's
+    # cost, not a bounded collection walk. Checked here, after `detected`/
+    # `matched_tiers` are already resolved (so the tiering + identity legs
+    # above are untouched -- a subagent's collect-only invocation is still
+    # denied by the identity leg, unaffected by this leg alone), and before
+    # the grant ask below, which is the only leg this shape exempts.
+    # Refusing an actual unbounded run is unchanged.
+    collect_only = any(_is_pytest_collect_only_segment(argv) for argv in segments_argv)
+    if matched_tiers & {"U", "F"} and not collect_only:
         # R6 (DR-088 amendment, 2026-07-25): a repo may DECLARE its fast
         # tier legitimately unscoped (``coordinator_core.session.
         # fast_tier_declaration`` owns that declaration and its key). This
@@ -4165,7 +4208,7 @@ _NEGATION_LOOKBACK = 300
 #: fix deliberately avoids); it enumerates a broad, closed vocabulary of
 #: verbs/phrases that actually issue a command in English ("run pytest",
 #: "verify with pytest", "please pytest the tree", "kick off pytest").
-# Review: coordinator:code-reviewer (Finding 2, P0) -- the original 10-verb
+# The original 10-verb
 # closed set missed ordinary command-issuing English ("please", "just do",
 # "kick off", "start ... and monitor"). Broadened substantially. A closed
 # set gating a detection gate is a recall risk (unlike ``_NEGATION_RE``'s
@@ -4236,7 +4279,7 @@ _START_CUE_TAIL_RE = re.compile(r"\bstart(?:ing)?\s*$", re.IGNORECASE)
 #: Checked ahead of the lead-strip fallback so a broadened cue set (above)
 #: can never override a clause that structurally reads as prose even when
 #: it happens to contain a cue-adjacent word elsewhere.
-# Review: coordinator:code-reviewer (Finding 2, P0) -- explicit prose-shape
+# Explicit prose-shape
 # negative patterns per the suggested fix, covering the repro corpus's
 # copula/preposition shapes ("is in pytest testpaths", "as a pytest
 # oracle", "backed by a re-runnable pytest node id").
@@ -4250,7 +4293,7 @@ _PROSE_NEGATIVE_RE = re.compile(
 #: testing whether nothing of substance precedes the runner token: plain
 #: whitespace, shell prompt markers (``$``), and bullet/numbered-list
 #: markers (``-``, ``*``, ``1.``, ``2)``).
-# Review: coordinator:code-reviewer (Finding 4, P2) -- ``#`` and ``>`` were
+# ``#`` and ``>`` were
 # previously in this permissive class, treating markdown heading/blockquote
 # markers as equivalent to a shell prompt lead-in; a bare (non-fenced) line
 # `` # pytest configuration notes`` or ``> pytest already covers this``
@@ -4265,7 +4308,7 @@ _BARE_LINE_LEAD_RE = re.compile(r"^[\s\-*\$\d\.\)]+")
 #: would strip the leading letters off ordinary prose words too, e.g.
 #: "Run "), so a lettered marker gets its own narrowly-anchored pattern
 #: instead: exactly one letter immediately followed by ``.``/``)``.
-# Review: coordinator:code-reviewer (Finding 3, P1) -- numeric list markers
+# Numeric list markers
 # (``1.``, ``2)``) were already covered by ``_BARE_LINE_LEAD_RE``; lettered
 # markers (``a.``, ``b)``) were not, so a lettered-list command line like
 # ``b. pytest`` evaded detection while the numeric equivalent was caught.
@@ -4275,7 +4318,7 @@ _LIST_MARKER_LEAD_RE = re.compile(r"^[A-Za-z][.\)]\s*")
 #: ``_bare_line_is_command_shaped``) to the CURRENT clause rather than the
 #: whole prefix -- a sentence/clause break a cue must not reach across.
 #: Restricted to SENTENCE-ending punctuation only (``.``/``;``).
-# Review: coordinator:code-reviewer (Finding 1, P0) -- ``:``/``,`` were
+# ``:``/``,`` were
 # previously clause boundaries too, so a colon-headed label instruction
 # ("Run: pytest", "Verify: pytest" -- an extremely common dispatch-brief/
 # README idiom) discarded the cue word into the segment BEFORE the split,

@@ -15,6 +15,24 @@ What this module does NOT do: it does not fix any orphan, does not touch
 `owner:orphan` event into exactly one of five causes, and emits counts by
 cause / path / session for a given day (or across all days if none is given).
 
+Coverage (state/bug-backlog/2026-08-28-the-scope-guard-s-instrument-is-absent
+-f-d1921a288f7b.yaml): every count above is drawn ONLY from sessions that
+happen to carry a `.git/coordinator-sessions/<id>/` directory, and nothing in
+`coordinator_core` provisions that directory for a plain committing session --
+it exists only if `hooks.session_heartbeat` round-tripped the control-plane
+engine, or one of five unrelated DoE hooks happened to fire. A zero from the
+counts above therefore does not mean "no foreign staged paths"; it can just
+as easily mean "the arm never ran because the directory never existed". The
+row's own remedy (b) is this module's job, not the registrar's: report
+`coverage` explicitly (`sessions_with_dir` / `committing_sessions`) so no
+number derived from `by_cause` etc. can be silently read as a population
+rate. `committing_sessions` is the count of distinct `Session-Id` git
+trailers reaching HEAD (scoped to `--since` when given, matching the
+`owner:orphan` window); `sessions_with_dir` is the count of directories
+actually present under `.git/coordinator-sessions/`. Remedy (a) --
+guaranteeing a directory for every committing session -- is a registrar-side
+design decision this module does not make.
+
 Cause taxonomy (checked in this order -- first match wins):
 
   - ``archival-sink``: path lives under an ``archive/`` prefix. Files moved
@@ -132,6 +150,16 @@ class CensusResult:
     C6 gate must be able to name every member of); populated for the other
     causes too, since a re-runnable census is only useful if its counts are
     checkable against the events that produced them.
+
+    `coverage` -- see the module docstring's "Coverage" section. Always
+    populated (never omitted), so a reader of `to_dict()` cannot mistake a
+    high-coverage run for a low-coverage one by their shape alone:
+    `sessions_with_dir` (directories actually present under
+    `.git/coordinator-sessions/`), `committing_sessions` (distinct
+    `Session-Id` trailers reaching HEAD in the same window, or `None` if the
+    `git log` read failed -- fails toward "unknown", never toward a false
+    zero), and `coverage_ratio` (`sessions_with_dir / committing_sessions`,
+    or `None` when the denominator is `None` or `0`).
     """
 
     day: Optional[str]
@@ -140,6 +168,7 @@ class CensusResult:
     by_path: Dict[str, int] = field(default_factory=dict)
     by_session: Dict[str, int] = field(default_factory=dict)
     members: Dict[str, List[Dict[str, str]]] = field(default_factory=dict)
+    coverage: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -149,6 +178,7 @@ class CensusResult:
             "by_path": dict(self.by_path),
             "by_session": dict(self.by_session),
             "members": {k: list(v) for k, v in self.members.items()},
+            "coverage": dict(self.coverage),
         }
 
 
@@ -448,6 +478,57 @@ def classify_cause(git_root: str, event: OrphanEvent) -> str:
     return "genuinely-unowned"
 
 
+def _count_session_dirs(git_root: str) -> int:
+    """Count directories actually present under `.git/coordinator-sessions/`
+    -- the denominator side of coverage. Zero, not a crash, when the hub
+    itself does not exist (matches `_iter_scope_warning_logs`'s own posture).
+    """
+    sessions_root = os.path.join(git_root, ".git", "coordinator-sessions")
+    if not os.path.isdir(sessions_root):
+        return 0
+    count = 0
+    for entry in os.listdir(sessions_root):
+        if os.path.isdir(os.path.join(sessions_root, entry)):
+            count += 1
+    return count
+
+
+def _count_committing_sessions(git_root: str, since: Optional[str] = None) -> Optional[int]:
+    """Count distinct `Session-Id` git trailers reaching HEAD, scoped to
+    `since` (an ISO-8601 instant, matching `run_census`'s own `--since`) when
+    given -- the numerator side of coverage this module cannot get from
+    session-directory state alone.
+
+    Returns `None`, never `0`, when the `git log` read itself fails (missing
+    `git`, a non-repo `git_root`, a timeout) -- a coverage ratio computed
+    against a failed read must read as "unknown", not as "100% coverage of a
+    zero-commit population".
+    """
+    args = ["log", "--format=%(trailers:key=Session-Id,valueonly)"]
+    if since:
+        args.append(f"--since={since}")
+    args.append("HEAD")
+    result = run_git(args, cwd=git_root)
+    if not result.ok:
+        return None
+    return len({line.strip() for line in result.stdout.splitlines() if line.strip()})
+
+
+def _compute_coverage(git_root: str, since: Optional[str] = None) -> Dict[str, object]:
+    sessions_with_dir = _count_session_dirs(git_root)
+    committing_sessions = _count_committing_sessions(git_root, since=since)
+    coverage_ratio = (
+        sessions_with_dir / committing_sessions
+        if committing_sessions
+        else None
+    )
+    return {
+        "sessions_with_dir": sessions_with_dir,
+        "committing_sessions": committing_sessions,
+        "coverage_ratio": coverage_ratio,
+    }
+
+
 def run_census(
     git_root: str, day: Optional[str] = None, since: Optional[str] = None
 ) -> CensusResult:
@@ -460,6 +541,11 @@ def run_census(
     docstring). Resets the per-run op-output-prefix / touch-claim caches
     first, so a fix that changed op source or the touch record between two
     calls is reflected, not served stale from the previous call.
+
+    `result.coverage` is always populated (see `CensusResult`'s docstring)
+    -- every `by_cause` / `by_path` / `by_session` count above is drawn only
+    from the sessions `coverage.sessions_with_dir` counts, never from the
+    full `coverage.committing_sessions` population.
     """
     global _op_output_prefix_cache, _any_touch_claim_cache
     _op_output_prefix_cache = None
@@ -484,6 +570,7 @@ def run_census(
             }
         )
 
+    result.coverage = _compute_coverage(git_root, since=since)
     return result
 
 

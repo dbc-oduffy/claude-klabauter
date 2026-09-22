@@ -1197,7 +1197,7 @@ def _tier1b_pointer_and_shim(
             # host-INDEPENDENT by design: every host checks every shape, because a
             # shim generated on one host can be read on another.
             #
-            # Review: code-reviewer S7 asked whether the UNC arm over-matches a
+            # code-reviewer S7 asked whether the UNC arm over-matches a
             # non-path `\\` escape sequence in a shell body. It does not, and
             # the arm stays as written: the arm demands `\\`, a host token, a
             # SINGLE `\`, a share token, another single `\`, then a letter, and
@@ -1419,7 +1419,7 @@ def _tier1b_mirror_and_cold_tier(
         # fallback would expand to a bare path and the probe would measure the
         # sandbox's own layout instead of the shim's pointer read.
         if not home:
-            # Review: code-reviewer (S7 finding 1, P1) — unevaluable() is a
+            # unevaluable() is a
             # terminal verdict for this subject; without this guard the probe
             # still ran with HOME="" and could still record r.ok()/r.bad() for
             # the same AC2 assertion the line above just declared unevaluable.

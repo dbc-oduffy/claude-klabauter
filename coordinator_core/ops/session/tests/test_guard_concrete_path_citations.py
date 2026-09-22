@@ -196,7 +196,7 @@ def test_unc_escape_artifact_not_flagged() -> None:
     misread as the UNC share separator, no real UNC path present. Regression
     for the false positive `_UNC_RE` picked up before the escape-letter
     lookahead was added to its share segment."""
-    # Review: coordinator:code-reviewer -- original fixture had 4 leading
+    # Original fixture had 4 leading
     # backslashes, which `_UNC_RE` never matches under old or new pattern
     # (vacuous regression coverage). 2 backslashes is the real JSON-escaped
     # byte sequence the guard false-positived on.
@@ -652,7 +652,7 @@ def test_dead_registry_rung_yaml_folded_prose_continuation_word_colon_shape_not_
     `Word:` shape (e.g. "Note:", "Fix:") matches the key-line regex but is
     still folded prose content, not a sibling key -- it must stay exempt.
 
-    Review: coordinatorcode-reviewer-3e4f4e1b -- regression for the
+    Regression for the
     false-positive gap in `_structured_data_documentary_lines` where such a
     line prematurely ended the active prose continuation.
     """

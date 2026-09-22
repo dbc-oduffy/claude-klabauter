@@ -163,7 +163,7 @@ CALLER_PREFIXES: Tuple[str, ...] = (
 
 
 def is_caller_prefixed(name: str) -> bool:
-    # Review: coordinator-code-reviewer -- strict `>` matches both compiled
+    # Strict `>` matches both compiled
     # door legs (door_posix.c's `name_len > plen`, door.c's `name_len <= plen`
     # continue-guard); a name equal to a bare prefix carries no suffix and is
     # not a caller override, so `startswith` alone would diverge from the C

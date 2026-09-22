@@ -44,7 +44,6 @@ META_REPO_NAME_FALLBACK = "dbc-oduffy/.example-doctrine-mirror-repo"
 
 # Provenance source_kinds that are git-backed and therefore carry a non-null ref
 # (matches cockpit-contract/src/provenance.ts SourceKind + the D9 bidirectional invariant).
-# Review: code-reviewer
 # — Finding 5 (2026-07-14 entity_anchor slice review) — git_commit is in the vendored
 # isGitBacked set (provenance.ts) but was missing here; dormant today (no in-repo caller
 # passes source_kind="git_commit"), added for parity so a future caller auto-populating
@@ -89,7 +88,7 @@ def _run_git(repo_root: Path, *args: str) -> Optional[str]:
         # ValueError: raised by subprocess.run if capture_output=True is combined with explicit
         # stdout/stderr overrides; that combination isn't used here, but caught defensively
         # to match the pattern used for similar subprocess calls throughout resolvers.py.
-        # Review: code-reviewer (F7) — rationale documented; no live ValueError path for these kwargs.
+        # Rationale documented; no live ValueError path for these kwargs.
         return None
     if out.returncode != 0:
         return None
@@ -151,16 +150,16 @@ def _remote_url_to_slug(url: str) -> Optional[str]:
             # (group/subgroup/repo) is truncated to subgroup/repo, which is plausible but
             # not uniquely identifying.  Self-hosted multi-segment paths are out of scope;
             # the caller's coordinator_root_path field (AC12) is the disambiguation anchor.
-            # Review: code-reviewer (Slice-1 F4) — documents GitLab truncation rather than silently wrong.
+            # Documents GitLab truncation rather than silently wrong.
             return "/".join(parts[-2:])
         # Single-segment URL (e.g. https://host/myrepo — no owner prefix) — not a valid
         # owner/repo slug; return None so the caller falls through to local/<basename>.
-        # Review: code-reviewer (Slice-1 F3) — was returning bare name, now returns None.
+        # Was returning bare name, now returns None.
         return None
     return None
 
 
-def resolve_repo_name(repo_root: Optional[Path]) -> str:  # Review: code-reviewer (Slice-1 F2) — body guards None; annotation must match
+def resolve_repo_name(repo_root: Optional[Path]) -> str:  # Body guards None; annotation must match
     """Resolve the emitting-repo slug from *repo_root*'s own git remote.
 
     Attribution invariant (Q-B hybrid, 2026-07-07 per-repo-emission-cutover AC5):
@@ -320,7 +319,7 @@ class EmitContext:
         empty-by-design (see resolvers.py). Do not compute a non-null entity_anchor in
         this method.
 
-        Review: code-reviewer — Finding 4 (2026-07-14 entity_anchor slice review) — this
+        This
         method is NOT the sole provenance constructor in claude-klabauter; a future re-vendor
         agent auditing entity_anchor conformance must ALSO check:
           - ``sections/coordinator_roots.py``'s hand-rolled ``_local_fs_provenance`` dict
@@ -395,7 +394,7 @@ class EmitContext:
         ``resolve_coordinator_root()``, NOT the DoE-claude clone on a current install) — it
         would attribute the wrong tree.  ``git_branch``/``git_sha`` reflect the main
         worktree HEAD (intended).
-        # Review: code-reviewer (Slice-1 F1) — old text said "raises on no remote"; Q-B hybrid returns local/<basename> instead.
+        # Old text said "raises on no remote"; Q-B hybrid returns local/<basename> instead.
 
         Spawn count (2026-08-22, ``the-import-path-costs-nothing`` C11):
         ``git_branch``/``git_sha`` are resolved SPAWN-FREE — ``_resolve_git_branch`` and

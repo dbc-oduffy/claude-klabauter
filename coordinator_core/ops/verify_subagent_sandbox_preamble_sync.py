@@ -366,7 +366,7 @@ def run(
             stdout_lines.append(consumer)
         return 0, stdout_lines, stderr_lines
 
-    # Review: code-reviewer — guard against OSError (permission/race-deleted) and
+    # Guard against OSError (permission/race-deleted) and
     # UnicodeDecodeError (non-UTF-8 content) so this fail-loud gate script stays on the
     # documented 0/1/2 exit-code table instead of propagating a raw traceback.
     try:

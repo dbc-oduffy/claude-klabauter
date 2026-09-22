@@ -32,11 +32,17 @@ classified by path pattern — NOT directories.
 
 CLI contract (unchanged from the bash oracle):
     review-brightline-gate.sh [--session-id <id>] [<git-range>]
-    range default: `git merge-base origin/main HEAD`..HEAD
+    range default: `git merge-base origin/main HEAD`..HEAD — REFUSED (exit 1)
+    when neither --session-id nor an explicit <git-range> is given AND HEAD
+    is on a shared `work/*` branch (see `_resolve_range`'s bare-argv-refusal
+    note); the bash oracle carried no such guard, so this is a deliberate,
+    non-faithful divergence, not a reproduced quirk.
 
 --session-id <id> filters the range to commits whose trailer matches
-`^Session-Id: <id>$` (prepare-commit-msg hook injects this trailer per
-docs/wiki/workstream-complete-review.md), recomputing all four metrics over
+`^Session-Id: <id>` (prepare-commit-msg hook injects this trailer per
+docs/wiki/workstream-complete-review.md — UNANCHORED at the end, 2026-09-21,
+since a trailing `$` silently drops a commit whose `Session-Id` line is not
+the message's last line), recomputing all four metrics over
 the filtered commit set only. A zero-match against the resolved `range_`
 first retries against a session-aware floor (C2, 2026-08-08,
 `_resolve_session_floor`) — the session's own earliest commit reachable
@@ -45,9 +51,52 @@ advanceable) merge-base — before falling back to the vacuous outcome
 (`VERDICT=indeterminate`, exit 0, stderr note) — NOT the same as a `range`
 resolution failure (exit 1).
 
+The de-anchoring above was applied without reproducing the live drop
+end-to-end: state/bug-backlog/2026-08-10-session-id-selector-anchored-on-
+drops-a-047ebb4e9793.yaml's own residual 1 notes a synthetic tmp-repo
+commit of the matching trailer shape passes the anchored form fine, and
+this clone carries no `edf8c6b3a` object to byte-diff against (`git
+cat-file -t edf8c6b3a` — unknown revision) — the mechanism stays
+unidentified, same as when that row was filed. That row's caution against
+touching a shared attribution surface without reproduction names hazard
+bug 2026-08-10-workstream-complete-measures-review-scal-a52c3f9d55d2
+(`_measure_session_review_scale_inputs`'s uncommitted leg): there, that
+leg's fallback swept the ENTIRE shared dirty working tree (gross_loc=1775,
+commits=0, five surfaces none authored by the session) and disagreed 18x
+with a DIFFERENT producer measuring the SAME session at the SAME point in
+time — this module's own `--session-id`-filtered CLI, which correctly
+reported loc=96 commits=1 by trailer-filtering the range. (A related but
+distinct bug, state/bug-backlog/2026-08-14-review-scale-uncommitted-leg-
+attributes-peer-work.yaml, is the one where the SAME measurement gives two
+different answers for one session minutes apart as file state transitions
+from uncommitted to committed; it is still open and does not name this
+module.) Neither mechanism transfers here — dropping the trailing `$` is a
+pure text-match WIDENING applied uniformly to every `_session_scoped`/
+`_resolve_session_floor` caller at once, not a second disagreeing producer
+and not a state transition one session can straddle mid-measurement — and
+the only failure mode a widened match opens is a `session_id`-prefix
+collision, which `session_id`'s UUID shape makes practically nil. The row's
+residual 2
+literally named `_compute_session_oracle_single` as the still-anchored
+sibling; that function was deleted by K-007 (2026-08-19) and no longer
+exists — `_session_scoped` is its renamed successor and the caution
+transfers to it as the live `--session-id` CLI entry point.
+
+`coordinator_core/chain_attribution.py::bulk_grep_attributed_shas` (its own
+`--grep=^Session-Id: <sid>$`, feeding the chain-terminal/N+1-amplification
+path) still builds the anchored form and is DELIBERATELY left untouched by
+this fix — it is outside this row's fix_files scope, not checked-and-
+found-unaffected. `coordinator_core/ops/session_commits.py`'s
+`resolve_session_commits` already builds the unanchored form (see that
+module's own docstring); `coordinator_core/ops/completion_ops.py`'s
+`_SESSION_ID_TRAILER_RE` comment references a `_collect_session_log` that
+does not exist in this tree — neither is a live anchored `--grep` and
+neither needed touching here.
+
 Exit codes: 0 — verdict printed (incl. vacuous zero-match). 1 — usage error
 (bad --session-id, missing --session-id argument, unresolvable origin/main,
-or a die-silent gate — see negative-spec).
+a bare invocation refused on a shared `work/*` branch, or a die-silent gate
+— see negative-spec).
 
 Port of: review-brightline-gate.sh (DoE b5a4192c, 2026-07-20)
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
@@ -130,6 +179,12 @@ SURFACES_THRESHOLD = 4
 _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
 _LOC_RE = re.compile(r"(\d+) insertion|(\d+) deletion")
 _TEST_DIR_RE = re.compile(r"(^|/)tests?/")
+
+# coordinator:review A.1 names `work/*` as the shared, peer-advanceable
+# branch shape that must never default to `origin/main...HEAD` — a bare
+# invocation there sweeps in every session's already-committed work, not
+# just the caller's own. See `_resolve_range`'s bare-argv branch.
+_SHARED_BRANCH_RE = re.compile(r"^work/")
 
 # chain_oracle (C3) defensive file-granularity noise exclusion — a commit is
 # noise IFF every file it touches matches one of these path rules; a MIXED
@@ -444,12 +499,35 @@ def _verdict(loc: int, commits: int, surfaces: int) -> str:
     return "single-reviewer-ok"
 
 
+def _current_branch() -> str:
+    """Best-effort abbreviated current branch name (`""` on any failure —
+    detached HEAD, not a repo, git missing). Never raises."""
+    out, rc = _run_git(["rev-parse", "--abbrev-ref", "HEAD"])
+    if rc != 0:
+        return ""
+    return out.strip()
+
+
 def _resolve_range(argv: List[str]) -> Tuple[Optional[str], Optional[str], int]:
     """Parse `[--session-id <id>] [<range>]`.
 
     Returns `(range_, session_id, rc)`. On a usage error, `range_` is None
     and `rc` is the exit code the caller should return immediately (a
     diagnostic has already been printed to stderr).
+
+    BARE-ARGV SHARED-BRANCH REFUSAL (coordinator:review A.1): when neither
+    `--session-id` nor an explicit `<range>` is given, this used to default
+    unconditionally to `origin/main..HEAD`, which routes straight to
+    `_unfiltered` — on a long-lived shared `work/*` branch that range can
+    span every peer session's already-committed work (measured: ~150x the
+    session-scoped figure on a 4012-commit branch), and the gate reported a
+    forced `PARTITION-MANDATORY` over the whole branch with no indication it
+    had measured anything other than the caller's own session. A.1 forbids
+    exactly this default; this refuses it rather than silently answering for
+    the branch instead of the session. An explicit `<range>` argument is
+    unaffected — the caller has already scoped it themselves — and this
+    check never fires once `--session-id` is supplied, since that path is
+    filtered downstream regardless of how wide `range_` is.
     """
     argv = list(argv)
     session_id = ""
@@ -471,6 +549,17 @@ def _resolve_range(argv: List[str]) -> Tuple[Optional[str], Optional[str], int]:
     if argv:
         range_ = argv[0]
     else:
+        if not session_id:
+            branch = _current_branch()
+            if _SHARED_BRANCH_RE.match(branch):
+                print(
+                    f"{_PROG}: refusing to default to origin/main..HEAD on "
+                    f"shared branch {branch!r} — pass --session-id or an "
+                    "explicit <range> (coordinator:review A.1: a bare "
+                    "invocation must not answer for the whole shared branch)",
+                    file=sys.stderr,
+                )
+                return None, None, 1
         base_out, rc = _run_git(["merge-base", "origin/main", "HEAD"])
         base = base_out.strip()
         if rc != 0 or not base:
@@ -570,7 +659,7 @@ def _accumulate_countable_rows(
         for added, deleted, path, status in countable:
             a = int(added) if added.isdigit() else 0
             d = int(deleted) if deleted.isdigit() else 0
-            # Review: code-reviewer — P3: this two-step truncation (int() here,
+            # This two-step truncation (int() here,
             # then int() again below) is safe from compounding rounding error
             # ONLY because `_substance_weight` is 0-or-1 valued — the first
             # `int()` is a no-op whenever weight=1.0 (nothing to truncate) and
@@ -616,9 +705,15 @@ def _resolve_session_floor(session_id: str) -> Optional[str]:
     "do not widen the range over peer commits" — that warning is about
     sweeping a peer's DIFF into the measurement, not about how far back the
     trailer search itself looks.
+
+    UNANCHORED at the end (2026-09-21), matching `_session_scoped`'s own
+    `--grep` calls and `workstream_complete._session_owned_shas` — see that
+    function's docstring for why the trailing `$` is dropped: it silently
+    excludes a commit whose `Session-Id` trailer is not the message's last
+    line.
     """
     shas_out, rc = _run_git(
-        ["log", "--pretty=%H", f"--grep=^Session-Id: {session_id}$", "HEAD"]
+        ["log", "--pretty=%H", f"--grep=^Session-Id: {session_id}", "HEAD"]
     )
     if rc != 0:
         return None
@@ -683,6 +778,18 @@ def _count_untrailered_commits(range_: str) -> int:
 def _session_scoped(range_: str, session_id: str) -> int:
     """`--session-id`-filtered scan over `range_`.
 
+    UNANCHORED `--grep` (2026-09-21): both the initial scan and the
+    floor-retry drop the trailing `$` that used to close
+    `^Session-Id: {session_id}$`. That anchor silently dropped a real
+    commit whose `Session-Id` trailer was not the message's last line
+    (verified live over a session's own commits; see
+    `state/bug-backlog/2026-08-10-session-id-selector-anchored-on-drops-a-
+    047ebb4e9793.yaml`) — an undercount, which is the direction that
+    quietly shrinks how much work gets reviewed. `_session_owned_shas` in
+    `workstream_complete` already reads its own `Session-Id` scan
+    unanchored for the same reason; this brings the two producers back
+    into agreement.
+
     Zero-match against `range_` first retries with a session-aware floor
     (`_resolve_session_floor`, C2) — a shared-branch merge-base can advance
     past this session's own commits as peers push, which is not the same as
@@ -716,7 +823,7 @@ def _session_scoped(range_: str, session_id: str) -> int:
     outcome, not the die-silent infra-failure case below (which prints
     nothing and returns 1)."""
     shas_out, _rc = _run_git(
-        ["log", "--no-merges", "--pretty=%H", f"--grep=^Session-Id: {session_id}$", range_]
+        ["log", "--no-merges", "--pretty=%H", f"--grep=^Session-Id: {session_id}", range_]
     )
     filtered_shas = [line for line in shas_out.splitlines() if line.strip()]
     filtered_count = len(filtered_shas)
@@ -726,7 +833,7 @@ def _session_scoped(range_: str, session_id: str) -> int:
         if floor is not None:
             retry_range = f"{floor}..HEAD"
             retry_shas_out, _rc2 = _run_git(
-                ["log", "--no-merges", "--pretty=%H", f"--grep=^Session-Id: {session_id}$", retry_range]
+                ["log", "--no-merges", "--pretty=%H", f"--grep=^Session-Id: {session_id}", retry_range]
             )
             retry_shas = [line for line in retry_shas_out.splitlines() if line.strip()]
             if retry_shas:

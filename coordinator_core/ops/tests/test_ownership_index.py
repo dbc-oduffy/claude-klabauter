@@ -117,7 +117,7 @@ def test_ownership_decided_by_claim_store_not_by_frontmatter_mirror(tmp_path):
 
 
 def test_frontmatter_mirror_disagreement_is_flagged_but_still_owned(tmp_path, caplog):
-    """Review: code-reviewer — Finding 2 (P2) regression test. A basename
+    """Regression test. A basename
     WITH a claim record for sid, but whose `claimed_by` frontmatter names a
     DIFFERENT session (a stale mirror) must still be counted as owned (the
     claim-store decision is final either way) AND must produce a warning

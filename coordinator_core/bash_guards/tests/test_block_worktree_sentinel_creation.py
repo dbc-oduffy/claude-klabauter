@@ -287,7 +287,6 @@ class TestReasonClassSpecificMessages:
         assert "indirection wrapper" in reason
 
     def test_indirection_deny_offers_a_path_forward(self):
-        # Review: review-integrator (mirrors
         # test_block_approval_sentinel_creation.py::
         # test_indirection_deny_names_the_guard_and_offers_a_path_forward)
         # -- was pinning a verbatim substring of the shared

@@ -136,7 +136,7 @@ def compute_tshirt_nullable(
     """Nullable-aware sibling of ``compute_tshirt`` sharing the same
     any-criterion, highest-tier-first walk.
 
-    Review: code-reviewer — hand-rolled duplicate of this walk previously
+    hand-rolled duplicate of this walk previously
     lived inline in ``coordinator_core.ops.coordinator_complete_entry``
     because ``compute_tshirt``'s ``int`` signature can't distinguish
     "unset" from "0" (a present-but-empty dispatch log legitimately

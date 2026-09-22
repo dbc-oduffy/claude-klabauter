@@ -12,6 +12,11 @@ correct for the outside-repo question; this module's negative-spec forbids
 "fixing" it there). Drives the real production call path
 (`record_write_claims`), not the filter function in isolation, per the
 issue's own "verify against the real claiming path" requirement.
+
+Also covers the heredoc-opener sibling of the same class: `<<WORD`/`<<-WORD`
+glued to one token, and the bare `<<`/`<<-` split that arrives with its
+marker as a separate following token -- see `_LEAKED_HEREDOC_OPENER_RE` and
+`_is_bare_heredoc_opener`.
 """
 
 from __future__ import annotations
@@ -90,4 +95,22 @@ def test_real_destination_still_claimed_alongside_an_unexpanded_sibling(tmp_path
     root = _repo(tmp_path)
     record_write_claims("cp a.py f.py && cp a.py $f", _SESSION_ID, root, denied=False)
     touched = _touched_paths(root)
+    assert touched == {"f.py"}, touched
+
+
+@pytest.mark.parametrize(
+    "cmd, junk_tokens",
+    [
+        ("tee f.py <<EOF", {"<<EOF"}),
+        ("tee f.py <<'MSG'", {"<<MSG"}),
+        ("tee f.py <<-DOC", {"<<-DOC"}),
+        ("tee f.py << EOF", {"<<", "EOF"}),
+    ],
+    ids=["glued", "glued-quoted", "glued-dash", "split-on-space"],
+)
+def test_heredoc_opener_tokens_are_never_claimed(tmp_path, cmd, junk_tokens):
+    root = _repo(tmp_path)
+    record_write_claims(cmd, _SESSION_ID, root, denied=False)
+    touched = _touched_paths(root)
+    assert not (touched & junk_tokens), f"{cmd!r} claimed heredoc junk: {touched}"
     assert touched == {"f.py"}, touched

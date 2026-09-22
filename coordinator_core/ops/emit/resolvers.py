@@ -541,7 +541,7 @@ def _resolve_central_state_root(coordinator_root: Path, cwd: Path) -> Path:
     (the oracle's seam took both) but are not consulted: Rule 4's resolution depends only
     on the claude-klabauter-live-root resolver, never on the coordinator/cwd it's invoked from.
 
-    Review: code-reviewer (F2/F3) — the except-clause is ``Exception`` (not the narrower
+    The except-clause is ``Exception`` (not the narrower
     ``(RuntimeError, ImportError)``) so it actually matches this docstring's "falls back
     ... only when the resolver fails" claim (``coordinator_engine_root()``'s pointer-file
     read only catches ``OSError``, so a corrupt/non-UTF-8 pointer file raises
@@ -714,7 +714,7 @@ def resolve_coordinator_root() -> Path:
         p = Path(env_val).expanduser()
         if (p / "bin" / "query-records.py").exists():
             return p
-        # Review: code-reviewer (F3) — warn when the explicit COORDINATOR_ROOT override fails
+        # Warn when the explicit COORDINATOR_ROOT override fails
         # validation; silent drop-through masks typos and stale/partial checkouts.
         import warnings
         warnings.warn(
@@ -753,14 +753,14 @@ def resolve_coordinator_root() -> Path:
             **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
-        # Review: code-reviewer (Findings 2, 3) — added timeout=15 to match the
+        # Added timeout=15 to match the
         # sibling C4 sites (liveness.py, and the OLD wsc_commit.py, retired
         # 2026-07-29 kill-list op removal) and resolve the absolute
         # survivor path instead of a bare PATH lookup for consistency.
         proc = None
     if proc is not None and proc.returncode == 0:
         legacy = Path(proc.stdout.strip())
-        # Review: code-reviewer (F1) — validate query-records.py on the resolved path too;
+        # Validate query-records.py on the resolved path too;
         # returning on directory-existence alone re-introduces the hollow-emission bug if
         # the resolved clone is stale/partial.
         if (legacy / "bin" / "query-records.py").exists():

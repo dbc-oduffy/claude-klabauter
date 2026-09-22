@@ -34,13 +34,13 @@ import time
 from typing import Optional
 
 
-# Review: code-reviewer (Slice B F6, nit) — single shared home for the
+# Single shared home for the
 # Windows-popup-guard creationflags idiom; harness.py and op_fixtures.py import
 # this instead of each re-declaring `getattr(subprocess, "CREATE_NO_WINDOW", 0)`.
 SUBPROCESS_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 # Bounded timeout (seconds) for every subprocess.run call in this package —
-# Review: code-reviewer (Slice B F3, P2) — a hung op must fail loud (AC9's
+# A hung op must fail loud (AC9's
 # "erroring op fails loud" spirit extends to "a hanging op fails loud"), not
 # wedge the whole benchmark run indefinitely.
 SUBPROCESS_TIMEOUT_S = 60
@@ -136,7 +136,7 @@ def time_invocation(op: str, params_json: str, repo: Optional[str]) -> float:
             env=child_env,
         )
     except subprocess.TimeoutExpired as exc:
-        # Review: code-reviewer (Slice B F3, P2) — a hung child process must
+        # A hung child process must
         # fail loud like any other invalid sample, not wedge the run forever.
         excerpt = (exc.stdout or "")[:500] if isinstance(exc.stdout, str) else ""
         raise BenchmarkSampleInvalid(op, -1, f"TIMEOUT after {SUBPROCESS_TIMEOUT_S}s: {excerpt}")
@@ -146,12 +146,12 @@ def time_invocation(op: str, params_json: str, repo: Optional[str]) -> float:
     error_envelope = False
     try:
         parsed = json.loads(stdout)
-        # Review: code-reviewer (Slice C F2, nit) — a parsable-but-non-dict JSON
+        # A parsable-but-non-dict JSON
         # body (a bare list/scalar) is not a valid JSON-RPC envelope either; only
         # a dict without an "error" key is accepted.
         error_envelope = not isinstance(parsed, dict) or "error" in parsed
     except (json.JSONDecodeError, ValueError):
-        # Review: code-reviewer (Slice A F1, nit) — rewritten to name the actual
+        # Rewritten to name the actual
         # mechanism: unparsable stdout is treated as an invalid sample regardless
         # of returncode. A healthy exit 0 always emits a parsable JSON-RPC
         # envelope, so a parse failure alone is sufficient grounds to invalidate

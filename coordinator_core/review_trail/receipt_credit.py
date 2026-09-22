@@ -58,7 +58,7 @@ WHY THE RECEIPT BLOCK AND NOT THE DISPOSITIONS BLOCK. `## Integrator
 Dispositions` is the other candidate surface and it is the wrong one, for two
 independent reasons.
 
-Review: coordinator-code-reviewer, 2026-09-11 — the first reason below
+The first reason below
 described `ops/append_integrator_dispositions.py` as it stood before commit
 1b44e2138c and is now stale prose, corrected here rather than left to drift:
 `already_dispositioned=True` no longer means the call declined to write a

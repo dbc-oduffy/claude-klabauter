@@ -291,7 +291,7 @@ def _reap_probe_session_dir():
 def _unanchor(pattern: re.Pattern) -> re.Pattern:
     body = pattern.pattern.lstrip("^")
     if body == r"\\\\":
-        # Review: code-reviewer (Finding 3) -- stripping the `^` anchor off
+        # Stripping the `^` anchor off
         # the UNC pattern leaves just "two literal backslashes", which then
         # matches ANY doubled-backslash artifact mid-string, not only a
         # genuine `\\server\share`-shaped path. Require at least one

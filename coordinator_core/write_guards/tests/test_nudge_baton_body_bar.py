@@ -58,7 +58,7 @@ _AUTHORED_BODY = (
     "Next step: land C9 and hand off.\n"
 )
 
-# Review: code-reviewer — Finding 3 (P2): a narrative-bullet-only body (every
+# A narrative-bullet-only body (every
 # line syntactically matches _BULLET_RE, but each bullet is a full sentence
 # with real reasoning) must NOT be classified as a bare row-list.
 _NARRATIVE_BULLETS_BODY = (
@@ -152,7 +152,7 @@ class TestAuthoredBodyPassesThrough:
         assert result is None
 
     def test_narrative_bullets_only_no_advise(self):
-        """Review: code-reviewer — Finding 3 (P2): bullets that are full
+        """Bullets that are full
         sentences with real reasoning must not false-positive as a bare
         row-list, even though they syntactically match _BULLET_RE."""
         result = guard.check(
@@ -169,7 +169,7 @@ class TestAuthoredBodyPassesThrough:
 
 class TestPathGateAnchoring:
     def test_substring_coincidence_does_not_match(self):
-        """Review: code-reviewer — Finding 4 (P2): fnmatch's `*` crosses path
+        """fnmatch's `*` crosses path
         separators, so the unanchored glob previously matched any path
         containing the literal substring `state/handoffs/` — including an
         unrelated directory like `vendor/upstate/handoffs/`."""

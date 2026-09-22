@@ -7,7 +7,7 @@ Covers the pieces that need no subprocess/network/venv to exercise:
 and the `--claude-klabauter-live-root`/`--coordinator-root` flag -> env -> default
 resolution ladders.
 
-Review: code-reviewer 2026-07-21 Finding 8 (P2) — this 689-line installer
+This 689-line installer
 landed with zero test coverage; this file closes that gap for the
 straightforwardly-unit-testable subset (subprocess-touching paths like pip
 installs and machine-local registration are out of scope here — they need
@@ -707,7 +707,7 @@ def test_offer_homebrew_removal_returns_false_for_non_homebrew_interpreter(setup
 
 
 def test_offer_homebrew_removal_declines_on_closed_stdin_runtime_error(setup_mod, monkeypatch, tmp_path):
-    """Review: code-reviewer (2026-09-06) — the twin of
+    """The twin of
     test_offer_homebrew_removal_declines_on_eof for the OTHER exception
     91aa0da5's guard catches. A closed stdin (0<&-) raises `RuntimeError:
     input(): lost sys.stdin`, not EOFError; a mutation that keeps the AST
@@ -733,7 +733,7 @@ def test_offer_homebrew_removal_declines_on_closed_stdin_runtime_error(setup_mod
 def test_offer_warm_opt_in_defaults_on_after_closed_stdin_runtime_error(
     setup_mod, monkeypatch, tmp_path
 ):
-    """Review: code-reviewer (2026-09-06) — behavioral twin of the
+    """Behavioral twin of the
     homebrew-offer RuntimeError test, for `offer_warm_opt_in`'s own
     `try: input() except (EOFError, RuntimeError): answer = ""` guard.
     Reachable directly (agent_mode=False) without a subprocess by stubbing
@@ -1102,7 +1102,7 @@ def test_resolve_coordinator_claude_root_sibling_default_verified_exists(setup_m
     assert source.display == "sibling-dir default"
 
 
-# Review: staff-eng 2026-08-08 MAJOR-2 — the two tests above only assert on
+# The two tests above only assert on
 # `_resolve_coordinator_claude_root`'s RETURN VALUE; neither drives
 # `check_coordinator_claude_dep`, the only consumer of the honesty suffix and
 # the only thing a fresh-OSS-box stranger ever sees. That gap is why MAJOR-1
@@ -1305,7 +1305,7 @@ def test_doe_root_pointer_no_pointer_no_sibling_returns_none(setup_mod, monkeypa
     assert root is None
 
 
-# Review: staff-eng 2026-08-08 MAJOR-3 — C1F's own commit message makes the
+# C1F's own commit message makes the
 # case: "a test that only runs on this dev box passes either way, since
 # `coordinator/lib` exists here." This repo's own `coordinator/lib` always
 # exists, so the flat-`lib/` fallback branch below was dead code as far as
@@ -1663,7 +1663,6 @@ def test_install_machine_identity_idempotent_against_real_cli(setup_mod, tmp_pat
     Only `compute_*_live` are stubbed (git-identity resolution is exercised
     elsewhere); `subprocess.run` is NOT mocked here.
 
-    Review: code-reviewer (F3, P2).
     """
     import coordinator_core.machine_resolver as mr
     from coordinator_core.install._shared import resolve_machine_local_cli
@@ -3204,7 +3203,7 @@ def test_install_warm_door_claims_the_bare_name(
     `coordinator-invoke.ps1` in place, which PowerShell would resolve
     ahead of the door's `.exe`.
 
-    Review: code-reviewer Finding 5 — the collapse's whole point is that
+    The collapse's whole point is that
     this path is platform-independent; parametrized over win32/darwin/linux
     (rather than the removed single `darwin` pin) so that claim is
     machine-checked, not incidental to whichever OS runs CI.
@@ -3243,7 +3242,7 @@ def test_install_warm_door_claims_the_bare_name(
 def test_install_lfs_pre_push_gate_honours_a_non_default_hooks_path(
     setup_mod, tmp_path, monkeypatch
 ):
-    """Review: code-reviewer P2 — a repo with `core.hooksPath` set must have
+    """A repo with `core.hooksPath` set must have
     the gate written where git actually reads it, not hardcoded
     `.git/hooks`. Simulates `git rev-parse --git-path hooks` resolving to a
     non-default directory and asserts the gate lands there, not at the

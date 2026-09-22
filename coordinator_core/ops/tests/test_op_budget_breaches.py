@@ -187,6 +187,33 @@ def test_report_asserts_its_own_process_time_against_both_bars():
     assert isinstance(self_assessment["handler_total_ms"], float)
 
 
+def test_self_assessment_discloses_the_observed_clock_tick(monkeypatch):
+    """`handler_total_ms` is a single-shot `time.process_time()` reading
+    (module docstring's negative-spec: batching would mean re-running this
+    handler's own read-and-summarise body K times, multiplying the real cost
+    it reports). `clock_resolution_ms` is what makes that single-shot number
+    legible: the tick this process has actually observed, read through
+    `op_latency.process_clock_resolution_ms` (never probed -- see that
+    function's own docstring) rather than asserted or guessed."""
+    monkeypatch.setattr(op_budget_breaches, "process_clock_resolution_ms", lambda: 15.625)
+
+    summary = breach_report(entries=[_complete("op.a", 12.0)], now=BASE_T)
+
+    assert summary["self_assessment"]["clock_resolution_ms"] == 15.625
+
+
+def test_self_assessment_clock_tick_is_none_when_unobserved(monkeypatch):
+    """No `process_time` row has been recorded in this process yet -- a real
+    absence (`process_clock_resolution_ms` docstring: "stays None forever if
+    discovery could not complete"), reported as `None` rather than a guessed
+    default that would misrepresent an unknown tick as a known one."""
+    monkeypatch.setattr(op_budget_breaches, "process_clock_resolution_ms", lambda: None)
+
+    summary = breach_report(entries=[_complete("op.a", 12.0)], now=BASE_T)
+
+    assert summary["self_assessment"]["clock_resolution_ms"] is None
+
+
 def test_source_block_reports_the_read_bound_honestly():
     summary = breach_report(entries=[_complete("op.a", 12.0)], now=BASE_T)
 

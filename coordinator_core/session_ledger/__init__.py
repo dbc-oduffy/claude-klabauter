@@ -20,7 +20,7 @@ site (``ops/handoff_author_fork.py``, ``ops/queue_scaffold_baton.py``,
 ``coordinator/bin/coordinator-doc-new.py``'s C3 refusal) so emitter, parser, and
 gate agree on one grammar by construction rather than three independently
 hand-typed regexes drifting apart.
-Review: code-reviewer 49e8b242 P2 — unifies a near-miss between
+Unifies a near-miss between
 ``frontmatter.body_blocks._compile_heading_re`` (accepted `##\\s+Session\\ Ledger\\s*$`)
 and the parser's own `^## Session Ledger` (single space, no trailing anchor).
 The parser's grammar wins: it defines what actually gets summed.

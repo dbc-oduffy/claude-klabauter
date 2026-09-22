@@ -162,7 +162,7 @@ def test_skip_repo_root_unresolvable(tmp_path, capsys, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_resolve_git_root_fallback_grandparent_no_git(tmp_path):
-    # Review: code-reviewer — fills a fidelity-critical coverage gap: every
+    # Fills a fidelity-critical coverage gap: every
     # other test drives the `git rev-parse` success rung; this exercises the
     # real logical grandparent-of-plan-dir fallback (no git repo anywhere in
     # the ancestor chain), not a monkeypatched stand-in.
@@ -178,7 +178,7 @@ def test_resolve_git_root_fallback_grandparent_no_git(tmp_path):
 
 @symlink_capability.requires_symlink_capability
 def test_resolve_git_root_fallback_does_not_resolve_symlinks(tmp_path):
-    # Review: code-reviewer — locks in the module docstring's explicit
+    # Locks in the module docstring's explicit
     # negative-spec claim ("never resolves symlinks when falling back to the
     # grandparent-of-plan-dir heuristic"): the returned fallback path must
     # retain the symlinked directory component, not the realpath target.

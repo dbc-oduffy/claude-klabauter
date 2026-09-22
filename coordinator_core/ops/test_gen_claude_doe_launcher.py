@@ -196,7 +196,7 @@ def test_check_only_reports_up_to_date_after_real_render(monkeypatch, tmp_path, 
 
 
 def test_check_only_survives_missing_tmpdir(monkeypatch, tmp_path, capsys):
-    # Review: code-reviewer (2026-07-17 Finding 1) — closes the coverage gap the
+    # Closes the coverage gap the
     # reviewer named: the module's own target platform (clean Windows) never has
     # TMPDIR set, only TEMP/TMP (or nothing). This must not crash.
     _force_windows(monkeypatch)

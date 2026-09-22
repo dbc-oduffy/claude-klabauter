@@ -232,7 +232,7 @@ def scan_findings(worktree_root: Path, classify: ClassifyFn) -> List[Tuple[Path,
     Returns [(path, note), ...] for every file classify() marks reapable.
     A missing findings directory degrades to [] (not an error).
 
-    # Review: overengineering-reviewer -- single-root by design. The legacy
+    # single-root by design. The legacy
     # `state/review-trail/` root measurably holds zero files for THIS leg's
     # corpus; `_review_trail_roots`'s dual-root walk exists for
     # `scan_review_trail_rest` (C12's rest-of-corpus leg, where a genuine

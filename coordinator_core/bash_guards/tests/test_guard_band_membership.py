@@ -90,7 +90,7 @@ CONFINEMENT_DENY_NAMES = [
 # registration comment: those return allow+rewrite, which would make its
 # search-answering seam unreachable if registered after them).
 ADVISORY_REWRITE_NAMES = [
-    # Review: staff-eng, Finding 0 (2026-08-05) -- the advisory floor's
+    # The advisory floor's
     # non-hard-deny leg. Registered immediately after `check-raw-pid-
     # liveness` (the last CONFINEMENT_DENY guard) and before `offer-git-c`,
     # so it is the first ADVISORY_REWRITE entry in physical chain order.

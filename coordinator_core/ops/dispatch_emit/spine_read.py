@@ -16,7 +16,7 @@ empty-list distinction on ``writes`` (AC2), and depends_on referent
 resolution against the row-id set (AC6). It has no fenced-block or YAML
 parsing code of its own.
 
-Five fail-loud behaviours, three AC-bearing and two closing gaps the ACs
+Six fail-loud behaviours, three AC-bearing and three closing gaps the ACs
 didn't name:
 
   1. AC2 — a row with no ``writes:`` key, or a present-but-empty value
@@ -74,6 +74,17 @@ didn't name:
      name, not by location, and the epistemic-premise holdout (which keys
      on UNDECLARED) must not hold it. Source:
      state/improvement-queue/2026-09-11-dispatch-emit-takes-a-writes-under-prefi-309100e2b36b.yaml.
+  6. A row carrying ``awaiting_gate`` raises ``UndeclaredGateKeyError``
+     rather than being read tolerantly like the fields above.
+     ``awaiting_gate`` is not a property plan-tasks.schema.json declares,
+     the schema sets no ``additionalProperties: false`` to catch it, and
+     the only gate this module (or DoE-claude's wave-builder) ever reads
+     is ``external_gate``. Read tolerantly, a row carrying it validates
+     clean and dispatches exactly as though unblocked, silently discarding
+     whatever cross-repo blocker the author meant to name — the dangerous
+     direction, since silence reads as "not blocked" rather than as an
+     error. Source:
+     state/bug-backlog/2026-08-28-awaiting-gate-is-read-by-nothing-an-unde-de280708447e.yaml.
 
 A further behaviour, not one of the fail-loud ones above but load-bearing:
 ``read_spine`` excludes non-dispatchable rows (closed ``disposition``
@@ -177,6 +188,13 @@ KNOWN_DISPOSITIONS = NON_DISPATCHABLE_DISPOSITIONS | {"open"}
 _GATE_BLOCKS_AC_CLOSURE = "ac-closure"
 _GATE_CLOSURE_EVIDENCE_KEY = "closure_evidence"
 _GATE_CLEARED_KEY = "cleared"
+
+# The observed authoring near-miss the row this refuses was filed over: a
+# plausible-looking key that reads as a cross-repo blocker declaration but
+# is not one plan-tasks.schema.json defines, and that no reader anywhere in
+# this pipeline (or DoE-claude's emit-dispatch-workflow.py) consults. Named
+# once here so the refusal in read_spine never re-spells it.
+_UNDECLARED_GATE_KEY = "awaiting_gate"
 
 
 def _is_operator_row(raw: dict) -> bool:
@@ -392,11 +410,28 @@ class InvalidFieldTypeError(SpineReadError):
     """
 
 
+class UndeclaredGateKeyError(SpineReadError):
+    """Raised when a row carries ``awaiting_gate``, a key that reads like a
+    cross-repo gate declaration but plan-tasks.schema.json does not define
+    and this pipeline never reads (module docstring point 6).
+
+    The row object sets no ``additionalProperties: false``, so
+    ``awaiting_gate`` validates clean and, left tolerant like every other
+    field here, would dispatch exactly as though the row carried no gate at
+    all — the author's intended blocker silently discarded. Refusing here,
+    at emit time, is the one point the author is still present to fix it,
+    matching the row's own preferred remedy over a schema-level alias:
+    state/bug-backlog/2026-08-28-awaiting-gate-is-read-by-nothing-an-unde-de280708447e.yaml.
+    Names the row and points the author at ``external_gate``, the one gate
+    key this pipeline (and DoE-claude's wave-builder) actually reads.
+    """
+
+
 class InvalidRowIdError(SpineReadError):
     """Raised when a spine row's ``id`` is missing, non-string, or a
     duplicate of another row's ``id`` in the same spine.
 
-    Review: coordinator:code-reviewer (wsc-A, ecb99d36) — ``wave_map.
+    ``wave_map.
     _predecessors`` keys its predecessor dict by ``id``; a duplicate or
     missing id silently collapses two rows into one dict entry rather than
     raising, corrupting the predecessor graph and producing a wrong wave
@@ -554,9 +589,11 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
     duplicates another row's id, ``MalformedDependencyEdgeError`` if any
     ``depends_on`` entry is not an object with a ``chunk`` key,
     ``DanglingDependencyError`` if a well-formed ``depends_on[].chunk``
-    does not resolve against the spine's row-id set (AC6), and
+    does not resolve against the spine's row-id set (AC6),
     ``InvalidFieldTypeError`` if ``writes:``/``reads:``/``depends_on:`` is
-    declared as a non-list value rather than a list.
+    declared as a non-list value rather than a list, and
+    ``UndeclaredGateKeyError`` if any row carries ``awaiting_gate`` (module
+    docstring point 6).
     ``writes`` is UNDECLARED (AC2) on any row that omits the key or
     declares it present-but-empty; ``reads`` and ``depends_on`` both
     default to ``[]`` when omitted (neither carries an undeclared-vs-empty
@@ -650,6 +687,14 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
         if row_id in seen_ids:
             raise InvalidRowIdError(f"duplicate row id {row_id!r} in spine")
         seen_ids.add(row_id)
+        if _UNDECLARED_GATE_KEY in raw:
+            raise UndeclaredGateKeyError(
+                f"row {row_id!r} declares {_UNDECLARED_GATE_KEY!r}, which "
+                "plan-tasks.schema.json does not define and no reader in "
+                "this pipeline consults; the row would dispatch exactly as "
+                "though unblocked. Use external_gate to declare a cross-repo "
+                "blocker instead."
+            )
 
     row_ids = seen_ids
 
@@ -688,7 +733,7 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
                         "which does not end in a path separator. A single file "
                         "belongs in `writes:`."
                     )
-            # Review: coordinator:code-reviewer (P1) -- normalize a
+            # Normalize a
             # Windows-authored `\`-spelled prefix to `/` here, once, so every
             # downstream stage (wave_map's PurePosixPath-based containment
             # checks foremost) sees a directory it can reason about. git

@@ -451,7 +451,7 @@ def _build_dispatches(buckets: list, supersessions: list, repo_root: str) -> tup
                 if newer in memo_ids or older in memo_ids:
                     relevant.append(s)
             if relevant:
-                # Review: code-reviewer F2 — fold `advisory` into the rendered
+                # Fold `advisory` into the rendered
                 # basis label so AC4's demotion of `same-sender-same-locus` is
                 # observable to the ceremony reading this brief, not merely
                 # structurally present in the candidate's own shape.

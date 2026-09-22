@@ -69,7 +69,7 @@ def _resolve_repo_key(repo_root: str) -> str:
     if not matches:
         raise P4SessionChangeError(f"no registered p4 workspace for repo_root={repo_root!r}")
     if len(matches) > 1:
-        # Review: code-reviewer F4 (integrator-applied) -- two registry rows
+        # Two registry rows
         # resolving to the same physical repo_root (a re-registration under
         # a new repo_key without the old row being cleared) used to pick
         # `matches[0]` silently, letting a caller act against a possibly

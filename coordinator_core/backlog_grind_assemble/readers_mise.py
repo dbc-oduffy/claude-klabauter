@@ -554,7 +554,7 @@ def _named_run_record(inventory_dir: Path, run_id: str) -> _RecordLookup:
     AC6 no-directory-glob contract, now satisfied by construction rather
     than by convention.
 
-    Review: code-reviewer — F2, why validation sits HERE and not at
+    Why validation sits HERE and not at
     `__init__.py`'s CLI ingestion (the general path-injection convention's
     usual seam): `__init__.py` forwards `run_id` to all five readers as an
     opaque keyword and is deliberately barred from knowing it is EVER a

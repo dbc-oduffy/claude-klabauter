@@ -322,7 +322,7 @@ def coordinator_state_root(
     (the bash oracle's rc-1) or CrossCuttingStateRoot on a cross-cutting artifact
     (Rule 3, the bash oracle's rc-2).
 
-    Review: code-reviewer — ``git_root`` (Rule 5 only; ignored when
+    ``git_root`` (Rule 5 only; ignored when
     ``central=True``) lets a caller that has already resolved its own repo
     root (e.g. a subprocess-spawn boundary that would otherwise need a
     process-global ``os.chdir`` to make Rule 5's cwd-based git-toplevel
@@ -404,7 +404,7 @@ def coordinator_state_root_central() -> str:
     """Shared ``coordinator_state_root(central=True)`` wrapper, folding
     ``StateRootError`` to ``""``.
 
-    Review: code-reviewer — previously hand-duplicated verbatim across
+    Previously hand-duplicated verbatim across
     ``coordinator_core.ops.central_run_due`` and
     ``coordinator_core.ops.learn_lessons_roots`` (Rule 4 -- no subject/artifact
     given, so it resolves to ``<coordinator_engine_root()>/state``, matching
@@ -452,7 +452,6 @@ def print_map() -> str:
     # report a mirror path that the resolver itself refuses to hand out for
     # writing, which is worse than no diagnostic. On failure OR on a resolved
     # published-mirror class: null + one stderr WARN line, continue.
-    # Review: code-reviewer.
     try:
         engine_root, resolution_class = coordinator_engine_root_with_class()
         if resolution_class == _RESOLUTION_UNVERIFIED_ENV_LITERAL:

@@ -228,7 +228,7 @@ class TestHeadTailPlumbing:
 
 
 class TestSeamConfirmedOutletMessageShape:
-    """Review: code-reviewer -- Finding 1 (C19b): pins the two message-
+    """Pins the two message-
     accuracy claims for the seam-confirmed leg (`_outlet_from_seam_result`)
     that had no regression coverage -- a refactor of that function could
     silently reintroduce either defect with nothing to catch it.
@@ -478,7 +478,7 @@ class TestPrecedence:
 
 
 class TestCrashPropagatesForFailClosed:
-    """Review: code-reviewer -- Finding 3: this guard is registered in
+    """This guard is registered in
     `dispatch.py`'s `guard_chain` with `fail_closed=True`, whose whole
     contract is that an internal bug reaches `dispatch._crash_deny` rather
     than being swallowed as a silent allow. Before this fix, `check()`

@@ -191,7 +191,7 @@ class TestAC10MtimeEqual:
         # Restore mtime to original (defeats mtime-keyed cache)
         os.utime(str(hf), original_mtime)
 
-        # Review: code-reviewer — F1: in-body clear removed; autouse fixture provides clean cache at
+        # in-body clear removed; autouse fixture provides clean cache at
         # entry; without this clear a mtime-keyed impl would return a cache hit (stale "open") and
         # FAIL — that is the discrimination the test must provide.
 
@@ -255,7 +255,7 @@ def _write_chain(tmp_path: Path, n: int) -> str:
 
 
 class TestAC13MicroBenchmark:
-    # Review: code-reviewer — F9: slow mark allows `pytest -m "not slow"` for fast-feedback loops
+    # Slow mark allows `pytest -m "not slow"` for fast-feedback loops
     @pytest.mark.slow
     def test_walk_forward_100_files_within_budget(self, tmp_path: Path):
         """AC13: walk_forward across 100+ linked handoffs completes within per-file budget.
@@ -298,7 +298,7 @@ class TestAC13MicroBenchmark:
             f"walk_forward terminated early: {result['terminatedEarly']!r}"
         )
 
-        # Review: code-reviewer — F6: per-file assertion tightens SLA guard
+        # per-file assertion tightens SLA guard
         # Arithmetic: ≤2ms/file × 5 files/request = ≤10ms SLA.
         # Widen per_file_budget_ms only with documented arithmetic justification.
         per_file_budget_ms = 2.0

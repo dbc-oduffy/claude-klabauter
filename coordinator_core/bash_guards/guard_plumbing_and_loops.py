@@ -396,7 +396,6 @@ def _generic_advisory(
     # `_outlet_from_seam_result`'s cue-window trick -- see that function's
     # comment.
     #
-    # Review: coordinator:code-reviewer (Finding 6, guard-message-size-
     # discipline) -- the override note now trails the Example line (the
     # concrete command a reader would copy) rather than sitting between the
     # alternative summary and the Example, matching every other guard's

@@ -189,7 +189,7 @@ def test_append_then_parse_round_trip(tmp_path, path, disposition, fate, run_id)
 
 
 def test_append_then_parse_round_trip_fate_with_parens(tmp_path):
-    # Review: workflow-review — writer/parser round-trip regression guard for a
+    # writer/parser round-trip regression guard for a
     # fate string containing parentheses (previously silently dropped by the
     # parser's parenthesis-excluding fate capture group).
     log_path = tmp_path / "distillation-log.md"

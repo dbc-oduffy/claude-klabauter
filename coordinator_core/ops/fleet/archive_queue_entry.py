@@ -191,7 +191,7 @@ async def _handle_batch(worktree: Path, queue_dir: Path, entry_paths: list, dry_
     for entry_path_raw in entry_paths:
         raw = entry_path_raw.strip() if isinstance(entry_path_raw, str) else ""
         if not raw:
-            # Review: coordinator:code-reviewer — echo the same normalized
+            # Echo the same normalized
             # `raw` every other branch reports, not the unstripped/untyped
             # entry_path_raw, for a consistent per-item id shape.
             items.append({"id": raw, "dest": None, "error": "empty entry_path"})

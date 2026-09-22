@@ -447,7 +447,7 @@ def last_assistant_text(transcript_path: str) -> str:
     try:
         size = os.path.getsize(transcript_path)
         with open(transcript_path, "rb") as fh:
-            # Review: code-reviewer — F8: seek on raw bytes, not a text-mode
+            # Seek on raw bytes, not a text-mode
             # stream — text-mode seek() is only documented as safe for
             # offsets from tell() or 0, not an arbitrary computed byte offset.
             # Binary seek + discard-the-partial-line + decode-the-tail is
@@ -471,7 +471,7 @@ def last_assistant_text(transcript_path: str) -> str:
             continue
         if not isinstance(entry, dict) or entry.get("type") != "assistant":
             continue
-        # Review: code-reviewer — F1: a truthy non-dict `message` (older schema,
+        # A truthy non-dict `message` (older schema,
         # compaction-summary entry, hand-edited jsonl) must not raise on `.get`.
         msg = entry.get("message")
         content = msg.get("content") if isinstance(msg, dict) else None
@@ -659,7 +659,7 @@ def op(payload: dict) -> dict | None:
     Never raises on well-formed input.
     """
     if not isinstance(payload, dict):
-        # Review: code-reviewer — F9: an un-reviewable caller passing a
+        # An un-reviewable caller passing a
         # non-dict must not turn "never raises" into an AttributeError storm.
         return None
     if payload.get("stop_hook_active"):
@@ -683,7 +683,7 @@ def op(payload: dict) -> dict | None:
     _, has_true_sid = _session_key(payload)
     message = _NUDGE_MESSAGE
     if not has_true_sid:
-        # Review: code-reviewer — F7: no session_id means the sentinel is
+        # No session_id means the sentinel is
         # PID-scoped, so fire-once silently degrades to fire-every-time.
         # Surface that, matching the nudge_em_code_dispatch.py precedent.
         message += (

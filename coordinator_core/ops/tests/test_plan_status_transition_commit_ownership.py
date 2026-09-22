@@ -192,6 +192,45 @@ def test_second_flip_on_an_already_implemented_plan_is_a_second_no_op(tmp_path, 
     assert _head_sha(tmp_path) == first_sha, "idempotent re-run must not add a second commit"
 
 
+def test_already_terminal_plan_clears_a_stale_close_out_partial_marker(tmp_path, capsys):
+    # A plan reaching this verb already at status "implemented" used to take
+    # the plain no-op branch unconditionally, leaving a stale
+    # close_out_last_partial marker on disk forever -- the marker is only
+    # ever cleared by close_out_and_stamp's own certified-ship call site,
+    # which this verb's already-terminal short-circuit never reaches. The
+    # already-terminal branch must clear it too, and commit that clear.
+    p = _write_and_commit(
+        tmp_path, "p.md",
+        "---\nstatus: implemented\n"
+        "close_out_last_partial: '2026-08-20T16:11:01Z -- 2 missing (joined): C21,C22'\n"
+        "---\n\nBody.\n",
+    )
+    before_sha = _head_sha(tmp_path)
+    assert before_sha is not None
+
+    rc = main(["stamp-implemented", "--plan", str(p)])
+
+    assert rc == 0
+    on_disk = p.read_text(encoding="utf-8")
+    assert "close_out_last_partial" not in on_disk
+    assert "status: implemented" in on_disk
+    after_sha = _head_sha(tmp_path)
+    assert after_sha is not None and after_sha != before_sha, (
+        "clearing a stale marker must land its own commit"
+    )
+    assert _porcelain(tmp_path, "p.md") == ""
+    out = capsys.readouterr().out
+    assert "cleared a stale close_out_last_partial marker" in out
+
+    # Idempotent: the marker is already gone, so a second run is a genuine
+    # terminal no-op -- nothing left to clear, no second commit.
+    cleared_sha = after_sha
+    rc2 = main(["stamp-implemented", "--plan", str(p)])
+    assert rc2 == 0
+    assert _head_sha(tmp_path) == cleared_sha, "nothing left to clear must not add a commit"
+    assert "is terminal/deferred — no-op" in capsys.readouterr().out
+
+
 # ---------------------------------------------------------------------------
 # Byte-parity survivors: stdout lines + primitives' emitted bytes are
 # unperturbed by the added commit (2026-08-04 PM-ratified retirement of the

@@ -275,7 +275,7 @@ def _thin_reason_violations(table: dict) -> list:
 def _manifest_spawn_count_overrides() -> dict:
     """Every `overrides` row in the live manifest that carries a `spawn_count_budget`.
 
-    Review: code-reviewer (P5 F3) -- a row may carry the `spawn_count_budget`
+    A row may carry the `spawn_count_budget`
     key with a JSON `null` value (the key present, no budget set), distinct
     from the key being absent entirely. Such a row is simply ungoverned by
     the ratchet, not a malformed one, so it is excluded here the same as a
@@ -410,7 +410,7 @@ def test_spawn_count_high_water_table_covers_every_override():
     deleted from the manifest cannot leave a stale high-water entry behind
     that silently governs nothing.
 
-    Review: code-reviewer (P5 F1) -- this test previously only checked the
+    This test previously only checked the
     forward direction (new/live keys missing a high-water mark). The reverse
     (`_stale_high_water_ops`) closes the gap the ratchet test's own comment
     already claimed was covered here.

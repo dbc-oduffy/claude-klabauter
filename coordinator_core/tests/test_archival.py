@@ -132,7 +132,7 @@ def _write_handoff_additional_predecessors(
     return path
 
 
-# Review: code-reviewer F4 — flattened from single-method `class Test...:`
+# Flattened from single-method `class Test...:`
 # wrappers to top-level functions, matching the flatter style of the sibling
 # test_archive_handoffs.py.
 
@@ -180,7 +180,7 @@ def test_live_child_retained(tmp_path: Path) -> None:
 
     result = reverse_membership(str(parent), [str(parent), str(child)])
 
-    # Review: code-reviewer F3 — dropped the `or len(result) > 0` clause, which
+    # Dropped the `or len(result) > 0` clause, which
     # made the membership check vestigial (a bug returning the wrong path but
     # right count would have slipped through). Assert membership directly.
     assert str(Path(child).resolve()) in {str(Path(c).resolve()) for c in result}, (
@@ -207,7 +207,7 @@ def test_indeterminate_child_retained_fail_closed(tmp_path: Path) -> None:
 
 
 def test_terminal_child_excluded_via_additional_predecessors(tmp_path: Path) -> None:
-    """Review: code-reviewer F5 — the terminal/archived exclusion must compose with
+    """The terminal/archived exclusion must compose with
     the multi-valued additional_predecessors edge kind, not just the scalar
     predecessor field. A consumed child whose ONLY edge to the parent is
     additional_predecessors: [<parent>] (list form) must still be excluded.

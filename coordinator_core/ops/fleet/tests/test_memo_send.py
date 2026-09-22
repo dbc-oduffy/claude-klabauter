@@ -156,7 +156,7 @@ def _write_draft(
     return draft_path
 
 
-# Review: coordinator:code-reviewer — new-root staging helper. `_write_draft`
+# new-root staging helper. `_write_draft`
 # only ever stages at the retired `state/memo-outbox/` root, so no test in
 # this file exercised `_draft_path`'s new-root branch of the dual-root
 # resolution memo.send depends on (Finding 2).
@@ -404,7 +404,7 @@ class TestEndToEndDelivery:
             "the outbox original must be DELETED in HEAD, not merely moved on disk"
         )
 
-    # Review: coordinator:code-reviewer (Finding 2) — a draft staged ONLY at
+    # A draft staged ONLY at
     # the new canonical root, no legacy dir present at all, so a broken
     # new-root branch of `_draft_path`'s dual-root resolution (ordering
     # flip, inverted existence check) cannot hide behind the legacy leg.
@@ -1025,7 +1025,7 @@ class TestDeliveryIsAnchored:
     def test_lost_cas_where_the_ref_already_matches_reports_anchored_true_no_warning(
         self, tmp_path, monkeypatch
     ):
-        """Review: eng-director F7. A CAS loss whose ref already equals the
+        """eng-director F7. A CAS loss whose ref already equals the
         intended blob (a peer anchored the SAME delivery -- identical
         filename, commit sha, and bytes -- immediately before this call's
         own CAS attempt) must not warn `anchored: false` for an anchor that

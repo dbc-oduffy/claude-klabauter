@@ -394,8 +394,8 @@ def main(argv: "list[str] | None" = None) -> int:
         repo / "coordinator/bin/legacy-engine-noun-reference-manifest.md"
     )
     out_json = Path(args.out_json) if args.out_json else SLICE_LIST_PATH
-    out_manifest.write_text(manifest, encoding="utf-8")
-    out_json.write_text(json.dumps(classes_json, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    out_manifest.write_text(manifest, encoding="utf-8", newline="\n")
+    out_json.write_text(json.dumps(classes_json, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
     return 0
 
 

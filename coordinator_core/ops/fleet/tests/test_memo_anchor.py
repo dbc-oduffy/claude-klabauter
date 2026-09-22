@@ -187,7 +187,7 @@ def test_anchor_ref_prefix_shape():
 
 
 # ---------------------------------------------------------------------------
-# Review: eng-director F7 -- a lost CAS whose ref already equals the
+# A lost CAS whose ref already equals the
 # intended blob (a peer wrote the identical anchor first) must not be
 # reported as a loss.
 # ---------------------------------------------------------------------------

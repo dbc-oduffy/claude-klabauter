@@ -139,7 +139,6 @@ class TestProseExemptSplit:
         assert result.prose_bytes >= 0
 
     def test_diagnostic_prefixed_indented_line_inside_cue_window_is_not_exempted(self):
-        # Review: coordinator:code-reviewer (Finding 1, guard-message-size-
         # discipline) -- a `Detected:` line is the "what was denied" half
         # of the duty-of-care contract, not an offered alternative, even
         # though it sits indented inside the same no-blank-line run as the

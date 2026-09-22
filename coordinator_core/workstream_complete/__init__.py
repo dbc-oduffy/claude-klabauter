@@ -2518,7 +2518,7 @@ def _compute_review_receipt_gate(
     # by a pre-relocation session must not read as "no receipt" and block a
     # close.
     sidecar_dirs = [Path(d) / sid for d in _share_roots(str(root))]
-    # Review: code-reviewer (S10 finding 2) — the gate now globs every extant
+    # The gate now globs every extant
     # root (see AC2b note below), so the detail text must name all of them
     # rather than only sidecar_dirs[0]; naming just the first root misled a
     # human reading the block when the actual receipt (or the actual block
@@ -2554,7 +2554,7 @@ def _compute_review_receipt_gate(
     # entry in sorted-candidate order, never `sidecar_dirs[0]` specifically.
     dispatched_never_completed_path: Optional[str] = None
 
-    # Review: code-reviewer (S10 finding 3) — sort within each root, then
+    # Sort within each root, then
     # concatenate, matching this fix's own rationale comment above (legacy
     # root considered after current-root) rather than a single sort across
     # both roots' candidates together.
@@ -3163,7 +3163,7 @@ def _evaluate_consumed_handoff_completeness_element(root: Path, raw_path: str) -
     if resolved is not None:
         try:
             text = resolved.read_text(encoding="utf-8")
-        # Review: coordinatorcode-reviewer-c13e4663 Finding 1 — UnicodeDecodeError is a
+        # UnicodeDecodeError is a
         # ValueError subclass, not an OSError; leg A must degrade to indeterminate for
         # a non-UTF-8 handoff too, never propagate out of brief() uncaught.
         except (OSError, UnicodeDecodeError):
@@ -3668,7 +3668,7 @@ def _read_consumed_handoff_text(repo_root: Path, gate: SessionShapeGate) -> Opti
         return None
     try:
         return candidate.read_text(encoding="utf-8")
-    # Review: coordinatorcode-reviewer-c13e4663 Finding 1 (sibling) — same
+    # Same
     # non-UTF-8-content gap as the plural-loop read site; this docstring's
     # own "never raises" contract already promised None here, so this was
     # not yet met either.
@@ -4822,7 +4822,7 @@ def _measure_session_review_scale_inputs(
         return None, None, None, None
     tracked, untracked = split
     if tracked:
-        # Review: code-reviewer — Finding (P1). `_split_tracked` returns
+        # `_split_tracked` returns
         # `tracked` built from the caller's original, unnormalized paths
         # (backslash-containing on Windows) -- normalizing it only for its
         # OWN internal `ls-files` pathspec, not for the caller. Feeding that
@@ -5009,7 +5009,7 @@ def _resolve_session_start_sha(root: Path, session_start_time: Any) -> Optional[
     if shas is None:
         return None
     if not shas:
-        # Review: code-reviewer (P2 #2) — returning the literal "HEAD" here
+        # Returning the literal "HEAD" here
         # propagated into `resolve_mid_chain_review_scope`'s fallback and
         # could emit an empty `HEAD..HEAD` range instead of the caller's
         # byte-identical no-range fallback. `None` makes
@@ -5025,7 +5025,7 @@ def _list_review_trail_paths_for_root(root: Path, sid_short: str = "") -> list[s
     THIS caller's explicit `root` instead of that function's own cwd-or-
     `COORDINATOR_ROOT` resolution.
 
-    Review: code-reviewer (P2 #1) — the prior call site
+    The prior call site
     (`list_review_trail_records.list_paths(date_prefix="")`) has no
     `root`/`repo_root` parameter at all; it resolves the state root purely
     from process cwd (git-root-of-cwd) or the `COORDINATOR_ROOT` env var, so
@@ -5069,7 +5069,7 @@ def _list_review_trail_paths_for_root(root: Path, sid_short: str = "") -> list[s
     (which two directories get combined); it only supplies the one caller-
     known input (`root`) that function has no parameter for.
 
-    Review: code-reviewer (P3) — cross-reference, not just prose: mirrors
+    cross-reference, not just prose: mirrors
     `list_review_trail_records.list_paths()`'s `live_dir`/`archive_dir`
     computation at `coordinator_core/ops/list_review_trail_records.py:275-280`
     verbatim (same two directories, no re-implemented union logic).
@@ -5133,7 +5133,7 @@ def _resolve_review_brightline_floor_kwargs(
     widen the emitted range over commits this session never touched —
     forbidden by the plan's Anti-scope.
 
-    Review: code-reviewer (P2, 2026-08-08, scan cost) — FIXED (C11,
+    (C11,
     docs/plans/2026-08-21-rebuild-the-three-ceremony-assemblers.md): this
     helper used to `json.load` every `*.json` under `state/review-trail/`
     and `archive/review-trail/` unconditionally (2,778 files at ~0.07s when

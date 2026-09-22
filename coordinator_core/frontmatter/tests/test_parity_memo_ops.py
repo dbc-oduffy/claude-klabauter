@@ -216,7 +216,7 @@ created: 2026-06-01
 ---
 """
 
-# Review: code-reviewer (F3) — note-mode idempotency fixture.
+# note-mode idempotency fixture.
 # Already-actioned memo in note-mode (actioned_note only — no decision/realized_by).
 # Field order matches what action() produces starting from _IN_PROGRESS_MEMO:
 #   status → actioned; actioned_note inserted after status.
@@ -438,7 +438,7 @@ def _strip_post_freeze_fields(content: str) -> str:
     lines = content.splitlines(keepends=True)
     fences = [i for i, line in enumerate(lines) if line.strip() == "---"]
     if len(fences) < 2:
-        # Review: coordinator-code-reviewer -- deliberate fallback, not an
+        # Deliberate fallback, not an
         # oversight: unfenced/malformed content passes through unchanged and
         # the byte-compare downstream fails on the raw diff.
         return content
@@ -599,7 +599,7 @@ class TestClaimParity:
         assert _PINNED_AT in (read_fm_field(fm, "picked_up_at") or "")
         assert read_fm_field(fm, "picked_up_by") == _PINNED_SESSION
 
-        # Review: code-reviewer (F4) — lock claim(FRESH_MEMO) → _IN_PROGRESS_MEMO byte-for-byte.
+        # Lock claim(FRESH_MEMO) → _IN_PROGRESS_MEMO byte-for-byte.
         # action/release idempotency tests use _IN_PROGRESS_MEMO as a pre-claimed starting
         # fixture; if claim() output ever diverges (e.g. field-ordering change in primitives),
         # those tests would silently exercise a non-claim-produced state.
@@ -781,7 +781,7 @@ class TestActionParity:
     def test_action_note_mode_idempotent_noop(self, tmp_path):
         """Action (note mode) re-actioned with same actioned_note → no-op, exit 0, file unchanged.
 
-        Review: code-reviewer (F3) — covers the note-mode idempotency branch
+        Covers the note-mode idempotency branch
         (_action's _unquote_yaml_scalar comparison on actioned_note, line ~396-397).
         The decision-mode idempotency is covered by test_action_idempotent_noop.
         A byte-divergence between JS and Python in note-mode idempotency detection

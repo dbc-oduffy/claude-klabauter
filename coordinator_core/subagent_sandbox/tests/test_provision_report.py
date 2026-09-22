@@ -1227,7 +1227,7 @@ def test_receipt_block_agent_type_with_colon_space_stays_parseable_and_bare_read
     must not corrupt the frontmatter block or get misread by the gate's
     `rpartition(":")`-based bare-type stripping.
 
-    Review: coordinatorcode-reviewer (findings 1+2) -- asserted through
+    Asserted through
     ``schema_validate.parse_frontmatter``, the RESTRICTED loader the
     close-time gate (``workstream_complete/__init__.py::
     _compute_review_receipt_gate``) actually reads with, not
@@ -1250,7 +1250,7 @@ def test_receipt_block_agent_type_with_colon_space_stays_parseable_and_bare_read
 
 
 def test_receipt_block_agent_type_with_newline_folds_to_a_space_and_stays_single_line() -> None:
-    """Review: coordinatorcode-reviewer (findings 1+2) -- asserted through
+    """Asserted through
     the restricted ``parse_frontmatter`` reader, not ``yaml.safe_load``; see
     the colon-space test above for why."""
     dangerous_agent_type = "coordinator:code-reviewer\nsession_id: injected"

@@ -127,7 +127,7 @@ def _is_windows_shell() -> bool:
     )
 
 
-# Review: code-reviewer (Finding 8) — also used by substrate_migrate.py (deferred
+# Also used by substrate_migrate.py (deferred
 # import of this module) as its own platform helpers; keep signatures stable.
 def _run(argv, **kwargs) -> subprocess.CompletedProcess:
     """Run a child process, suppressing the Windows console window.
@@ -551,7 +551,7 @@ def _resolve_directory_tracked_set(dest_dir: Path) -> Optional["FrozenSet[str]"]
     if result.returncode == 127 or result.timed_out:
         return None
     if not result.ok:
-        # Review: code-reviewer (Finding 3) — nonzero exit is folded to "not a
+        # Nonzero exit is folded to "not a
         # repo" per the plan's stated two-way contract (unchanged), but we log
         # stderr so a genuine mid-repo failure (corrupt .git, permissions) isn't
         # indistinguishable from a legitimate non-repo when an operator is later
@@ -743,7 +743,7 @@ def _install_one_live_would_rewrite(force_overwrite: bool, write_strategy: str) 
     actually rewrite an existing, content-differing destination for this
     `(force_overwrite, write_strategy)` pair.
 
-    Review: coordinator:code-reviewer (P1) — check-mode previously
+    check-mode previously
     hand-maintained a second copy of this classification (`write_strategy
     in ("careful", "refuse")` treated as an unconditional no-op) that
     disagreed with the live path for `write_strategy="careful"`: live's
@@ -851,7 +851,7 @@ def _install_one(
         if dst.exists() and _install_one_content_matches(src, dst, python_bin_substitution):
             print(f"[install-substrate] check: {dst.name} up to date -> {dst} (no-op)")
             return
-        # Review: coordinator:code-reviewer (P1, overridden to FIX) — the old
+        # The old
         # `write_strategy in ("careful", "refuse")` clause treated BOTH
         # strategies as an unconditional check-mode no-op, but the live path
         # (`elif force_overwrite:` below) only refuses to write for
@@ -1585,7 +1585,7 @@ def _write_native_door_forwarder(
     try:
         dest = door_install.install_named_forwarder(bin_dst, engine_root, name, check_only=check_only)
     except (door_install.DoorInstallError, SystemExit) as exc:
-        # Review: coordinator:code-reviewer (Finding 1) -- check_only=True
+        # check_only=True
         # raises DoorInstallError as its own normal "not yet cut over"
         # signal (door_install.py :: install_named_forwarder short-circuits
         # before any build is attempted); that is not a build failure and
@@ -1835,7 +1835,7 @@ def _agent_cmd_raw_cmdline_block(target: str) -> str:
     exists-check race window), so the retry loop below is genuinely
     collision-free, unlike a check-then-write pattern.
 
-    Review: staff-eng (Finding 0) -- mirrors gen-launcher-shim.py::
+    Mirrors gen-launcher-shim.py::
     _cmd_raw_cmdline_block's own fix for the same finding: the retry above
     was originally an unbounded `goto`, which spins forever (stderr
     swallowed by `2>nul`) under a full/read-only/ACL-denied `%TEMP%`,
@@ -4493,7 +4493,7 @@ def _percolation_and_path_steps(
         if result["already_present"]:
             print(f"[install-substrate] check: claude-CLI PATH block present in all applicable profile files under {install_base} (no-op)")
             return
-        # Review: code-reviewer (Finding 5, nit) — `already_present is False`
+        # `already_present is False`
         # covers both "sentinel genuinely absent" and "sentinel present but
         # stale" (content mismatch, e.g. after a COORDINATOR_SETTINGS_HOME
         # relocation — see shell_rc_guard's § Relocation self-heal). Thread
@@ -4701,7 +4701,7 @@ def _c10a_steps(
                 return 1
         else:
             print(f"[install-substrate] venv: {status}")
-            # Review: code-reviewer (Finding 3) — use the B2 both-imports health
+            # Use the B2 both-imports health
             # oracle (coordinator_whoami AND pydantic), not a narrower
             # coordinator_whoami-only probe, before treating this as the gate
             # that clears deletion of the legacy venv fallback.
@@ -4863,7 +4863,6 @@ def _install_claude_klabauter_seed_wiki_page(claude_klabauter_root: Path, settin
     is committed in DoE-claude's own tree at `DoE-claude@56998ae14`; what
     remains outstanding is DoE's ANSWER, not delivery -- tracked in the
     plan's own `## Open at close-out` section, not restated here.
-    # Review: coordinator:code-reviewer (a11777c9823b0017b) Finding 2 --
     # corrected: the memo was sent, not deferred; only the reply is
     # outstanding.
 
@@ -4930,7 +4929,7 @@ def _fnm_mutation_declined(*, leg_desc: str, prompt_verb: str) -> bool:
     if os.environ.get("COORDINATOR_INSTALL_FNM") == "1":
         return False
 
-    # Review: code-reviewer — sys.stdin can be replaced by a stream with no
+    # sys.stdin can be replaced by a stream with no
     # isatty (embedded/frozen launchers, a mocked stream elsewhere); fall
     # back to the safe non-interactive/decline branch instead of raising.
     interactive = getattr(sys.stdin, "isatty", lambda: False)() and os.environ.get("COORDINATOR_NON_INTERACTIVE") != "1"
@@ -5026,7 +5025,7 @@ def _fnm_step(check_only: bool) -> None:
     if blocked:
         print(f"[install-substrate] REFUSED: {blocked}", file=sys.stderr)
         return
-    # Review: code-reviewer — brew and curl are mutually exclusive legs;
+    # Brew and curl are mutually exclusive legs;
     # declining brew must not fall through to curl (this if/elif chain is
     # load-bearing for that invariant).
     if shutil.which("brew"):
@@ -5061,7 +5060,7 @@ def _fnm_step(check_only: bool) -> None:
         try:
             curl_proc = subprocess.run(["curl", "-fsSL", "https://fnm.vercel.app/install"], capture_output=True, timeout=NETWORK_FETCH_SECS, **_NO_CONSOLE)
             if curl_proc.returncode != 0:
-                # Review: coordinator:code-reviewer — a failed/partial curl must
+                # A failed/partial curl must
                 # never feed its (possibly empty/garbage) stdout into `bash -s`;
                 # short-circuit before spawning bash rather than joint-checking
                 # both return codes only after both have already run.
@@ -5802,7 +5801,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         ),
     )
     args = parser.parse_args(argv)
-    # Review: code-reviewer Finding 1 — `is not None`, not truthiness: an
+    # `is not None`, not truthiness: an
     # explicit `--engine-root ""` must not silently degrade to whatever rung
     # would otherwise fire; it is passed through so downstream path
     # validation rejects it loudly instead.
@@ -5814,7 +5813,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.engine_root is not None and (
         not args.engine_root or not Path(args.engine_root).is_dir()
     ):
-        # Review: code-reviewer Finding 2 — validate at parse time so a
+        # Validate at parse time so a
         # typo'd path fails here, at the flag that caused it, rather than
         # degrading into a less legible failure downstream in run().
         print(

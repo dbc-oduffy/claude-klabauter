@@ -184,7 +184,7 @@ def _detect_ram_bytes_windows() -> Optional[int]:
 def _coerce_registry_int(value: object) -> Optional[int]:
     """Coerce a `winreg.QueryValueEx` result to an int, or None if it can't be.
 
-    Review: coordinator:code-reviewer P1 — HardwareInformation.qwMemorySize /
+    HardwareInformation.qwMemorySize /
     .MemorySize are frequently stored as REG_BINARY (an 8-byte, or on older
     drivers 4-byte, little-endian blob) rather than REG_QWORD/REG_DWORD on
     real hardware, so `winreg.QueryValueEx` can legitimately return `bytes`

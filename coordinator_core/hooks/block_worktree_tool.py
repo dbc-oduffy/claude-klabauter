@@ -69,7 +69,7 @@ def _deny_message(env: object = None) -> str:
 async def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(EnterWorktree|ExitWorktree) op: deny EnterWorktree unless
     the repo-root sentinel override is active; always allow ExitWorktree."""
-    # Review: coordinator-code-reviewer — params arrives wrapped as
+    # Params arrives wrapped as
     # {"payload": event} through both engine doors; payload_of reads either
     # shape (see preuse_bash_dispatch's identical fix, same defect class).
     params = payload_of(params)

@@ -193,7 +193,7 @@ def main(argv: "list[str] | None" = None) -> int:
         print(f"{args.output} is up to date")
         return 0
 
-    with open(args.output, "w", encoding="utf-8") as handle:
+    with open(args.output, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(rendered)
     print(f"wrote {args.output}")
     for key, value in document["counts"].items():

@@ -49,7 +49,6 @@ def test_obligations_are_named_not_merely_counted() -> None:
         )
 
         sid = "sess-has-ledger-000000000000000"
-        # Review: overengineering-reviewer (finding #2, minor, accepted) --
         # `send_pass` no longer aliases `machinery_paths`'s functions/constants
         # under a private name; this test named `machinery_paths.share_dir`/
         # `LEDGER_FILENAME` directly.

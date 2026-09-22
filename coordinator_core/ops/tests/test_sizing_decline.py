@@ -209,7 +209,7 @@ def test_decision_record_must_exist_on_disk(tmp_path):
 
 
 def test_decision_record_outside_docs_decisions_rejected(tmp_path):
-    # Review: coordinator-code-reviewer — P2, pins the real-but-wrong-location
+    # Pins the real-but-wrong-location
     # gap the P1 fix closes (a readable file outside docs/decisions/ must not
     # satisfy the gate).
     repo = tmp_path / "repo"
@@ -230,7 +230,7 @@ def test_decision_record_outside_docs_decisions_rejected(tmp_path):
 
 
 def test_decision_record_absolute_path_outside_repo_rejected(tmp_path):
-    # Review: coordinator-code-reviewer — P2, absolute-path variant of the same gap.
+    # absolute-path variant of the same gap.
     repo = tmp_path / "repo"
     _init_repo(repo)
     sizing = _seed_sizing(repo, "20260101-a.yaml", status="routed")
@@ -249,7 +249,7 @@ def test_decision_record_absolute_path_outside_repo_rejected(tmp_path):
 
 
 def test_decision_record_as_the_declined_sizing_itself_rejected(tmp_path):
-    # Review: coordinator-code-reviewer — P2, sharpest variant: the sizing-object
+    # Sharpest variant: the sizing-object
     # being declined passed as its own decision_record must not satisfy the gate.
     repo = tmp_path / "repo"
     _init_repo(repo)

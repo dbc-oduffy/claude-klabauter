@@ -294,7 +294,7 @@ def _is_namespace_qualified_citation(text: str, bin_start: int) -> bool:
 # literally elsewhere and are swept there instead.
 _GLOB_TRUNCATION_RE = re.compile(r"[-_.]*\*")
 
-# Review: code-reviewer — `.cmd` added: every `.py`/extensionless oracle in
+# `.cmd` added: every `.py`/extensionless oracle in
 # `coordinator/bin/` gets a generated `.cmd` Windows-launcher twin
 # (`coordinator/bin/gen-launcher-shim.py`); a DoE fence citing the literal
 # `bin/<name>.cmd` form would otherwise normalize to `<name>.cmd` and never
@@ -633,7 +633,7 @@ def check_fleet_reachability(
 
     if not missing_normalized:
         if not doe_demand:
-            # Review: code-reviewer, Finding 1 — a zero-citation sweep is NOT
+            # A zero-citation sweep is NOT
             # the same fact as a genuine clean pass, and must not print
             # identically to one. `demand_count=0` makes the distinction a
             # checkable field (see `assert_registered_implies_no_skip`'s own

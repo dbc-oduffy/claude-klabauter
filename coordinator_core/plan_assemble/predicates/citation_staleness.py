@@ -112,7 +112,7 @@ from coordinator_core.plan_assemble.predicates import PredicateContext, undeterm
 def _history_records(repo_root, rel_path):
     """Thin, deliberately-named wrapper over `doc_staleness._log_follow_records`.
 
-    Review: code-reviewer flagged the direct cross-module import of an
+    code-reviewer flagged the direct cross-module import of an
     underscore-prefixed, non-`__all__` helper as undocumented-contract
     coupling — `doc_staleness.py` is free to rename or reshape that
     symbol without breaking its own public API. This wrapper does not
@@ -184,7 +184,7 @@ def _find_anchor_text(text: str, start: int, end: int) -> Optional[str]:
     ]
     if following_spans:
         return following_spans[0].group(1)
-    # Review: code-reviewer — a whitespace-only backtick span (` ` `) is
+    # A whitespace-only backtick span (` ` `) is
     # filtered out above rather than returned as anchor_text: it would
     # otherwise match almost every non-empty target line at rung 1
     # (`anchor_text in line`), producing a bogus non-undetermined match

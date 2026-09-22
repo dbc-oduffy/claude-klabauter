@@ -297,7 +297,7 @@ def run(
         memo_candidate_paths = []
         inbox_dir = memo_inbox_dir
         memo_scan_error = f"{inbox_dir}: {exc}"
-        # Review: coordinator:code-reviewer F1 -- the op's own `inbox_paths=None`
+        # The op's own `inbox_paths=None`
         # path logs + records a `scan_errors` entry when the inbox can't be
         # enumerated; this caller degraded to `[]` silently, so a permission
         # problem on the inbox directory was indistinguishable from a
@@ -345,7 +345,7 @@ def run(
         Move(
             src=entry.path,
             dst=handoff_archive_dest(worktree_root, entry.path),
-            # Review: coordinator:code-reviewer F1 -- `Move.candidate_id` is
+            # `Move.candidate_id` is
             # the wire "id" field throughout the result envelope
             # (`ops/fleet/_common.py:677-678,710`); `wire_paths.rel_id`'s own
             # docstring names the native-separator `str(relative_to())` form
@@ -398,7 +398,7 @@ def run(
     # combined batch never calls into the seam at all (nothing to move,
     # nothing to commit — a zero-length batch is not a degenerate call to
     # make, it is simply not a call).
-    # Review: overengineering-reviewer F4 — `archive_terminal_batch` was a
+    # `archive_terminal_batch` was a
     # single-caller passthrough (empty-check + one asyncio.run) after the
     # Move-prebuild moved into run(); inlined here, function and its three
     # tests deleted.
@@ -417,7 +417,7 @@ def run(
     archived = [item["id"] for item in acted if item["id"] in handoff_move_ids]
     failed = [item for item in failed if item["id"] in handoff_move_ids]
 
-    # Review: coordinator:code-reviewer F4 -- gating `revalidate` on `acted`
+    # Gating `revalidate` on `acted`
     # meant a quiet cycle (this cycle moved nothing) never called it at all,
     # so archive drift from a peer process or a manual git operation between
     # cycles was never detected and the stale cache never rewritten.

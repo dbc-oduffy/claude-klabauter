@@ -320,7 +320,7 @@ def main(argv):
     for sf in settings_files:
         _check_settings_json(sf, state)
 
-    # Review: code-reviewer — F4: $HOME is POSIX-only; stock Windows (cmd.exe/
+    # $HOME is POSIX-only; stock Windows (cmd.exe/
     # PowerShell without Git Bash/WSL) doesn't set it — falls back to os.path.expanduser
     # (which honors USERPROFILE on Windows) instead of silently no-oping the soft-warn.
     current_home = os.environ.get("HOME") or os.path.expanduser("~")

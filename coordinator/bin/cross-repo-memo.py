@@ -140,7 +140,7 @@ GENERATES = []  # writes ONE dirty memo into the RECEIVER's (sibling) repo tree 
 # module scope — each function below that needs one does its own local
 # import, so this file carries no module-scope non-stdlib import.
 
-# Review: staff-eng (Finding 1) — cross-repo-memo.py is a member of both
+# cross-repo-memo.py is a member of both
 # gen-launcher-shim.py's _RAW_CMDLINE_ENTRYPOINTS and substrate.py's
 # _RAW_CMDLINE_TARGETS (added alongside scoped-git-commit per
 # cross-repo/inbox/2026-08-07-doe-claude-em-cmd-forwarder-drops-everything-
@@ -269,7 +269,7 @@ def _record_unsound_raw_cmdline_transport(
 
     ledger_path = _raw_cmdline_ledger_path()
     classification = (str(exc).split(":", 1)[0].strip()) or "UNKNOWN"
-    # Review: coordinator:code-reviewer (9245562b, P2) -- persist only the
+    # Persist only the
     # spawn-shape prefix, never the raw payload; see docstring above.
     spawn_shape = spawn_shape_prefix(raw_capture or "")
     print(
@@ -428,7 +428,7 @@ def _receiver_repo_key(receiver_em_id: str) -> str:
 def _print_receiver_unresolved_error(to: str) -> int:
     """Shared 'receiver unresolved' diagnostic for both --dry-run and a real send.
 
-    Review: code-reviewer (Finding 3) — extracted so the --dry-run preview
+    Extracted so the --dry-run preview
     branch and the real-send branch can never drift in wording, mirroring
     single source, both call sites `return` its result. Prints either the central-registry-absent message or the
     sibling-not-registered message to stderr and returns 1.
@@ -828,7 +828,7 @@ def _known_receiver_ids() -> list[str]:
     import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
     from coordinator_registry import _central_canonical_id, repo_key_to_em_id
 
-    # Review: code-reviewer — F3: filter repos.doe_claude from sibling scan; post-flip
+    # Filter repos.doe_claude from sibling scan; post-flip
     # repo_key_to_em_id("repos.doe_claude") → the canonical central id (via _central_canonical_id()), already prepended.
     repo_keys = _machine_local_repos_keys()
     if repo_keys is None:
@@ -1132,7 +1132,7 @@ def _resolve_receiver_path(receiver_em_id: str) -> tuple[str | None, bool]:
         if fallback_status == "ambiguous":
             _print_fallback_ambiguous_warning(receiver_em_id, candidates)
         elif fallback_status == "none":
-            # Review: code-review F2 — without this, a genuine machine-local
+            # Without this, a genuine machine-local
             # registry-read failure at send time was indistinguishable from a
             # clean "receiver never registered" absence once this function
             # returns None; the caller's generic not-registered message then
@@ -1304,12 +1304,12 @@ def _looks_like_coordinator_receiver(path: str) -> bool:
     marker — `<inbox-root>` is `_receiver_inbox_root(path)`, per-receiver
     resolved rather than a fixed `cross-repo/` literal (see that function).
     """
-    # Review: code-review F5 — use os.path.exists rather than os.path.isdir:
+    # Use os.path.exists rather than os.path.isdir:
     # in a git-worktree sibling, .git is a FILE (gitdir: pointer), not a
     # directory. isdir would wrongly reject a legitimate worktree receiver.
     if not os.path.exists(os.path.join(path, ".git")):
         return False
-    # Review: overengineering-reviewer — `root_isdir` reuses the isdir
+    # `root_isdir` reuses the isdir
     # result `_receiver_inbox_root` already computed rather than re-probing
     # it here (the re-probe was tautologically True whenever the probe had
     # selected the new root).
@@ -1353,7 +1353,7 @@ def _resolve_receiver_via_parent_scan(receiver_em_id: str) -> "tuple[str | None,
         return None, "none", []
     parent = os.path.dirname(sender_root)
     shortname = receiver_em_id[:-3] if receiver_em_id.strip().endswith("-em") else receiver_em_id
-    # Review: code-review F1 — resolve RECEIVER_EM_ALIASES before normalizing,
+    # Resolve RECEIVER_EM_ALIASES before normalizing,
     # mirroring _receiver_repo_key (line ~523), so the scan searches for the
     # same on-disk shortname the primary machine-local path would have used
     # (e.g. 'example-game-repo' -> 'example_game_workbench_repo'). Without this, the fallback
@@ -1448,7 +1448,7 @@ def _print_ambiguous_slug_diagnostic(receiver_em_id: str, machine_local_stderr: 
 
 
 def _print_registry_error_diagnostic(receiver_em_id: str) -> None:
-    """Review: code-review F2 — send-time (`_resolve_receiver_path`) companion
+    """send-time (`_resolve_receiver_path`) companion
     to the draft-time "registry-error" message: printed as a side effect
     ALONGSIDE (not instead of) the caller's existing not-registered message,
     the same "print diagnostic, then fall through to the existing message"
@@ -1587,7 +1587,7 @@ def _warn_if_unregistered_sender() -> None:
 # ---------------------------------------------------------------------------
 # Shared pre-dispatch steps (--to and --campaign-to)
 # ---------------------------------------------------------------------------
-# Review: code-reviewer (Finding 2) — main()'s --campaign-to block was a
+# main()'s --campaign-to block was a
 # hand-duplicated near-copy of these four pre-dispatch steps from the
 # ordinary --to path (exactly the drift risk that produced Finding 1: the
 # --to path's --dry-run handling never got ported to --campaign-to because
@@ -1736,7 +1736,7 @@ def _print_premise_check_advisory(
         return
     if not receiver_path:
         return
-    # Review: code-reviewer — F3: absolutize to match the adjacent "Hand the
+    # Absolutize to match the adjacent "Hand the
     # PM this path for relay" line's os.path.abspath normalization, so both
     # paths in the same stdout block are consistently absolute.
     abs_receiver_path = os.path.abspath(receiver_path)
@@ -1990,7 +1990,7 @@ def _run_scoped_premise_checks(
 
     if artifact:
         artifact_path, line_pin = _split_artifact_line_pin(artifact)
-        # Review: coordinator:code-reviewer 9266869a finding 2 — same defect
+        # Same defect
         # class as _verify_delivery_landed's HEAD: revspec bug (this commit's
         # fix target), arriving via a different route: `artifact` is
         # author-typed, not os.path.relpath output, so a Windows author who
@@ -2685,7 +2685,7 @@ def _unquote_yaml_scalar(v: str) -> str:
             elif nc == 'n':
                 chars.append('\n')
             elif nc == 'r':
-                # Review: code-reviewer — _yaml_quote emits \r but parser did not handle it
+                # _yaml_quote emits \r but parser did not handle it
                 chars.append('\r')
             elif nc == 't':
                 chars.append('\t')
@@ -2705,7 +2705,7 @@ def _unquote_yaml_scalar(v: str) -> str:
 # (_scoped_to_errors, _validate_outbox_frontmatter, the send params) needs no
 # change; see _parse_outbox_file's docstring for the two accepted shapes.
 #
-# Review: overengineering-reviewer — a nested `supersedes:` YAML-sequence
+# A nested `supersedes:` YAML-sequence
 # reader (in_supersedes_list state, supersedes_list accumulator, the
 # dict[str, str | list[str]] return-type widening) was removed here. No CLI
 # consumer read fm["supersedes"]: the two call sites of this function's
@@ -2836,7 +2836,7 @@ def _format_age(seconds: float) -> str:
 
     Spec backlink: docs/plans/2026-06-15-cross-repo-memo-draft-lifecycle.md § C3
     """
-    # Review: code-reviewer — avoid "0m" for brand-new files; "<1m" is clearer
+    # Avoid "0m" for brand-new files; "<1m" is clearer
     if seconds < 60:
         return "<1m"
     if seconds < 3600:
@@ -3093,7 +3093,7 @@ def _cmd_discard(args: argparse.Namespace) -> int:
     """
     topic = args.topic
 
-    # Review: code-reviewer — validate topic slug before path construction to prevent
+    # Validate topic slug before path construction to prevent
     # path traversal. Mirrors _cmd_draft and _cmd_send validation.
     if not _TOPIC_SLUG_RE.fullmatch(topic):
         print(
@@ -3318,7 +3318,7 @@ def _cmd_compose(args: argparse.Namespace) -> int:
     topic = args.topic
     open_flag = getattr(args, "open", False)
 
-    # Review: code-reviewer — validate topic slug before path construction to prevent
+    # Validate topic slug before path construction to prevent
     # path traversal. Mirrors _cmd_draft and _cmd_send validation.
     if not _TOPIC_SLUG_RE.fullmatch(topic):
         print(
@@ -3863,7 +3863,7 @@ def main(argv: list[str] | None = None) -> int:
         _build_combined_parser(for_help=True).print_help()
         return 0
 
-    # Review: code-reviewer — detect likely typo verbs before falling through to legacy
+    # Detect likely typo verbs before falling through to legacy
     # parser, which would emit a confusing argparse error about unrecognised flags.
     # A non-flag non-verb token (no leading '--') that isn't in _SUBCOMMAND_VERBS is
     # almost certainly a typo (e.g. "sned", "lst"). Emit a friendly hint and exit 2.
@@ -3898,7 +3898,7 @@ def main(argv: list[str] | None = None) -> int:
     # addressee guard (M-addr) to detect a session actioning a memo addressed
     # to a different repo's EM.
     #
-    # Review: the comparison MUST be path-based (realpath of the resolved
+    # the comparison MUST be path-based (realpath of the resolved
     # repo roots), NOT a string compare on the ids — a normalised id
     # is only .strip().lower() and does not resolve aliases. "central" /
     # "central-em" no longer resolve at all (DoE retired them from
@@ -3906,7 +3906,7 @@ def main(argv: list[str] | None = None) -> int:
     # naive id string compare would false-fire on neither resolving, not on
     # an aliased `to:` value resolving to the wrong repo.
     if args.check_addressee is not None:
-        # Review: mirror --to's `not val` empty-string handling — an explicit
+        # mirror --to's `not val` empty-string handling — an explicit
         # empty string already fails safe via _resolve_receiver_path("")
         # returning None (exit 4), but give a clearer diagnostic than
         # "receiver '' does not resolve..." for what is a malformed invocation.
@@ -3921,7 +3921,7 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 1
-        # Review: self_em is best-effort/display-only (human-facing verdict
+        # self_em is best-effort/display-only (human-facing verdict
         # lines only) — the exit code below is purely the engine's path-based
         # verdict and does not depend on self_em's accuracy.
         self_em = _sender_em_id()

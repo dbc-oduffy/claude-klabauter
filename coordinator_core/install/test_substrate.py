@@ -2,7 +2,7 @@
 manifest loader (see coordinator_core/tests/test_setup_template_manifest.py
 for _load_setup_template_manifest's own dedicated coverage).
 
-Review: code-reviewer (Lane B install F2) — the former _parse_bash_string_array
+The former _parse_bash_string_array
 bash-array parser this file used to cover was deleted outright in the
 b644d5a9 executable-surface relocation: the manifest it parsed
 (setup-templates-manifest.sh) no longer exists anywhere — it was replaced by
@@ -659,7 +659,7 @@ def _fake_orphan_appx_stub(calls, orphan_path=_FAKE_APPX_STUB_PATH):
 
 # --- _orphan_appx_stub: real body against real live aliases -----------------
 #
-# Review: coordinator:code-reviewer (P1/P2) -- every test above monkeypatches
+# Every test above monkeypatches
 # `_orphan_appx_stub` itself, never exercising its real lstat/stat body, so
 # nothing here proved the resolvability split (live vs. orphaned APPEXECLINK)
 # actually holds. Measured directly (Windows 11, 2026-08-14): 55 zero-length
@@ -702,9 +702,15 @@ def test_windows_health_steps_appx_stub_disabled_never_prompts_or_deletes(monkey
     # Not tmp_path-rooted -- `_refuse_machine_mutation`'s temp-path check
     # would otherwise mask the assertion this test is actually about (the
     # DISABLE_ENV guard, not the temp-path one).
-    fake_local_app_data = str(Path(_FAKE_APPX_STUB_PATH).parent.parent.parent)
+    # ntpath, not bare Path: the fixture path is Windows-backslash-separated
+    # and a test-runner on a POSIX host must still split it into segments.
+    fake_local_app_data = ntpath.dirname(ntpath.dirname(ntpath.dirname(_FAKE_APPX_STUB_PATH)))
     monkeypatch.setenv("LOCALAPPDATA", fake_local_app_data)
-    orphan_path = _FAKE_APPX_STUB_PATH
+    # Mirrors `_windows_health_steps`'s own `Path(local_app_data) / ...` join
+    # rather than reusing `_FAKE_APPX_STUB_PATH` verbatim -- on a POSIX
+    # test-runner, `Path` joins with "/", so the candidate it builds would
+    # never equal an all-backslash literal even with LOCALAPPDATA correct.
+    orphan_path = str(Path(fake_local_app_data) / "Microsoft" / "WindowsApps" / "python3.exe")
     monkeypatch.setattr(substrate, "_cygpath_w", lambda p: p)
     monkeypatch.setattr(substrate, "_win_user_path_entries", _fake_win_user_path_entries_for_windows_health_steps(already_present=True))
     monkeypatch.setattr(substrate, "_orphan_appx_stub", _fake_orphan_appx_stub(calls, orphan_path))
@@ -734,9 +740,12 @@ def test_windows_health_steps_appx_stub_enabled_prompt_still_deletes(monkeypatch
 
     calls: list = []
     removed: list = []
-    fake_local_app_data = str(Path(_FAKE_APPX_STUB_PATH).parent.parent.parent)
+    # ntpath, not bare Path: see the sibling disabled-mutation test above.
+    fake_local_app_data = ntpath.dirname(ntpath.dirname(ntpath.dirname(_FAKE_APPX_STUB_PATH)))
     monkeypatch.setenv("LOCALAPPDATA", fake_local_app_data)
-    orphan_path = _FAKE_APPX_STUB_PATH
+    # See the sibling disabled-mutation test above for why this mirrors the
+    # production join instead of reusing `_FAKE_APPX_STUB_PATH` verbatim.
+    orphan_path = str(Path(fake_local_app_data) / "Microsoft" / "WindowsApps" / "python3.exe")
     monkeypatch.setattr(substrate, "_cygpath_w", lambda p: p)
     monkeypatch.setattr(substrate, "_win_user_path_entries", _fake_win_user_path_entries_for_windows_health_steps(already_present=True))
     monkeypatch.setattr(substrate, "_orphan_appx_stub", _fake_orphan_appx_stub(calls, orphan_path))
@@ -897,7 +906,7 @@ def test_sweep_protects_ps1_sibling_of_currently_installed_name(tmp_path):
 
 
 def test_sweep_protects_ps1_derived_via_limb_two_not_marker_or_static_family(monkeypatch, tmp_path):
-    """Review: code-reviewer (P1, coordinatorcode-reviewer-2032cde5) -- limb 2
+    """Limb 2
     (`protected_names |= {Path(n).stem + ".ps1" for n in protected_names}`)
     is checked BEFORE the marker branch in the sweep loop, so a fixture must
     be deletion-ELIGIBLE under limb 1 (carries `_AGENT_PS1_FORWARDER_MARKER`)
@@ -924,7 +933,7 @@ def test_sweep_protects_ps1_derived_via_limb_two_not_marker_or_static_family(mon
 
 
 def test_sweep_ps1_legacy_marker_alone_grants_no_deletion_eligibility(monkeypatch, tmp_path):
-    """Review: code-reviewer (P3, coordinatorcode-reviewer-2032cde5) -- the
+    """The
     `.ps1` branch's marker check does NOT accept `_LEGACY_CMD_MARKER` (only
     `_AGENT_PS1_FORWARDER_MARKER`), so a `.ps1` file carrying only the legacy
     marker, whose bare name is UNPROTECTED (not in

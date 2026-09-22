@@ -117,7 +117,7 @@ def _slot_order_fn():
     wrong twice in the same way: `wave-10-…` sorts before `wave-2-…` as text, so a lexical sort
     reports a ten-wave run's oldest records as its newest.
 
-    Review: coordinator:overengineering-reviewer (finding 5) -- both files now import the one
+    Both files now import the one
     `coordinator_core` definition directly instead of this file loading `recycle-check.py` by
     file path via `importlib.util`. Engine import happens here, inside a function, never at
     module scope -- keeps this module's body pure so `serve_classifier` still classifies this
@@ -286,7 +286,7 @@ def _live_writer_paths(repo_root: Path, rel_paths: list[str]) -> set[str] | None
     reads the working tree and cannot tell, and by contract spawns no git, so the driver
     holds these the way it holds its own in-flight batons. None when git could not answer.
 
-    Review: coordinator:overengineering-reviewer (finding 3) -- routes through
+    Routes through
     `coordinator_core.ops.ceremony.git_native._git` instead of a hand-rolled
     `subprocess.run`. NOT `git_native.dirty_relpaths_from_porcelain`: that helper fails
     CLOSED (treats every candidate as dirty on a git failure), while this caller's own
@@ -536,7 +536,7 @@ def _engine_ref(repo_root: Path, script_source: Path) -> dict:
         ref["reason"] = f"workflow bytes unreadable ({exc})"
         return ref
     try:
-        # Review: coordinator:overengineering-reviewer (findings 3, 4) -- one
+        # One
         # `git status --porcelain=v2 --branch -- <path>` call returns both the HEAD oid
         # (the `# branch.oid` header line) and this path's dirtiness (any entry line at
         # all), replacing the prior `rev-parse HEAD` + `status --porcelain` pair. Routed

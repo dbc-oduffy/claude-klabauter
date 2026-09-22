@@ -111,7 +111,7 @@ from typing import List, Optional
 # only imports are `os` and `pathlib`, so it cannot participate in a
 # `coordinator_core` cycle. The deferral this replaces was the workaround that
 # leaf module exists to retire.
-# Review: Kira (overengineering, F4) — the workaround survived at the one site
+# The workaround survived at the one site
 # that motivated the fix.
 from coordinator_core._content_root_primitive import content_root_for as _content_root_for
 from coordinator_core.doe_root_pointer import read_doe_root_pointer as _read_doe_root_pointer
@@ -327,7 +327,7 @@ def _resolve_source_mode(verb: str) -> str:
     # carry the manifest) is never double-counted as both the OSS install AND
     # the "unmarked candidate" in the ambiguity check below.
     #
-    # Review: B6 (MAJOR, 2026-08-08) -- this rung was previously gated on
+    # B6 (MAJOR, 2026-08-08) -- this rung was previously gated on
     # `os.path.isdir(flat)` alone: mere directory existence (an interrupted
     # install, a `rm -rf <dir>/*` leftover, a user-created placeholder)
     # classified the box as "dev", silently trading an accurate "no

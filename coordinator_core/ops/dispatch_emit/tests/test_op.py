@@ -151,7 +151,7 @@ def test_dispatch_emit_round_trip_writes_and_returns_verdict(tmp_path):
 
 
 def test_dispatch_emit_degrades_agent_type_for_a_bare_host_caller(tmp_path, monkeypatch):
-    """Review: code-reviewer, Finding 1 -- `_dispatch_emit` must resolve
+    """`_dispatch_emit` must resolve
     `agent_type_host` from the CALLER's own env (`COORDINATOR_AGENT_TYPE_HOST`/
     `CLAUDE_PLUGIN_ROOT`) and thread it into `emit_script`, or host agent-type
     degradation (S1-C5/S1-C6) never fires from the one production entry point

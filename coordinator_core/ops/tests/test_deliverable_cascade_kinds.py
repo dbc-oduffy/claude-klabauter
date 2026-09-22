@@ -392,7 +392,7 @@ def test_ac3_writeside_floor_is_byte_identical_on_already_terminal_record(tmp_pa
 
 
 def test_ac3_writeside_floor_holds_for_a_quoted_on_disk_status(tmp_path):
-    """Review: staff-eng — Finding 0: the idempotency-floor comparison must
+    """The idempotency-floor comparison must
     read through `read_fm_field_unquoted`, not the raw on-disk bytes — a
     record carrying `status: 'shipped'` (single-quoted) must still be
     recognised as already-terminal and left BYTE-IDENTICAL, not rewritten."""
@@ -418,7 +418,7 @@ def test_ac3_writeside_floor_holds_for_a_quoted_on_disk_status(tmp_path):
 
 
 def test_ac3_writeside_floor_crlf_document_has_no_mixed_line_endings(tmp_path):
-    """Review: staff-eng — Finding 9: every fixture in this suite is
+    """Every fixture in this suite is
     LF-authored and every assertion reads through `Path.read_text`
     (universal newlines) or `yaml.safe_load`, both of which normalize CRLF
     away — so Findings 3/5(a) were structurally unfalsifiable here. This
@@ -548,7 +548,7 @@ def test_ac10_vendored_sizing_schema_version_is_pinned():
     )
 
 
-# Review: staff-eng — Finding 11: C0 vendored FOUR schemas, but only
+# C0 vendored FOUR schemas, but only
 # sizing-object carried a version-pin regression above — roadmap/goal/
 # initiative reopened the identical EQUAL_VERSION_SHAPE_DRIFT silent-divergence
 # hazard C0 exists to close, the moment DoE bumps any of the other three.
@@ -672,7 +672,7 @@ def test_ac11_already_terminal_sizing_target_is_refused_leg_c(tmp_path):
     )
 
     assert reason is not None
-    # Review: staff-eng — Finding 1 (root cause of the leg-c rewrite): leg
+    # Leg
     # (c) is now a uniform positive `live_values` check for every kind, so
     # the refusal message reads "not consistent with live-and-advanceable"
     # rather than the handoff-only "already terminal" wording this test
@@ -681,7 +681,7 @@ def test_ac11_already_terminal_sizing_target_is_refused_leg_c(tmp_path):
 
 
 def test_ac11_superseded_sizing_target_is_refused_leg_c(tmp_path):
-    """Review: staff-eng — Finding 1's own named regression test: a
+    """'s own named regression test: a
     `superseded` sizing is not terminal (`_SIZING_TERMINAL_STATUS` is
     `{shipped, declined}`, per 2026-08-10's `declined` addition) but is also
     not live — leg (c) must refuse it rather than let it clear through to a
@@ -856,7 +856,7 @@ def test_ac7_coordinator_doc_new_writes_reverse_edge_end_to_end(tmp_path):
     assert sizing_after["status"] == "routed"
     assert sizing_after["plan"] == plan_rel
 
-    # Review: staff-eng — Finding 10: the mutated sizing must still validate
+    # The mutated sizing must still validate
     # against the vendored schema — unlike test_ac2_..., this test previously
     # asserted values only, so a `plan:` value the schema's
     # `^docs/plans/.+\.md$` pattern rejects (e.g. a Windows-separator path
@@ -867,7 +867,7 @@ def test_ac7_coordinator_doc_new_writes_reverse_edge_end_to_end(tmp_path):
 
 @pytest.mark.skipif(not _DOC_NEW_CLI.is_file(), reason="coordinator-doc-new CLI not found at expected path")
 def test_ac7_mutate_sizing_reverse_edge_preserves_crlf():
-    """Review: staff-eng — Finding 9 (doc-new reverse-edge leg): unlike the
+    """Unlike the
     cascade's write side, `_mutate_sizing_reverse_edge` is a PURE text
     function — no `locked_rmw`/universal-newline read in between when called
     directly — so a CRLF-authored document's line endings must survive the

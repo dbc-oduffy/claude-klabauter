@@ -436,7 +436,7 @@ def _trigger_destructive_rm() -> Optional[Dict[str, Any]]:
 
 
 def _trigger_destructive_git_revert() -> Optional[Dict[str, Any]]:
-    """Review: staff-eng, Finding 9 (2026-08-05) -- the previous UNTRIGGERED
+    """The previous UNTRIGGERED
     row recorded a probe of `git revert`, a command this guard does not
     target at all (it gates `checkout`/`restore`/`reset`/`stash`, per its
     own docstring). A load-bearing path (`state/`-rooted, `_is_loadbearing`)
@@ -2063,7 +2063,7 @@ def probe_override(alt: Alternative, guard: str, baseline: GuardFireResult) -> V
         if baseline.envelope:
             baseline_decision = baseline.envelope.get("hookSpecificOutput", {}).get("permissionDecision")
 
-    # Review: coordinator:code-reviewer (finding, 2026-08-15) -- deliberately
+    # Deliberately
     # RE-READ here, not reused from the `had_prior`/`prior_value` captured
     # near the top of this function. That earlier pair is scoped to the
     # key-specific branch's own try/finally (it restores state before that

@@ -146,7 +146,7 @@ _GATE_REGISTRY: List[_Gate] = [
         # hooks, and conversely a native commit never enters those checks.
         # So a phantom staged deletion arriving by the native route had no
         # guard at all on either side, which is what this entry closes.
-        # Review: overengineering-reviewer flagged this row as inert (script
+        # overengineering-reviewer flagged this row as inert (script
         # absent, wrong repo) — false: guard-phantom-staged-deletion-precommit.py
         # was authored in DoE-claude on 2026-08-28 (55add252c, 1b40e1865),
         # predating this row. Scope limit that IS real: this installer only
@@ -158,6 +158,12 @@ _GATE_REGISTRY: List[_Gate] = [
         filename="guard-phantom-staged-deletion-precommit.py",
         label="phantom-staged-deletion",
         override_env="COORDINATOR_OVERRIDE_PRECOMMIT_PHANTOM_STAGED_DELETION",
+    ),
+    _Gate(
+        marker="guard-hook-script-deregistration",
+        filename="guard-hook-script-deregistration-precommit.py",
+        label="hook-script-deregistration",
+        override_env="COORDINATOR_OVERRIDE_HOOK_SCRIPT_DEREGISTRATION",
     ),
 ]
 

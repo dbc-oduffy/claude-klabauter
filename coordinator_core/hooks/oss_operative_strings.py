@@ -226,7 +226,7 @@ _PINNED_UNREACHABLE_RECORD: dict = {
         "is_engine_sibling": False,
         "oss_reachable": False,
         "short_forms": (),
-        # Review: no-op duplicate of this entry's own key (already in
+        # no-op duplicate of this entry's own key (already in
         # `forms` via `_sibling_name_pattern`'s `{name, norm}` seed);
         # `()` matches the sibling entry's convention for "no distinct
         # alias declared".

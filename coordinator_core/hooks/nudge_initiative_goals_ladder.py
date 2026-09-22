@@ -234,7 +234,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     initiative has no `goals` field and the repo carries goal(s) to attach.
     """
     try:
-        # Review: coordinator-code-reviewer — normalize the two params
+        # Normalize the two params
         # shapes both engine doors and the cold chain send (see
         # block_worktree_tool).
         return await _handle(payload_of(params))

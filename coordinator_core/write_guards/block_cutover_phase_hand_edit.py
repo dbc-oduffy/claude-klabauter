@@ -202,7 +202,7 @@ def _edit_touches_phase(
     ``phase:`` field. ``Write`` supplies a full ``content`` replacement;
     ``Edit``/``MultiEdit`` supply ``old_string``/``new_string`` fragments.
 
-    Review: code-reviewer — a ``Write`` whose NEW content omits the
+    A ``Write`` whose NEW content omits the
     ``phase:`` line entirely (rather than changing its value) previously went
     undetected: the old check only looked for a ``phase:``-shaped line
     IN the new content, so replacing the whole file with content that drops
@@ -279,7 +279,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             # hand-edited — out of scope (negative-spec above).
             if not candidate_disk.is_file():
                 continue
-            # Review: code-reviewer — a Write's pre-image is needed to detect
+            # A Write's pre-image is needed to detect
             # a phase-field DELETION (new content omits phase: entirely), not
             # just a phase-value change. Read failures fail open (no
             # pre_image), consistent with this guard's fail-open discipline.

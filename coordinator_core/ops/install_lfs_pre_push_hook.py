@@ -176,7 +176,7 @@ def classify_existing(current: str | None) -> str:
     from `install()` so the asymmetry documented in the module docstring is
     testable directly rather than only through a filesystem side effect.
     """
-    # Review: code-reviewer P1 — both probes are anchored to LINE SHAPE, not
+    # Both probes are anchored to LINE SHAPE, not
     # matched as a plain substring of the whole blob. A foreign hook that
     # merely MENTIONS either marker in a comment (e.g. `# do not run git lfs
     # pre-push here`, or `# avoid coordinator-lfs-gate`) must classify as
@@ -238,7 +238,7 @@ def install(hooks_dir: Path) -> tuple[int, str]:
     if case == "ours" and current == desired:
         return 0, f"{_PROG}: {target} already current — no write."
 
-    # Review: code-reviewer P3 — write-temp-then-os.replace(), not a
+    # write-temp-then-os.replace(), not a
     # truncate-in-place open(target, "w"). A crash or a concurrent
     # `git lfs install` between the read/classify above and the write below
     # could otherwise interleave with a real git-lfs write to the same

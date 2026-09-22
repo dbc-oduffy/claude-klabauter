@@ -372,7 +372,7 @@ def test_recursive_scan_across_nested_subdirs(tmp_path):
 
 
 def test_basename_collision_across_subdirs_does_not_mask_debt(tmp_path):
-    # Review: code-reviewer (Finding 1, 2026-07-12) — two DIFFERENT specs sharing a
+    # Two DIFFERENT specs sharing a
     # basename across two different specs_dir subdirectories must not collide into
     # one debt-set entry. Logging one as DISTILLED must not silently drop the other
     # (same-named, different subdir) from the debt list.

@@ -126,7 +126,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # it calls cutover.gate internally against the same main-worktree-rooted
     # state/roadmap/**/cutovers/ record and must resolve the identical worktree.
     "cutover.advance":                       "common_dir",
-    # Review: code-reviewer (F13) — show_top is the KEYING scope (which worktree's daemon
+    # show_top is the KEYING scope (which worktree's daemon
     # partition handles the request), not the memo location. Memo may live in any registered
     # git repo's cross-repo/; containment gate (memo_transition.py:_containment_check) governs
     # reachability. The prior comment "memo lives in the caller worktree" was misleading for
@@ -204,7 +204,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # hooks.stop_dispatch (C3) — repo_root handler arg unused: resolves its
     # own repo root from params["payload"]["cwd"]. Same "none" class as the
     # other repo_root-less hooks.* ops above.
-    # Review: overengineering-reviewer (Kira) — the four sibling
+    # The four sibling
     # residue/wrapper op-key rows formerly here (guard_kira_verdict_routed,
     # stop_em_report_altitude, nudge_harness_directive_dispatch,
     # nudge_unrouted_sizing) were removed with their registrations; no

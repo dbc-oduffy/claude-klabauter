@@ -446,7 +446,7 @@ def test_read_session_start_record_docstring_corrects_the_false_safety_claim():
     ["../escaped", "..\\escaped", "a/../../escaped", "..", ".", "a/b", "a\\b"],
 )
 def test_settings_home_write_rejects_traversal_shaped_session_id(tmp_path, traversal_id):
-    """Review: code-reviewer (`e2a586f9`) -- a traversal-shaped `session_id` must not escape
+    """A traversal-shaped `session_id` must not escape
     the settings-home anchor hub. Fail-open: the write returns whatever the in-repo write
     would return on its own, never raises, and lands no settings-home record at all."""
     root = _init_repo(tmp_path)

@@ -1296,7 +1296,7 @@ def directory_pathspec_diagnostic(path: str) -> str:
     )
 
 
-# Review: overengineering-reviewer Finding 5 -- the sole-publisher
+# The sole-publisher
 # suppression axis is gravestoned. `_AUTO_PUSH_SUPPRESS_ENV`'s only reader
 # was `auto_push.main()` (deleted, Finding 4); `git_hook_install.
 # ensure_post_commit_hook` stopped passing `skip_env` for post-commit once
@@ -4603,7 +4603,7 @@ def _resolve_cas_ref_target(root: Path) -> Optional[Tuple[Path, str]]:
     just recovered. `None` still means a ref that is neither loose nor
     packed, which is genuinely unresolvable.
 
-    # Review: coordinator-code-reviewer -- the loose-or-packed existence
+    # The loose-or-packed existence
     # check is shared with the sibling resolver in `git/commit.py` via
     # `git_objects._ref_exists_loose_or_packed`, so the two stay in sync
     # rather than drifting as hand-kept-identical copies.
@@ -5207,7 +5207,7 @@ def commit_authored_content(
         if not fast_result.ok:
             return fast_result
         new_commit_sha = fast_result.stdout.strip()
-        # Review: code-reviewer finding 2 -- C4 (7fd7c86f) threaded
+        # C4 (7fd7c86f) threaded
         # cas_ref_relpath through commit_authored_new_file but left this
         # sibling's fast path dropping it; carried through here the same way.
         fast_path_cas_ref_relpath = fast_result.cas_ref_relpath

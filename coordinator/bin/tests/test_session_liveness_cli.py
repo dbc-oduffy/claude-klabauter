@@ -137,7 +137,7 @@ def test_live_same_repo_session_exits_0_no_longer_silent(stub_import_module, cap
 
 
 def test_toctou_window_true_flagged_verdict_never_prints_dead(stub_import_module, capsys):
-    # Review: staff-eng-review Finding 1 -- the two-read window between
+    # The two-read window between
     # session_live() and session_verdict() can leave `live` False while
     # `verdict` carries a True-flagged tuple on a non-elsewhere basis (e.g.
     # a session dir created, or Layer-2 recency crossing the threshold,

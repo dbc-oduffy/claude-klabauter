@@ -207,7 +207,7 @@ def test_default_resolution_cmd_forwarder_process_time() -> None:
         [str(_CMD_FORWARDER), "list"], k=K_INVOCATIONS, cwd=str(_REPO_ROOT)
     )
     assert result["procs_per_call"] <= 7.0, result
-    # Review: coordinator:code-reviewer -- 500.0 is the CLAUDE.md brightline
+    # 500.0 is the CLAUDE.md brightline
     # itself, a coarser bar this test's own docstring is not about; pinning
     # the ratchet to it would let a >2x regression off this test's own
     # baseline (234.4ms) pass silently. Ratchet at ~1.5x the recorded
@@ -228,7 +228,7 @@ def test_default_resolution_python_direct_process_time() -> None:
         [sys.executable, str(_PY_CLI), "list"], k=K_INVOCATIONS, cwd=str(_REPO_ROOT)
     )
     assert result["procs_per_call"] <= 6.0, result
-    # Review: coordinator:code-reviewer -- same brightline-vs-baseline gap as
+    # Same brightline-vs-baseline gap as
     # the forwarder test above; 500.0 would pass a 208ms -> 400ms regression
     # undetected. Ratchet at ~1.5x this test's own baseline (208.3ms).
     assert result["process_time_ms"] <= 312.5, result
@@ -243,7 +243,7 @@ def test_bare_interpreter_floor_process_time() -> None:
 
     result = batched_process_time_ms([sys.executable, "-c", "pass"], k=K_INVOCATIONS)
     assert result["procs_per_call"] == 1.0, result
-    # Review: coordinator:code-reviewer -- headroom rationale for the ~4x gap
+    # Headroom rationale for the ~4x gap
     # over the measured floor (26.0ms pinned baseline, 36.5ms this session's
     # re-measurement, both module docstring). Kept wide deliberately: unlike
     # the stamped-root test's shared-fleet-server noise, this floor's

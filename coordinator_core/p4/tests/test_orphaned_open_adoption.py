@@ -182,7 +182,6 @@ class TestNoOrphanPathSpendsFourSpawns:
         assert outcome.adopted == 0
         assert len(spawned) == 4
 
-# Review: overengineering-reviewer F7 (integrator-applied) --
 # `TestNegativeWithoutReopenShelveSilentlyOmitsTheFile` used to live here.
 # It monkeypatched `_fstat_records` to a hand-stripped stub, so its
 # assertion followed from the stub by construction and would have passed

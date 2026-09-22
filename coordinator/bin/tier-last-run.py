@@ -182,7 +182,7 @@ def _write_state(state_path: Path, state: dict[str, Any]) -> None:
     """
     state_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = state_path.with_name(f"{state_path.name}.tmp-{os.getpid()}")
-    tmp_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
     os.replace(tmp_path, state_path)
 
 

@@ -693,7 +693,7 @@ class TestDispatchReachability:
 
 
 class TestCrashPropagatesForFailClosed:
-    """Review: code-reviewer -- Finding 3: this guard is registered in
+    """This guard is registered in
     `dispatch.py`'s `guard_chain` with `fail_closed=True`, whose whole
     contract is that an internal bug reaches `dispatch._crash_deny` rather
     than being swallowed as a silent allow. Before this fix, `check()`

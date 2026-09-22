@@ -711,6 +711,50 @@ def _violation_message(schema_name: str, errors: "list[dict]") -> str:
     return f"{schema_name}: {'; '.join(parts)}"
 
 
+def _run_report_glob_match_is_content_thin(
+    schema_name: Optional[str], schema: Optional[dict], frontmatter: Optional[dict]
+) -> bool:
+    """True when ``_match_schema`` routed an undeclared-kind write to
+    ``run-report`` purely through that schema's directory-wide catch-all
+    glob (``run-report.schema.json``'s ``applies_to``,
+    ``.coordinator-local/subagent-share/*/*.md``) and the write's own
+    frontmatter shares none of ``run-report.schema.json``'s declared
+    vocabulary — i.e. nothing about the write itself claims to BE a
+    run-report sidecar, only its directory does.
+
+    ``run-report`` carries no ``x-kind``/``kinds`` mapping (nothing routes
+    to it via ``_byKind``), so today every non-``None`` ``schema_name ==
+    "run-report"`` result already came from the glob branch; the
+    ``kind``-declared stand-down below is defensive parity with the same
+    check `_match_schema` itself applies elsewhere (kind-first, glob-
+    fallback), not a currently-reachable path — a future ``x-kind`` entry
+    for run-report must not make this predicate start overriding an
+    explicit kind resolution.
+
+    A file dropped into that shared sidecar directory with no frontmatter
+    at all, or with frontmatter that happens to parse but carries none of
+    ``status``/``agent_type``/``spawned_at``/etc., is UNCLASSIFIED noise
+    (e.g. a hand-authored review note), not a malformed run-report — the
+    glob exists to catch every subagent sidecar family living under one
+    shared directory, not to assert every ``.md`` there IS one.
+
+    Kept out of ``coordinator_core/frontmatter/schema_validate.py::
+    match_schema`` itself (a pinned contract surface other repos import by
+    file path) — narrowed here instead, called by both write-guard siblings
+    immediately after their own ``match_schema``/``_match_schema`` call, so
+    a content-thin match degrades to "no schema matched" for both rather
+    than firing a misleading missing-frontmatter violation.
+    """
+    if schema_name != "run-report":
+        return False
+    if isinstance(frontmatter, dict) and frontmatter.get("kind") is not None:
+        return False
+    if not isinstance(frontmatter, dict):
+        return True
+    shaped_fields = (schema or {}).get("properties") or {}
+    return not any(field in frontmatter for field in shaped_fields)
+
+
 def _malformed_frontmatter_detail(content: str) -> Optional[str]:
     """Return a one-line YAML-error summary when ``content`` OPENS a
     frontmatter block whose YAML does not parse, else ``None``.
@@ -1471,7 +1515,7 @@ _HANDOFF_KIND_SCHEMA_NAME = "handoff"
 
 
 def _handoff_kind_off_enum_message(raw_kind: str, enum_values: "list[str]") -> str:
-    # Review: code-reviewer -- Finding 1 (ae407001) -- this message must describe
+    # This message must describe
     # only THIS deny's own behavior, not the write's overall outcome. A legacy
     # pre-rename spelling stands down HERE (it is not "never valid"), but the
     # base schema-shape check a few lines below still flags it as an invalid
@@ -1483,7 +1527,7 @@ def _handoff_kind_off_enum_message(raw_kind: str, enum_values: "list[str]") -> s
     # records must be canonical). So this message must not claim aliases are
     # accepted end-to-end — only that this specific (unconditional) deny does
     # not fire for them.
-    # Review: code-reviewer -- Finding 2 (ae407001) -- built from
+    # Built from
     # _PRE_RENAME_ALIASES.items() (the module's own alias table) instead of
     # spelling the three retired names as literals, so this message can't
     # drift from the logic if that table ever changes.
@@ -1983,6 +2027,10 @@ def _first_result(
     try:
         match = _match_schema(repo_rel, frontmatter, schemas)
     except Exception:  # noqa: BLE001 — fail-open
+        match = None
+    if match and _run_report_glob_match_is_content_thin(
+        match.get("schemaName"), match.get("schema"), frontmatter
+    ):
         match = None
     if not match:
         # Second always-WARN finding (see module docstring): the write opens

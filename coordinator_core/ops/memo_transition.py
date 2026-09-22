@@ -30,8 +30,13 @@ Verb contracts (mirrored from the JS spec, plus the native-only addition):
               An already-actioned memo re-actioned with ``correct_realization``
               truthy AND an UNCHANGED ``decision:`` may move ``realized_by``/
               ``decision_note`` only (evidence correction, e.g. a cited commit
-              was later reverted) — a verdict change still fails loud
-              regardless of the flag. See ``_handle_already_actioned``.
+              was later reverted); on an ``actioned_note``-shape memo (no
+              ``decision:`` on disk) the same flag with no ``--decision`` may
+              instead correct ``actioned_note`` in place — either way the
+              superseded value is preserved inside a ``[correction ...]``
+              clause, never dropped. A verdict or disposition-SHAPE change
+              still fails loud regardless of the flag. See
+              ``_handle_already_actioned``.
               An already-actioned/superseded memo re-actioned with
               ``supersede_note``+``supersede_realized_by`` (mutually exclusive
               with ``decision``/``actioned_note``/``superseded_by``) records
@@ -162,7 +167,7 @@ _CREATIONFLAGS = no_console_creationflags()
 # ---------------------------------------------------------------------------
 
 _ALLOWED_SUBTREES = ("cross-repo", "state")
-# Review: code-reviewer (F1) — bound the containment-check subprocess the same way the
+# Bound the containment-check subprocess the same way the
 # sibling workday_complete_step2_5_dirty_tree.py's _run_git helper does: timeout so a
 # hung git process can't wedge the asyncio.to_thread pool indefinitely, stdin=DEVNULL so
 # an interactive prompt never blocks on the daemon's inherited stdin, and CREATE_NO_WINDOW
@@ -189,7 +194,7 @@ def _containment_check(memo: str) -> Path:
     Returns:
         Path — the resolved git repository root (for use as locked_rmw repo_root).
     """
-    # Review: code-reviewer (F6) — return git_root so callers use it as repo_root
+    # Return git_root so callers use it as repo_root
     # in locked_rmw, keying lru_cache on the stable repo root rather than the per-call
     # memo_path.parent, which would spawn a fresh git rev-parse per unique memo directory.
     m = Path(memo).resolve()
@@ -201,7 +206,7 @@ def _containment_check(memo: str) -> Path:
             f"cross-repo/ or state/ subtree): {memo!r} — could not determine git root"
         )
 
-    # Review: code-reviewer (F7) — .resolve() makes symlink handling explicit and
+    # .resolve() makes symlink handling explicit and
     # platform-consistent; git on macOS returns /private/tmp/... for /tmp/... repos.
     git_root = Path(toplevel).resolve()
     for subtree in _ALLOWED_SUBTREES:
@@ -731,12 +736,12 @@ def _replace_block_scalar_span(fm_text: str, key: str, new_line: str) -> str | N
 # YAML scalar unquote helper
 # ---------------------------------------------------------------------------
 
-# Review: code-reviewer (F2) — _validate_action_disposition deleted; it was a dead function
+# _validate_action_disposition deleted; it was a dead function
 # never called by _action, with is-not-None semantics that differed from _action's live truthy
 # guard and raising semantics that violated the AC6 _err() return contract. Tests retargeted
 # to _action directly in test_memo_transition_unit.py.
 #
-# Review: code-reviewer (F5) — _unquote_yaml_scalar extracted from the nested _unq closure
+# _unquote_yaml_scalar extracted from the nested _unq closure
 # inside _action's if-status-actioned block. Module-level placement made it testable in
 # isolation and eliminated per-call function recreation.
 #
@@ -810,17 +815,17 @@ def _claim(memo: str, session_id: str, at: str) -> dict:
         return _err("claim requires --at <ISO timestamp>")
 
     # Containment gate MUST fire before any frontmatter-primitive call (lesson: externally-triggered-ops-must-contain).
-    # Review: code-reviewer (F1) — wrap in try/except so containment ValueError returns _err()
+    # Wrap in try/except so containment ValueError returns _err()
     # (AC6 {exit_code:1} contract) instead of propagating through asyncio.to_thread to the IPC
     # BaseException handler which would emit a -32603 INTERNAL_ERROR with no result.exit_code.
-    # Review: code-reviewer (F6) — capture git_root for use as locked_rmw repo_root to avoid
+    # Capture git_root for use as locked_rmw repo_root to avoid
     # lru_cache thrash (memo_path.parent varies per call; git_root is stable for the repo lifetime).
     try:
         git_root = _containment_check(memo)
     except ValueError as exc:
         return _err(str(exc))
     except subprocess.TimeoutExpired:
-        # Review: code-reviewer (F1) — surface a timed-out containment-check git
+        # Surface a timed-out containment-check git
         # subprocess as the AC6 {exit_code:1} contract, same as ValueError above,
         # instead of letting it escape unhandled through asyncio.to_thread.
         return _err(f"claim: containment check timed out for --memo {memo!r}")
@@ -899,7 +904,7 @@ def _claim(memo: str, session_id: str, at: str) -> dict:
     except LockTimeout as exc:
         return _err(str(exc))
     except FileNotFoundError:
-        # Review: code-reviewer (F1) — memo deleted between is_file() check and lock
+        # Memo deleted between is_file() check and lock
         # acquisition (TOCTOU window); locked_rmw raises FileNotFoundError. Without this
         # clause it escapes through asyncio.to_thread to the IPC dispatcher → -32603
         # INTERNAL_ERROR with no exit_code field (AC6/AC10 contract violation).
@@ -1143,6 +1148,36 @@ def _apply_realization_correction(fm_text: str, params: dict) -> str:
     return fm_text
 
 
+def _apply_note_correction(fm_text: str, params: dict) -> str:
+    """Apply a ``--correct-realization`` correction on an ``actioned_note``-shape
+    memo: append a ``[correction ...]`` clause to ``actioned_note``, preserving
+    the superseded note text, instead of overwriting it in place.
+
+    Preconditions (caller's responsibility — see ``_handle_already_actioned``):
+    the memo is already ``actioned``, ``actioned_note``-shape (no ``decision:``
+    on disk), ``params`` requests the same shape (``actioned_note``, no
+    ``--decision``), and the note text differs from what is on disk (else the
+    idempotent no-op branch would already have fired).
+
+    Audit trail: the superseded ``actioned_note`` text is never silently
+    dropped — it is preserved inside the ``[correction ...]`` clause alongside
+    a UTC timestamp. No new frontmatter key is introduced.
+    """
+    cur_note = unquote_yaml_scalar(read_fm_field(fm_text, "actioned_note")) or "(none)"
+    new_note = params.get("actioned_note") or ""
+
+    ts = datetime.now(timezone.utc).isoformat()
+    clause = f"[correction {ts}: actioned_note superseded — was {cur_note}]"
+    combined_note = f"{new_note} {clause}".strip() if new_note else clause
+
+    if read_fm_field(fm_text, "actioned_note") is None:
+        fm_text = insert_fm_field(fm_text, "actioned_note", combined_note, "status", numeric_quoting=True)
+    else:
+        fm_text = replace_fm_field(fm_text, "actioned_note", combined_note, numeric_quoting=True)
+
+    return fm_text
+
+
 # ---------------------------------------------------------------------------
 # supersede-disposition (--supersede-note/--supersede-realized-by) — the ONE
 # place a REVERSED verdict on an already-actioned memo is recorded. Distinct
@@ -1244,13 +1279,12 @@ def _handle_already_actioned(fm_text: str, params: dict, verb: str) -> str | Non
 
     Raises:
         MutateAbort — a verdict change (``decision:`` differs from the on-disk
-        value), WITH OR WITHOUT ``--correct-realization`` — this flag never
-        unlocks a verdict change, only evidence correction under an unchanged
-        verdict. Also raised when ``--correct-realization`` is requested
-        without ``--decision`` (there is no ``realized_by`` to correct on an
-        ``actioned_note``-shape memo), or when the disposition otherwise
-        differs and no correction was requested at all (the pre-existing
-        fail-loud, unchanged).
+        value, or the disposition SHAPE itself flips between ``decision`` and
+        ``actioned_note``), WITH OR WITHOUT ``--correct-realization`` — this
+        flag never unlocks a verdict or shape change, only evidence correction
+        under an unchanged verdict/shape. Also raised when the disposition
+        otherwise differs and no correction was requested at all (the
+        pre-existing fail-loud, unchanged).
     """
     if _disposition_matches(fm_text, params):
         return None  # idempotent no-op
@@ -1259,14 +1293,22 @@ def _handle_already_actioned(fm_text: str, params: dict, verb: str) -> str | Non
         raise MutateAbort("memo is already actioned with a different disposition — cannot re-action")
 
     new_decision = params.get("decision")
-    if not new_decision:
-        raise MutateAbort(
-            f"{verb}: --correct-realization requires --decision matching the on-disk "
-            "decision value (decision-shape memos only — there is no realized_by to "
-            "correct on an actioned_note-shape memo)"
-        )
-
     cur_decision = read_fm_field_unquoted(fm_text, "decision")
+
+    if not new_decision:
+        # actioned_note-shape correction: legal only when the on-disk memo is
+        # ALSO actioned_note-shape (no decision: on disk) and the caller is
+        # requesting the same shape (--actioned-note, no --decision) — moving
+        # between shapes is a disposition change, which --correct-realization
+        # never unlocks.
+        if cur_decision is not None or not params.get("actioned_note"):
+            raise MutateAbort(
+                f"{verb}: --correct-realization requires --decision matching the on-disk "
+                "decision value on a decision-shape memo, or --actioned-note on an "
+                "actioned_note-shape memo — the disposition shape cannot change"
+            )
+        return _apply_note_correction(fm_text, params)
+
     if cur_decision != new_decision:
         # Verdict change — --correct-realization does NOT unlock this.
         raise MutateAbort("memo is already actioned with a different disposition — cannot re-action")
@@ -1495,14 +1537,14 @@ def _action(memo: str, params: dict) -> dict:
         return disposition_error
 
     # Containment gate MUST fire before any frontmatter-primitive call.
-    # Review: code-reviewer (F1) — containment ValueError → _err() (AC6 contract).
-    # Review: code-reviewer (F6) — capture git_root for locked_rmw repo_root stability.
+    # Containment ValueError → _err() (AC6 contract).
+    # Capture git_root for locked_rmw repo_root stability.
     try:
         git_root = _containment_check(memo)
     except ValueError as exc:
         return _err(str(exc))
     except subprocess.TimeoutExpired:
-        # Review: code-reviewer (F1) — same AC6 {exit_code:1} contract as ValueError.
+        # Same AC6 {exit_code:1} contract as ValueError.
         return _err(f"action: containment check timed out for --memo {memo!r}")
 
     memo_path = Path(memo)
@@ -1597,7 +1639,7 @@ def _action(memo: str, params: dict) -> dict:
     except LockTimeout as exc:
         return _err(str(exc))
     except FileNotFoundError:
-        # Review: code-reviewer (F1) — TOCTOU: memo deleted between is_file() and lock
+        # TOCTOU: memo deleted between is_file() and lock
         # acquire; locked_rmw raises FileNotFoundError → would escape as -32603 INTERNAL_ERROR.
         return _err(f"memo not found: {memo}")
 
@@ -1680,14 +1722,14 @@ def _release(memo: str) -> dict:
     Negative-spec: do NOT preserve picked_up_by/at (contrast with action, which preserves them).
     """
     # Containment gate MUST fire before any frontmatter-primitive call.
-    # Review: code-reviewer (F1) — containment ValueError → _err() (AC6 contract).
-    # Review: code-reviewer (F6) — capture git_root for locked_rmw repo_root stability.
+    # Containment ValueError → _err() (AC6 contract).
+    # Capture git_root for locked_rmw repo_root stability.
     try:
         git_root = _containment_check(memo)
     except ValueError as exc:
         return _err(str(exc))
     except subprocess.TimeoutExpired:
-        # Review: code-reviewer (F1) — same AC6 {exit_code:1} contract as ValueError.
+        # Same AC6 {exit_code:1} contract as ValueError.
         return _err(f"release: containment check timed out for --memo {memo!r}")
 
     memo_path = Path(memo)
@@ -1757,7 +1799,7 @@ def _release(memo: str) -> dict:
     except LockTimeout as exc:
         return _err(str(exc))
     except FileNotFoundError:
-        # Review: code-reviewer (F1) — TOCTOU: memo deleted between is_file() and lock
+        # TOCTOU: memo deleted between is_file() and lock
         # acquire; locked_rmw raises FileNotFoundError → would escape as -32603 INTERNAL_ERROR.
         return _err(f"memo not found: {memo}")
 
@@ -2088,7 +2130,7 @@ def _resolve(memo: str, session_id: str, at: str, params: dict) -> dict:
     if _noop_result[0] is not None:
         resumed_reply = _resume_probe_and_commit(
             memo_path, git_root, "resolve", new_text,
-            # Review: code-reviewer (P2) — resolve's resumed-reply names its own verb,
+            # resolve's resumed-reply names its own verb,
             # matching _claim/_action/_release's per-verb-distinct wording; previously
             # identical to _action's message, so a resumed resolve read as an action
             # resume in logs/commit messages.

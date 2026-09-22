@@ -90,6 +90,26 @@ def test_commit_prompt_names_no_flag_and_states_the_trailer_is_automatic():
     assert "apply_missing_trailers" in lowered or "commit_v2" in lowered
 
 
+def test_commit_prompt_instructs_the_agent_to_actually_call_the_resolver():
+    """`commit_paths` -- the only commit route this prompt shows a worked
+    call for (its own FilterUnsupported clause a few paragraphs down) --
+    fires no git hooks (`coordinator_core/git/commit.py :: commit_paths`,
+    "this route fires no native hook"), so nothing attaches a Deliverable-Id
+    trailer unless the agent calls the resolver itself. The prior wording
+    asserted attachment was automatic without ever naming that call, which
+    left every agent free to either land no trailer or hand-improvise one
+    from ambient state -- state/bug-backlog/2026-09-19-a-wave-commit-
+    strands-what-the-chunk-row-38555becc9a2.yaml's second, independent
+    defect (observed trailers included another live session's deliverable
+    id and the current branch name). The prompt must name the call
+    verbatim, not just gesture at `ceremony.commit_v2`."""
+    call = _commit_agent_call(
+        ["a.py"], "Commit wave 1", 0, ["C1"], deliverable_id="dlv-a-plan-99b845"
+    )
+    assert "apply_missing_trailers(message, repo, paths)" in call
+    assert "before calling" in call.lower()
+
+
 def test_commit_prompt_treats_a_mismatched_trailer_as_a_report_not_a_refusal():
     """The trailer resolver can land an id the agent did not expect (session-
     state resolution, multi-claim ambiguity, etc.) -- `close_out_and_stamp`

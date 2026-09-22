@@ -157,7 +157,7 @@ def test_idempotent_rerun_byte_identical(tmp_path):
     assert first == second
 
 
-# Review: coordinatorcode-reviewer f292d223 — F4: a splice must preserve any
+# A splice must preserve any
 # content that follows the ledger block rather than assuming it is last.
 def test_upsert_preserves_content_after_ledger_block(tmp_path):
     state_dir = tmp_path / "state"
@@ -200,7 +200,7 @@ def test_upsert_preserves_content_after_populated_ledger_block(tmp_path):
     assert ids == {"dlv-existing", "dlv-new"}
 
 
-# Review: coordinatorcode-reviewer f292d223 — F5: an optional key whose value is
+# An optional key whose value is
 # None must be omitted from the rendered row, matching the header's "absent
 # when not required" schema comment.
 def test_open_row_omits_null_closed_at_and_superseded_by_keys(tmp_path):
@@ -220,7 +220,7 @@ def test_open_row_omits_null_closed_at_and_superseded_by_keys(tmp_path):
     assert by_id["dlv-null-omit"].get("superseded_by") is None
 
 
-# Review: coordinatorcode-reviewer f292d223 — F8: a CRLF header, or a header
+# A CRLF header, or a header
 # whose last line lacks a trailing newline, must be refused rather than
 # silently spliced into a malformed file.
 def test_crlf_header_refused(tmp_path):
@@ -245,7 +245,7 @@ def test_header_missing_trailing_newline_before_ledger_key_refused(tmp_path):
         upsert_deliverable_ledger_rows(tmp_path, [_open_row("dlv-no-trailing-nl")])
 
 
-# Review: coordinatorcode-reviewer f292d223 — F1: a present-but-malformed
+# A present-but-malformed
 # on-disk row must fail loud, never be silently excluded from the merge.
 def test_malformed_existing_row_on_disk_raises_rather_than_silently_dropping(tmp_path):
     state_dir = tmp_path / "state"
@@ -343,7 +343,7 @@ def test_large_row_count_reparses_intact(tmp_path):
     assert {r["deliverable_id"] for r in loaded} == {r["deliverable_id"] for r in rows}
 
 
-# Review: coordinatorcode-reviewer f292d223 — F3: adversarial _render_scalar
+# Adversarial _render_scalar
 # inputs, pinned as byte-exact round-trips through write -> load_deliverable_ledger.
 @pytest.mark.parametrize(
     "tricky_value",
@@ -361,7 +361,7 @@ def test_large_row_count_reparses_intact(tmp_path):
         "~",
         "  leading-and-trailing-whitespace  ",
         "an embedded: colon-space value",
-        # Review: coordinatorcode-reviewer c8602a8b — F3: adversarial coverage
+        # Adversarial coverage
         # widened per the reviewer's enumerated hazard list — leading indicator
         # chars, leading/trailing quote chars, YAML 1.1 bool-resolver forms
         # distinct from true/false/null, and non-ASCII/unicode.
@@ -402,7 +402,7 @@ def test_render_scalar_adversarial_inputs_round_trip_byte_exact(tmp_path, tricky
     assert ledger_row["evidence_source"] == tricky_value
 
 
-# Review: coordinatorcode-reviewer c8602a8b — F2: embedded-newline values were
+# embedded-newline values were
 # unexercised by any test despite being a named splice/round-trip hazard —
 # evidence_source/closure_evidence are free-text fields sourced from handoff
 # prose, where a literal newline is entirely plausible.
@@ -449,7 +449,7 @@ def test_render_scalar_embedded_newline_values_round_trip_byte_exact(tmp_path, t
     assert ledger_row["evidence_source"] == tricky_value
 
 
-# Review: coordinatorcode-reviewer c8602a8b — F4: _find_ledger_key_line must
+# _find_ledger_key_line must
 # refuse rather than silently take the first of more than one column-0
 # 'ledger:' match — a wrong splice on this artifact is data loss.
 def test_duplicate_column_zero_ledger_key_refused(tmp_path):
@@ -472,7 +472,7 @@ def test_duplicate_column_zero_ledger_key_refused(tmp_path):
     assert text == _HEADER + "ledger: this-is-not-the-real-key\nledger: []\n"
 
 
-# Review: coordinatorcode-reviewer c8602a8b — F1: no lock guarded the
+# No lock guarded the
 # read-merge-write critical section, so two overlapping invocations could
 # each read the same existing_rows and one would silently discard the
 # other's row on write. This forces a real interleaving (thread B is only
@@ -529,7 +529,7 @@ def test_concurrent_upserts_serialize_and_both_rows_survive(tmp_path, monkeypatc
     assert ids == {"dlv-thread-a", "dlv-thread-b"}
 
 
-# Review: coordinatorcode-reviewer c8602a8b — F5: main()'s happy path used to
+# main()'s happy path used to
 # compute artifact_path.is_file() and then discard it, always printing help
 # text. Now the existence + splice-point check is load-bearing in the success
 # message, and a real refusal (ambiguous splice target) surfaces as an error.

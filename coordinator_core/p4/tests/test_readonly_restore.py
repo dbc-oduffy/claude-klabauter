@@ -10,7 +10,7 @@ read-only bit cleared) is restored and its count rides `ShelveOutcome.restored`;
 the no-orphan/no-drift path spends exactly 4 p4 spawns (fstat, reconcile,
 revert, shelve) -- never `p4 clean`, `reconcile -w`, or `sync -f`.
 
-Review: overengineering-reviewer F8 (integrator-applied) -- this file used
+This file used
 to carry its own `TestEmptyPathSetStillZeroSpawns`, a verbatim duplicate of
 `test_shelve.py::test_empty_path_set_is_a_success_with_zero_p4_spawns`
 (same fixture shape, same `fail_run` spy, same assertion). Deleted here;

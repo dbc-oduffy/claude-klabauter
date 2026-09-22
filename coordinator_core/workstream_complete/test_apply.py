@@ -1681,7 +1681,7 @@ def test_build_pinboard_directive_not_satisfied_when_existing_line_unverified() 
 
 
 def test_idempotence_table_directive_ids_are_still_emitted_by_their_builders() -> None:
-    """Review: coordinator:code-reviewer (P3, later P0) —
+    """
     `directives_session_hygiene.py`'s module-docstring idempotence table
     names directive ids emitted by five sibling `directives_*.py` modules it
     does not own, with no mechanical link back; nothing failed if the table

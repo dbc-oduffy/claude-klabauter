@@ -120,7 +120,7 @@ _TOUCH_RECORD_FILENAME = "touch-record.jsonl"
 # ---------------------------------------------------------------------------
 _FILE_LOCKS: dict[str, asyncio.Lock] = {}
 
-# Review: code-reviewer F2 — bound _FILE_LOCKS growth. The engine may run for a full
+# Bound _FILE_LOCKS growth. The engine may run for a full
 # workday; sessions archive but locks were never evicted, accumulating O(sessions×agents)
 # entries indefinitely. Two-tier eviction: (1) on new-path creation, sweep entries whose
 # parent directory no longer exists (session archived → dir gone — cheap isdir check);

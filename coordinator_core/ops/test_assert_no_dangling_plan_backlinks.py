@@ -216,6 +216,35 @@ def test_fix_leaves_prose_mention_untouched(tmp_path):
         assert fh.read() == content
 
 
+def test_fix_partial_failure_diagnosed_on_stderr(tmp_path, monkeypatch, capsys):
+    """A `--fix` run where a citation's `_fix_file` call fails must not print
+    "healed N ..." without also naming the shortfall: the stdout summary
+    line only counts citations `_fix_file` actually reported success for, so
+    a caller reading just that line could previously mistake "healed 0" for
+    "there was nothing to heal". `main()`'s post-fix rescan already catches
+    this particular fixture via the id/path-form axes (rc stays 1 — that
+    fail-closed contract is unchanged), but the shortfall is now also named
+    on stderr instead of only being inferable from the count."""
+    root = str(tmp_path)
+    _make_moved_plan_tree(root)
+    target = "coordinator/wiki/citer1.md"
+    _write(
+        root,
+        target,
+        "Some doc.\n\nspec_backlink: docs/plans/2026-01-01-foo-plan.md\n",
+    )
+    monkeypatch.setattr(
+        "coordinator_core.ops.assert_no_dangling_plan_backlinks._fix_file",
+        lambda full_path, src, dst: False,
+    )
+    rc = main(["--root", root, "--fix"])
+    captured = capsys.readouterr()
+
+    assert rc == 1
+    assert "healed 0 dangling" in captured.out
+    assert "WARNING: 1 of 1 dangling backlink citation(s) could not be healed" in captured.err
+
+
 def test_no_root_resolvable_returns_zero(tmp_path, monkeypatch, capsys):
     non_git_dir = tmp_path / "not-a-repo"
     non_git_dir.mkdir()

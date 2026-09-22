@@ -1393,7 +1393,7 @@ def sweep_scratch(
     # both eliminated in this same session. A scratch dir sitting inside an
     # unreadable subtree here would otherwise be silently never discovered,
     # never pruned, and never reported as unscanned.
-    # Review: code-reviewer -- Finding 1 (2026-07-22 slice1 review): this walk
+    # This walk
     # was the one unfixed sibling of the defect this commit exists to patch.
     all_dirs: List[Path] = []
     walk_errors: List[str] = []
@@ -2047,7 +2047,7 @@ def sweep_harness_scratchpads(
         name = f"{entry['project_slug']}/{entry['session_id']}"
         size_bytes = entry.get("bytes") or 0
         age_days = entry.get("age_days")
-        # Review: code-reviewer -- Finding 5: don't fabricate epoch-1970 for
+        # don't fabricate epoch-1970 for
         # verdicts (e.g. "live") that never computed age_days -- fall back to
         # a real stat of the scratchpad path itself (_get_mtime's own "real
         # mtime, 0 only on genuine stat failure" convention, matching every
@@ -2458,7 +2458,7 @@ async def _run_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # This façade is a legitimate alternate call path into the same mutating
     # phase functions the DoE trampoline drives, so it must hold the same
     # single-instance-serialization guarantee, not just the trampoline.
-    # Review: code-reviewer (ops-records-cruft-hierarchy F3) — try_acquire_lock/
+    # try_acquire_lock/
     # release_lock were defined but never called anywhere in this module.
     lock_dir = Path(
         params.get("lock_dir", str(Path.home() / ".claude" / "state" / "cruft-sweep.lock.d"))

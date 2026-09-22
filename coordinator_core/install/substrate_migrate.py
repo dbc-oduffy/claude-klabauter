@@ -298,7 +298,7 @@ def _install_compat_pointer(legacy_ml: Path, dst_ml: Path, check_only: bool) -> 
             return 1
         win_legacy = _substrate_mod._cygpath_w(str(legacy_ml))
         win_dst = _substrate_mod._cygpath_w(str(dst_ml))
-        # Review: coordinator:code-reviewer — this rmdir/rmtree is a genuine
+        # This rmdir/rmtree is a genuine
         # removal of a real directory and its contents; gate it the same way
         # substrate.py's analogous delete legs do, above the mutating call.
         blocked = _substrate_mod._refuse_machine_mutation(
@@ -321,7 +321,7 @@ def _install_compat_pointer(legacy_ml: Path, dst_ml: Path, check_only: bool) -> 
             return 1
         print(f"[migrate] installed compat junction: {legacy_ml} → {dst_ml}")
     else:
-        # Review: coordinator:code-reviewer — same gate on the POSIX branch's
+        # Same gate on the POSIX branch's
         # real-directory rmtree, above the mutating call.
         blocked = _substrate_mod._refuse_machine_mutation(
             str(legacy_ml), what=f"remove legacy machine-local directory {legacy_ml}", check_temp_path=False,
@@ -356,7 +356,7 @@ def migrate_substrate_to_settings_home(
     dst_ml = settings_home_path / LEGACY_MACHINE_LOCAL_DIRNAME
     dst_manifest = settings_home_path / LEGACY_MANIFEST_FILENAME
 
-    # Review: code-reviewer (Finding 7) — renamed from `any_work`: this flag
+    # Renamed from `any_work`: this flag
     # tracks whether a legacy migration *candidate* was found, not whether
     # any bytes actually moved (a both-present-identical no-op still sets it).
     any_source_present = False
@@ -413,7 +413,7 @@ def migrate_substrate_to_settings_home(
             return rc
         any_source_present = True
 
-    # Review: code-reviewer (Finding 1, AC A5) — gate on "would dst_ml exist
+    # Gate on "would dst_ml exist
     # after a real run" (legacy_ml present + not already a pointer), not on
     # dst_ml's current on-disk state: in dry-run, _migrate_tree never writes
     # dst_ml, so the dst_ml.is_dir() conjunct silently skipped the

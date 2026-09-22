@@ -140,7 +140,7 @@ class TestAC3AsyncioImportGraph:
         )
 
     def test_dry_run_does_not_drag_asyncio(self, tmp_path):
-        # Review: coordinator:code-reviewer (07cbe322f slice, P2) -- the two
+        # The two
         # tests above only pin the import graph at module-load time; neither
         # actually calls `main(["--dry-run"])` and checks `sys.modules`, so a
         # future re-merge of the two now-separated `import asyncio` blocks

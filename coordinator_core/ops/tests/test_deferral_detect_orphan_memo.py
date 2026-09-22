@@ -178,7 +178,7 @@ class TestClassifyOrphanMemosCore:
         assert basenames == {"2026-07-17-first.md", "2026-07-16-second.md"}
 
     def test_slug_substring_inside_unrelated_word_not_owned(self):
-        """Review: code-reviewer Finding 2 — a generic slug must not match as
+        """A generic slug must not match as
         a plain substring of an unrelated longer word; the match has to be
         word/token-boundary-anchored."""
         basename = "2026-07-17-list.md"
@@ -208,7 +208,7 @@ class TestClassifyOrphanMemosCore:
         assert result == {"state": "clean"}
 
     def test_future_created_date_still_flagged_not_silently_clean(self):
-        """Review: code-reviewer Finding 7 — a fat-fingered future `created:`
+        """A fat-fingered future `created:`
         date yields negative age_days; it must not silently suppress a real
         orphan by never clearing the age threshold."""
         memos = [_memo("2026-07-17-future.md", kind="ask", created="2099-01-01")]
@@ -278,7 +278,7 @@ class TestReadOwningText:
         assert "2026-07-15-decision-owned.md" in blob
 
     def test_slug_owning_globs_excludes_handoffs(self, tmp_path):
-        """Review: code-reviewer Finding 3 — the slug-eligible blob
+        """The slug-eligible blob
         (_SLUG_OWNING_GLOBS) must exclude state/handoffs/*.md."""
         handoffs = tmp_path / "state" / "handoffs"
         handoffs.mkdir(parents=True)
@@ -295,7 +295,7 @@ class TestReadOwningText:
 
 
 class TestHandoffOwnershipScoping:
-    """Review: code-reviewer Finding 3 — a memo merely name-dropped in
+    """A memo merely name-dropped in
     passing by a handoff must NOT read as OWNED via the loose topic-slug
     match; only a full-basename reference in a handoff counts."""
 
@@ -411,7 +411,7 @@ class TestHandlerWiring:
         assert result == {"state": "clean"}
 
     def test_string_age_threshold_param_coerced_via_handler(self, tmp_path):
-        """Review: the Staff Engineer Finding 6 — age_threshold_days must be coerced to
+        """age_threshold_days must be coerced to
         int; a string (plausible on the standalone `python3 -m` path) would
         otherwise TypeError on `age_days < age_threshold_days`."""
         inbox = tmp_path / "cross-repo" / "inbox"

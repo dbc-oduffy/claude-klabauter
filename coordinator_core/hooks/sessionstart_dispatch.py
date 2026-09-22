@@ -104,7 +104,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     payload = dict(payload)
     leg_params = {"payload": payload}
 
-    # Review: coordinator:code-reviewer — align with postuse_stop_family_
+    # Align with postuse_stop_family_
     # dispatch.py::_call_leg's inspect.isawaitable handling instead of
     # hand-picking bare-await vs. _run_sync per leg; a future sync->async
     # flip on any leg's handler no longer needs a matching edit here.

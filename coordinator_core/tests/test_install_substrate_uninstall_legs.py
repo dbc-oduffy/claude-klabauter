@@ -637,7 +637,7 @@ def test_substrate_run_success_path_dual_anchor_populated_tree(tmp_path, monkeyp
 
     # claude-klabauter-side (coordinator/lib/claude-home) resolvers landed.
     assert (bin_dst / "claude-home").is_file()
-    # Review: code-reviewer — Finding 7, exec-bit check was present for
+    # exec-bit check was present for
     # machine-local but skipped for claude-home/cross-repo-memo.
     assert is_executable(bin_dst / "claude-home")
 
@@ -722,7 +722,7 @@ def test_substrate_run_manifest_resolves_off_claude_klabauter_root_not_plugin_ro
     success-path test above (``plugin_root/lib`` absent in both) and so could
     not fail for the regression it named; this seeds a distinguishable
     ``plugin_root/lib`` so choosing the wrong root would be observably wrong.
-    # Review: code-reviewer — Finding 6, non-discriminating duplicate test;
+    # non-discriminating duplicate test;
     # rebuilt as a real regression pin per suggested fix option (b).
     """
     plugin_root, claude_klabauter_root = _build_success_fixture(
@@ -1164,7 +1164,7 @@ def test_uninstall_leg7_removes_legacy_compat_mirror_artifacts(tmp_path, monkeyp
     still sweep those pre-existing artifacts by name, even though nothing
     installs new ones any more.
 
-    Review: code-reviewer — Finding 3, 2026-07-24-codereview-sliceowns-zero-claude-klabauter
+    2026-07-24-codereview-sliceowns-zero-claude-klabauter
     sidecar (option (a)): ``coordinator_engine_root_with_class`` is pointed at a
     REAL fake claude-klabauter root with a nonempty ``coordinator/bin/`` dir (one on-disk CLI file),
     so ``_derive_agent_helper_names`` genuinely returns a nonempty
@@ -1582,7 +1582,7 @@ def test_uninstall_setup_dir_leg_untracked_dir_deletes_everything_but_portable(t
     assert setup_dir.is_dir()
 
 
-# Review: code-reviewer (Finding 1) — setup-overwrite-backups/ cleanup on
+# setup-overwrite-backups/ cleanup on
 # full-remove uninstall only; exercised THROUGH uninstall_remove_substrate,
 # parametrized over both mode values, matching the setup/ leg test style above.
 @pytest.mark.parametrize("mode", ["full-remove", "revert-to-marketplace"])

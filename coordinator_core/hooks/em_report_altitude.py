@@ -407,7 +407,7 @@ def op(payload: dict) -> dict | None:
 
 
 if __name__ == "__main__":  # pragma: no cover - manual probe path
-    # Review: coordinator:code-reviewer — op() already routes through the shared
+    # op() already routes through the shared
     # envelope chokepoint (see the comment above the context_only() call inside
     # op()) for C3's corpus measurement; re-wrapping the already-unwrapped
     # result["message"] here double-records the same message under

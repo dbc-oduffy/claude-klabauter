@@ -149,7 +149,7 @@ _RECORD_FILENAME = "write_bump_launch_cwd"
 def _is_safe_settings_home_session_id(session_id: str) -> bool:
     """`True` iff `session_id` resolves to a direct child of the settings-home anchor hub.
 
-    Review: code-reviewer (`e2a586f9`) — this is the first `session_id`-keyed write to land
+    This is the first `session_id`-keyed write to land
     outside the repo tree, under a settings-home directory this fleet also uses for other
     consumers' durable data, so a `session_id` containing a path separator or a `.`/`..`
     segment could escape `write-bump-anchor/<session_id>/` into sibling settings-home
@@ -438,7 +438,7 @@ def delete_settings_home_session_record(session_id: str, env: Optional[dict] = N
         return False
     try:
         if not _is_safe_settings_home_session_id(session_id):
-            # Review: code-reviewer (`e2a586f9`) -- a traversal-shaped session_id resolves to
+            # A traversal-shaped session_id resolves to
             # nothing this hub owns; treat it like an already-absent record (idempotent
             # success), never attempt the delete.
             return True

@@ -178,7 +178,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     dr = Path(decision_record_raw)
     if not dr.is_absolute():
         dr = worktree / dr
-    # Review: coordinator-code-reviewer — the decision_record gate must run through
+    # The decision_record gate must run through
     # contained_path against docs/decisions/, same as sizing_path against
     # state/sizings/ above; an is_file()-only check let any readable file anywhere
     # satisfy the gate.

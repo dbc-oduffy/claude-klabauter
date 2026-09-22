@@ -67,7 +67,7 @@ def test_retired_subdirs_have_not_returned() -> None:
     if not DOE_AVAILABLE:
         # No clone resolved, so this machine cannot observe the retirement either
         # way. Distinct from the retirement being violated — assert nothing.
-        # Review: coordinator:code-reviewer -- pytest.skip, not a bare return,
+        # pytest.skip, not a bare return,
         # so a no-clone run reports SKIPPED rather than a zero-assertion PASSED.
         pytest.skip("DoE clone not available on this machine")
 

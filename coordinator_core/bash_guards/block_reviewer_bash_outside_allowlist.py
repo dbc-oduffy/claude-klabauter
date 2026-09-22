@@ -1496,7 +1496,7 @@ def _resolve_ruleset(effective_type: str, policy: Any) -> Dict[str, Any]:
     """(Divergence 7, AC11) Resolve the Tier A/B allowlist ruleset for
     ``effective_type``.
 
-    Review: code-reviewer -- ``policy`` is VESTIGIAL as of Divergence 14
+    ``policy`` is VESTIGIAL as of Divergence 14
     below: this function no longer reads it at all (it terminates
     unconditionally in ``_default_ruleset(effective_type)``), kept ONLY for
     call-site parity with ``_is_confined_type`` (which still does consult
@@ -2370,12 +2370,11 @@ def _windows_argv0_identity_names(ruleset: Dict[str, Any]) -> frozenset:
     functions for why this is resolved per-``ruleset`` rather than a
     hardcoded pair like the sibling guards use).
 
-    # Review: coordinator:code-reviewer, Finding 2 -- ``machine_local_binary``
+    # ``machine_local_binary``
     # was omitted here, so a Windows absolute-path invocation of
     # machine-local with an embedded-space username fell through the P0
     # normalization pass and denied where it should allow.
 
-    # Review: coordinator:code-reviewer, Finding 2 follow-up (2026-08-17,
     # false-deny) -- ``scaffolder_binary``'s real on-disk name carries a
     # ``.py`` suffix (see ``_matches_scaffolder_dispatch``'s own Divergence
     # 19 docstring above for why: ``coordinator-doc-new`` is a naked Python
@@ -3441,7 +3440,6 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
 
     subagent_type = ""
     if agent_id and git_root:
-        # Review: coordinator:code-reviewer (2026-08-14, Divergence 18
         # deferred finding) -- the back-pointer chain never checked that the
         # em_session_id it read from em-session-id.txt matched THIS payload's
         # own session_id, so a stale/cross-session/fabricated back-pointer

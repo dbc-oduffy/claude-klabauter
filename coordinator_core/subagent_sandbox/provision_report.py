@@ -1428,7 +1428,7 @@ def _provision_plan_derivable_doc(
     # `harvest_exit_interviews`'s read side drift apart in the first place.
     rel_doc_path = os.path.relpath(doc_path, git_root).replace(os.sep, "/")
     spawned_at = datetime.now(timezone.utc).isoformat()
-    # Review: overengineering-reviewer — redundant second `_declared_plan_disagrees_with_stem`
+    # Redundant second `_declared_plan_disagrees_with_stem`
     # scan removed here; see this commit's message for why.
     doc_text = _build_doc_text(
         agent_type, spawned_at, doc_type, lead_session_id=session_id, plan_path=plan_path
@@ -1646,7 +1646,7 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
             if adopted is not None and adopted != rel_path:
                 return adopted
 
-    # Review: the Staff Engineer -- sanitized_session_id is guaranteed separator-free by
+    # sanitized_session_id is guaranteed separator-free by
     # _sanitize_segment, so this can only ever mkdir a direct child of
     # subagent-share/ (confinement invariant -- do not relax the sanitizer
     # without revisiting this). Deferred until after the adoption check above
@@ -1752,7 +1752,7 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
         with open(doc_path, "x", encoding="utf-8", newline="\n") as handle:
             handle.write(doc_text)
     except FileExistsError:
-        # Review: the Staff Engineer -- second collision (astronomically unlikely at 32
+        # Second collision (astronomically unlikely at 32
         # bits) or any other OSError on this retry (e.g. ENOSPC, EACCES, a
         # mkdir race) is intentionally left unguarded here and falls through
         # to main()'s blanket except -- fail-open, emit nothing, never brick

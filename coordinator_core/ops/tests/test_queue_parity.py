@@ -1319,7 +1319,7 @@ class TestSchemaFieldsUnrecognizedKeyWarning:
     """The **schema_fields contract-derived-plumbing loop warns (does not raise) on a
     caller-supplied key the schema contract doesn't declare — was previously untested.
 
-    Review: review-integrator (Finding 4) — the warn-don't-raise fix (motivated by "a
+    The warn-don't-raise fix (motivated by "a
     typo like 'supercedes' vanished with no signal") shipped with zero coverage.
     """
 
@@ -1394,7 +1394,7 @@ class TestUnknownSchema:
     def test_append_queue_entry_unknown_schema_raises_value_error(self, tmp_path, monkeypatch):
         """append_queue_entry(schema='totally-not-a-real-schema', ...) raises ValueError.
 
-        Review: code-reviewer — the ValueError message no longer asserts "unknown schema"
+        The ValueError message no longer asserts "unknown schema"
         text (that framing mislabeled infra failures like node-missing/timeout/non-JSON
         as "unknown schema" — Finding 5); it now surfaces the underlying describe-failure
         cause plus the schema name via "could not resolve output dir for schema ...".

@@ -652,7 +652,7 @@ def main(argv: list[str]) -> int:
     if subcmd == "stamp-shipped-in":
         if not rest:
             return _usage_line(_SUBCOMMAND_USAGE["stamp-shipped-in"])
-        # Review: code-reviewer — scan for --allow-branch-tip-fallback the same way
+        # Scan for --allow-branch-tip-fallback the same way
         # --sha is scanned below (order-independent), rather than matching only the
         # fixed 2nd positional slot. The prior positional-only match silently dropped
         # the fallback flag when --sha preceded it (`stamp-shipped-in <path> --sha
@@ -714,7 +714,7 @@ def main(argv: list[str]) -> int:
                     file=sys.stderr,
                 )
                 return _usage_line(_SUBCOMMAND_USAGE["stamp-shipped-in"])
-        # Review: code-reviewer (P0) — chunk C0 changed stamp_shipped_in's
+        # Chunk C0 changed stamp_shipped_in's
         # return type from a bare int to a StampOutcome envelope; returning
         # the envelope itself here meant sys.exit(main(...)) received a
         # non-int and exited 1 unconditionally. `.exit_code` mirrors the
@@ -744,7 +744,7 @@ def main(argv: list[str]) -> int:
         # guard) — cs_ship_handoff composes handoff.archive_transition so the
         # guard stays intact.
         #
-        # Review: code-reviewer (incident 2026-07-22) — the prior parser took
+        # The prior parser took
         # ONLY `rest[1:2] == ["--archive"]` and had NO sha-forwarding path at
         # all: a caller passing a positional sha (`ship-handoff <path> <sha>`)
         # or `--sha <sha>` had it silently swallowed, even though
@@ -920,7 +920,7 @@ def main(argv: list[str]) -> int:
                 )
             reaped_from = tail[idx + 1]
             tail = tail[:idx] + tail[idx + 2 :]
-            # Review: code-reviewer — a repeated --reaped-from left the second
+            # A repeated --reaped-from left the second
             # occurrence in `tail` after the first was stripped, so `note`
             # silently became the literal string "--reaped-from" and the
             # second sid was dropped with no error at all. Hard-reject a

@@ -75,23 +75,33 @@ from coordinator_core.session.path_dialect import canonicalize_relative_path
 # all inside `.git/`, never a tracked repo path.
 GENERATES = []
 
-_ABSOLUTE_RE = re.compile(r"^(?:/|[A-Za-z]:)")
+#: An ordinary UNC path (``\\server\share\...``) is absolute too — the third
+#: alternation recognizes two leading backslashes NOT followed by ``?``,
+#: which excludes the extended-length prefix forms below (``\\?\...``,
+#: ``\\?\UNC\...``) so this regex's behavior on those is UNCHANGED: they
+#: still fall through to :func:`_strip_extended_length_prefix` first. Fixed
+#: 2026-09-21 (bug-backlog
+#: 2026-08-08-ordinary-unc-paths-are-not-recognized-as-8b10c7e23d11): before
+#: this, a UNC path matched neither the POSIX-slash nor the drive-letter
+#: branch, so it was never recognized as absolute, never normalized, and
+#: reached ``touched.txt`` verbatim — the same corruption class as the
+#: extended-length-prefix defect below.
+_ABSOLUTE_RE = re.compile(r"^(?:/|[A-Za-z]:|\\\\(?!\?))")
 
 #: Windows extended-length path prefixes — the local ``\\?\`` form and its
 #: UNC counterpart ``\\?\UNC\``. Both are absolute by construction (the
 #: prefix exists ONLY to opt a path into the >260-char namespace) but neither
-#: matches ``_ABSOLUTE_RE`` — the leading backslash pair is neither a POSIX
-#: ``/`` nor a drive letter. Stripped by :func:`_strip_extended_length_prefix`
-#: BEFORE the absoluteness test runs, so both ``_ABSOLUTE_RE`` and the
-#: existing ls-files/relpath arms see an ordinary drive-letter (or UNC) path
-#: rather than needing a second detection dialect of their own. The UNC
-#: variant is handled here rather than left for a caller audit: stripping
-#: ``\\?\UNC\`` down to ``\\`` reproduces an ordinary UNC path, which
-#: ``_ABSOLUTE_RE`` still does not match (UNC paths are out of scope for this
-#: regex today, unchanged) but which no longer carries the extended-length
-#: prefix's own distinct corruption risk — the caller-audit deferral in the
-#: backlog entry is about ordinary UNC absoluteness recognition, not about
-#: leaving the extended-length prefix attached.
+#: matches ``_ABSOLUTE_RE`` — the leading backslash pair is followed by ``?``,
+#: which ``_ABSOLUTE_RE``'s UNC alternation deliberately excludes. Stripped by
+#: :func:`_strip_extended_length_prefix` BEFORE the absoluteness test runs,
+#: so both ``_ABSOLUTE_RE`` and the existing ls-files/relpath arms see an
+#: ordinary drive-letter (or UNC) path rather than needing a second detection
+#: dialect of their own. The UNC variant is handled here rather than left for
+#: a caller audit: stripping ``\\?\UNC\`` down to ``\\`` reproduces an
+#: ordinary UNC path, which ``_ABSOLUTE_RE`` now matches directly (see its own
+#: definition above) — so this strip and the direct UNC alternation compose
+#: rather than duplicate: the strip removes only the extended-length marker,
+#: leaving absoluteness recognition itself to one regex.
 _EXTENDED_LENGTH_UNC_RE = re.compile(r"^\\\\\?\\UNC\\", re.IGNORECASE)
 _EXTENDED_LENGTH_LOCAL_RE = re.compile(r"^\\\\\?\\", re.IGNORECASE)
 
@@ -205,7 +215,7 @@ class OwnerFact(NamedTuple):
     """
 
     owner: str
-    # Review: code-reviewer Finding 5 (2026-08-03) — the docstring above
+    # The docstring above
     # enumerates exactly 3 `liveness` values and 4 `claim_source` values;
     # a bare `str` let a typo at any construction site type-check cleanly
     # and only surface as silent drift for a downstream exact-string
@@ -323,7 +333,7 @@ class ScopeResult(NamedTuple):
     # immutable, so an in-place mutation attempt raises TypeError instead of
     # silently corrupting every other caller's "empty" default.
     #
-    # Review: staff-eng P2 (2026-08-03, pass 3) — the real attribution dict
+    # The real attribution dict
     # compute_scope builds is ALSO wrapped in types.MappingProxyType at the
     # return statement (end of this module) before construction, not passed
     # through as a plain dict. Wrapping only the default (and not the real
@@ -339,8 +349,9 @@ class ScopeResult(NamedTuple):
 
 
 def _is_absolute(path: str) -> bool:
-    """True iff ``path`` is absolute in the bash sense (POSIX ``/`` or a
-    drive-qualified ``C:`` prefix)."""
+    """True iff ``path`` is absolute in the bash sense (POSIX ``/``, a
+    drive-qualified ``C:`` prefix, or an ordinary UNC ``\\\\server\\share``
+    prefix — see :data:`_ABSOLUTE_RE`)."""
     return _ABSOLUTE_RE.match(path or "") is not None
 
 
@@ -957,6 +968,29 @@ def normalize_touch_path(
             fast_candidate, _fast_exc = _relpath_candidate(fpath, root)
             if _touch_path_fast_arm_eligible(fpath, root, fast_candidate):
                 return fast_candidate
+        # `git ls-files -- <dir>` lists everything under the directory, and
+        # this arm keeps only `lines[0]`, so an unguarded directory-shaped
+        # `fpath` here would resolve to an unrelated sibling file rather than
+        # the directory itself. `_clause_not_a_directory` covers this for the
+        # zero-spawn fast arm above, but that clause only stops a directory
+        # input when it is the ONLY failing clause — any other declining
+        # clause (e.g. a root-less caller, since the fast arm never runs
+        # `if not root`) still falls through here with no directory guard of
+        # its own. `classify_touch_entry` reaches this arm not because it is
+        # root-less (its own call site always passes `root=str(worktree_
+        # root)`, which is truthy) but because `_clause_not_a_directory`
+        # itself declines for a directory-shaped `fpath` and the fast arm as
+        # a whole is ineligible; genuine root-less callers (e.g.
+        # `relocate_touched_path`) reach it the other way. Either route ends
+        # up here needing its own guard. Fails open (falls through to the
+        # unchanged body below) on an `os.path.isdir` OSError, matching
+        # `_clause_not_a_directory`'s own fail-open contract.
+        try:
+            fpath_is_dir = os.path.isdir(fpath)
+        except OSError:
+            fpath_is_dir = False
+        if fpath_is_dir:
+            return None
         rel = ""
         ls_files = _git_run(
             ["-c", "core.quotepath=false", "ls-files", "--full-name", "--", fpath],
@@ -1085,9 +1119,12 @@ def classify_touch_entry(
                            for the containment test above, never a second,
                            separately-computed comparison.
       absolute_rescued   — an absolute entry that ``normalize_touch_path``
-                           (run with ``worktree_root`` as ``cwd``) resolves
-                           to a clean, non-absolute, in-tree path: rewritten
-                           to the rescued value.
+                           (run with ``worktree_root`` as BOTH ``cwd`` and
+                           ``root`` — the latter is what lets a tracked or
+                           untracked in-worktree entry take the zero-spawn
+                           fast arm; see ``normalize_touch_path``'s docstring)
+                           resolves to a clean, non-absolute, in-tree path:
+                           rewritten to the rescued value.
       dropped            — an absolute entry ``normalize_touch_path`` still
                            cannot resolve (still absolute, or the relpath
                            attempt failed), or a non-absolute entry whose
@@ -1135,7 +1172,9 @@ def classify_touch_entry(
         )
 
     if _is_absolute(entry):
-        rescued = normalize_touch_path(entry, cwd=str(worktree_root))
+        rescued = normalize_touch_path(
+            entry, cwd=str(worktree_root), root=str(worktree_root)
+        )
         if rescued is None or _is_absolute(rescued):
             return TouchEntryClassification(
                 original=entry,
@@ -1253,7 +1292,6 @@ def normalize_peer_claim_key(
     for the peer/``other_owner`` key space ONLY (Step 3, Step 3b of
     :func:`compute_scope`) — never for Step 1 candidates.
 
-    Review: code-reviewer Finding 1 (sidecar
     ``coordinatorcode-reviewer-359b224b.md``) — the original AC8 transform
     applied ``classify_touch_entry``'s ``dropped`` (formerly ``multi_level``/
     unrescuable-``dropped``, now one collapsed outcome)
@@ -1408,7 +1446,6 @@ def _last_verb_map(lines: List[str]) -> Dict[str, str]:
     CLAIMED/RELEASED decision itself): scan raw ``touched.txt`` lines and
     keep, per path, the verb of its LAST event in file order.
 
-    Review: code-reviewer Finding 1 (sidecar
     ``coordinatorcode-reviewer-5c643f30.md``, plan
     ``docs/plans/2026-08-03-scope-guard-peer-claim-release.md``) — this scan
     was independently re-written in three places (``project_self_scope``'s
@@ -1437,7 +1474,6 @@ def _challenger_t_events(lines: List[str]) -> Dict[str, datetime]:
     carries no evidence of post-dating anything and is excluded, matching
     every existing call site.
 
-    Review: code-reviewer Finding 1 (sidecar
     ``coordinatorcode-reviewer-5c643f30.md``, plan
     ``docs/plans/2026-08-03-scope-guard-peer-claim-release.md``) — this scan
     was independently re-written in three places (``compute_scope``'s own
@@ -1528,10 +1564,15 @@ def contested_by_live_peers(
     paths: "List[str] | Set[str] | Tuple[str, ...]",
     sid: str,
     cwd: Optional[str] = None,
-) -> Dict[str, List[str]]:
+) -> "Optional[Dict[str, List[str]]]":
     """Which of *paths* a LIVE peer session (not ``sid``) still holds an
     unreleased TOUCH on. Returns ``{path: [peer_sid, ...]}`` -- empty when
-    nothing is contested.
+    nothing is contested, and ``None`` when contest could not be
+    established at all (no resolvable ``sid``, an unreadable/absent
+    sessions dir, or an exception in either read pass below). ``None`` is
+    distinct from ``{}`` on purpose: "could not establish contest" is not
+    "genuinely uncontested", and a caller that treats them the same cannot
+    tell a swallowed read failure from a clean pathspec.
 
     The narrow half of :func:`compute_scope`'s Step 3, extracted because the
     explicit-pathspec commit route cannot afford the whole thing: measured
@@ -1546,12 +1587,13 @@ def contested_by_live_peers(
     ``compute_scope``: a caller wanting the full set-math has one already.
 
     FAILS OPEN, ALWAYS. Every read is best-effort and an unreadable sink,
-    an absent session hub, or an unresolvable ``sid`` returns ``{}`` --
-    "could not establish contest" is not "contested". This sits on the
-    commit hot path every live session shares, where turning a read failure
-    into a refusal would wedge the fleet on a bookkeeping outage.
-    ``project_live_claims`` already drops a RELEASE and a dead session's
-    TOUCH, so liveness needs no second gate here.
+    an absent session hub, or an unresolvable ``sid`` returns ``None`` --
+    the caller still commits either way, so the fail-open behavior is
+    unchanged; only the return value now says which thing happened. This
+    sits on the commit hot path every live session shares, where turning a
+    read failure into a refusal would wedge the fleet on a bookkeeping
+    outage. ``project_live_claims`` already drops a RELEASE and a dead
+    session's TOUCH, so liveness needs no second gate here.
 
     A READ-KIND HOLD IS NOT A CONTEST, and filtering it out is this
     function's job rather than the record's. ``project_live_claims`` keeps
@@ -1576,12 +1618,14 @@ def contested_by_live_peers(
     blocking until a writer positively says it was a read.
     """
     wanted = {p for p in paths if p}
-    if not wanted or not sid:
+    if not wanted:
         return {}
+    if not sid:
+        return None
     try:
         base = core.sessions_dir(cwd)
         if not base or not os.path.isdir(base):
-            return {}
+            return None
         peer_sinks: List[str] = []
         for entry in sorted(os.listdir(base)):
             if entry == sid or entry in liveness._NON_SESSION_DIR_NAMES:
@@ -1595,7 +1639,7 @@ def contested_by_live_peers(
         if not peer_sinks:
             return {}
     except Exception:
-        return {}
+        return None
 
     # Two passes, because the cheap answer and the complete answer are not
     # the same read. `project_live_claims` folds its inputs last-verb-wins
@@ -1610,7 +1654,7 @@ def contested_by_live_peers(
     try:
         merged = touch_record.project_live_claims(*peer_sinks, cwd=cwd)
     except Exception:
-        return {}
+        return None
     if not any(
         path in wanted
         and event.session_id != sid
@@ -2797,7 +2841,7 @@ def _dst_is_claimable(dst_norm: str) -> bool:
 def _release_from_touch_record(
     sink_path: "Path | str",
     sid: str,
-    release_set: Set[str],
+    release_set: "Optional[Set[str]]",
     when: datetime,
     normalize: Callable[[str], Optional[str]],
     agent_id: Optional[str] = None,
@@ -2807,6 +2851,14 @@ def _release_from_touch_record(
     longer intersected against worktree cleanliness (PM ruling 2026-08-26,
     see :func:`release_committed_claims`'s own docstring for the overrule);
     it is exactly the caller-named paths this record still claims.
+
+    ``release_set=None`` is the full-release sentinel :func:`release_own_
+    path_claims` threads through when its own ``paths`` argument is
+    ``None``: every currently ``T``-claimed path in this ONE sink releases,
+    with no intersection against a caller-supplied subset at all. Used by
+    :func:`release_all_committed_claims` for the one caller that needs a
+    session's ENTIRE claim surface retired, not a caller-named subset — see
+    that function's own docstring for why.
 
     C4 — the seam-through counterpart of
 the former ``_release_from_touched_file``, for BOTH release planes.
@@ -2840,8 +2892,9 @@ the former ``_release_from_touched_file``, for BOTH release planes.
         norm = normalize(raw_path)
         if norm is None or norm.endswith("/"):
             continue
-        if norm in release_set:
-            to_release.append(raw_path)
+        if release_set is not None and norm not in release_set:
+            continue
+        to_release.append(raw_path)
 
     if not to_release:
         return  # AC10 — no empty write, don't churn the sink's mtime
@@ -2861,12 +2914,20 @@ the former ``_release_from_touched_file``, for BOTH release planes.
 
 
 def release_own_path_claims(
-    sid: str, paths: List[str], cwd: Optional[str] = None
+    sid: str, paths: "Optional[List[str]]", cwd: Optional[str] = None
 ) -> None:
     """Append an ``R`` (release) event for each of *paths* this session
     itself claims, to THIS session's OWN ``touched.txt`` and to
     every ``.agents/<aid>/touched.txt`` back-pointed at *this* ``sid`` —
     the claim-release counterpart to :func:`touch`.
+
+    ``paths=None`` is the full-release sentinel: every path this record
+    (own sink plus every back-pointed agent sink) currently carries a live
+    ``T`` claim for releases, not merely a caller-named subset. Distinct
+    from ``paths=[]``/an empty iterable, which (per the no-empty-write rule
+    below) is a plain no-op — the two are not interchangeable spellings of
+    "release everything". See :func:`release_all_committed_claims` for the
+    one caller that needs this.
 
     NAMED FOR WHAT IT DOES, which is not what its post-commit alias
     :func:`release_committed_claims` is named for. There is no
@@ -2989,12 +3050,17 @@ def release_own_path_claims(
     ``ops/session/reap.py``'s 24h agent staleness), so a no-op call must
     not churn it.
     """
-    if not sid or not paths:
+    if not sid:
         return
-
-    requested = {p for p in paths if p}
-    if not requested:
-        return
+    if paths is None:
+        release_set: "Optional[Set[str]]" = None  # full-release sentinel
+    else:
+        requested = {p for p in paths if p}
+        if not requested:
+            return
+        release_set = {canonicalize_relative_path(p) for p in requested}
+        if not release_set:
+            return  # nothing to release this call
 
     # PM RULING 2026-08-26 -- THE CLEANLINESS TERM IS DELETED, NOT WEAKENED.
     # This function used to spend a chunked `git status --porcelain` here and
@@ -3035,10 +3101,6 @@ def release_own_path_claims(
     # transient git hiccup into permanently stale claims -- manufacturing
     # exactly the garbage the reaper exists to collect, in service of a rule
     # that was pointing the wrong way to begin with.
-    release_set = {canonicalize_relative_path(p) for p in requested}
-    if not release_set:
-        return  # nothing to release this call
-
     when = datetime.now(timezone.utc)
 
     sdir = core.session_dir(sid, cwd)
@@ -3148,6 +3210,30 @@ def release_committed_claims(
     should be built against this name.
     """
     release_own_path_claims(sid, paths, cwd=cwd)
+
+
+def release_all_committed_claims(sid: str, cwd: Optional[str] = None) -> None:
+    """Full-claim-surface sibling of :func:`release_committed_claims`, for
+    the ONE caller that must not scope release to a caller-named subset: a
+    workstream-complete close route whose session has just landed its
+    terminal commit and will never commit again. That commit's own
+    ``stage_paths`` is not this session's WHOLE claim surface — an earlier
+    hunk already landed in a prior commit, or a scratch/marker path was
+    touched but never staged at all, stays ``T``-claimed under the
+    ``stage_paths``-scoped release forever, because no later commit is
+    coming to release it (bug-backlog ``2026-08-19-completed-but-alive-
+    session-holds-touche-27e0ba000d69``: a session whose ceremony completed
+    but whose process is still alive keeps blocking every peer on every
+    file it will provably never write again).
+
+    Delegates to :func:`release_own_path_claims` with its ``paths=None``
+    full-release sentinel — every path this session's own record (and its
+    dispatched-agent fan-out) currently ``T``-claims releases, not a
+    subset. Same fail-safe RETAIN-on-``OSError`` posture, same self/other
+    boundary (never touches a peer's claim) as every other route through
+    that function.
+    """
+    release_own_path_claims(sid, None, cwd=cwd)
 
 
 #: Prefix that forces a git pathspec to be matched byte-literally, so a
@@ -3683,7 +3769,7 @@ def compute_scope(
       5. Orphans: a dirty file that is neither in ``my_scope`` nor owned by
          another session is an orphan (recorded in ``orphans``) — this now
          also catches every mtime-only candidate dropped in Step 4(c).
-         Review: staff-eng F6 — the liveness/clean-path release path above
+         The liveness/clean-path release path above
          (Step 3/3b) ALSO changes this Step's disposition for one shape:
          a dirty path claimed ONLY by a now-dead (or claim-pruned) peer,
          and never touched by THIS session, used to land in ``other_owner``
@@ -3712,7 +3798,7 @@ def compute_scope(
     file dropped from the allow-list gets blocked, not silently accepted) —
     handling that consumer-side tradeoff is out of scope for this function.
 
-    Review: staff-eng F2 — the liveness/clean-path release path (Step 3/3b)
+    The liveness/clean-path release path (Step 3/3b)
     adds TWO inputs whose failure can WIDEN ``my_scope`` if left unguarded,
     on top of the pre-existing ``started_at``/other-session-touched.txt
     reads documented above:
@@ -3867,7 +3953,7 @@ def compute_scope(
         )
     started_at_epoch = core.iso_to_epoch(started_at_iso)
 
-    # Review: staff-eng F0/F8 — `-c core.quotepath=false` keeps the dirty
+    # `-c core.quotepath=false` keeps the dirty
     # scan raw-byte-faithful with touched.txt's own dialect (latent today,
     # zero non-ASCII tracked paths, but the mismatch is safety-relevant the
     # moment one exists). `dirty_scan_ok` mirrors `started_at_readable`
@@ -3940,7 +4026,7 @@ def compute_scope(
     # invariant. So an unexpected exception from live_session_ids() degrades
     # to "gating disabled this call" (the pre-existing unconditional
     # exclusion), never to "everyone is dead".
-    # Review: staff-eng F0 — the dirty scan is the second input this gate's
+    # The dirty scan is the second input this gate's
     # own safety depends on (the clean-path prune below reads
     # `dirty_files_set`, populated from the SAME two git commands). If the
     # dirty scan failed, `dirty_files_set` is unreliable, so disable
@@ -3977,7 +4063,7 @@ def compute_scope(
         # entirely for this call.
         peer_dir_seen = False
         if os.path.isdir(base):
-            # Review: staff-eng F10 — os.listdir(base) is unguarded on a
+            # os.listdir(base) is unguarded on a
             # TOCTOU race (base removed/unreadable between the isdir()
             # check above and this call) or a permissions error. On
             # failure, treat as indeterminate (peer_dir_seen=True) rather
@@ -3999,7 +4085,7 @@ def compute_scope(
                         peer_dir_seen = True
                         break
                 if not peer_dir_seen:
-                    # Review: staff-eng F5 — a non-empty `.agents` dir is
+                    # A non-empty `.agents` dir is
                     # ALSO peer evidence: a dispatched sub-agent's claim
                     # (Step 3b) is back-pointed to an owning EM session
                     # that may itself have no visible session dir of its
@@ -4031,7 +4117,7 @@ def compute_scope(
                 file=sys.stderr,
             )
 
-    # Review: staff-eng F1 — self-liveness canary. Absence from `live_ids`
+    # self-liveness canary. Absence from `live_ids`
     # conflates confirmed-dead, no-evidence, and enumeration
     # under-reporting; the empty-set guard above only catches TOTAL
     # under-report. A caller that cannot see its OWN live session in the
@@ -4104,7 +4190,7 @@ def compute_scope(
             # bash `*/` glob excludes dot-entries (subsumes .archive/.agents).
             if other_id.startswith("."):
                 continue
-            # Review: staff-eng F4 — the dot-entry check alone misses the
+            # The dot-entry check alone misses the
             # NON-dot reserved children (`handoff-claims`, `memo-claims`,
             # `plan-claims`, `agent-sessions-locks`, `logs`, `no-session`)
             # that `liveness._NON_SESSION_DIR_NAMES` already excludes from
@@ -4558,7 +4644,7 @@ def compute_scope(
             try:
                 first_lines = backptr.read_text(encoding="utf-8").splitlines()
             except OSError as exc:
-                # Review: code-reviewer Finding 1 — an unreadable
+                # An unreadable
                 # em-session-id.txt is NOT the same as a malformed
                 # (successfully-read, empty) one: the owning em-session-id
                 # is unknowable, so this must fail-closed like the
@@ -4673,7 +4759,6 @@ def compute_scope(
             # empty, non-degraded result (no jsonl family, no sibling
             # `touched.txt`) naturally no-ops every loop below, the same
             # outcome the old "file missing -> continue" arm produced.
-            # Review: code-reviewer Finding 1 (coordinatorcode-reviewer.
             # aed918d6ef1f26b24.md) — this arm used to call
             # `_read_agent_touch_record_as_legacy_lines` a SECOND time on
             # the same sink_path, paying the exact
@@ -4837,7 +4922,7 @@ def compute_scope(
     # full accounting, including the residual it does NOT cover.
     indeterminate = bool(unreadable_other_sessions) or bool(agent_race_paths)
 
-    # Review: staff-eng P2 — wrap the real dict in the SAME immutable type
+    # Wrap the real dict in the SAME immutable type
     # as ScopeResult.attribution's default, so the field's runtime type is
     # uniform across every code path (see that field's own docstring and
     # default-value comment for why a divergent type here is the worse
@@ -4969,7 +5054,7 @@ def _drop_owned_agent_dirs(sid: str, sdir: str, base: str) -> None:
             if em_sid != sid:
                 continue  # not this session's own agent — never touch it
 
-            # Review: code-reviewer P1 — ownership alone is not liveness; a
+            # Ownership alone is not liveness; a
             # dispatched agent that outlives its EM session can still be
             # writing to its dir. Skip anything recently touched — see
             # `_AGENT_DROP_RECENCY_SECONDS`'s docstring.
@@ -5022,7 +5107,7 @@ def _drop_owned_agent_dirs(sid: str, sdir: str, base: str) -> None:
             # bookkeeping child of the hub, never a session dir — no session
             # record belongs here (core.ensure_session's negative-spec).
             os.makedirs(archive_root, exist_ok=True)
-            # Review: code-reviewer P2 — match `_reap_stale_agents`'s
+            # Match `_reap_stale_agents`'s
             # rename + exists-recheck idiom exactly rather than
             # `shutil.move`, whose collision semantics differ (it nests
             # the source inside an existing destination directory instead

@@ -267,6 +267,24 @@ def test_no_new_os_name_offender_beyond_the_baseline():
     )
 
 
+def test_every_observed_offender_file_is_a_baseline_entry():
+    """A file with process-global os.name sites must have its own baseline
+    entry -- an offender file silently absent from the map is treated as a
+    ceiling of 0 by `test_no_new_os_name_offender_beyond_the_baseline` and
+    fails there anyway, but a missing key is a distinct failure mode from a
+    too-low ceiling and deserves its own name so the two don't get
+    conflated when the baseline drifts out of sync with the tree."""
+    observed = _observed_offenders()
+    baseline = _load_baseline()
+    missing = sorted(path for path in observed if path not in baseline)
+
+    assert not missing, (
+        "Offender file(s) have no entry in "
+        "state/tests/os-name-monkeypatch-baseline.json at all: "
+        + ", ".join(missing)
+    )
+
+
 def test_baseline_ceiling_matches_observed_count_or_lower():
     """Forces the ratchet DOWN: a baseline entry whose recorded ceiling is
     ABOVE the current observed count is stale and must be edited to match

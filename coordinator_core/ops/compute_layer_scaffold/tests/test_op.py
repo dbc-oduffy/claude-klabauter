@@ -49,7 +49,7 @@ def test_check_mode_returns_rendered_report():
 
 
 def test_check_mode_honors_explicit_modules_param():
-    """Review: coordinator:code-reviewer (weak-test finding) — the prior
+    """The prior
     assertion (`"1/1" in report or "0/1" in report`) is an OR that passes on
     either branch, so it only proves a fraction shape is present, never that
     the correct one is. Assert the specific per-clause fractions pickup_assemble

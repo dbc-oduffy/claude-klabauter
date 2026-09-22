@@ -91,7 +91,7 @@ from coordinator_core.git.repo_root import git_dir as _git_dir_seam
 def _diff_probe_failed_message(probe: str) -> str:
     """Shared wording for the three fail-loud abort sites (`git diff` x2, `git ls-files
     -m` x1) so the text and the failing probe name never drift apart.
-    # Review: code-reviewer (Finding 8) -- was duplicated verbatim across three call
+    # Was duplicated verbatim across three call
     # sites, one of which (the ls-files branch) named the wrong probe; extracted to keep
     # the wording and the probe name coupled at a single definition."""
     return (
@@ -105,7 +105,7 @@ def _git_rev_parse_git_dir(cwd: Optional[str] = None) -> Optional[str]:
     # filename byte sequence), so text=True is safe here -- unlike _git_diff_name_only /
     # _git_ls_files_modified below, which decode manually with surrogateescape because
     # their NUL-list output can contain arbitrary filename bytes.
-    # Review: code-reviewer (Finding 9) -- mixed text=True/manual-decode style read as an
+    # Mixed text=True/manual-decode style read as an
     # oversight rather than a deliberate per-output choice; this comment disambiguates.
     git_dir = _git_dir_seam(cwd)
     if not git_dir:
@@ -200,7 +200,7 @@ def main(argv: List[str], cwd: Optional[str] = None) -> int:
 
     modified = _git_ls_files_modified(cwd)
     if modified is None:
-        # Review: code-reviewer (Finding 2) -- was mislabeled as "git diff failed" even
+        # Was mislabeled as "git diff failed" even
         # though this branch is the git-ls-files probe; disclosed divergence documented
         # in the module docstring's negative-spec section.
         print(_diff_probe_failed_message("git ls-files -m"), file=sys.stderr)
@@ -229,7 +229,7 @@ def main(argv: List[str], cwd: Optional[str] = None) -> int:
         )
         return 0
 
-    # Review: code-reviewer (Finding 1) -- `os.sep` is '\\' on Windows, but
+    # `os.sep` is '\\' on Windows, but
     # `git rev-parse --git-dir` always emits forward-slash paths on every platform, and
     # an absolute Windows git-dir is drive-letter-prefixed (C:/repo/.git), never
     # backslash-prefixed. `startswith(os.sep)` was False for both a relative git-dir AND
@@ -276,7 +276,7 @@ def main(argv: List[str], cwd: Optional[str] = None) -> int:
     # `git add .`), absorbing the entire concurrent tree, so this guards against a
     # *future* edit inserting code between the `m == 0` check above and the pipe below
     # that could repopulate/mutate `safe`.
-    # Review: code-reviewer (Finding 7) -- flagged as dead code; annotated with the
+    # Flagged as dead code; annotated with the
     # defense-in-depth rationale rather than dropped, per the oracle's own CATASTROPHE
     # GUARD comment at coordinator-renormalize-index:175-179.
     if not safe:

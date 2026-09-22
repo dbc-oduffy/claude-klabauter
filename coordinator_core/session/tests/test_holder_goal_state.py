@@ -104,7 +104,7 @@ class TestHolderGoalState:
     def test_exception_after_goal_resolved_preserves_declared_goal(
         self, tmp_path, monkeypatch
     ):
-        """Review: code-reviewer P3 (2026-08-13) — an exception in the
+        """An exception in the
         transcript/recent-paths block (which runs after holder_goal is
         already resolved) must not discard a genuinely `declared` goal
         down to `unreadable`."""

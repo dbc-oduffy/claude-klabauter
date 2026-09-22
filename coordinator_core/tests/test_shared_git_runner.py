@@ -301,14 +301,57 @@ def _resolved_git_names(tree: ast.Module) -> "frozenset[str]":
     return frozenset(names)
 
 
-def _carries_git_argv(expr: ast.expr, resolved_names: "frozenset[str]" = frozenset()) -> bool:
-    """True if `expr` contains an argv whose HEAD is git -- either the
-    `["git", ...]` (or tuple) literal, or a name `resolved_names` says holds
-    a resolved git binary path.
+def _git_argv_names(tree: ast.Module) -> "frozenset[str]":
+    """Names in this module bound directly to a git-headed `["git", ...]`
+    (or tuple) LITERAL -- the one-hop binding shape `_carries_git_argv`
+    cannot see on its own, since it walks the argv EXPRESSION at the spawn
+    call site and a bare name there carries no `"git"` literal to find:
+
+        cmd = ["git", "ls-files", ...]
+        subprocess.run(cmd)
+
+    Mirrors `_resolved_git_names`'s shape (walk every module/function-local
+    `Assign`/`AnnAssign`, collect `Name` targets) rather than a second
+    bespoke traversal -- one binding pattern, resolved the same way
+    regardless of what the bound value turns out to be. The accumulate
+    pair `argv = ["git"]; argv += args` is covered without a separate
+    `AugAssign` case: the initial literal `Assign` is what binds the name
+    here, and the later re-bind stays git-headed."""
+    names: set = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        if not (isinstance(value, (ast.List, ast.Tuple)) and value.elts):
+            continue
+        head = value.elts[0]
+        if isinstance(head, ast.Constant) and head.value == "git":
+            names.update(t.id for t in targets if isinstance(t, ast.Name))
+    return frozenset(names)
+
+
+def _carries_git_argv(
+    expr: ast.expr,
+    resolved_names: "frozenset[str]" = frozenset(),
+    argv_names: "frozenset[str]" = frozenset(),
+) -> bool:
+    """True if `expr` contains an argv whose HEAD is git -- the
+    `["git", ...]` (or tuple) literal, a name `resolved_names` says holds a
+    resolved git binary path, or a bare name `argv_names` says is itself
+    already bound to a git-headed argv literal.
 
     Walks rather than matching the node directly, because the argv is
     routinely a composition: `["git", "-C", root] + args`, `["git", *args]`,
-    `["git", "log"] + list(paths)`. All three carry the same literal head."""
+    `["git", "log"] + list(paths)`. All three carry the same literal head.
+    The bare-name case is checked separately, one hop only, matching this
+    gate's other one-hop resolutions: `expr` itself is the whole call-site
+    argv, so a Name found anywhere else inside a larger composition is not
+    treated as carrying it."""
+    if isinstance(expr, ast.Name) and expr.id in argv_names:
+        return True
     for node in ast.walk(expr):
         if isinstance(node, (ast.List, ast.Tuple)) and node.elts:
             head = node.elts[0]
@@ -405,12 +448,15 @@ def _collect_module(relpath: str, source: str) -> "tuple[list, list]":
     enclosing = _enclosing_names(tree)
     generics = _generic_runner_names(tree)
     resolved_names = _resolved_git_names(tree)
+    argv_names = _git_argv_names(tree)
 
     def is_git_spawn(call: ast.Call) -> bool:
         name = _leaf_name(call.func)
         if name is None or (name not in _SPAWN_API_NAMES and name not in generics):
             return False
-        return any(_carries_git_argv(argv, resolved_names) for argv in _argv_exprs(call))
+        return any(
+            _carries_git_argv(argv, resolved_names, argv_names) for argv in _argv_exprs(call)
+        )
 
     sites = {
         GitSpawnSite(module=relpath, enclosing=enclosing.get(id(node), "<module>"))
@@ -677,6 +723,7 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator/bin/merge-gate-and-pr.py",
         "coordinator/bin/merge-recovery-and-tag-cut.py",
         "coordinator/bin/merge-release-notes-derive.py",
+        "coordinator/bin/parallel-review-gate-decision.py",
         "coordinator/bin/percolate-full-payload-proof.py",
         "coordinator/bin/percolate-push.py",
         "coordinator/bin/percolate-round.py",
@@ -685,6 +732,7 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator/bin/publish.py",
         "coordinator/bin/reap-integrated-review-findings.py",
         "coordinator/bin/reap-stale-subagent-sidecars.py",
+        "coordinator/bin/record-platform-outcome.py",
         "coordinator/bin/red-set-report.py",
         "coordinator/bin/refresh-plugin-live-install.py",
         "coordinator/bin/regen-cockpit-schema.py",
@@ -716,6 +764,8 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/benchmarks/harness.py",
         "coordinator_core/benchmarks/interleave.py",
         "coordinator_core/benchmarks/op_fixtures.py",
+        "coordinator_core/cartography/file_index.py",
+        "coordinator_core/cartography/tree.py",
         "coordinator_core/chain_attribution.py",
         "coordinator_core/consolidate_assemble/__init__.py",
         "coordinator_core/consolidate_assemble/apply.py",
@@ -724,6 +774,7 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/diff_scoped_tests.py",
         "coordinator_core/distill/delete_guard.py",
         "coordinator_core/frontmatter/schema_validate.py",
+        "coordinator_core/git/commit_signing.py",
         "coordinator_core/git/divergence.py",
         "coordinator_core/git/repo_root.py",
         "coordinator_core/git_scope.py",
@@ -769,6 +820,7 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/ops/draft_plan_aging.py",
         "coordinator_core/ops/emit/context.py",
         "coordinator_core/ops/emit/doe_drift.py",
+        "coordinator_core/ops/emit/enrich.py",
         "coordinator_core/ops/emit/resolvers.py",
         "coordinator_core/ops/emit/lma_cache.py",
         "coordinator_core/ops/emit/sections/_shared.py",
@@ -792,6 +844,7 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/ops/platform_outcome_records.py",
         "coordinator_core/ops/promote_shipped_in_flight_stubs.py",
         "coordinator_core/ops/propagate_body.py",
+        "coordinator_core/ops/reap_in_flight_claims.py",
         "coordinator_core/ops/reap_orphaned_agent_dirs.py",
         "coordinator_core/ops/record_history.py",
         "coordinator_core/ops/release_tagging.py",
@@ -822,6 +875,7 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/orient_assemble/readers_branch_reconcile.py",
         "coordinator_core/orientation/regenerate_cache.py",
         "coordinator_core/person_resolver.py",
+        "coordinator_core/percolate/store.py",
         "coordinator_core/pickup_assemble/__init__.py",
         "coordinator_core/plan_assemble/predicates/composition_graph.py",
         "coordinator_core/plan_assemble/predicates/concurrent_preflight.py",
@@ -857,6 +911,7 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
         ("coordinator/bin/check-install-divergence.py", "_GIT_TIMEOUT_SECS"),
         ("coordinator/bin/coordinator-prepare-commit-msg.py", "_resolve_staged_paths(timeout)"),
         ("coordinator/bin/lib/workday_ceremony_lib.py", "git(timeout)"),
+        ("coordinator/bin/parallel-review-gate-decision.py", "_GIT_TIMEOUT_SECS"),
         ("coordinator/bin/percolate-round.py", "_GIT_PUSH_TIMEOUT_SECS"),
         ("coordinator/bin/reap-integrated-review-findings.py", "_GIT_TIMEOUT_SECS"),
         ("coordinator/bin/workday-start-day-branch-resolve.py", "_GIT_TIMEOUT"),
@@ -883,6 +938,7 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
         ("coordinator_core/ops/bootstrap_repo.py", "_COMMIT_TIMEOUT_SECS"),
         ("coordinator_core/ops/bootstrap_repo.py", "_GIT_TIMEOUT_SECS"),
         ("coordinator_core/ops/cascade_retract.py", "_SUBPROCESS_TIMEOUT_SEC"),
+        ("coordinator_core/ops/ceremony/git_native.py", "_DEFAULT_TIMEOUT_SECS"),
         ("coordinator_core/ops/changelog_ops.py", "_SUBPROCESS_TIMEOUT"),
         ("coordinator_core/ops/create_github_remote.py", "_GIT_TIMEOUT"),
         ("coordinator_core/ops/create_github_remote.py", "_NETWORK_TIMEOUT"),
@@ -930,8 +986,8 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
 #: all. Lowering either is free and is the point; raising either is the
 #: deliberate, reviewable act of arguing that the tree needs one more private
 #: git runner than it had yesterday.
-_PINNED_RUNNER_CEILING = 190
-_PINNED_DIAL_CEILING = 68
+_PINNED_RUNNER_CEILING = 198
+_PINNED_DIAL_CEILING = 70
 
 #: Frozen inventory of destructive-verb call sites (plan AC2/AC3). FROZEN
 #: 2026-09-19 over a full run of `collect_destructive_verb_sites()` across
@@ -1027,7 +1083,7 @@ def _dial_message(dials: list) -> str:
     )
 
 
-# Review: coordinator:code-reviewer (00814cf56f nit) -- these two gates were
+# These two gates were
 # already red before the 00814cf56f ceiling drop, against modules unrelated to
 # review-trail retirement (e.g. scope_orphan_census.py, session/scope.py). The
 # ceiling drop shrinks the registers correctly; it does not touch, cause, or
@@ -1050,16 +1106,28 @@ def test_no_new_module_private_git_dial_outside_the_frozen_inventory():
 def test_the_registers_are_shrink_only():
     """The ratchet. Adding a grandfather row costs what raising a budget
     costs: this literal must move too, in the same diff, as an argument that
-    the tree needs one more private git runner than it had yesterday."""
-    assert len(_GRANDFATHERED_RUNNER_MODULES) <= _PINNED_RUNNER_CEILING, (
-        f"the runner register grew to {len(_GRANDFATHERED_RUNNER_MODULES)}, above the "
-        f"pinned {_PINNED_RUNNER_CEILING}. It shrinks only. A new module needing a git "
-        f"read calls coordinator_core.git.run.run_git; it does not join this list."
+    the tree needs one more private git runner than it had yesterday.
+
+    Equality, not `<=`: the two self-invalidation legs
+    (`test_every_grandfathered_runner_still_spawns_git`,
+    `test_every_grandfathered_dial_still_bounds_a_git_spawn`) already force
+    a live register down to exactly its ceiling on any drift, so slack
+    between `len(...)` and the pinned ceiling can only ever be a forgotten
+    manual edit, never an observed state. A `<=` here would let that slack
+    sit unnoticed instead of failing loudly."""
+    assert len(_GRANDFATHERED_RUNNER_MODULES) == _PINNED_RUNNER_CEILING, (
+        f"the runner register holds {len(_GRANDFATHERED_RUNNER_MODULES)} rows, not "
+        f"the pinned {_PINNED_RUNNER_CEILING}. It shrinks only. A new module needing "
+        f"a git read calls coordinator_core.git.run.run_git; it does not join this "
+        f"list. A register smaller than its ceiling means a row was removed without "
+        f"lowering the ceiling to match -- do that in the same diff."
     )
-    assert len(_GRANDFATHERED_DIALS) <= _PINNED_DIAL_CEILING, (
-        f"the dial register grew to {len(_GRANDFATHERED_DIALS)}, above the pinned "
+    assert len(_GRANDFATHERED_DIALS) == _PINNED_DIAL_CEILING, (
+        f"the dial register holds {len(_GRANDFATHERED_DIALS)} rows, not the pinned "
         f"{_PINNED_DIAL_CEILING}. It shrinks only. The two bounds a git spawn may "
-        f"carry live in coordinator_core.git.run."
+        f"carry live in coordinator_core.git.run. A register smaller than its "
+        f"ceiling means a row was removed without lowering the ceiling to match -- "
+        f"do that in the same diff."
     )
 
 
@@ -1133,6 +1201,46 @@ def test_collector_sees_a_which_resolved_argv_head(source):
 
     assert [s.enclosing for s in sites] == ["probe"]
     assert dials == [("fake/probe.py", "_PROBE_TIMEOUT_SECS")]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param(
+            'import subprocess\n'
+            '_PROBE_TIMEOUT_SECS = 30\n'
+            'def probe(root):\n'
+            '    cmd = ["git", "-C", root, "ls-files"]\n'
+            '    return subprocess.run(cmd, timeout=_PROBE_TIMEOUT_SECS)\n',
+            id="one-hop-literal-binding",
+        ),
+        pytest.param(
+            'import subprocess\n'
+            '_PROBE_TIMEOUT_SECS = 30\n'
+            'def probe(args, root):\n'
+            '    argv = ["git"]\n'
+            '    argv += ["-C", root]\n'
+            '    argv += args\n'
+            '    return subprocess.run(argv, timeout=_PROBE_TIMEOUT_SECS)\n',
+            id="accumulate-augassign-binding",
+        ),
+    ],
+)
+def test_collector_sees_a_one_hop_bound_argv_name(source):
+    """The blind spot this gate's own docstring did not yet name: the
+    argv-expression walk at the call site sees only the EXPRESSION passed
+    to the spawn, so a name bound to a `["git", ...]` literal one line
+    earlier -- `cmd = ["git", ...]; subprocess.run(cmd)` -- carried no
+    literal `"git"` head at the call itself and was invisible, the same way
+    a `which`-resolved head was invisible before `_resolved_git_names`
+    closed that gap. `_git_argv_names` closes this one the same way, and
+    the accumulate shape (`argv = ["git"]; argv += args`) needs no separate
+    case: the initial literal `Assign` is what binds the name, and the
+    later re-bind stays git-headed."""
+    sites, dials = _collect_module("fake/one_hop.py", source)
+
+    assert [s.enclosing for s in sites] == ["probe"]
+    assert dials == [("fake/one_hop.py", "_PROBE_TIMEOUT_SECS")]
 
 
 def test_contract_exempt_modules_still_declare_their_standalone_contract():

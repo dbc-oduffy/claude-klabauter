@@ -62,7 +62,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _make_repo(tmp_path):
-    # Review: staff-eng F12 — check=True on every fixture-setup git call
+    # check=True on every fixture-setup git call
     # (mirrors test_scope.py's _make_repo): a silent fixture-setup failure
     # must not masquerade as a passing test.
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
@@ -664,7 +664,7 @@ class TestNormalizeAgentTouchedEntry:
         ],
     )
     def test_absolute_entry_dropped(self, entry):
-        # Review: code-reviewer (Finding 3) — posixpath.join("coordinator",
+        # posixpath.join("coordinator",
         # "/etc/passwd") discards the plugin-dir prefix under POSIX join
         # semantics when the second argument is absolute, so an absolute
         # entry previously survived normalization unchanged. Covers
@@ -1124,7 +1124,7 @@ class TestAutoCommitSession:
     # module can lift it.
     @pytest.mark.designed_red
     def test_explicit_group_prose_reaches_the_commit_body(self, tmp_path):
-        # Review: code-reviewer (Finding 4) — the explicit-`groups` branch of
+        # The explicit-`groups` branch of
         # commit_session_offer_async previously rebuilt each group without
         # carrying `g.get("prose")` through, so caller-supplied body text was
         # silently dropped and only the mechanical `_default_groups` fallback
@@ -1323,6 +1323,43 @@ class TestHandler:
         assert out["safe_paths"] == ["claimed.py"]
         assert out["reconciliation"]["unclaimed"] == ["unclaimed.py"]
 
+    def test_dry_run_drops_untracked_junk_from_safe_paths(self, tmp_path):
+        """A ledger entry that never named a real file -- a heredoc
+        delimiter, a bare basename a command tokenizer misread as a path --
+        must not surface in the pathspec this op reports as safe to commit.
+        `claimed.py` is a genuine, HEAD-tracked deletion this session made and
+        stays in `safe_paths`; `<<EOF` never existed on disk or in HEAD and is
+        dropped, since `git status` carries no trace of it either.
+        """
+        repo = _make_repo(tmp_path)
+        (repo / "claimed.py").write_text("tracked")
+        subprocess.run(
+            ["git", "add", "claimed.py"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
+        )
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "add claimed.py"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
+        )
+        core.init("mine", cwd=str(repo))
+        scope.touch("mine", "claimed.py", cwd=str(repo))
+        (repo / "claimed.py").unlink()
+        scope.touch("mine", "<<EOF", cwd=str(repo))
+
+        out = safe_commit_offer._handler(
+            {"session_id": "mine", "cwd": str(repo), "dry_run": True}
+        )
+
+        assert out["safe_paths"] == ["claimed.py"]
+        assert "<<EOF" not in out["safe_paths"]
+        assert "<<EOF" not in out["ownership"]["mine"]
+        # Named on the reconciliation report still -- narrowing the pathspec
+        # is not the same as hiding the finding.
+        assert set(out["reconciliation"]["claimed_absent"]) == {
+            "claimed.py",
+            "<<EOF",
+        }
+
     # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
     # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
     # max 150021ms against a 2000ms bar). NOT the attribution kill -- that was
@@ -1452,7 +1489,7 @@ class TestHandler:
     def test_genuine_commit_failure_populates_failed_groups_and_logs_diagnostic(
         self, tmp_path, monkeypatch
     ):
-        # Review: code-reviewer (Finding 1) — `failed_groups` was computed and
+        # `failed_groups` was computed and
         # tested but never surfaced anywhere a real caller read. The
         # diagnostics write is what closes that gap, and it outlives the call,
         # which the return value does not.

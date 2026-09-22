@@ -255,7 +255,7 @@ CADENCE_PUSH_RETRY_BUDGET_SECS: float = 16.0
 _CEREMONY_PUSH_HEADROOM_SECS: float = 0.8
 CEREMONY_PUSH_BUDGET_SECS: float = CEREMONY_BUDGET_SECS - _CEREMONY_PUSH_HEADROOM_SECS
 
-# Review: coordinator:code-reviewer (a72f5accd9830c935) nit -- the leading
+# The leading
 # underscore is package-internal-by-convention, not module-private-in-fact:
 # `post_commit_tail.py` and `consumed_handoff_stamp.py` import this name
 # directly across the module boundary by design. Do not rename it to drop
@@ -520,6 +520,15 @@ class PushOutcome:
             1). `None` is the explicit "this path never counted legs" sentinel
             under the same rule as `pushed_count`, and `log_failure` renders
             it `after ?` rather than substituting a number.
+        landed_sha -- the post-push HEAD sha on ANY landed push (`acted ==
+            ["push"]`), set unconditionally whenever the push itself
+            succeeded -- unlike `pushed_range`/`pushed_count`, which stay
+            `None` together on a landed push with no resolvable upstream tip
+            (a genuine first push on a fresh branch, see `pushed_range`'s own
+            docstring). A caller that only needs "what did HEAD become",
+            never "what range did this land", reads this field instead of
+            partitioning `pushed_range` and handling its `None` case itself.
+            `None` on every non-landed outcome, same as `pushed_range`.
     """
 
     exit_code: int
@@ -531,6 +540,7 @@ class PushOutcome:
     pushed_range: Optional[str] = None
     pushed_count: Optional[int] = None
     attempts: Optional[int] = None
+    landed_sha: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1610,6 +1620,7 @@ def push_with_retry(
                 acted=["push"],
                 pushed_range=pushed_range,
                 pushed_count=pushed_count,
+                landed_sha=new_sha,
             )
 
         reason = condense_git_diagnostic(push_result.stderr) or f"exit_code={push_result.returncode}"
@@ -1673,6 +1684,7 @@ def push_with_retry(
                     acted=["push"],
                     pushed_range=pushed_range,
                     pushed_count=pushed_count,
+                    landed_sha=new_sha,
                 )
             last_reason = f"{reason} (publish declined: {publish_detail})"
             break

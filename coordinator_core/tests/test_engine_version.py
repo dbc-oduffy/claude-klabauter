@@ -35,7 +35,7 @@ def test_resolve_engine_sha_returns_40_char_lowercase_hex_in_real_repo():
     sha = resolve_engine_sha()
     assert sha is not None
     assert len(sha) == 40
-    # Review: code-reviewer (Finding 4) — literal lowercase-hex set states
+    # Literal lowercase-hex set states
     # intent directly instead of relying on `.lower()`'s redundant haystack.
     assert all(c in "0123456789abcdef" for c in sha)
 
@@ -72,7 +72,7 @@ def test_resolve_engine_sha_returns_none_when_git_missing(monkeypatch):
 
 
 def test_resolve_engine_sha_strips_trailing_newline_from_git_stdout(monkeypatch):
-    # Review: code-reviewer (Finding 5) — explicitly exercises `.strip()` via
+    # Explicitly exercises `.strip()` via
     # a mocked stdout so a regression (e.g. accidental `.rstrip` swap,
     # or `.strip()` removal) fails here rather than only incidentally via the
     # real-repo test.
@@ -135,13 +135,13 @@ def test_resolve_engine_dirty_returns_none_when_timeout(monkeypatch):
 
 def test_min_known_good_sha_is_40_char_hex():
     assert len(MIN_KNOWN_GOOD_SHA) == 40
-    # Review: code-reviewer (Finding 4) — literal lowercase-hex set states
+    # Literal lowercase-hex set states
     # intent directly instead of relying on `.lower()`'s redundant haystack.
     assert all(c in "0123456789abcdef" for c in MIN_KNOWN_GOOD_SHA)
 
 
 def test_min_known_good_sha_is_a_real_commit_in_this_repo():
-    # Review: code-reviewer (Finding 3) — a shape-only check lets a
+    # A shape-only check lets a
     # typo'd/orphaned floor SHA pass silently and surfaces later as a
     # misclassified "indeterminate" drift result rather than a fast local
     # test failure. Tolerant of a missing git binary (skip, don't fail).

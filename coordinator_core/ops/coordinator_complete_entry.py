@@ -161,7 +161,7 @@ _CREATIONFLAGS = no_console_creationflags()
 
 _VALID_NATURES = ("roadmap", "bugfix", "tech-debt", "infra")
 _GOVERNING_PLAN_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-# Review: code-reviewer — --sid reaches the same class of filename-construction
+# --sid reaches the same class of filename-construction
 # sink as --governing-plan-slug (sid6 = sid[-6:] spliced into entry_filename)
 # but was missing the adjacent flag's allowlist guard; validate at parse time.
 _SID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -569,7 +569,7 @@ def _parse_args(argv: List[str]):
             continue
         if a == "--commits":
             if commits_source:
-                # Review: coordinatorcode-reviewer.a2ea175d92501b498 -- the
+                # The
                 # --claim-shas-from removal also dropped the only guard
                 # against a repeated --commits, letting a second occurrence
                 # silently merge without de-duplicating across invocations,
@@ -881,7 +881,7 @@ def _native_single_session_loe() -> str:
     if in_tok.isdigit() and out_tok.isdigit():
         em_tokens = int(in_tok) + int(out_tok)
 
-    # Review: code-reviewer — share loe_thresholds' table walk instead of a
+    # Share loe_thresholds' table walk instead of a
     # hand-rolled duplicate (the exact drift class that module centralizes
     # against).
     tshirt = _compute_tshirt_nullable(ad, od, em_tokens)
@@ -1216,7 +1216,7 @@ def _resolve_rollup_sentence(repo_root: str, governing_plan_slug: str) -> str:
     # such shim exists on PATH).
     shim = _which_render_rollup_shim()
     if shim:
-        # Review: code-reviewer — bare shebang exec was a Windows regression
+        # Bare shebang exec was a Windows regression
         # (the retired oracle explicitly named `bash`; a bare-path exec has no
         # shebang mechanism on Windows and silently degrades to an empty
         # rollup). Resolve the interpreter explicitly via the shared
@@ -1325,7 +1325,7 @@ def _write_entry(
         lines.append("nature: null")
         lines.append("nature_inferred: true")
     if chain_slug:
-        # Review: code-reviewer — escape embedded double-quotes before
+        # Escape embedded double-quotes before
         # splicing into a double-quoted YAML scalar (nit F4).
         _chain_slug_esc = chain_slug.replace('"', '\\"')
         lines.append(f'chain: "{_chain_slug_esc}"')
@@ -1472,7 +1472,7 @@ def main(argv: List[str]) -> int:
 
     chain_terminal = canonicalize(disposition) == PREDECESSOR_CONSUMED
 
-    # Review: code-reviewer P2 — a fully-authored re-run used to pay
+    # A fully-authored re-run used to pay
     # `_resolve_session_commits`'s git spawn and the plan/handoff reads for
     # `_resolve_rollup_sentence`/`_resolve_governing_deliverable_id`/
     # `_resolve_entry_title` before `_write_entry`'s own all-three-authored

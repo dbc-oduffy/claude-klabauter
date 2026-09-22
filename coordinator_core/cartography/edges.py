@@ -236,7 +236,6 @@ def _module_name_for(target_root: Path, file_path: Path) -> str:
     if parts and parts[-1] == "__init__":
         parts = parts[:-1]
     if not parts:
-        # Review: code-reviewer (nit, Finding 3, 2026-07-12-codereview-
         # slicecartography-substrate-b-wave) — a root-level __init__.py
         # strips to an empty parts list ("".join([]) == ""), which would
         # otherwise silently emit edges with a blank "from" field. Fall back

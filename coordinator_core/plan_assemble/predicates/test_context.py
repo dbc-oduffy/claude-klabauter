@@ -53,7 +53,7 @@ def _write_sizing(tmp_path: Path) -> Path:
 
 
 def _patch_content_root(monkeypatch, tmp_path: Path) -> None:
-    # Review: F3 fix — never let a CLI test resolve the live repo's content
+    # F3 fix — never let a CLI test resolve the live repo's content
     # root; point `residue.brief`'s one `resolve_content_root()` call at an
     # empty, unpopulated directory under `tmp_path` instead. No residue
     # segments there is fine for every test below: a bare call fail-louds
@@ -258,7 +258,7 @@ def test_unpack_preserves_undetermined_sentinel_at_every_field():
 
 
 # --- CLI: --arrival / --trampoline / --collapse-fired-this-pass ------------
-# Review: caller-flags fix — wires :32a/:100/:108's previously-dead CLI seam.
+# caller-flags fix — wires :32a/:100/:108's previously-dead CLI seam.
 
 
 def test_cli_arrival_valid_value_is_accepted(capsys, tmp_path, monkeypatch):

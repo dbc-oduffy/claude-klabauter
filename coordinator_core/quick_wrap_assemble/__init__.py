@@ -59,10 +59,19 @@ reported `dirty: true` — detection is ours, the decision to skip rather than s
 the EM's. `git mv` on a dirty record would drag in-flight work into `archive/`.
 
 READ-ONLY, by construction, WITH ONE NAMED CARVE-OUT (C5, see Negative-spec below): this
-module reads disk/git state, and `brief()` additionally calls C4's hardened
+module reads disk/git state, and `brief(commit=True)` additionally calls C4's hardened
 `commit_session_offer_async` in-process to commit this session's own claimed dirty paths
 before returning. Every OTHER mutating action is still returned as a `directives[]` entry
 naming an existing atomic CLI.
+
+CALLER-OPT-IN, NOT A GLOBAL CARVE-OUT (state/bug-backlog/2026-09-06-quick-wrap-assemble-
+brief-commits-while-every-sibling-brief-only-reads.yaml): `commit` defaults to `False`, so
+`brief()` called bare — the shape every sibling assembler's `brief()` has — stays genuinely
+read-only, matching `pickup-assemble brief`/`plan-assemble brief`/`sizing-assemble`/
+`merge_assemble.brief()`. Only the real close ceremony, `main()`'s `brief(commit=True)`
+call reached through the `quick-wrap-assemble brief` CLI, opts in. This narrows the C5
+carve-out's blast radius to its one deliberate caller; it does not reverse or gate C5's own
+commit behaviour for that caller, which remains unconditional and prompt-free.
 
 Negative-spec:
     - Do NOT add a mutating code path here, beyond the ONE narrow carve-out C5
@@ -131,6 +140,7 @@ from coordinator_core.workstream_complete.directives_session_hygiene import (
     build_terminal_sizing_sweep_directive,
 )
 from coordinator_core.session_baton.store import merge_baton
+from coordinator_core.telemetry.op_latency import new_correlation_id
 from coordinator_core.win_portability import no_console_creationflags
 
 #: Locally scoped exit codes — NOT inherited from a sibling assembler. Built through the
@@ -470,7 +480,14 @@ def _read_ancestry_fields(worktree_root: Path, artifact_path: str) -> dict[str, 
     Returns `None` when the file cannot be read or carries no parseable
     frontmatter (absent, archived mid-session, malformed) so condition 3's
     caller fails CLOSED rather than guessing a chain-root split from a file
-    it never actually read. Never raises.
+    it never actually read. Never raises. Also returns `None` when
+    `additional_predecessors` is present but carries an inline value —
+    `_extract_scope_paths` only recognizes the `  - <value>` block-list
+    shape and silently reads anything else (a scalar, a flow-style `[...]`
+    list) as empty, which would let an artifact with real ancestry pass as a
+    chain root. A key line with nothing after the colon (the legitimate
+    block-list header, `read_fm_field_unquoted` reading back `""`) is not
+    flagged — that shape IS what `_extract_scope_paths` parses.
 
     Reuses `coordinator_core.frontmatter.primitives` (`split_frontmatter`,
     `read_fm_field_unquoted`) and the same nested-list-block scanner
@@ -487,6 +504,8 @@ def _read_ancestry_fields(worktree_root: Path, artifact_path: str) -> dict[str, 
     if split is None:
         return None
     fm_text = split.fm_text
+    if read_fm_field_unquoted(fm_text, "additional_predecessors"):
+        return None
     return {
         "predecessor": read_fm_field_unquoted(fm_text, "predecessor"),
         "forked_from": read_fm_field_unquoted(fm_text, "forked_from"),
@@ -1085,10 +1104,38 @@ def _run_close_commit(root: Path, sid: str) -> dict[str, Any]:
         }
 
 
-def brief(worktree_root: Path | None = None) -> dict[str, Any]:
-    """Compute `/quick-wrap`'s decision object. READ-ONLY except for C5's named
-    carve-out (`_run_close_commit`, see module docstring) — this call commits this
-    session's own claimed dirty paths in-process before the envelope is emitted.
+def _skipped_commit_report(sid: str) -> dict[str, Any]:
+    """Synthesized report for a `brief(commit=False)` call — the default — which never
+    attempts `_run_close_commit` at all.
+
+    Distinct from that function's own `"error"`-status fallback: nothing here failed,
+    the caller simply did not opt into the C5 carve-out. `"skipped"` keeps that
+    distinction visible in `commit_outcome["status"]` rather than reusing `"empty"`,
+    which already means "the commit ran and found nothing to commit."
+    """
+    return {
+        "session_id": sid,
+        "groups": [],
+        "excluded": [],
+        "failed_groups": [],
+        "dropped_groups": [],
+        "residue": {},
+        "outcome": {
+            "status": "skipped",
+            "detail": "commit=False — this brief() call did not attempt the close commit.",
+            "committed_paths": [],
+            "conflicted_paths": [],
+        },
+    }
+
+
+def brief(worktree_root: Path | None = None, *, commit: bool = False) -> dict[str, Any]:
+    """Compute `/quick-wrap`'s decision object. READ-ONLY unless `commit=True`, C5's
+    named carve-out (`_run_close_commit`, see module docstring "CALLER-OPT-IN" section)
+    — that call commits this session's own claimed dirty paths in-process before the
+    envelope is emitted. Defaults to `False` so a direct/probe call matches every sibling
+    assembler's `brief()`; `main()` below is the one caller that passes `commit=True`,
+    reached only through the real `quick-wrap-assemble brief` CLI invocation.
 
     Reads all five close-gate facts off `coordinator_core.session.session_facts`
     (DR-323's cutover, chunk C7 — see module docstring). Each DR-319 record's `value`
@@ -1099,14 +1146,32 @@ def brief(worktree_root: Path | None = None) -> dict[str, Any]:
     a bare `.get("value")` that would silently resolve to `None`. `close_gate` itself
     carries the raw DR-319 record for each fact — `source`/`collision`/`degraded`
     travel to this ceremony's own consumers rather than being discarded here.
+
+    Mints one `invocation_id` (`telemetry.op_latency.new_correlation_id`) per call
+    and threads it to every one of the five facts below, so their `fact_span` rows
+    are joinable into a single per-ceremony aggregate at read time instead of
+    collapsing to this session's `sid` across every `brief()` call it makes —
+    `record_fact_span`'s own docstring, and
+    `state/bug-backlog/2026-08-27-fact-span-rows-cannot-yield-a-per-ceremo-d9be470c2039.yaml`.
     """
     root, common_dir, sid = _resolve_session(worktree_root)
+    invocation_id = new_correlation_id()
 
-    pickup_kind_record = session_facts.session_pickup_kind(root, common_dir, sid)
-    governing_plan_record = session_facts.session_governing_plan(root, common_dir, sid)
-    diff_record = session_facts.session_diff_brightline(root, common_dir, sid)
-    sizings_record = session_facts.session_terminal_sizings(root)
-    fold_record = session_facts.session_fold_sidecars(root)
+    pickup_kind_record = session_facts.session_pickup_kind(
+        root, common_dir, sid, invocation_id=invocation_id
+    )
+    governing_plan_record = session_facts.session_governing_plan(
+        root, common_dir, sid, invocation_id=invocation_id
+    )
+    diff_record = session_facts.session_diff_brightline(
+        root, common_dir, sid, invocation_id=invocation_id
+    )
+    sizings_record = session_facts.session_terminal_sizings(
+        root, invocation_id=invocation_id
+    )
+    fold_record = session_facts.session_fold_sidecars(
+        root, invocation_id=invocation_id
+    )
 
     pickup_kind = (
         pickup_kind_record["value"]
@@ -1196,7 +1261,7 @@ def brief(worktree_root: Path | None = None) -> dict[str, Any]:
         )
     narration += " " + _CLOSE_LEDGER_NARRATION
 
-    commit_report = _run_close_commit(root, sid)
+    commit_report = _run_close_commit(root, sid) if commit else _skipped_commit_report(sid)
     commit_outcome = dict(commit_report.get("outcome") or {})
     commit_outcome["residue"] = commit_report.get("residue") or {}
 
@@ -1274,7 +1339,7 @@ def main(argv: list[str]) -> int:
         return _usage()
 
     try:
-        decision_object = brief()
+        decision_object = brief(commit=True)
     except RuntimeError as exc:
         print(f"quick-wrap-assemble: {exc}", file=sys.stderr)
         return int(QuickWrapExitCode.TRANSPORT)

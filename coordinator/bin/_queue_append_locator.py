@@ -114,7 +114,7 @@ def find_cli_cmd(
     if not sibling_only:
         for candidate in (cli_name, cli_name + ".py"):
             try:
-                # Review: code-reviewer — pre-existing hazard, untouched by this
+                # pre-existing hazard, untouched by this
                 # diff: this bare-PATH probe validates only `returncode == 0` on
                 # a name found via PATH lookup, so a forwarder that answers
                 # `--help` with exit 0 for an unrelated reason would still pass.

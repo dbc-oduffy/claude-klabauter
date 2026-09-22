@@ -55,6 +55,7 @@ from coordinator_core.ops.tracker.push_suggestion import (
     _handler,
 )
 from coordinator_core import tracker_holder
+from coordinator_core.ops.ceremony import git_native
 from coordinator_core.win_portability import no_console_creationflags
 
 
@@ -1042,21 +1043,21 @@ def test_failed_delivery_commit_leaves_envelope_unstaged_in_receiver(tmp_path, m
     _init_receiver_repo(receiver)
 
     rel_path = "cross-repo/inbox/delivered.md"
+    content = "---\nkind: sovereign-tracker-event\n---\n{}\n"
     target = receiver / rel_path
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("---\nkind: sovereign-tracker-event\n---\n{}\n", encoding="utf-8")
+    target.write_text(content, encoding="utf-8")
 
     real_run = subprocess.run
 
-    def _fail_only_commit(args, **kwargs):
-        # Let `git add` (and everything else) really run; fail only the commit,
-        # which is what index.lock contention in the receiver looks like.
-        if "commit" in args:
-            return subprocess.CompletedProcess(args, 1, "", "fatal: Unable to create index.lock")
-        return real_run(args, **kwargs)
+    def _fail(*args, **kwargs):
+        return git_native.GitResult(
+            returncode=1, stdout="",
+            stderr="fatal: Unable to create index.lock",
+        )
 
-    monkeypatch.setattr(subprocess, "run", _fail_only_commit)
-    outcome = push_suggestion._commit_envelope(receiver, rel_path)
+    monkeypatch.setattr(push_suggestion, "commit_authored_new_file", _fail)
+    outcome = push_suggestion._commit_envelope(receiver, rel_path, content)
     monkeypatch.undo()
 
     assert outcome["committed"] is False
@@ -1076,6 +1077,49 @@ def test_failed_delivery_commit_leaves_envelope_unstaged_in_receiver(tmp_path, m
         "the envelope must remain WRITTEN but untracked — the same state the "
         "detached/bare/unborn-HEAD arm documents as safe for the receiver's sweep"
     )
+
+
+def test_commit_envelope_routes_through_shared_delivery_primitive_not_bespoke_spawns(
+    tmp_path, monkeypatch
+):
+    """`_commit_envelope` must land the receiver-side commit through
+    `git_native.commit_authored_new_file` -- the same hookless primitive
+    `memo_send` already shares between its `to:` and `cc:` legs -- rather
+    than re-spawning its own `git add`/`git commit` pair. Pins the peer
+    delivery's write-and-commit half to that one shared implementation, so
+    a future invariant fix (locking, encoding, trailer shape) lands once
+    and covers every writer into a peer's cross-repo inbox, not just this
+    one."""
+    receiver = tmp_path / "receiver"
+    _init_receiver_repo(receiver)
+
+    rel_path = "cross-repo/inbox/delivered.md"
+    content = "---\nkind: sovereign-tracker-event\n---\n{}\n"
+
+    real_run = subprocess.run
+
+    def _guard(args, **kwargs):
+        if "add" in args or "commit" in args:
+            raise AssertionError(
+                f"_commit_envelope spawned a bespoke git subprocess: {args}"
+            )
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", _guard)
+    try:
+        outcome = push_suggestion._commit_envelope(receiver, rel_path, content)
+    finally:
+        monkeypatch.undo()
+
+    assert outcome["committed"] is True, outcome["reason"]
+    assert outcome["reason"] is None
+
+    landed = real_run(
+        ["git", "-C", str(receiver), "show", f"HEAD:{rel_path}"],
+        capture_output=True, text=True, stdin=subprocess.DEVNULL,
+        **no_console_creationflags(),
+    ).stdout
+    assert landed == content
 
 
 def test_delivery_commit_message_carries_deliverable_trailer():

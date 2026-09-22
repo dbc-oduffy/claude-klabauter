@@ -92,7 +92,7 @@ _SCAN_ROOTS: tuple[str, ...] = (
 
 
 def _module_level_nodes(tree: ast.Module):
-    # Review: code-reviewer — a module-level `WRITE_SURFACE` nested inside an `if`/`try`
+    # A module-level `WRITE_SURFACE` nested inside an `if`/`try`
     # (platform branch, import-fallback) is a child of that node, not of `tree.body`, so a
     # `tree.body`-only walk misses it. Walk the whole tree but stop descending into
     # `FunctionDef`/`AsyncFunctionDef`/`ClassDef` subtrees — a `WRITE_SURFACE` bound inside
@@ -316,7 +316,6 @@ def discover_declarations(
     `coordinator_core.install.maximalist._collect_writer_declarations`
     (receipt-coverage collection).
 
-    Review: code-reviewer (P2/P3, 2026-08-06 install-receipt-persistence
     slice) -- `maximalist.py` previously imported the two private names
     above and, on an import failure, silently `continue`d with zero
     logging, degrading a failed-to-import writer's receipt coverage to

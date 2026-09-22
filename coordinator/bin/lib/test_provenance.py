@@ -101,7 +101,7 @@ def test_unrecognized_value_passes_through_unchanged() -> None:
     The resolver's docstring promises it "returns the stored value when present";
     silently folding a corrupted value into 'unknown' would hide the corruption.
     """
-    # Review: code-reviewer F4 — asserts the documented pass-through contract.
+    # Asserts the documented pass-through contract.
     assert (
         get_provenance_completeness(
             {"system": {"provenance_completeness": "corrupted_value"}}

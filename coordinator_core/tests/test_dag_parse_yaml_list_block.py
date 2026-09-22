@@ -25,7 +25,7 @@ Spec backlink: pln-structured-sibling-evidence-ga-6e2ceb
 coordinator_core/ops/handoff_gate_aging.py's C6 scope-boundary note, which
 was written against the exact silent-truncation bug this module now closes.
 
-Review: code-reviewer / DAG-401 — reproduces the exact truncation reported
+Reproduces the exact truncation reported
 against ``_parse_yaml_list_block`` (drops every continuation line of a
 sequence-of-mappings entry, keeping only the first key).
 """

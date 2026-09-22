@@ -202,7 +202,7 @@ def test_registered_handler_dispatches_to_clone_idempotent(tmp_path):
     src = _make_source_repo(tmp_path)
     target = tmp_path / "cloned" / "via-handler"
 
-    # Review: code-reviewer — Finding 1. Handler is a plain sync `def`
+    # Handler is a plain sync `def`
     # (engine auto-offloads via asyncio.to_thread), called directly rather
     # than via asyncio.run.
     result = _clone_idempotent({"repo_url": str(src), "target_dir": str(target)})

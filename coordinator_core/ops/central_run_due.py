@@ -76,7 +76,7 @@ from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
 from coordinator_core.machine_resolver import registry_get as _registry_get
 from coordinator_core.win_portability import no_console_creationflags
 
-# Review: code-reviewer — module-level alias (not a re-derived duplicate) so this
+# module-level alias (not a re-derived duplicate) so this
 # module's own tests can keep monkeypatching a local name; the actual
 # implementation now lives once in coordinator_core.state_root, shared with
 # coordinator_core.ops.learn_lessons_roots (previously two independently

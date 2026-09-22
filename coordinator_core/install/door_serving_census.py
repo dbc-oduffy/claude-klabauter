@@ -215,7 +215,7 @@ def _installed_image_names(settings_home_bin: Path) -> "set[str]":
     occupies never reports an image. An absent or unparsable manifest yields the
     empty set -- the same degradation as today.
 
-    Review: reviewer (S6, finding 2/3) -- this is manifest-INTEGRITY-bound, not
+    This is manifest-INTEGRITY-bound, not
     a general safeguard against a bad manifest entry: it only ever answers
     "absent/unparsable manifest -> never a false SERVES", not "any manifest ->
     never a false SERVES". A present-but-wrong manifest entry (a name recorded

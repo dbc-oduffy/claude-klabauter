@@ -960,7 +960,7 @@ class TestAggregateIncludesCockpitSource:
 
         assert report["status"] == STATUS_INDETERMINATE
         assert [d["schema"] for d in report["indeterminate"]] == [_VENDOR_SOURCE_NAME]
-        # Review: code-reviewer — restore assertion dropped as accidental collateral
+        # Restore assertion dropped as accidental collateral
         # of appending TestResolveScanSchemasDir below; the docstring's coverage claim
         # (an unresolved cockpit side must not mask real JSON-schema matches) needs it.
         assert sorted(report["matched"]) == sorted([_SCHEMA_A, _SCHEMA_B])
@@ -974,7 +974,7 @@ class TestResolveScanSchemasDir:
     """
 
     def test_explicit_schemas_dir_wins_outright(self, tmp_path: Path) -> None:
-        # Review: overengineering-reviewer — rung 1 returns before any mirror
+        # Rung 1 returns before any mirror
         # lookup is consulted, so an explicit arg needs no mirror/source
         # fixture or monkeypatches to prove it wins; trimmed to the assertion.
         explicit = tmp_path / "explicit-schemas"
@@ -1045,7 +1045,7 @@ class TestResolveScanSchemasDir:
 
         assert _resolve_scan_schemas_dir(None) == VENDORED_SCHEMAS_DIR
 
-    # Review: overengineering-reviewer — removed
+    # Removed
     # test_is_published_engine_mirror_raising_falls_back_to_module_relative:
     # same single `except Exception` and same assertion as
     # test_engine_root_raising_falls_back_to_module_relative above; which call

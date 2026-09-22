@@ -83,7 +83,7 @@ def test_resolve_python_bin_returns_resolved_value(monkeypatch):
 
     monkeypatch.setattr("coordinator_core.pyresolve.resolve_python_bin", _fake_resolve)
     assert _resolve_python_bin() == "/opt/found/python"
-    # Review: coordinatorcode-reviewer — pin the kwarg the callsite is handed
+    # Pin the kwarg the callsite is handed
     # so this test can't pass if prefer_windowless is silently dropped.
     assert captured == {"prefer_windowless": False}
 
@@ -99,7 +99,7 @@ def test_resolve_python_bin_falls_back_on_invalid_pin(monkeypatch):
 
     monkeypatch.setattr("coordinator_core.pyresolve.resolve_python_bin", _raise)
     assert _resolve_python_bin() == sys.executable
-    # Review: coordinatorcode-reviewer — pin the kwarg the callsite is handed
+    # Pin the kwarg the callsite is handed
     # so this test can't pass if prefer_windowless is silently dropped.
     assert captured == {"prefer_windowless": False}
 

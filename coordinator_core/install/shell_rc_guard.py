@@ -336,7 +336,7 @@ def _write_block_to_file(rc_path: Path, begin: str, end: str, body: str, check_o
         print(f"[shell-rc-guard] would: {verb} {label} guard block in {rc_path}")
         return {"rc_path": str(rc_path), "already_present": False, "modified": False, "stale_present": stale_present}
 
-    # Review: coordinator:code-reviewer — this is the ONE place any consumer's
+    # This is the ONE place any consumer's
     # guard-block file I/O happens (per this function's own docstring), so
     # gating here is what makes every caller (write_shell_rc_guard_block,
     # write_path_entry_guard_blocks, and the `install.write_shell_rc_guard_block`

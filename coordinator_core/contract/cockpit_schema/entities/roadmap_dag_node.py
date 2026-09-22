@@ -56,7 +56,7 @@ class RoadmapDagNode(BaseModel):
     status: str | None
     # Sprint label assigned to this stub; string or numeric YAML value, null
     # if unscheduled.
-    # Review: code-reviewer — int included explicitly (not just float) so an
+    # Int included explicitly (not just float) so an
     # integer-labeled sprint round-trips as e.g. `3`, not `3.0`, matching the
     # oracle's number-preserving str|number|null wire type byte-for-byte.
     sprint: str | int | float | None

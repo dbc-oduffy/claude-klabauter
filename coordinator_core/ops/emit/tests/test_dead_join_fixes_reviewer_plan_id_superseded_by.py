@@ -159,7 +159,7 @@ def test_reviewer_join_precedence_named_reviewer_over_model_reviewer(mock_qr, tm
 def test_reviewer_join_kind_based_staff_reviewer_outranks_sonnet_review(
     mock_qr, tmp_path: Path
 ) -> None:
-    """Review: code-reviewer Finding 3 — a NAMED staff reviewer with no hardcoded-roster
+    """A NAMED staff reviewer with no hardcoded-roster
     marker in its filename (e.g. a the Data Science Reviewer/the UX Reviewer/sid/the Front-End Reviewer-style sidecar) still outranks a
     ``kind: sonnet-review`` sidecar, because ``kind:`` is read directly rather than matched
     against a fixed persona-name list. This is the exact case the old hardcoded

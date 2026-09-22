@@ -137,7 +137,7 @@ def test_declared_untested_entries_are_all_hot_path_surfaces() -> None:
 
 
 def test_declared_untested_reasons_are_non_trivial() -> None:
-    # Review: coordinator:code-reviewer (slice D, Finding 1) -- length alone
+    # Length alone
     # lets a future author waive a genuinely untested surface with 40
     # characters of plausible filler. Requiring a real
     # state/debt-backlog/*.yaml path -- verified to EXIST on disk, not just

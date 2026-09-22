@@ -1202,7 +1202,7 @@ def apply_manifest_layout_rewrite(dst_file: Path, rewrite: ManifestLayoutRewrite
 
     if not changed:
         return False
-    dst_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    dst_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n")
     return True
 
 

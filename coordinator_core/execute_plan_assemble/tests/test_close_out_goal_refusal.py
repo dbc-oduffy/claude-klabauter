@@ -531,6 +531,70 @@ class TestGoalGateEndToEnd:
         assert result["stamped"] is True
         assert result["goal_gate"]["refused"] is False
 
+    def test_cross_repo_baseline_ref_resolves_against_the_named_sibling(
+        self, tmp_path, monkeypatch
+    ):
+        """A publisher-side plan's baseline necessarily lives in the mirror
+        repo -- a `<repo>:<sha>` qualified baseline_ref resolves against
+        that named sibling's OWN history rather than refusing
+        baseline_ref_unresolvable against this repo (state/bug-backlog/
+        2026-08-29-close-out-s-baseline-ref-must-resolve-in-a818162857ae)."""
+        root = tmp_path / "main"
+        root.mkdir()
+        _init_repo(root)
+        shipping_sha = _land_the_shipping_chunk(root)
+
+        sibling = tmp_path / "sibling"
+        sibling.mkdir()
+        _init_repo(sibling)
+        (sibling / "mirrored.py").write_text("v1", encoding="utf-8")
+        _run_git(["add", "mirrored.py"], sibling)
+        _run_git(["commit", "-q", "-m", "mirror-side baseline"], sibling)
+        sibling_sha = _head_sha(sibling)
+
+        monkeypatch.setattr(
+            coas,
+            "registry_get",
+            lambda key: str(sibling) if key == "repos.klabauter" else None,
+        )
+        goal_fm = _prime_exit_criterion_block(
+            baseline_ref=f"klabauter:{sibling_sha}",
+            exit_criterion_met=_asserted_pass_block(),
+        )
+        _seed_goal_plan(root, goal_frontmatter=goal_fm, shipping_sha=shipping_sha)
+
+        exit_code, result = _run_close_out(monkeypatch, root, "plan.md")
+
+        assert exit_code == coas.EXIT_OK, result
+        assert result["status_target"] == "implemented"
+        assert result["stamped"] is True
+        assert result["goal_gate"]["refused"] is False
+
+    def test_cross_repo_baseline_ref_unregistered_repo_key_still_refuses(
+        self, tmp_path, monkeypatch
+    ):
+        """An unregistered `<repo>` qualifier is a genuine unresolvable
+        case, same reason a bad bare-sha already reports -- the cross-repo
+        form widens WHAT resolves, never loosens the refusal itself."""
+        root = tmp_path
+        _init_repo(root)
+        shipping_sha = _land_the_shipping_chunk(root)
+        monkeypatch.setattr(coas, "registry_get", lambda key: None)
+        goal_fm = _prime_exit_criterion_block(
+            baseline_ref="klabauter:eb6be84a",
+            exit_criterion_met=_asserted_pass_block(),
+        )
+        _seed_goal_plan(root, goal_frontmatter=goal_fm, shipping_sha=shipping_sha)
+
+        exit_code, result = _run_close_out(monkeypatch, root, "plan.md", dry_run=True)
+
+        assert exit_code == coas.EXIT_OK, result
+        assert result["status_target"] is None
+        assert (
+            result["goal_gate"]["reason"]
+            == f"{coas.GOAL_REFUSAL_BASELINE_REF_PREFIX}{coas.DISPOSITION_REF_UNRESOLVABLE}"
+        )
+
     def test_unresolvable_derived_from_refuses_and_names_which_half_ac20(
         self, tmp_path, monkeypatch
     ):

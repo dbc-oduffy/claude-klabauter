@@ -126,6 +126,31 @@ def test_on_path_false_when_target_dir_absent_from_path(wrapper_src, tmp_path, m
     assert result["on_path"] is False
 
 
+def test_on_path_false_carries_actionable_warning_on_real_install(wrapper_src, tmp_path, monkeypatch):
+    target_dir = _patch_bin_dir(monkeypatch, tmp_path)
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    monkeypatch.setenv("PATH", str(other))
+
+    result = _install_wrapper_onto_path({"wrapper_src": str(wrapper_src)})
+
+    assert result["modified"] is True
+    assert result["on_path"] is False
+    assert "warning" in result
+    assert str(target_dir) in result["warning"]
+
+
+def test_on_path_true_omits_warning(wrapper_src, tmp_path, monkeypatch):
+    target_dir = _patch_bin_dir(monkeypatch, tmp_path)
+    target_dir.mkdir(parents=True)
+    monkeypatch.setenv("PATH", str(target_dir))
+
+    result = _install_wrapper_onto_path({"wrapper_src": str(wrapper_src)})
+
+    assert result["on_path"] is True
+    assert "warning" not in result
+
+
 def test_missing_wrapper_src_param_is_structured_error():
     result = _install_wrapper_onto_path({})
     assert "error" in result
@@ -253,7 +278,6 @@ def test_nonexistent_wrapper_src_never_journals(tmp_path):
 
 # --- Regression: module-level resolution_journal import vs the ops eager walk
 #
-# Review: coordinator:code-reviewer (2026-08-06, rcpt-R3-writer-wiring) —
 # wrapper_onto_path.py and dep_check.py both import resolution_journal at
 # module level, unlike every other writer in this diff (clone_sibling_repo.py,
 # detect_test_cmd.py, ensure_venv.py, first_run.py, gen_settings_hooks.py),

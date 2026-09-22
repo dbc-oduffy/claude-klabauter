@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import types
 
-# Review: hand-edited only — mutation raises TypeError rather than silently
+# hand-edited only — mutation raises TypeError rather than silently
 # escalating an assembler's dispatch privilege at runtime. Copies
 # coordinator_core.authz.classification.OP_CLASSIFICATION's MappingProxyType shape
 # rather than inventing a new one. Keyed by assembler module name (e.g.

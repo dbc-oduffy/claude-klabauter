@@ -143,7 +143,7 @@ class TestPhraseOverlapPrecisionRegression:
         hit = next(c for c in candidates if c["signal"] == "phrase-overlap")
         assert "propagation ask needs a worked" in hit["excerpt"]
 
-    # Review: code-reviewer — Finding 5. The two tests above pin the exact anecdote
+    # The two tests above pin the exact anecdote
     # ("a cross-repo memo") that motivated the 4->5 n-gram size change. This pair
     # generalizes the assertion to the PROPERTY the fix is meant to hold, using a
     # different recurring generic phrase built from actual coordinator jargon (not
@@ -227,7 +227,7 @@ class TestHeadingDuplicateSignal:
         assert meta["heading_duplicate_count"] == 0
 
     def test_does_not_fire_on_generic_repeated_headings(self, tmp_path):
-        # Review: code-reviewer — Finding 10. Two structurally-generic headings
+        # Two structurally-generic headings
         # ("## Overview" repeated in unrelated sections) score Jaccard 1.0 with no
         # genericity weighting, and would otherwise be indistinguishable from a
         # genuine near-duplicate section.
@@ -309,7 +309,7 @@ _VERDICT_SHAPED_KEYS = {
     "recommendation",
 }
 
-# Review: code-reviewer — Finding 4. A denylist of named verdict-shaped strings only
+# A denylist of named verdict-shaped strings only
 # catches the specific vocabulary chosen today — a future edit adding e.g. `confidence:
 # "high"` or `flag: True` to a candidate dict would pass the isdisjoint() checks below
 # vacuously. This allowlist is the structural form: it names every key the generator is

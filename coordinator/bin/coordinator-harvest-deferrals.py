@@ -170,7 +170,7 @@ from pathlib import Path
 
 _BIN_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Review: code-reviewer (slice2 Finding 1) — import the SAME doe_root() the
+# Import the SAME doe_root() the
 # write seams (coordinator-queue-append / coordinator-lesson-promote) call,
 # instead of re-deriving a partial (env-var-only) approximation of its
 # resolution chain. Mirrors the _LIB_DIR sys.path pattern used by both seams.

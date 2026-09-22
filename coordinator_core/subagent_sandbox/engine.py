@@ -297,7 +297,7 @@ def _resolve_git_root_uncached(cwd: Optional[str] = None) -> Optional[str]:
     normalize paths without a root, and failing closed here would over-block
     every unmarked subagent.
 
-    Review: code-reviewer F10 — the reference hook tries a `_cs_git_root`
+    The reference hook tries a `_cs_git_root`
     bash-library helper first, falling back to bare `git rev-parse` only if
     that helper isn't loaded. `_cs_git_root` is DoE-bash-specific with no
     Python equivalent in coordinator_core and is deliberately not ported;
@@ -607,7 +607,6 @@ def _read_backpointer_subagent_type(
     if not rows:
         return ""
 
-    # Review: coordinator:code-reviewer (2026-08-14, P3, duplicate-row
     # ambiguity) -- a bare "return on first match" resolved a duplicate
     # agent_id (one legacy 2-column row, one full 3+-column row) by file
     # order rather than by recency. Now: rows with fewer than 3 columns are

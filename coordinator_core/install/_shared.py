@@ -367,7 +367,6 @@ def resolve_machine_local_cli(plugin_root: Optional[str]) -> Optional[list]:
             # delivered .cmd sibling; never return the bare shim on Windows.
             # os.access(X_OK) is also meaningless here (it degrades to an
             # existence check), so gate on is_file().
-            # Review: code-reviewer 2026-07-20 Finding 2 (P2).
             shim_cmd = shim.with_suffix(".cmd")
             if shim_cmd.is_file():
                 return [str(shim_cmd)]
@@ -449,7 +448,7 @@ def ml_get(
 def is_pointer(path) -> bool:
     """True if ``path`` is a POSIX symlink OR a Windows directory junction.
 
-    Review: code-reviewer (Finding 2, AC A3/A4) — ``os.path.islink()`` alone
+    ``os.path.islink()`` alone
     only detects the NTFS ``IO_REPARSE_TAG_SYMLINK`` tag; a directory
     junction created by ``mklink /J`` (what ``_install_compat_pointer``'s
     Windows branch actually creates) carries the different

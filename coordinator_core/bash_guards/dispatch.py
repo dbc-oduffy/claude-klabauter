@@ -828,6 +828,17 @@ def _crash_deny(guard_name: str, exc: BaseException, resolution_class: Optional[
                 "already finished and verified -- may still go through "
                 "normally; try a trivial command to find out which case "
                 "you are in.\n\n"
+                "The most likely cause of a crash like this is NOT a bug "
+                "in the guard's own logic: it is a peer session on this "
+                "shared tree (standard practice here, no worktrees) "
+                "mid-editing a module the guard's import chain pulls in -- "
+                "an import line moved while a usage of it was still "
+                "present, or similar -- which is not something opening "
+                "the guard file will show you, since the file on disk may "
+                "already be back to consistent by the time you read it. A "
+                "real bug in the guard is still possible and worth "
+                "checking, but do not assume one just because this "
+                "message fired.\n\n"
                 "This does NOT require the Bash tool to diagnose: file-"
                 "reading tools reach the guard source directly, without "
                 "Bash. Report this crash (guard name and exception above) "
@@ -1048,6 +1059,51 @@ def resolve_governed_authoring_surfaces(
         _unreadable("a list containing non-string entries")
         return None
     return data
+
+
+#: This repo's own CLASS-2 privileged-configuration surface
+#: (``coordinator_core/write_guards/guard_doctrine_surface_edits.py``'s
+#: ``_PER_REPO_SURFACES``) -- never a member of DoE's own
+#: ``governed-authoring-surfaces.json`` manifest, which pins DoE's CLASS-1
+#: always-loaded-doctrine tuple only (state/bug-backlog/2026-08-19-doctrine-
+#: surface-guard-on-coordinator-lo-9720031728bf.yaml).
+_LOCAL_CONFIG_GOVERNED_SURFACE = "coordinator.local.md"
+
+
+def _with_local_config_surface(
+    governed_surfaces: Optional[List[str]],
+) -> List[str]:
+    """``governed_surfaces`` (the DoE-manifest read, unchanged) plus this
+    repo's own CLASS-2 surface, ``coordinator.local.md``.
+
+    THE GAP THIS CLOSES. ``guard_doctrine_surface_edits.py`` (the
+    Write/Edit/MultiEdit admission gate) protects ``coordinator.local.md``
+    unconditionally -- its frontmatter is the repo's privileged-execution
+    surface (the ceremony-executed test-command strings and the Tier-U
+    authority declarations that discharge them) -- but the Bash/PowerShell
+    mirror here only ever denied on the DoE manifest's own CLASS-1 identifier
+    set, which never lists it. A ``python3 -c "open('coordinator.local.md',
+    'a').write(...)"`` therefore reached no guard at all: BLOCKED through
+    Edit, silent through Bash.
+
+    Composed HERE, in the caller, rather than inside
+    ``resolve_governed_authoring_surfaces`` itself -- that function's own
+    contract is "read the DoE manifest verbatim, fresh, every call" (see its
+    docstring and ``tests/test_governed_surfaces_manifest_miss.py``, which
+    pins its return value unchanged on every miss/hit shape); this repo's own
+    CLASS-2 addition is not a manifest concern and must not perturb that
+    contract.
+
+    UNCONDITIONAL, deliberately: ``coordinator.local.md`` is appended even
+    when ``governed_surfaces`` is ``None`` (manifest miss) or ``[]``
+    (explicit "no CLASS-1 surfaces governed here") -- mirroring
+    ``guard_doctrine_surface_edits.py``'s own CLASS-2 protection, which needs
+    no manifest to apply. Idempotent: a manifest that already lists the bare
+    basename is not duplicated."""
+    surfaces = list(governed_surfaces) if governed_surfaces else []
+    if _LOCAL_CONFIG_GOVERNED_SURFACE not in surfaces:
+        surfaces.append(_LOCAL_CONFIG_GOVERNED_SURFACE)
+    return surfaces
 
 
 #: MIRRORS a PEER REPO's regex -- ``DoE-claude/coordinator/hooks/scripts/
@@ -1892,7 +1948,7 @@ def _evaluate_payload_json_budgeted(
             # must still get its own chance to fire) -- never an early-
             # return ALLOW, which would skip every guard still to come.
             # `False` -> fall through unchanged to the deny return below.
-            # Review: coordinator:code-reviewer Finding 1 (P1) -- mirror
+            # Mirror
             # `_advisory_value.suppress_advisory`'s own isinstance discipline
             # one line above in this exact loop, since this computation sits
             # OUTSIDE the per-guard try/except and must therefore be TOTAL BY
@@ -1932,7 +1988,6 @@ def _evaluate_payload_json_budgeted(
                 and isinstance(_hso, dict)
                 and _hso.get("permissionDecision") == "deny"
             )
-            # Review: coordinator:code-reviewer (P1, re-derived independently
             # by review-integrator) -- envelope-only (`_is_hard_deny_envelope`
             # alone) is TOO WIDE for sentinel eligibility: it makes every
             # `fail_closed=False` guard that composes a genuine deny on its
@@ -1956,7 +2011,7 @@ def _evaluate_payload_json_budgeted(
             # `fail_closed=False` population is now gated by this explicit
             # allowlist.
             _sentinel_eligible = fail_closed or name in _SENTINEL_ELIGIBLE_ADVISORY_GUARDS
-            # Review: coordinator:code-reviewer Finding 3 (P2) -- compute
+            # Compute
             # host-default suppression BEFORE consuming any unlock grant
             # (within-iteration reorder only; the guard-chain CALL order
             # above is untouched). `_is_hard_deny_envelope` already requires
@@ -2201,7 +2256,7 @@ def _build_guard_chain(
         governed_surfaces = resolve_governed_authoring_surfaces(plugin_root, session_id, cwd)
         return _check_doctrine_surface_bash_write(
             payload,
-            governed_surfaces,
+            _with_local_config_surface(governed_surfaces),
             resolve_wiki_citation=lambda citation: resolve_wiki_citation(citation, plugin_root),
         )
 
@@ -2890,7 +2945,7 @@ def _build_guard_chain(
         # change.
         GuardEntry("git-no-optional-locks", lambda: _check_git_no_optional_locks(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         # Content: deliberately NOT crash-deny-routed (see module docstring).
-        # Review: code-reviewer (Finding 2) -- check_validate_commit's git
+        # check_validate_commit's git
         # calls (staged-file list, scope-check toplevel resolution, CLAUDE.md
         # blob fetch, frontmatter diff) are all cwd-sensitive; thread cwd
         # through so they resolve against the payload's actual working
@@ -2904,7 +2959,7 @@ def _build_guard_chain(
         # foreign-binary-argv case as the two entries above. No detection
         # change.
         GuardEntry("validate-commit", lambda: _dc.check_validate_commit(cmd, session_id, cwd, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
-        # Review: review-integrator -- Finding 2. Still sits after every
+        # Still sits after every
         # hard-deny above (identity/confinement/git-history denies all
         # outrank a search answer), same invariant every rewrite/advisory
         # entry in this chain already honors. (Its former second ordering

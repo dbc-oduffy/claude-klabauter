@@ -64,7 +64,7 @@ from coordinator_core.session.autonomous_sentinel import sentinel_path  # noqa: 
 from coordinator_core.session.context_usage_sidecar import read_usage
 from coordinator_core.session.mode_resolution import resolve_mode
 
-# Review: reviewer -- comment was stale: `sentinel_path` IS called directly by this
+# Comment was stale: `sentinel_path` IS called directly by this
 # module's own logic now, in the mise-en-place CONTINUANCE detection below (reads
 # the sentinel's own `mode` field to distinguish autonomous from mise-en-place runs;
 # `resolve_mode("autonomous", ...)` only answers presence, not that distinction --
@@ -518,7 +518,7 @@ def _check_context_pressure_sync(
     if not session_id:
         return ""
 
-    # Review: code-reviewer (B-F3) — use tempfile.gettempdir() throughout;
+    # Use tempfile.gettempdir() throughout;
     #   docstring motivates Windows portability and /tmp/ does not exist there.
     tmpdir = _tempfile().gettempdir()
 
@@ -1115,7 +1115,7 @@ def _check_runtime_tripwire_sync(session_id: str, agent_id: str) -> str:
     # SEPARATE file from the context-pressure state avoids a lost-update race
     # between the two checks, which run concurrently in the same process via
     # asyncio.gather + asyncio.to_thread (see the op handler below).
-    # Review: code-reviewer (B-F3) — use tempfile.gettempdir(); /tmp/ absent on Windows.
+    # Use tempfile.gettempdir(); /tmp/ absent on Windows.
     tmpdir = _tempfile().gettempdir()
     rt_bark_sentinel = os.path.join(tmpdir, f"rt-bark-once-{session_id}")
     if os.path.isfile(rt_bark_sentinel):
@@ -1131,7 +1131,7 @@ def _check_runtime_tripwire_sync(session_id: str, agent_id: str) -> str:
     # --- Autonomous-run detection (session-wins key via the resolve_mode seam) ---
     autonomous = resolve_mode("autonomous", em_sid)
 
-    # Review: code-reviewer (B-F1) — fire-log append (state/runtime-tripwire-fire-log.tsv)
+    # fire-log append (state/runtime-tripwire-fire-log.tsv)
     #   dropped entirely. Calibration evidence now captured via the durable
     #   rt-bark-once-{session_id} sentinel above (touch-once, not an append log).
 
@@ -1210,7 +1210,7 @@ def _check_first_agent_dispatch_sync(session_id: str, tool_name: str) -> str:
     if not session_id or tool_name != "Agent":
         return ""
 
-    # Review: code-reviewer (B-F3) — use tempfile.gettempdir(); /tmp/ absent on Windows.
+    # Use tempfile.gettempdir(); /tmp/ absent on Windows.
     tmpdir = _tempfile().gettempdir()
     sentinel = _first_agent_dispatch_sentinel_path(tmpdir, session_id)
     if os.path.isfile(sentinel):
@@ -1317,7 +1317,7 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
     try:
         from coordinator_core.workflow_watch.tail import TailReader
 
-        # Review: overengineering-reviewer (F1) — a fresh TailReader starts
+        # A fresh TailReader starts
         # at offset 0, so an unseeded construction here reads the ENTIRE
         # session transcript on every Workflow PostToolUse event. This call
         # site takes exactly one snapshot (no repeated polling), so
@@ -1339,7 +1339,7 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
     # input carries no tool_response — so where the tail holds more than one
     # candidate launch, the right answer is to say so, not to pick one.
     match = None
-    # Review: code-reviewer (F2) — scoped to local_workflow launches only
+    # Scoped to local_workflow launches only
     # (the different-taskType case is handled by the breadcrumb branch below);
     # named accordingly so a future reader doesn't assume general-purpose scope.
     seen_local_workflow_task_ids: list[str] = []
@@ -1406,7 +1406,7 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
     if not task_id or not run_id or not transcript_dir:
         return ""
 
-    # Review: code-reviewer (B-F3) — use tempfile.gettempdir(); /tmp/ absent on Windows.
+    # Use tempfile.gettempdir(); /tmp/ absent on Windows.
     tmpdir = _tempfile().gettempdir()
     sentinel = _workflow_monitor_sentinel_path(tmpdir, session_id, task_id)
     if os.path.isfile(sentinel):
@@ -1644,7 +1644,7 @@ def _group_em_watch_arm_sentinel_path(tmpdir: str, session_id: str) -> str:
 
 
 def _group_em_watch_checked_sentinel_path(tmpdir: str, session_id: str) -> str:
-    # Review: review-integrator (finding #2, EM-ratified break-class) -- a
+    # A
     # SEPARATE sentinel from the "armed" one above. That one means "the
     # advisory fired, never re-check"; this one means "checked this session,
     # concluded there is nothing to arm, for a STABLE reason -- never
@@ -1698,7 +1698,6 @@ def _check_group_em_watch_arm_sync(session_id: str, transcript_path: str) -> str
     if not session_id:
         return ""
 
-    # Review: overengineering-reviewer (finding #2, EM-ratified break-class) --
     # the launcher probe is the cheapest check, so it runs FIRST and
     # short-circuits before the sentinel
     # check, the repo-root walk, the nomination read, or the whole-file
@@ -1719,7 +1718,7 @@ def _check_group_em_watch_arm_sync(session_id: str, transcript_path: str) -> str
     if os.path.isfile(sentinel):
         return ""
 
-    # Review: review-integrator (finding #2, EM-ratified break-class) -- the
+    # The
     # "armed" sentinel above only ever gets written on the success path, so
     # once a launcher ships, a non-Group-EM session would re-pay the
     # repo-root walk + nomination read below on EVERY PostToolUse event for
@@ -1950,7 +1949,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     # Built as a plain coroutine object here (not yet awaited/scheduled) so it
     # can be folded into the same asyncio.gather as the other three below when
     # session_id is present — genuinely concurrent, not stacked ahead of them.
-    # Review: code-reviewer (P2) — a prior sequential `await` here before
+    # A prior sequential `await` here before
     # asyncio.gather made total latency uh_text-time + gather-time instead of
     # max(all four), contradicting this module's own docstring. No ordering
     # dependency exists between this check and the other three (confirmed: it

@@ -34,7 +34,7 @@ def test_linked_worktree_absolute_gitdir_with_commondir_resolves_to_common(tmp_p
     repo_root.mkdir()
     (repo_root / ".git").write_text(f"gitdir: {private_gitdir}\n", encoding="utf-8")
 
-    # Review: code-reviewer -- bare `==`, no `_norm()` on either side. The
+    # Bare `==`, no `_norm()` on either side. The
     # `_norm()` wrapper this test used to carry would make an uncollapsed
     # (buggy) LHS `..` path compare equal to this clean RHS, masking exactly
     # the regression the sibling test below pins.
@@ -111,7 +111,7 @@ def test_submodule_relative_gitdir_resolves_against_repo_root(tmp_path):
     repo_root.mkdir()
     (repo_root / ".git").write_text("gitdir: ../.git/modules/sub\n", encoding="utf-8")
 
-    # Review: code-reviewer -- bare `==`, no `_norm()` on either side; see
+    # Bare `==`, no `_norm()` on either side; see
     # the linked-worktree test above for why the masking shape matters.
     resolved = resolve_git_common_dir(repo_root)
     assert resolved == modules_dir
@@ -131,7 +131,7 @@ def test_submodule_relative_gitdir_no_commondir_private_is_common(tmp_path):
     repo_root.mkdir()
     (repo_root / ".git").write_text("gitdir: ../.git/modules/sub\n", encoding="utf-8")
 
-    # Review: code-reviewer -- bare `==`, no `_norm()` on either side; see
+    # Bare `==`, no `_norm()` on either side; see
     # the linked-worktree test above for why the masking shape matters.
     assert resolve_git_common_dir(repo_root) == modules_dir
 

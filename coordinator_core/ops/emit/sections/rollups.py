@@ -90,7 +90,7 @@ def _query_completions(ctx: EmitContext) -> list[dict]:
     actually executes.
     """
     root = ctx.subprocess_root if ctx.subprocess_root is not None else ctx.repo_root
-    # Review: coordinatorcode-reviewer — cutoff computed BEFORE the try so a malformed
+    # Cutoff computed BEFORE the try so a malformed
     # ctx.observed_at raises loudly instead of being swallowed by the query-failure except
     # below, which would silently zero completions.
     cutoff = _since_cutoff(ctx)

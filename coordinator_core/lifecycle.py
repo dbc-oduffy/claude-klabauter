@@ -293,7 +293,7 @@ def _compute_core_version() -> str:
     Used as the `version` sentinel to detect stale-binary clients (design spike §1.5).
     Only includes .py files under the coordinator_core package directory.
 
-    Review: code-reviewer (F4) / EM-ratified (option a, docstring-only) — an unreadable
+    An unreadable
     subtree is excluded from the hash rather than failing the computation outright, which is
     the correct trade-off for this sentinel's post-DR-215 spawn-per-call consumer
     (`is_version_current()` / `ops/health.py`): excluding a subtree CHANGES the computed
@@ -321,7 +321,7 @@ def _compute_core_version() -> str:
     walk_errors: list[OSError] = []
     py_files: list[Path] = []
     for dirpath, dirnames, filenames in os.walk(pkg_dir, onerror=walk_errors.append):
-        # Review: code-reviewer (F1) — exclude tests/ subtree; test-file edits must not
+        # Exclude tests/ subtree; test-file edits must not
         # change the production source hash or trigger spurious version-skew restarts.
         # Pruned during the walk (not filtered after) so an unreadable file under a
         # tests/ dir never reaches walk_errors either.

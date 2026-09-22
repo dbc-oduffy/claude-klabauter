@@ -232,7 +232,7 @@ def report(sink: Path) -> Dict[str, Any]:
     if probes:
         probes_sorted = sorted(probes)
         mid = len(probes_sorted) // 2
-        # Review: coordinator:code-reviewer -- even-n median averaged the two
+        # even-n median averaged the two
         # middle values instead of taking the upper-median, which read one
         # sample off on this already-noisy peer-load metric.
         if len(probes_sorted) % 2 == 0:

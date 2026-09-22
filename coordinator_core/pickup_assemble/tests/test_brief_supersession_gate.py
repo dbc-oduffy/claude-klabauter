@@ -118,7 +118,7 @@ def test_continued_with_dangling_continued_into_still_blocks_and_states_it(tmp_p
 
 
 def test_continued_with_missing_continued_into_still_blocks_and_states_it(tmp_path: Path):
-    # Review: coordinator:code-reviewer, 2026-09-03, Finding 1 — a
+    # A
     # `deployment_state: continued` record with continued_into missing
     # entirely must still route to the gate (positive assertion the gate
     # fires), not fall through to the ordinary live-pickup path.

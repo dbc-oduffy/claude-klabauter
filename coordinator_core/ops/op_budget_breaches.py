@@ -51,6 +51,24 @@ Negative-spec:
     - Reports its own breach as a breach. `self_assessment.under_per_process_bar`
       is emitted unhedged; this op is subject to the brightline like every
       other (see `op_census_report`'s same discipline).
+    - `self_assessment.handler_total_ms` is a single-shot `time.process_time()`
+      bracket, not `benchmarks.process_time.batched_process_time_ms`'s
+      K-iteration amortisation. Deliberate, not an oversight: batching would
+      mean re-running this handler's own read-and-summarise body K times
+      inside one invocation, multiplying the real disk read and computation
+      this figure is supposed to report by K -- corrupting the very number
+      being measured rather than refining it, and pushing a cheap op toward
+      the bar it exists to police. `state/bug-backlog/2026-08-21-process-time-
+      on-windows-is-15-625ms-gran-c3711465cae3.yaml` checked this op's two
+      bars against the ~15.625ms Windows scheduler tick directly (not
+      assumed) and excluded both as not at risk: ~7.8% quantisation error at
+      the 200ms per-process bar, ~3% at the 500ms brightline -- both far
+      inside the >=150ms band where a single-shot reading stops carrying
+      information. `self_assessment.clock_resolution_ms` states the tick
+      this process has actually observed (see `process_clock_resolution_ms`)
+      alongside the reading, so a reader judges precision from disclosed
+      data rather than an assumed one, the same discipline `source.
+      head_truncated` already applies to a bounded read.
     - Produces evidence, never a verdict about what to delete — the kill
       disposition is the reader's, exactly as `op_census.timing` has it.
     - `headline` conforms to `docs/wiki/guard-messaging.md` § Register: one
@@ -71,7 +89,11 @@ from typing import List, Optional
 from coordinator_core.ipc import CallerFacingValidationError, register_op
 from coordinator_core.op_census.kill_ledger_inventory import KILL_LEDGER, LedgerAbsent, fate_entries
 from coordinator_core.op_census.timing import PROCESS_TIME_BAR_MS
-from coordinator_core.telemetry.op_latency import breach_summary, sink_generations
+from coordinator_core.telemetry.op_latency import (
+    breach_summary,
+    process_clock_resolution_ms,
+    sink_generations,
+)
 
 __all__ = [
     "BRIGHTLINE_BUDGET_MS",
@@ -585,6 +607,15 @@ def breach_report(
     handler_total_ms = (time.process_time() - handler_t0) * 1000.0
     summary["self_assessment"] = {
         "handler_total_ms": round(handler_total_ms, 3),
+        # Empirically-observed tick size of THIS process's `time.process_time()`
+        # (see `process_clock_resolution_ms`'s own docstring for why this is
+        # read, never probed, and never `time.get_clock_info`'s nominal unit).
+        # `None` until some `process_time` row has been recorded in this
+        # process -- a real absence, not a claim of infinite precision.
+        # Exposed so a reader can judge `handler_total_ms` against the tick
+        # that actually produced it, the same honesty `source.head_truncated`
+        # gives a bounded read -- see module docstring's negative-spec.
+        "clock_resolution_ms": process_clock_resolution_ms(),
         "brightline_budget_ms": BRIGHTLINE_BUDGET_MS,
         "per_process_bar_ms": PER_PROCESS_BAR_MS,
         "under_brightline": handler_total_ms < BRIGHTLINE_BUDGET_MS,

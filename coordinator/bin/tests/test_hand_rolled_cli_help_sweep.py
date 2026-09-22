@@ -84,7 +84,7 @@ _SWEPT_HELP_ENTRYPOINTS = (
 )
 
 
-# Review: code-reviewer (a1e94259) -- `_SWEPT_HELP_ENTRYPOINTS` above is a
+# `_SWEPT_HELP_ENTRYPOINTS` above is a
 # closed list that does not track new hand-rolled entrypoints added to
 # coordinator/bin. A full behavioral --help sweep over the whole population
 # is genuinely infeasible here: the population reused by the actual
@@ -392,7 +392,7 @@ def _run_help(rel_path: str) -> subprocess.CompletedProcess:
 
 
 class TestCandidatePopulationTracksSweep(unittest.TestCase):
-    """Review: code-reviewer (a1e94259) -- the closed `_SWEPT_HELP_ENTRYPOINTS`
+    """The closed `_SWEPT_HELP_ENTRYPOINTS`
     tuple silently stops covering a NEW hand-rolled entrypoint. This asserts
     the static candidate population never diverges from the union of the
     three tracked buckets without an explicit disposition.
@@ -426,7 +426,7 @@ class TestHandRolledCliHelpSweep(unittest.TestCase):
         )
 
     def test_every_swept_entrypoint_writes_help_to_stdout(self):
-        # Review: code-reviewer (a1e94259) -- returncode alone doesn't catch a
+        # Returncode alone doesn't catch a
         # `--help` path that exits 0 but prints usage to stderr instead of
         # stdout (three entrypoints did exactly this via a shared `_usage()`
         # helper defaulting to stderr). A caller capturing only stdout must

@@ -154,7 +154,7 @@ def _write_records(session_id: str, records: list) -> bool:
         )
         try:
             try:
-                handle = os.fdopen(tmp_fd, "w", encoding="utf-8")
+                handle = os.fdopen(tmp_fd, "w", encoding="utf-8", newline="\n")
             except Exception:
                 # `os.fdopen` failing (fd exhaustion, odd encoding failure)
                 # leaves `tmp_fd` unwrapped by any context manager -- close
@@ -547,7 +547,7 @@ def _quarantine(directory: str, rejected: list) -> bool:
                 existing = handle.read()
             if existing.endswith(block):
                 return True
-        with open(path, "a", encoding="utf-8") as handle:
+        with open(path, "a", encoding="utf-8", newline="\n") as handle:
             handle.write(block)
     except OSError:
         return False

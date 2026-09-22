@@ -245,7 +245,7 @@ def test_non_strict_refs_demotes_dangling_ref_to_warning(tmp_path, capsys):
     assert payload["refWarnings"][0]["warning"]["field"] == "predecessor"
 
 
-# Review: code-reviewer — Finding 3 (P2): coverage for forked_from and
+# Coverage for forked_from and
 # additional_predecessors[] dangling refs, the two edge kinds the port's
 # check_lineage_reachability checks beyond bare predecessor — a claude-klabauter-local
 # PATH-field addition beyond the deleted oracle's original ID-companion-only

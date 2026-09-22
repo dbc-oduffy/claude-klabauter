@@ -85,7 +85,7 @@ def _docstring_safe(value: str) -> str:
     outright, so no escaping strategy can make it safe; reject it fail-loud
     instead of emitting text guaranteed not to parse.
 
-    Review: coordinator:code-reviewer — caller-supplied `skill_name` reached
+    caller-supplied `skill_name` reached
     `compose_producer_module`'s docstring unescaped (every sibling value
     goes through `_py_str_literal`/`_pascal_case` first), so a value
     containing `\"\"\"` could break out of the docstring and leave the
@@ -94,7 +94,7 @@ def _docstring_safe(value: str) -> str:
     docstring is emitted ahead of the mandatory `from __future__ import
     annotations`), not a confirmed code-execution path.
 
-    Review: coordinator:code-reviewer — a NUL byte survived all three
+    A NUL byte survived all three
     `.replace()` calls unchanged and the resulting text always fails to
     parse (`SyntaxError` on this interpreter); and CR / CRLF / U+2028 /
     U+2029 survived unescaped, each rendering as a line break and violating

@@ -106,7 +106,7 @@ _SHAS_FILENAME = "reviewed-shas"
 _FOLDED_IDS_FILENAME = "folded-record-ids"
 
 
-# Review: coordinator:code-reviewer (Finding 3) -- returncode sentinel on
+# Returncode sentinel on
 # spawn failure changed from a hand-picked `1` to run_git's `-1`
 # (timeout)/`127` (missing git or OSError) on migration; confirmed every
 # caller in this module branches on nonzero generically and none pattern-

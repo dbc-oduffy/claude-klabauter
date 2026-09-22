@@ -153,11 +153,22 @@ class Manifest:
 
 def _repo_relative(path: Path, repo_root: Path) -> str:
     """POSIX path relative to ``repo_root``, so the frozen manifest names no
-    host path; a row outside the root keeps its own POSIX form."""
+    host path.
+
+    # A queue dir outside repo_root used
+    # to fall back to the raw (possibly absolute, host-specific) path, which
+    # would leak into the manifest digest and make it non-reproducible
+    # across machines/CI. Refused instead; the only current caller
+    # (queue_emit.py) already enforces containment before calling in.
+    """
     try:
         return path.resolve().relative_to(repo_root.resolve()).as_posix()
-    except ValueError:
-        return path.as_posix()
+    except ValueError as exc:
+        raise ValueError(
+            f"queue_select: row {path!s} does not resolve under repo_root "
+            f"{repo_root!s} — a manifest path must never carry a host-specific "
+            "absolute path"
+        ) from exc
 
 
 def _read_ledger_lines(profile: str, repo_root: Path) -> dict[str, list[dict]]:
@@ -574,11 +585,16 @@ def select_rows(
             ordered_values = order_spec
             order_index = {v: i for i, v in enumerate(ordered_values)}
 
-            def _sort_key(item: tuple[str, Path, str, dict[str, Any]]) -> tuple[int, int]:
-                value = item[3].get(order_field)
-                return (order_index.get(value, len(ordered_values)), rows.index(item))
-
-            filtered = sorted(filtered, key=_sort_key)
+            # `rows.index(item)` was an
+            # O(n) linear scan with full-tuple equality per comparison inside
+            # sorted()'s O(n log n) comparisons; sorted() is already stable
+            # over `filtered`'s read order so the tie-break was redundant as
+            # well as costly. Dropped; stability alone preserves read order
+            # among equal keys.
+            filtered = sorted(
+                filtered,
+                key=lambda item: order_index.get(item[3].get(order_field), len(ordered_values)),
+            )
 
     if limit is not None:
         filtered = filtered[:limit]

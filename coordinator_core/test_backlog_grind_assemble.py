@@ -1503,7 +1503,8 @@ class TestExecutorDispatchTemplateFieldsUnmovedByC2Refactor:
         "the full suite, or any unscoped runner invocation; note in the DONE "
         "summary if the spec calls for broader verification and leave it to "
         "the EM; (4) leave your changes uncommitted and unstaged — you do not "
-        "invoke git under any circumstance. Only the EM commits, once per "
+        "stage, commit, or otherwise mutate git state; reading git status "
+        "as step (2) directs is expected. Only the EM commits, once per "
         "wave, after every item in the wave passes verification."
     )
     _MISE_DONE_SUMMARY = (
@@ -3468,7 +3469,7 @@ def _load_entry_point_shim():
     return importlib.import_module("entry_point_shim")
 
 
-# Review: cli-and-tests reviewer (Finding 1) -- single source of truth for
+# Single source of truth for
 # which callee each allowlisted subcommand is expected to reach. Feeds BOTH
 # the parametrize list below AND
 # test_every_allowlisted_subcommand_has_an_expected_callee_mapped's

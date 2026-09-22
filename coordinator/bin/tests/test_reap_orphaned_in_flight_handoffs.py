@@ -27,6 +27,7 @@ Runs bash-free: `python -m pytest coordinator/bin/tests/test_reap_orphaned_in_fl
 """
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import os
 import sys
@@ -135,7 +136,7 @@ def test_mismatch_verdict_warns_but_proceeds(monkeypatch, capsys):
     mod = _load_module()
     _patch_resolver(mod, monkeypatch, root="/fake/repo", verdict="MISMATCH")
     monkeypatch.setattr(mod, "survey", lambda repo_root: _FakeSurveyResult(0, 0))
-    monkeypatch.setattr(mod, "apply_dispositions", lambda dispositions: ([], []))
+    monkeypatch.setattr(mod, "apply_dispositions", lambda dispositions: ([], [], []))
 
     rc = mod.main([])
     assert rc == 0
@@ -186,7 +187,7 @@ def test_default_applies_dispositions_from_survey(monkeypatch, capsys):
     apply_calls = []
     monkeypatch.setattr(
         mod, "apply_dispositions",
-        lambda passed: (apply_calls.append(passed), (["state/handoffs/a.md"], []))[1],
+        lambda passed: (apply_calls.append(passed), (["state/handoffs/a.md"], [], []))[1],
     )
 
     rc = mod.main([])
@@ -194,6 +195,35 @@ def test_default_applies_dispositions_from_survey(monkeypatch, capsys):
     assert apply_calls == [dispositions]
     out = capsys.readouterr().out
     assert "[dry-run]" not in out
+
+
+def test_retained_reclaim_shipped_row_is_not_declared_as_a_write(monkeypatch, capsys):
+    """A reclaim-shipped disposition the live-children guard retained comes back
+    in `apply_dispositions`'s second (`retained`) list, not its first
+    (`applied`) one -- nothing landed at that path, so it must never reach
+    `declare_write`."""
+    mod = _load_module()
+    _patch_resolver(mod, monkeypatch)
+
+    dispositions = [
+        _FakeDisposition("state/handoffs/a.md", "dead1", "reclaim_shipped", "detail", sha="deadbeef"),
+    ]
+    monkeypatch.setattr(mod, "survey", lambda repo_root: _FakeSurveyResult(0, 1, dispositions))
+    monkeypatch.setattr(
+        mod, "apply_dispositions",
+        lambda passed: ([], ["state/handoffs/a.md"], []),
+    )
+
+    declared = []
+    monkeypatch.setattr(mod, "declare_write", lambda path: declared.append(path))
+    monkeypatch.setattr(
+        mod, "recording_declared_writes",
+        lambda cwd=None: contextlib.nullcontext(),
+    )
+
+    rc = mod.main([])
+    assert rc == 0
+    assert declared == []
 
 
 def test_apply_failure_is_reported_and_exits_one(monkeypatch, capsys):
@@ -204,7 +234,7 @@ def test_apply_failure_is_reported_and_exits_one(monkeypatch, capsys):
     monkeypatch.setattr(mod, "survey", lambda repo_root: _FakeSurveyResult(1, 0, dispositions))
     monkeypatch.setattr(
         mod, "apply_dispositions",
-        lambda passed: ([], ["state/handoffs/a.md: unclaim-handoff failed: rc=3"]),
+        lambda passed: ([], [], ["state/handoffs/a.md: unclaim-handoff failed: rc=3"]),
     )
 
     rc = mod.main([])
@@ -221,7 +251,7 @@ def test_no_candidates_applies_empty_list_and_exits_zero(monkeypatch, capsys):
     apply_calls = []
     monkeypatch.setattr(
         mod, "apply_dispositions",
-        lambda passed: (apply_calls.append(passed), ([], []))[1],
+        lambda passed: (apply_calls.append(passed), ([], [], []))[1],
     )
 
     rc = mod.main([])

@@ -335,7 +335,7 @@ def _install_fake_winreg(monkeypatch, root_node):
 
         @staticmethod
         def EnumKey(key, index):
-            # Review: coordinator:code-reviewer P3 — this sorted() ordering is
+            # This sorted() ordering is
             # an artifact of the fake, not a verified property of the real
             # Windows API (real registry enumeration order is typically
             # insertion/creation order, not alphabetical/numeric-sorted). The
@@ -428,7 +428,7 @@ def test_detect_gpu_windows_registry_qwmemorysize_preferred(monkeypatch):
 
 
 def test_detect_gpu_windows_registry_qwmemorysize_reg_binary(monkeypatch):
-    """Review: coordinator:code-reviewer P2 — regression net for the P1 fix:
+    """Regression net for the P1 fix:
     HardwareInformation.qwMemorySize is frequently REG_BINARY (an 8-byte
     little-endian blob) on real drivers, not REG_QWORD. This would have
     raised TypeError on `int(bytes)` before the P1 fix, breaking the

@@ -313,7 +313,7 @@ def _main_mint_run_id(rest: list[str]) -> int:
             )
             return EXIT_OK
 
-    # Review: coordinator-code-reviewer — this branch and the
+    # This branch and the
     # unrecognized-cadence branch above both exit EXIT_USAGE (AC5), but now
     # print distinct messages so an operator can tell a typo from a real
     # cadence nothing mints for yet. The `cadence not in CADENCES` check is

@@ -248,7 +248,7 @@ def _check_workstreams(lines: List[str]) -> List[str]:
         if not _WORKSTREAM_RE.match(line):
             violations.append(f"workstream line fails name-only regex: '{line}'")
         if len(line) > WORKSTREAM_BODY_CAP:
-            # Review: code-reviewer F4 — message now cites the enforced
+            # Message now cites the enforced
             # constant instead of a hardcoded "80-char" that had drifted from
             # WORKSTREAM_BODY_CAP=84.
             violations.append(f"workstream line exceeds {WORKSTREAM_BODY_CAP}-char body cap: '{line}'")

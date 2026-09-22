@@ -67,19 +67,21 @@ _RETURNS_WHEN_RE = re.compile(r"\*\*Returns-when\.?\*\*\s*(.{0,40})", re.S)
 
 
 def _ledger_path() -> Path:
-    return Path(__file__).resolve().parents[2] / "state" / "kill-ledger.md"
+    from coordinator_core.session.machinery_paths import kill_ledger_path
+
+    return Path(kill_ledger_path(str(Path(__file__).resolve().parents[2])))
 
 
-#: The ledger is source-only -- `state/` is not part of the published mirror
-#: payload, so this module cannot assert anything there. `parametrize` reads the
-#: ledger at COLLECTION time, so an absent file is a collection ERROR that fails
-#: the whole tier rather than one test: it took the assembled-mirror gate down on
-#: every publish, which is what fail-closed looks like when the payload is fine
-#: and the test is not. Skip visibly instead -- never return an empty roster,
-#: which would read as green.
+#: The ledger is source-only -- `.coordinator-local/` is not part of the
+#: published mirror payload, so this module cannot assert anything there.
+#: `parametrize` reads the ledger at COLLECTION time, so an absent file is a
+#: collection ERROR that fails the whole tier rather than one test: it took the
+#: assembled-mirror gate down on every publish, which is what fail-closed looks
+#: like when the payload is fine and the test is not. Skip visibly instead --
+#: never return an empty roster, which would read as green.
 if not _ledger_path().is_file():
     pytest.skip(
-        "state/kill-ledger.md is absent -- source-only, not in the published "
+        f"{_ledger_path()} is absent -- source-only, not in the published "
         "mirror payload; nothing here is assertable against this tree",
         allow_module_level=True,
     )

@@ -79,7 +79,7 @@ harm suggests -- a cross-repo write is neither silent (it shows up in the
 peer session's own `git status`) nor total (it is revertible with a plain
 `git checkout`/`git revert`).
 
-Review: coordinator:code-reviewer (2074e4dd) -- an earlier version of this
+An earlier version of this
 paragraph claimed this cleared DR-277's bar under "the third carve-out:
 PM-ratified parity with this guard's Bash-surface siblings." No such
 carve-out exists. DR-277's actual three carve-outs are (1) a broken

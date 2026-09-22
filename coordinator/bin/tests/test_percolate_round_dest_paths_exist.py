@@ -1,7 +1,6 @@
 """test_percolate_round_dest_paths_exist.py — chunking + per-row attribution
 coverage for `_dest_paths_exist` (percolate-round.py).
 
-Review: state/subagent-share/a3d742ff-223c-4133-aedd-ed60ce61b558/amp-review-s6.md
 
 Finding 3 (LOW): `_dest_paths_exist` batches every DELETE/REMOVE-tagged row
 of a round into one `git ls-files --error-unmatch -- <paths>` argv with no

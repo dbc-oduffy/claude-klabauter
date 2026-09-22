@@ -152,7 +152,7 @@ def merged_outbox_drafts(caller_worktree: Path) -> list[Path]:
     outbox directory at either root yields no candidates from that root, not
     an error.
 
-    Review: overengineering-reviewer (Kira) — single shared implementation of
+    Single shared implementation of
     the dual-root merge previously copy-pasted verbatim into
     memo_list_outbox._enumerate_outbox_candidates and
     memo_reconcile_outbox._reconcile.
@@ -850,7 +850,7 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
     if repo_root is None:
         return build_setup_error_result(
             _MODE, dry_run,
-            # Review: coordinator:code-reviewer — error named the retired write root; corrected to canonical.
+            # Error named the retired write root; corrected to canonical.
             "memo.draft: no repo_root supplied — memo.draft writes into the CALLING "
             "repo's own .coordinator-local/memo-outbox/ and requires a resolved worktree "
             "(common_dir-keyed op).",

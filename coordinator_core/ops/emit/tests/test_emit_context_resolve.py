@@ -91,7 +91,7 @@ class TestRemoteUrlToSlug:
 
         e.g. https://github.com/myrepo — no owner component; returning a bare name would
         be silently mis-keyed in rag (expects owner/repo format).
-        Review: code-reviewer (Slice-1 F3) — single-segment was returning parts[-1]; now returns None.
+        single-segment was returning parts[-1]; now returns None.
         """
         assert _remote_url_to_slug("https://github.com/myrepo") is None
 
@@ -101,7 +101,7 @@ class TestRemoteUrlToSlug:
         This is a documented truncation — group/subgroup/repo → subgroup/repo.  The result
         is plausible but not uniquely identifying; the coordinator_root_path field (AC12)
         is the disambiguation anchor.  The test documents the known behaviour, not silence it.
-        Review: code-reviewer (Slice-1 F4) — documents GitLab truncation (not a regression net for correctness).
+        Documents GitLab truncation (not a regression net for correctness).
         """
         assert _remote_url_to_slug("https://gitlab.company.com/group/subgroup/repo") == "subgroup/repo"
 
@@ -162,7 +162,7 @@ class TestResolveRepoName:
         Uses a directory literally named `.example-doctrine-mirror-repo` so the non-equality assertion is
         load-bearing — if the code ever returned META_REPO_NAME_FALLBACK as a runtime catch,
         this test would catch it (unlike a hex-UUID tmp_path whose name can never match).
-        Review: code-reviewer (Slice-4 F9) — previous form used pytest hex-UUID tmp_path; assertion was trivially true.
+        Previous form used pytest hex-UUID tmp_path; assertion was trivially true.
         """
         fake_dir = tmp_path / ".example-doctrine-mirror-repo"
         fake_dir.mkdir()
@@ -220,7 +220,7 @@ class TestEmitContextResolve:
 
         assert ctx.repo_name == f"local/{tmp_path.name}"
         # D7a regression guard: a regression back to coordinator_root/state would fail this.
-        # Review: code-reviewer (Slice-4 F5) — central_state_root must be repo_root/state, not ~/.claude/state.
+        # central_state_root must be repo_root/state, not ~/.claude/state.
         assert ctx.central_state_root == tmp_path / "state"
 
     def test_resolve_succeeds_with_valid_remote(self, tmp_path: Path) -> None:
@@ -244,7 +244,7 @@ class TestEmitContextResolve:
         assert ctx.git_branch == "main"
         assert len(ctx.git_sha) == 40
         # D7a regression guard: a regression back to coordinator_root/state would fail this.
-        # Review: code-reviewer (Slice-4 F5) — central_state_root must be repo_root/state, not ~/.claude/state.
+        # central_state_root must be repo_root/state, not ~/.claude/state.
         assert ctx.central_state_root == tmp_path / "state"
 
 

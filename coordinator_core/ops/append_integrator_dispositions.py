@@ -555,7 +555,7 @@ def _findings_index_space(
             start = len(union) + 1
             union.extend(findings)
             spans.append((start, len(union)))
-        # Review: S8 reviewer F1 -- a co-existing bare (unidentified) block
+        # A co-existing bare (unidentified) block
         # must still count toward ambiguity even when real envelopes are
         # present; hardcoding 1 here silently dropped it instead of tripping
         # `ambiguous_block`. Envelopes themselves stay safe to union (any

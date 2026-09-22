@@ -161,7 +161,7 @@ def main(argv: list[str]) -> int:
 
         cc_invoke.ensure_engine_on_path(__file__)
     except ImportError as exc:
-        # Review: distinct message from the resolver guard below — this one
+        # distinct message from the resolver guard below — this one
         # names the bin/lib sibling (cc_invoke/win_argv), not the resolver.
         print(
             f"[coordinator-ceremony-hook] WARN: bin/lib module unavailable "
@@ -258,9 +258,9 @@ def main(argv: list[str]) -> int:
     # no compatibility path. win_argv.win_safe_shlex_split failure (e.g. an
     # unterminated quote) is a hard, clearly-diagnosed skip — not a crash,
     # not a silent no-op, and NOT a fallback to shell execution.
-    # Review: renamed from `argv` (shadowed the function parameter of the same
+    # renamed from `argv` (shadowed the function parameter of the same
     # name, a readability trap for anyone tracing argv through this function).
-    # Review: switched from bare `shlex.split` to `win_argv.win_safe_shlex_split`
+    # switched from bare `shlex.split` to `win_argv.win_safe_shlex_split`
     # — the former silently stripped backslashes from a Windows-authored path,
     # then echoed the mangled result back in this hook's own diagnostics.
     try:
@@ -314,7 +314,7 @@ def main(argv: list[str]) -> int:
         )
         rc = proc.returncode
     except ImportError as exc:
-        # Review: widened alongside the bin/lib and resolver guards above —
+        # widened alongside the bin/lib and resolver guards above —
         # an unimportable coordinator_core (partial live-install mirror) is
         # the identical failure mode; it must degrade to WARN+0, not escape
         # main()'s ALWAYS-0 contract.

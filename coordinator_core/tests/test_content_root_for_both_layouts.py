@@ -72,7 +72,7 @@ def test_a_trailing_separator_does_not_defeat_the_probe(tmp_path):
     assert content_root_for(str(root) + os.sep) == root / "coordinator"
 
 
-# Review: code-reviewer F1/F2 -- a degenerate all-slash root used to collapse
+# A degenerate all-slash root used to collapse
 # via rstrip("/\\") to "", and Path("") resolves to the process cwd, so this
 # silently probed cwd instead of failing closed on "/" or "//". Pinned here
 # so the fix (fall back to the un-stripped string when stripping empties it)

@@ -210,7 +210,7 @@ class TestSpawnHelpersDoNotLeakOriginIntoCallerEnviron:
 
 
 class TestSpawnHelpersTagTheChildEnv:
-    """Review: code-reviewer (Slice B, P2, item 5) -- legs 1-2 above are
+    """Legs 1-2 above are
     source-text/AST assertions and leg 3 (no-leak) only proves the CALLING
     process's os.environ is untouched. Neither proves the CHILD actually
     receives ORIGIN_ENV=BENCHMARK -- a rewrite that keeps the right-named

@@ -740,7 +740,12 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     streams.
     """
     parser = _build_arg_parser()
-    args = parser.parse_args(argv)
+    # `op` and `params_json` are both optional positionals, so plain parse_args
+    # stops consuming positionals at the first flag: `<op> --bare <params>` loses
+    # the params to "unrecognized arguments". parse_intermixed_args resolves the
+    # positionals after the flags instead, which every argument here supports --
+    # none uses nargs=REMAINDER or a subparser, the two shapes it refuses.
+    args = parser.parse_intermixed_args(argv)
 
     # --allow-unstamped-dispatch: process-local, per-invocation opt-out of
     # ipc.dispatch_message's stamp gate (state/handoffs/2026-08-21_103635_
@@ -761,7 +766,7 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     #    repo_root resolution, no params parsing. Runs BEFORE the op-required
     #    check below since this is the one flag that makes <op> optional.
     if args.dump_op_timeouts:
-        # Review: code-reviewer (nit) -- match every other pre-dispatch failure
+        # Match every other pre-dispatch failure
         # path's _fatal_stderr contract instead of letting an import/build
         # failure surface as a raw Python traceback.
         try:
@@ -796,7 +801,7 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
         # parses the command. Also ARG_MAX-immune, like the file path form,
         # and needs no temp file to clean up.
         if args.params_file == "-":
-            # Review: code-reviewer (P1) — decode the raw stdin bytes as UTF-8
+            # Decode the raw stdin bytes as UTF-8
             # explicitly, matching the file branch below, instead of
             # sys.stdin.read() (which decodes via locale.getpreferredencoding()).
             # On Windows, a redirected pipe/heredoc stdin resolves that to the
@@ -1206,7 +1211,7 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
                 pass
 
     # 8. Print result as indented JSON to stdout.
-    #    Review: code-reviewer (nit) — an unguarded json.dumps that raises TypeError/ValueError
+    # An unguarded json.dumps that raises TypeError/ValueError
     #    (e.g. handler returns a Path, datetime, or other non-serializable object) would crash
     #    BEFORE sys.stdout.flush() + SystemExit, bypassing the flush-then-exit contract that the
     #    rest of this function establishes. Wrap in a try/except and route failures through

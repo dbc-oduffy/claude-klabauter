@@ -18,9 +18,14 @@ answers the same question but costs 437ms process time on this repo against a
 tree.
 
 FAILURE DIRECTION, pinned: this sits on the commit hot path every live session
-shares, so every unreadable/unresolvable state returns ``{}`` -- "could not
-establish a contest" is never "contested". A refusal must rest on a claim that
-was actually read.
+shares, so it still permits the commit on every unreadable/unresolvable
+state -- "could not establish a contest" is never "contested". What is
+pinned here is that a genuine empty result (``{}``, nothing requested or
+nothing found) and a read failure (``None``, contest could not be
+established) are DISTINGUISHABLE return values -- a caller must be able to
+tell "nobody holds these paths" from "the read failed and this is silently
+permissive" (state/bug-backlog/2026-08-31-the-commit-route-s-peer-contest-
+read-fai-2651bbf2bd59.yaml).
 """
 
 from __future__ import annotations
@@ -112,17 +117,31 @@ class TestContestedByLivePeers:
 
 
 class TestFailsOpen:
-    def test_empty_session_id_yields_no_contest(self, repo):
-        assert scope.contested_by_live_peers(["pkg/mod.py"], "", repo) == {}
+    """Every case here still permits the commit (fail-open is unchanged).
+    What this class pins is the RETURN VALUE: a genuine empty result
+    (nothing requested, or nothing found) is ``{}``; a state where contest
+    could not be established at all is ``None`` -- the two must never be
+    the same value, or a caller cannot tell a swallowed read failure from a
+    clean pathspec.
+    """
+
+    def test_empty_session_id_cannot_establish_contest(self, repo):
+        assert scope.contested_by_live_peers(["pkg/mod.py"], "", repo) is None
 
     def test_empty_path_set_yields_no_contest(self, repo):
+        """Nothing was asked -- this is a genuine empty result, not a read
+        failure, so it stays ``{}``."""
         assert scope.contested_by_live_peers([], "mine", repo) == {}
 
-    def test_absent_session_hub_yields_no_contest(self, tmp_path):
-        assert scope.contested_by_live_peers(["pkg/mod.py"], "mine", str(tmp_path)) == {}
+    def test_absent_session_hub_cannot_establish_contest(self, tmp_path):
+        assert (
+            scope.contested_by_live_peers(["pkg/mod.py"], "mine", str(tmp_path))
+            is None
+        )
 
-    def test_raising_projection_yields_no_contest(self, repo, monkeypatch):
-        """A bookkeeping outage must not become a fleet-wide commit refusal."""
+    def test_raising_projection_cannot_establish_contest(self, repo, monkeypatch):
+        """A bookkeeping outage must not become a fleet-wide commit refusal,
+        but it must also not look identical to a clean pathspec."""
         monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)
         for sid in ("mine", "peer-a"):
             core.init(sid, cwd=repo)
@@ -132,5 +151,13 @@ class TestFailsOpen:
             raise OSError("sink unreadable")
 
         monkeypatch.setattr(touch_record, "project_live_claims", _boom)
+
+        assert scope.contested_by_live_peers(["pkg/mod.py"], "mine", repo) is None
+
+    def test_no_peer_sinks_is_a_genuine_empty_result(self, repo, monkeypatch):
+        """No peer sessions at all -- read succeeded, there is simply
+        nothing to contest. Distinct from the failure cases above."""
+        monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)
+        core.init("mine", cwd=repo)
 
         assert scope.contested_by_live_peers(["pkg/mod.py"], "mine", repo) == {}

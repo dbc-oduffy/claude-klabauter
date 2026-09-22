@@ -308,7 +308,7 @@ def test_rule5_sibling_repo_unaffected_when_mirror_registered_elsewhere(stub_pee
 def test_rule5_sibling_repo_fail_loud_mirror_trailing_separator_real_realpath(
     stub_peers, tmp_path
 ):
-    # Review: coordinatorcode-reviewer-e4a7d6a8 P3 -- the existing mirror-guard
+    # The existing mirror-guard
     # tests both stub `published_engine_mirror_path` with bare monkeypatch
     # values, so realpath()'s actual normalization is never exercised by the
     # committed suite. Use a real tmp_path directory and a trailing separator

@@ -12,6 +12,7 @@ Spec backlink: state/handoffs/2026-08-08-engine-fails-the-load-norm.md.
 
 from __future__ import annotations
 
+import os
 from unittest import mock
 
 import pytest
@@ -27,6 +28,33 @@ from coordinator_core.benchmarks.concurrency_probe import (
     run_probe,
     validate_levels,
 )
+from coordinator_core.telemetry import op_latency
+
+
+@pytest.fixture(autouse=True)
+def _restore_benchmark_origin_env():
+    """Every `run_probe()` call in this file reaches `declare_benchmark_origin()`,
+    an intentionally process-wide `os.environ.setdefault` write (see that
+    function's own negative-spec): safe by contract only for "a benchmark
+    driver's own entry", a process that stamps itself and every child it
+    spawns, then exits. These tests call `run_probe()` in-process inside the
+    shared pytest session, outside that contract, so this fixture restores
+    the var itself via a synchronous try/finally around the yield (completes
+    before conftest.py's autouse `_fail_on_environ_leak` "after" snapshot)
+    rather than `monkeypatch.setenv`/`delenv`, which only undoes when
+    monkeypatch's own finalizer runs. Mirrors
+    coordinator_core/benchmarks/tests/test_integration.py's identical fix for
+    the same underlying shape.
+    """
+    sentinel = object()
+    before = os.environ.get(op_latency.ORIGIN_ENV, sentinel)
+    try:
+        yield
+    finally:
+        if before is sentinel:
+            os.environ.pop(op_latency.ORIGIN_ENV, None)
+        else:
+            os.environ[op_latency.ORIGIN_ENV] = before
 
 
 # --- validate_levels ---------------------------------------------------

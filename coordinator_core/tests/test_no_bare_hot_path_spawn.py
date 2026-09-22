@@ -162,7 +162,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 #: Paths are `coordinator_core`-relative, POSIX-separated.
 _GATE_SCOPE_DIRS: tuple[str, ...] = ("",)
 
-# Review: overengineering-reviewer -- `_TEST_TREE_GATE_SCOPE_DIRS` used to be
+# `_TEST_TREE_GATE_SCOPE_DIRS` used to be
 # a second, separately-defined scope tuple whose one value ("" -- no
 # scoping) only mirrored `_GATE_SCOPE_DIRS`'s shape rather than expressing a
 # real, distinct need. `find_bare_test_tree_spawns` now defaults its
@@ -393,7 +393,7 @@ def _collect_no_console_names(stmts: list[ast.stmt]) -> set[str]:
 #: tag, which this gate honours directly rather than via a duplicate register.
 _EXEMPT_CALL_SITES: set[tuple[str, int]] = set()
 
-# Review: overengineering-reviewer -- `_TEST_TREE_EXEMPT_CALL_SITES` used to
+# `_TEST_TREE_EXEMPT_CALL_SITES` used to
 # be a second, module-level, empty-by-construction registry mirroring
 # `_EXEMPT_CALL_SITES`'s shape for an arm that has never needed one. The
 # shared `_bare_spawns_in_population` engine already carries the exemption
@@ -795,7 +795,7 @@ def find_double_console_suppressions(
     can only see under-application will keep re-admitting the sweep's own
     over-application."""
 
-    # Review: overengineering-reviewer -- was a THIRD, divergent file walk
+    # Was a THIRD, divergent file walk
     # (`root.rglob("*.py")`), disagreeing with the other two arms of this
     # gate about which files are in the repo. Routed through the same
     # `discover_source_files`/`DEFAULT_EXCLUDE` population they share.

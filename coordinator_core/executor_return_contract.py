@@ -115,7 +115,8 @@ def self_verify_constraint(
         "calls for broader verification and leave it to "
         f"{deferred_verification_authority}; "
         "(4) leave your changes uncommitted and unstaged — you do not "
-        f"invoke git under any circumstance. Only {commit_authority} "
+        "stage, commit, or otherwise mutate git state; reading git status "
+        f"as step (2) directs is expected. Only {commit_authority} "
         "commits, once per wave, after every item in the wave passes "
         "verification."
     )

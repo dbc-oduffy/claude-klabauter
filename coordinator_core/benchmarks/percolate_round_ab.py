@@ -290,7 +290,13 @@ klabauter-mirror keys this file was generated with, so a REAL round writes
 into a disposable clone instead of the live mirror. Every other key passes
 through unmodified. Supports only the `dump` subcommand -- the one verified
 call shape `coordinator/lib/percolate/resolve_target.py::_dump_registry`
-actually uses."""
+actually uses.
+
+Its own `dump` spawn suppresses the Windows console popup inline
+(`getattr(subprocess, "CREATE_NO_WINDOW", 0)`) rather than importing
+`coordinator_core.win_portability.no_console_creationflags`: this file runs
+standalone from a scratch dir with no guarantee the repo is on `sys.path`,
+so it cannot depend on a coordinator_core import at runtime."""
 import json
 import subprocess
 import sys
@@ -303,7 +309,12 @@ def main() -> int:
     if len(sys.argv) < 2 or sys.argv[1] != "dump":
         sys.stderr.write("machine-local-shim: only the 'dump' subcommand is supported\\n")
         return 1
-    proc = subprocess.run([REAL_BIN, "dump"], capture_output=True, text=True)
+    proc = subprocess.run(
+        [REAL_BIN, "dump"],
+        capture_output=True,
+        text=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
     if proc.returncode != 0:
         sys.stderr.write(proc.stderr)
         return proc.returncode

@@ -24,7 +24,11 @@ from typing import Optional
 import pytest
 
 import coordinator_core.ops.handoff_transition as ht
-from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
+from coordinator_core.frontmatter.primitives import (
+    read_fm_field,
+    read_fm_field_unquoted,
+    split_frontmatter,
+)
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [
@@ -62,7 +66,9 @@ def repo(tmp_path):
     return r
 
 
-def _seed(repo: Path, name: str, *, blocked_by: Optional[str]) -> Path:
+def _seed(
+    repo: Path, name: str, *, blocked_by: Optional[str], blocking_notes: Optional[str] = None
+) -> Path:
     path = repo / "state" / "handoffs" / name
     path.parent.mkdir(parents=True, exist_ok=True)
     fm = (
@@ -77,6 +83,8 @@ def _seed(repo: Path, name: str, *, blocked_by: Optional[str]) -> Path:
     )
     if blocked_by:
         fm += f"blocked_by:\n  - {blocked_by}\n"
+    if blocking_notes:
+        fm += f'blocking_notes: "{blocking_notes}"\n'
     path.write_text(f"---\n{fm}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
     return path
 
@@ -85,6 +93,12 @@ def _field(path: Path, key: str) -> Optional[str]:
     split = split_frontmatter(path.read_text(encoding="utf-8"))
     assert split is not None
     return read_fm_field(split.fm_text, key)
+
+
+def _field_unquoted(path: Path, key: str) -> Optional[str]:
+    split = split_frontmatter(path.read_text(encoding="utf-8"))
+    assert split is not None
+    return read_fm_field_unquoted(split.fm_text, key)
 
 
 def _unclaim(repo: Path, rel: str) -> dict:
@@ -114,4 +128,28 @@ def test_an_unblocked_baton_still_reaches_the_shelf(repo):
     assert result.get("exit_code") == 0, result
     assert _field(path, "status") == "open"
     assert _field(path, "deployment_state") == "ready_to_fire"
+    assert _field(path, "claimed_by") is None
+
+
+def test_a_dr173_parked_baton_stays_parked_through_unclaim(repo):
+    """A baton `session_baton.promote` parked for an unfilled category/
+    summary carries an EMPTY `blocked_by` (DR-173's gate has no graph node
+    to name) plus a `blocking_notes` naming the unfilled field. `blocked_by`
+    being empty makes `evaluate_gate_triage` read it as vacuously freed, so
+    unclaim must not let that flip the baton to `ready_to_fire` — it did not
+    park the record, so it must not unpark it either."""
+    path = _seed(
+        repo,
+        "dr173.md",
+        blocked_by=None,
+        blocking_notes="category is an unfilled placeholder",
+    )
+
+    result = _unclaim(repo, "state/handoffs/dr173.md")
+
+    assert result.get("exit_code") == 0, result
+    assert _field(path, "status") == "open"
+    assert _field(path, "deployment_state") == "awaiting_gate"
+    assert _field(path, "pickup_ready") == "false"
+    assert _field_unquoted(path, "blocking_notes") == "category is an unfilled placeholder"
     assert _field(path, "claimed_by") is None

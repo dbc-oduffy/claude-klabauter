@@ -79,7 +79,7 @@ MUTATES = [".coordinator-local/subagent-share/**/*.jsonl"]
 # namespace for the join -- one string typo apart from reading a different
 # file than the module writing it.
 #
-# Review: overengineering-reviewer (finding #2, minor, accepted) -- call
+# Call
 # sites below now name `machinery_paths.<name>` directly rather than rebinding
 # aliases, which restored the private-looking-but-foreign symbol the
 # consolidation existed to remove.

@@ -218,6 +218,26 @@ def test_commit_prompt_interpolates_touched_and_removed_js_expressions():
     assert "--declared-revert" in call_text
 
 
+def test_commit_prompt_gives_full_settle_invocation():
+    # The ledger-deletion clause must
+    # name every flag `grind_rows.cmd_settle` requires, not a bare
+    # underspecified subcommand mention. The row-id is its own JS piece
+    # (shared with every other row_id_part use in this composed call)
+    # rather than baked into the settle literal, so it is asserted
+    # separately from the surrounding literal fragments.
+    call_text = grind_stages.compose_commit_call(
+        label="commit:row1",
+        phase_title="Commit",
+        profile="p1",
+        row_id="row1",
+        touched_files=["a.py"],
+        repo_root="/tmp/repo",
+    )
+    assert "backlog-grind-assemble grind-row settle --profile p1 --row-id " in call_text
+    assert " --repo-root /tmp/repo`." in call_text
+    assert "'row1'" in call_text
+
+
 def test_undo_prompt_interpolates_touched_and_created_js_expressions():
     call_text = grind_stages.compose_undo_call(
         label="undo:row1",

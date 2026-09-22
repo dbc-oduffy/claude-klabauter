@@ -499,7 +499,7 @@ def emit_x(step_id: str) -> dict[str, Any]:
     Raises:
         KeyError: if step_id is not one of the registered X-steps (X_MISSING_SIGNALS keys).
 
-    Review: code-reviewer — count-free phrasing; 2.6.3, 2.96, and 2.67A reclassified X→D
+    count-free phrasing; 2.6.3, 2.96, and 2.67A reclassified X→D
         2026-07-06 (C1/C2/C3 spinoffs). X_MISSING_SIGNALS is now empty; emit_x raises KeyError
         for all step IDs until a new X-step is registered.
     """

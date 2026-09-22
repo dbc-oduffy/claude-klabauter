@@ -419,6 +419,17 @@ def _check_outcome_membership(profile: Profile) -> None:
                 "stray_outcome", node=node_id, detail=f"outcome(s) outside its stage kind's set: {sorted(stray)}"
             )
         missing = outcome_set - set(node.edges)
+        # A verify node's `fail` outcome
+        # is intercepted by the composer's `_verifyStage` itself (retry,
+        # undo, rejected-after-retry) before `followEdge`/`on_fail` is ever
+        # consulted (see `_check_verify_nodes`'s own note below); requiring a
+        # `fail` edge or `on_fail` here asserted reachability this totality
+        # check does not confer. Not required for `verify` nodes, but a
+        # profile that declares one anyway (edge or `on_fail`) still loads —
+        # the outer `stray` check above still catches an edge name outside
+        # `{"pass", "fail"}`.
+        if node.kind == "verify":
+            missing = missing - {"fail"}
         # A missing outcome is tolerated when `on_fail` is set: `follow_edge`
         # falls back to it at run time for any outcome the `edges` map does
         # not name, so an `on_fail`-carrying node is total by construction

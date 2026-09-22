@@ -93,7 +93,7 @@ class CommitClosure(BaseModel):
         ),
     )
 
-    # Review: code-reviewer (Finding 1, P1) — resolvers.py's version-gated
+    # resolvers.py's version-gated
     # _stamp_content_hash walks every SECMAP dotpath (including commit_closures,
     # already wired) and unconditionally attaches content_hash once
     # schema_version >= 2.5.0; extra="forbid" would reject the stamped record

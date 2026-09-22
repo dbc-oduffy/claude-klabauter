@@ -343,6 +343,7 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
     commit_pathspec_or_none,
     commit_prefixes,
     terminal_test_scope,
+    candidate_test_additions,
 )
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, read_spine
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow, _normalize_path, build_waves
@@ -914,6 +915,24 @@ def _dedupe_preserve_order(paths: list[str]) -> list[str]:
             seen.add(path)
             ordered.append(path)
     return ordered
+
+
+def _widen_with_test_candidates(paths: list[str]) -> list[str]:
+    """``paths`` plus each entry's stem-derived test-file candidate
+    (``pathspec.candidate_test_additions``), deduped, order preserved.
+
+    The widening a committer's handed pathspec needs so an AC-satisfying
+    executor's own test file reads as declared rather than a stranded-work
+    divergence (state/bug-backlog/2026-08-26-emitted-wave-commit-legs-are-
+    handed-a-wr-c0f443ac1fdb.yaml) -- see that function's docstring for why
+    an unwritten candidate costs nothing here. Applied at every site that
+    feeds a pathspec to a dispatched committer or its preflight, never to
+    ``pathspec.commit_pathspec``'s own return, which stays the exact,
+    unwidened ``writes:`` derivation its other callers pin.
+    """
+    if not paths:
+        return paths
+    return _dedupe_preserve_order([*paths, *candidate_test_additions(paths)])
 
 
 def _is_immutable_body_path(path: str) -> bool:
@@ -2485,11 +2504,17 @@ def _commit_agent_call(
     )
     deliverable_rule = (
         " A Deliverable-Id trailer is attached to this commit automatically"
-        " by the commit route itself (ceremony.commit_v2's apply_missing_trailers"
-        " call, not a git hook) -- do not pass a flag for it and do"
-        " not hand-write one into the message body. If the trailer resolves"
-        " to an id you did not expect, report it; that is never grounds to"
-        " amend, reset, or re-commit."
+        " -- via the SAME resolver `ceremony.commit_v2` calls internally"
+        " (`coordinator_core.git.commit_trailers.apply_missing_trailers`),"
+        " not a git hook. `commit_paths` fires no git hooks of its own"
+        " (it lands via commit-tree plumbing), so nothing attaches the"
+        " trailer unless you call the resolver yourself: BEFORE calling"
+        " `commit_paths`, run"
+        " `message = apply_missing_trailers(message, repo, paths)`."
+        " That call resolves the id, it does not invent one -- do not pass"
+        " a flag for it and do not hand-write one into the message body"
+        " yourself. If the trailer resolves to an id you did not expect,"
+        " report it; that is never grounds to amend, reset, or re-commit."
         if deliverable_id
         else ""
     )
@@ -2548,7 +2573,6 @@ def _commit_agent_call(
         f" before using it, and never use it to escape a commit you could"
         f" have made: it asserts your pathspec is clean, which the run"
         f" cannot check for you."
-        # Review: overengineering-reviewer flagged this sentence as
         # unconditional payload for a reader who cannot act on it —
         # dispositioned "accepted" in the sidecar, but the dispatching EM
         # overrode: three separate repos have misattributed this exact
@@ -3409,7 +3433,7 @@ def compose_script(
     # only matches a wave where every row explicitly declares, so that shape
     # still reaches ``commit_pathspec`` and still raises.
     wave_pathspecs = [
-        commit_pathspec_or_none(wave) or [] for wave in waves
+        _widen_with_test_candidates(commit_pathspec_or_none(wave) or []) for wave in waves
     ]
     # ONE batched spawn over the whole-run union, before any per-wave or
     # per-batch pathspec is filtered against it -- a batch's pathspec is
@@ -3518,7 +3542,7 @@ def compose_script(
                 body_blocks.append(stop_gate)
                 continue
 
-            batch_pathspec_raw = commit_pathspec(batch)
+            batch_pathspec_raw = _widen_with_test_candidates(commit_pathspec(batch))
             batch_gitignored = [p for p in batch_pathspec_raw if p in gitignored]
             batch_pathspec = [p for p in batch_pathspec_raw if p not in gitignored]
 
@@ -3619,7 +3643,7 @@ _NON_DONE_STATUS_JS_RE = (
 #: so an executor that writes prose ahead of its `DONE: <path>` line is not
 #: misread as having skipped the brief.
 _ANY_STATUS_JS_RE = (
-    # Review: code-reviewer -- the trailing class admitted "*"/"_" but not
+    # The trailing class admitted "*"/"_" but not
     # "`", so a reply closing its inline-code span before the colon (e.g.
     # `` `DONE_WITH_CONCERNS`: <path> ``) fell through unmatched even though
     # the opening class already admits the leading backtick.

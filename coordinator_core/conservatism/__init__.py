@@ -181,7 +181,7 @@ def declares_safe_direction(
     if direction is SafeDirection.FALL_BACK and anchor is None:
         raise ValueError("declares_safe_direction: FALL_BACK must declare the anchor it degrades to")
     if direction is SafeDirection.FALL_BACK and not callable(anchor):
-        # Review: code-reviewer -- a non-callable, non-None anchor passed the
+        # A non-callable, non-None anchor passed the
         # `is None` check above and then raised a bare TypeError at first
         # assertion, not at import, contradicting this function's own
         # docstring claim that malformed declarations are enforced here.

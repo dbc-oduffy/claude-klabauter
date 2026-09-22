@@ -329,7 +329,7 @@ def parse_grep_segment(tokens: Sequence[str]) -> SearchSpec:
         spec.recursive = True
         spec.line_numbers = True
 
-    # Review: coordinator:code-reviewer -- F9: track "was -e seen" explicitly rather than
+    # Track "was -e seen" explicitly rather than
     # round-tripping through spec.pattern's truthiness, which mis-parses `-e ''` (a legal
     # empty-pattern invocation) by falling through to consume the first operand as if no
     # flag pattern had been supplied.
@@ -518,7 +518,7 @@ def _stage_wc(args: Sequence[str]) -> Stage:
     The VALUE is always correct; only the leading whitespace differs, and only against
     BSD. Declared here rather than discovered later by a reader diffing outputs.
     """
-    # Review: coordinator:code-reviewer -- F2: bare `wc` (no flags) prints three numbers
+    # Bare `wc` (no flags) prints three numbers
     # (lines, words, bytes), not a line count. Only `-l` is absorbed; `[]` used to be
     # treated as equivalent to `["-l"]`, which silently answered a three-number command
     # with a single number.
@@ -582,7 +582,7 @@ def _stage_grep_filter(args: Sequence[str]) -> Stage:
     if spec.count_only or spec.files_only:
         raise Unanswerable("downstream grep -c/-l changes output shape")
     if spec.after or spec.before:
-        # Review: coordinator:code-reviewer -- F3: the piped lines are already-rendered
+        # The piped lines are already-rendered
         # strings by the time they reach this filter stage, so reconstructing -A/-B/-C
         # context from them is not faithfully derivable (the surrounding lines that
         # would satisfy the window may already have been filtered out upstream, or
@@ -789,7 +789,7 @@ def run(spec: SearchSpec, cwd: str = ".", stop_after: Optional[int] = None) -> S
         (searching_a_tree or len(targets) > 1) and not spec.no_filename
     )
 
-    # Review: coordinator:code-reviewer -- F5: GNU grep applies --include/--exclude only
+    # GNU grep applies --include/--exclude only
     # to files discovered by recursive walk; explicitly-named target arguments are always
     # searched. BSD grep (verified on this host, 2026-07-29: `grep --include='*.py' -n
     # alpha a.txt` on a `.txt` file containing "alpha" returns no match) applies the
@@ -868,7 +868,7 @@ def run(spec: SearchSpec, cwd: str = ".", stop_after: Optional[int] = None) -> S
             return True
 
         if spec.count_only:
-            # Review: coordinator:code-reviewer -- F1: real `grep -c` always emits one
+            # Real `grep -c` always emits one
             # count line per searched file, including "0" for a zero-match file (`-l`
             # correctly omits zero-match files; `-c` does not). Emitting unconditionally
             # here -- rather than only after an `if not hits` guard -- is the fix.

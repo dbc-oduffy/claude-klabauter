@@ -106,6 +106,7 @@ from typing import Any, Callable, Optional, TypeVar
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.write_guards.validate_frontmatter_schema_deny import (
     _is_doe_owned_repo as _deny_guard_is_doe_owned_repo,
+    _run_report_glob_match_is_content_thin,
     _validate_whole_document_records,
 )
 from coordinator_core.dag import check_lineage_reachability as _check_lineage_reachability
@@ -361,7 +362,7 @@ def build_violation_payload_advisory(
     payload: Optional[dict] = None,
     git_root: Optional[str] = None,
 ) -> Optional[dict]:
-    # Review: staff-eng (B8 leg (d)+(f)) -- this builder hand-rolled its own
+    # This builder hand-rolled its own
     # "see docs/reference/guard-override-keys.md" pointer, unconditionally,
     # for every audience including a dispatched subagent. Routed through
     # `bash_guards._helpers.operator_override_note` so it degrades to the
@@ -1636,6 +1637,10 @@ def check(payload: dict) -> Optional[dict]:
     frontmatter = parse_frontmatter(prospective_content).get("frontmatter")
 
     match = match_schema(repo_rel, frontmatter, schemas)
+    if match and _run_report_glob_match_is_content_thin(
+        match.get("schemaName"), match.get("schema"), frontmatter
+    ):
+        match = None
     if not match:
         # Unconditional stand-down, and it stays that way. One sub-case of
         # this seam — a frontmatter block that OPENS and does not parse —

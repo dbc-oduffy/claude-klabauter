@@ -8,7 +8,7 @@ Spec backlink: DoE-claude:pln-computed-skills-b2-ceremony-st-e82420,
 chunk C2b; state/bug-backlog/2026-08-13-session-brief-byte-budget-assertion
 -is-r-8733361330d6.yaml (the incident these caps were added to fix).
 
-Review: coordinatorcode-reviewer-87b5ce47 — Finding [P1] (this cap shipped
+[P1] (this cap shipped
 with zero direct unit coverage; the only related test,
 `test_brief_session_stays_under_byte_budget`, is a live-disk integration
 byte-budget assertion that would still pass with the cap off by several
@@ -189,7 +189,7 @@ def test_awaiting_gate_empty_full_listing_omits_leading_blank_line():
 def test_separator_literal_still_matches_the_ported_cli_source():
     """Pins the cross-file coupling `_cap_awaiting_gate_listing` rests on.
 
-    Review: code-reviewer — Finding [P4]. `_AWAITING_GATE_SEPARATOR` duplicates
+    [P4]. `_AWAITING_GATE_SEPARATOR` duplicates
     a literal `coordinator/bin/workday-start-handoff-triage.py` prints; there is
     no shared symbol between the two files. If the CLI's string drifts,
     `text.find(...)` returns -1 and the helper falls through to the

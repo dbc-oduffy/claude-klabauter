@@ -115,6 +115,31 @@ _UNEXPANDED_TOKEN_RE = re.compile(r"[$`]")
 #: that shape costs no legitimate target.
 _LEAKED_REDIRECT_RE = re.compile(r"^\d*>{1,2}")
 
+#: A heredoc opener -- `<<WORD`, `<<-WORD`, `<<'WORD'`, or a bare `<<`/`<<-`
+#: with nothing glued after it. `_command_tokenizer._strip_heredocs`
+#: deliberately leaves the opener in the token stream (it strips only the
+#: BODY), and `tokenize_full_command`'s `punctuation_chars=";&|"` excludes
+#: `<`, so whitespace alone decides whether the operator and its marker
+#: word glue into one token (`<<EOF`) or split into two (`<<` then `EOF`)
+#: -- the same split the `>`-direction guard family already documents
+#: (`dispatch_checks._BT_REDIRECTION_TOKEN_RE`'s own note). Either shape
+#: falls through to a binary's positional-argument rule exactly like the
+#: glued `>` case above: neither token starts with `-`, so `tee`/`cp`/`mv`/
+#: `mkdir`/`install`/`rsync` all read it as a real operand. A real path
+#: never starts with `<<` -- rejecting on that shape costs no legitimate
+#: target.
+_LEAKED_HEREDOC_OPENER_RE = re.compile(r"^<<-?")
+
+
+def _is_bare_heredoc_opener(raw: str) -> bool:
+    """True when `raw` is a heredoc operator with no marker glued after it
+    (`<<`, `<<-`) -- the marker word then arrives as its OWN following
+    candidate from the same positional sweep and must also be rejected,
+    mirroring `dispatch_checks._bt_is_bare_redirection_token`'s own "the
+    caller must additionally skip the NEXT token" contract for the
+    identical with-space-vs-glued split."""
+    return raw in ("<<", "<<-")
+
 
 def _is_claimable_target(raw: str, head_base: str, resolved: str) -> bool:
     """True when `raw` (the literal token the command carried) is a real path
@@ -130,6 +155,13 @@ def _is_claimable_target(raw: str, head_base: str, resolved: str) -> bool:
     - `_LEAKED_REDIRECT_RE` -- a redirection operator the tokenizer left
       glued to its own target (`2>&1`, `2>/dev/null`) is an operator, not a
       file.
+    - `_LEAKED_HEREDOC_OPENER_RE` -- a heredoc opener the tokenizer left
+      glued to its own marker (`<<EOF`, `<<'MSG'`) is likewise an operator,
+      not a file. The bare form (`<<` with the marker as a SEPARATE
+      following token) is rejected the same way here; the caller
+      additionally skips that following token itself (see
+      `_is_bare_heredoc_opener`, consulted by `record_write_claims`) since
+      this function only ever sees one candidate at a time.
     - `resolved` is not an existing directory -- `mkdir state/some-dir`
       names a directory, not a file this session wrote content to; a
       directory claim is junk the same way a redirect operator is.
@@ -171,6 +203,8 @@ def _is_claimable_target(raw: str, head_base: str, resolved: str) -> bool:
     if _UNEXPANDED_TOKEN_RE.search(raw):
         return False
     if _LEAKED_REDIRECT_RE.match(raw):
+        return False
+    if _LEAKED_HEREDOC_OPENER_RE.match(raw):
         return False
     try:
         if os.path.isdir(resolved):
@@ -590,9 +624,19 @@ def record_write_claims(
         from coordinator_core.session.touch_record import KIND_WRITE, append_touch_claims
 
         rels = []
+        skip_next = False
         for resolved_target, head_base, raw_target in _iter_write_sink_candidates(
             cmd, root
         ):
+            if skip_next:
+                skip_next = False
+                continue
+            if _is_bare_heredoc_opener(raw_target):
+                # The marker word is the NEXT candidate this same positional
+                # sweep yields (`_is_bare_heredoc_opener`'s own docstring) --
+                # reject it here too rather than only the operator itself.
+                skip_next = True
+                continue
             if not _is_claimable_target(raw_target, head_base, resolved_target):
                 continue
             rel = _rel_if_inside(resolved_target, root)

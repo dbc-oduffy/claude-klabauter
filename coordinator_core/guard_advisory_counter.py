@@ -18,6 +18,17 @@ once would be exactly the concurrency hazard this per-session design exists
 to avoid. Aggregation across sessions is a read-time concern (a future
 reader/reducer over the per-session files), not this module's.
 
+NO READER EXISTS TODAY (state/bug-backlog/2026-08-29-loud-and-counted-is-
+neither-*). Grep this tree for `_COUNTS_FILENAME` / `_DENY_COUNTS_FILENAME`
+or for a reader of `advisory-fire-counts.jsonl` / `deny-fire-counts.jsonl`
+outside this module, the two recorders' own callers, and their unit tests:
+there is none. No doctor probe, session-start step, ceremony, or report
+consumes either file. A caller mirroring this module's shape for a THIRD
+recorder must not assume "counted" implies "observed" — it does not, for
+either existing file, as of this paragraph. Building a reader is a
+proportionality call (cross-session aggregation, a probe registration, a
+DEGRADED threshold) left to that row, not silently assumed here.
+
 Two call sites:
   - `write_guards/engine.py::evaluate`, the advisory-phase `return out` (the
     legacy `aggregate=False` default). Since `docs/plans/2026-08-06-windows-

@@ -169,7 +169,7 @@ def _insert_row_text(original_text: str, row_text: str, run_id: str) -> tuple[st
 
     if run_header_line_idx is None:
         # No existing header for this run — open a new block at EOF.
-        # Review: code-reviewer (Finding 3, 2026-07-12) — removed dead
+        # Removed dead
         # `needs_leading_blank` local; it was computed but never referenced.
         separator = "\n" if original_text.endswith("\n") else "\n\n"
         new_text = f"{original_text}{separator}## Run {run_id}\n{row_text}\n"

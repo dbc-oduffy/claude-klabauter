@@ -119,11 +119,20 @@ def _frontmatter_shipped_status(fm: dict, record_kind: str) -> str:
     `status=="implemented"` for a plan) > otherwise not_shipped. Collapsed to a binary
     answer since this module's `ShipVerdict.frontmatter_status` has no in-between states
     (unlike `deliverable_status`'s richer in-progress/planned/abandoned phase enum).
+
+    `shipped_sha` is checked first for forward-compat with the precedence table above,
+    but no live schema ever writes it (DR-096 named the real handoff field `shipped_in`
+    instead). For a handoff, `shipped_in` set is therefore its own precedence rung
+    alongside the literal `deployment_state == "shipped"` marker — a baton that shipped
+    and was later flipped to `continued`/`closed` still carries `shipped_in`, and must
+    still read "shipped" here.
     """
     if fm.get("shipped_sha") is not None:
         return "shipped"
     if record_kind == "handoff":
         if (fm.get("deployment_state") or "") == "shipped":
+            return "shipped"
+        if fm.get("shipped_in") is not None:
             return "shipped"
     else:
         if (fm.get("status") or "") == "implemented":

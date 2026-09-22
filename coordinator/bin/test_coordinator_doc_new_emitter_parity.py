@@ -136,7 +136,7 @@ def _required_args_for(doc_type: str) -> list[str]:
     own dispatch `elif` (or the `else:` guard) instead of dying at an earlier,
     unrelated required-arg validation `sys.exit(1)`.
 
-    Review: code-reviewer Finding 2 — the prior minimal-args-only invocation never
+    The prior minimal-args-only invocation never
     exercised the dispatch chain for any required-arg-gated type; reaching the
     required-arg check is a SEPARATE code block from the actual `elif` dispatch
     branch and proves nothing about the latter still existing. Values below are

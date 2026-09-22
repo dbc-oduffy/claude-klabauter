@@ -1338,7 +1338,7 @@ def test_consumed_handoff_completeness_plural_one_of_two_fires_other_still_evalu
     assert elements_by_handoff["state/handoffs/y.md"]["leg_a"]["verdict"] == "clean"
 
 
-# Review: coordinatorcode-reviewer-c13e4663 Finding 4 — the new plural loop
+# The new plural loop
 # had no test proving `_resolve_handoff_path_str`'s archived-handoff branch
 # (a real fleet condition) still resolves and evaluates an element.
 def test_consumed_handoff_completeness_plural_resolves_archived_handoff(monkeypatch, tmp_path):
@@ -1382,7 +1382,7 @@ def test_consumed_handoff_completeness_leg_a_indeterminate_when_handoff_unreadab
     assert leg_a["detail"] == "handoff unreadable"
 
 
-# Review: coordinatorcode-reviewer-c13e4663 Finding 1 — a non-UTF-8 handoff
+# A non-UTF-8 handoff
 # raised UnicodeDecodeError (a ValueError subclass) out of brief() uncaught
 # instead of degrading to leg A's "handoff unreadable" indeterminate.
 def test_consumed_handoff_completeness_leg_a_indeterminate_when_handoff_non_utf8(monkeypatch, tmp_path):
@@ -1498,7 +1498,7 @@ def _leg_a_non_terminal_schema_statuses() -> list[str] | None:
     doe_repo = Path(doe_root)
     if not doe_repo.exists():
         return None
-    # Review: coordinator:code-reviewer -- a git-show error against a
+    # A git-show error against a
     # *present* DoE checkout still fails hard; "no DoE repo" AND "this root
     # publishes no authoring schema" both collapse to None/skip.
     doe_plan_schema = _doe_head_plan_schema(doe_repo)
@@ -1981,6 +1981,17 @@ def _sweep_directive_ids_and_resolves_ids(
     the chain-terminal leg. See `test_extended_sweep_covers_every_
     preserved_judgment_point` below for the code-derived guard against this
     same gap recurring silently.
+
+    Coverage note (2026-08-15/2026-09-21): every gate variant this sweep
+    ever built passed `consumed_handoff_paths=()`, so `compute_consumed_
+    handoff_completeness_gate` always took its `applies=False` shortcut and
+    `build_consumed_handoff_completeness_judgment_point` never ran inside
+    the sweep at all -- its static `resolves` ids were checked by no guard
+    anywhere in the tree. A third gate variant below seeds a real on-disk
+    consumed handoff with an open acceptance-criteria box and a non-empty
+    `consumed_handoff_paths`, so `.blocks` is True and the judgment point's
+    dispositions fold into the same `resolves_ids`/`directive_ids` union
+    `test_no_judgment_point_resolves_a_phantom_directive_id` already checks.
     """
     # `d-complete-entry`'s gate (`directives_completion.completion_archive_
     # predicate`) checks for a real `archive/` dir on disk -- seed it so
@@ -1995,6 +2006,16 @@ def _sweep_directive_ids_and_resolves_ids(
     plan_slug = "sweep-coverage-governing-plan"
     _write_plan(tmp_path, plan_slug)
     _write_handoff(tmp_path, "state/handoffs/x.md", f"docs/plans/{plan_slug}.md")
+
+    # A second, distinct consumed handoff carrying an open acceptance-
+    # criteria box, so the plural-gate variant below actually blocks (leg
+    # A fires) and `build_consumed_handoff_completeness_judgment_point`
+    # executes at least once inside this sweep.
+    consumed_handoff_completeness_path = "state/handoffs/sweep-coverage-consumed-handoff.md"
+    _write_ac_handoff(
+        tmp_path, consumed_handoff_completeness_path, "## Acceptance criteria\n\n- [ ] one\n"
+    )
+    _patch_leg_b(monkeypatch, {"exit_code": 1, "referenced": False})
 
     directive_ids: set[str] = set()
     resolves_ids: set[str] = set()
@@ -2055,6 +2076,11 @@ def _sweep_directive_ids_and_resolves_ids(
     for gate in (
         _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()),
         _gate("single-session", consumed_handoff_paths=()),
+        _gate(
+            "chain-terminal",
+            consumed_handoff=consumed_handoff_completeness_path,
+            consumed_handoff_paths=(consumed_handoff_completeness_path,),
+        ),
     ):
         _patch_gate(monkeypatch, gate)
         decision_object = wsc.brief(decisions=decisions, repo_root=tmp_path)
@@ -2107,7 +2133,7 @@ def _all_preserved_judgment_point_ids() -> set[str]:
     exactly-29-entry tuple of the builders that census actually owns (see
     that tuple's own docstring) -- rather than a `dir()` name-pattern sweep.
 
-    Review: code-reviewer -- a bare `dir(wsc._judgments)` sweep matching
+    A bare `dir(wsc._judgments)` sweep matching
     every `build_*_judgment_point`-named, module-local callable silently
     assumed every such function is zero-arg and always returns a dict (true
     of exactly the 29 census builders, at the time this helper was
@@ -2611,7 +2637,7 @@ def test_disk_driven_single_entry_exact_scope_match_stays_quiet_ac9(monkeypatch,
     this test pins against `test_single_entry_prefix_scope_match_surfaces_
     but_exact_match_stays_quiet` most needs producer-driven proof, since a
     hand-typed `detection` dict cannot catch that correspondence drifting.
-    Review: coordinator:code-reviewer -- Finding 1, closes the one AC9 quiet
+    Closes the one AC9 quiet
     case still hand-authored while its siblings were rebuilt via
     `_real_detector_c_detection`. Unaffected by the concurrent
     `matched_scope_entry_count` FILE-dedupe change in `wsc-session-

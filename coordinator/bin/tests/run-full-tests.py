@@ -137,7 +137,7 @@ SHELL_SUITES = [
     # verify-no-console-flash-file-allow.bats — SUPERSEDED, see module docstring.
 ]
 
-# Review: code-reviewer -- Finding 3: this comment previously named suites
+# This comment previously named suites
 # (test-bootstrap-repo.sh, test-coordinator-auto-push.sh,
 # test-coordinator-safe-commit.sh, test-new-project-scaffold.sh,
 # test-migrate-cross-repo-layout.sh) that are NOT members of SHELL_SUITES

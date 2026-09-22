@@ -178,6 +178,33 @@ def test_agreement_shipped(repo_with_origin):
     assert result.verdict == "shipped"
 
 
+def test_agreement_shipped_handoff_via_shipped_in_only(repo_with_origin):
+    """A handoff that shipped and was later flipped to `continued` loses the literal
+    `deployment_state: shipped` marker but keeps `shipped_in` — that alone must still
+    read "shipped" (DR-096; the exact record shape from
+    archive/handoffs/2026-08/2026-08-21-the-guard-spawns-git-three-times-to-label-a-
+    refusal.md)."""
+    root = repo_with_origin["root"]
+    _write_plan(
+        root,
+        "state/handoffs/example.md",
+        [
+            "status: consumed",
+            "deployment_state: continued",
+            "shipped_in: 6d5737f0",
+            "shipped_in_kind: ship-commit",
+        ],
+    )
+    _git(root, "add", "state/handoffs/example.md")
+    _git(root, "commit", "-m", "add handoff")
+
+    result = verify_shipped(
+        repo_with_origin["on_main"], plan_path="state/handoffs/example.md", repo_root=root
+    )
+    assert result.frontmatter_status == "shipped"
+    assert result.verdict == "shipped"
+
+
 def test_agreement_not_shipped_handoff(repo_with_origin):
     root = repo_with_origin["root"]
     _write_plan(root, "state/handoffs/example.md", ["status: claimed", "deployment_state: in_flight"])

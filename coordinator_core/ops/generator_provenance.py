@@ -429,7 +429,7 @@ def _json_bindings(tree: ast.AST) -> tuple[frozenset[str], frozenset[str]]:
     itself via `import ... as` / `from json import ...`, so `_call_is_write`
     can match `import json as j; j.dump(...)` and `from json import dump;
     dump(...)`, not only the literal spellings `json` and `json.dump`.
-    # Review: coordinator:code-reviewer — P3, json.dump detection missed the
+    # json.dump detection missed the
     # aliased-import and bare-name-import call shapes.
     """
     module_aliases: set[str] = set()
@@ -464,7 +464,7 @@ def _call_is_write(
         receiver; the mode lives at `args[0]`, and `args[1:]` is empty.
     Treating both as `args[1:]` silently misses every bound `.open()` write
     (e.g. `hooks_json_path.open("w", encoding="utf-8")` in `doctor.py`).
-    # Review: coordinator:code-reviewer — P1, confirmed live impact on
+    # Confirmed live impact on
     # doctor.py:406, invisible to discover_generators before this fix.
 
     A claiming-seam call (D5) is checked first: it shares an attribute-form
@@ -1835,7 +1835,7 @@ def discover_generators(
                         continue
                     if not entry.name.endswith(".py"):
                         continue
-                    # Review: coordinatorcode-reviewer — follow_symlinks=True
+                    # follow_symlinks=True
                     # here restores pre-C6 parity (rglob + path.stat() both
                     # followed symlinks); is_dir(follow_symlinks=False) above
                     # stays as-is, both for cycle safety and because rglob

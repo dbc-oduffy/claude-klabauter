@@ -136,7 +136,7 @@ def test_duplicate_dlv_id_resolves_via_pln_instead(spec_backlink_corpus):
 
 
 def test_duplicate_plan_id_is_ambiguity_not_last_write_wins(tmp_path):
-    """Review: code-reviewer P3 — a `plan_id` collision (two records
+    """A `plan_id` collision (two records
     carrying the same `plan_id`, a genuine duplicate/copy-paste on this
     supposedly per-file-identity field) must be a typed AMBIGUITY, exactly
     like a `deliverable_id` collision — never last-write-wins on whichever
@@ -334,7 +334,7 @@ def test_peer_qualified_miss_when_doe_root_unresolvable(tmp_path, monkeypatch):
 
 
 def test_unrecognized_repo_qualifier_is_typed_miss_not_silent_peer_hit(tmp_path, monkeypatch):
-    """Review: code-reviewer P2 — a queried_id carrying any qualifier OTHER
+    """A queried_id carrying any qualifier OTHER
     than the one recognized peer name (`DoE-claude`) must be a typed miss
     naming the unrecognized-repo condition, never silently routed to the
     DoE-claude peer index. This is the case `test_peer_qualified_hit_uses_doe_root`

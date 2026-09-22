@@ -294,7 +294,7 @@ async def _cutover_advance(params: dict, repo_root: Optional[Path] = None) -> di
         exit_code = gate_exit_code if gate_exit_code in (1, 2) else 2
         return _reply(f"{header} VERDICT={verdict_tag}", notes, exit_code)
 
-    # Review: code-reviewer — every sibling lifecycle-mutation verb
+    # Every sibling lifecycle-mutation verb
     # (_consume/_ship/_close/_repark/_supersede/_unconsume in
     # handoff_transition.py) routes its write through locked_rmw for
     # cross-process serialisation; this op previously wrote via a bare

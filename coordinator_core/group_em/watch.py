@@ -224,7 +224,7 @@ from coordinator_core.session.receiver_state import read_receiver_state
 _POLL_INTERVAL_FLOOR_SECONDS = 5.0
 _POLL_INTERVAL_MEASURED_MULTIPLIER = 1000.0
 
-# Review: coordinatorcode-reviewer.a9e1410288878bea9 -- `_poll_interval_seconds`
+# `_poll_interval_seconds`
 # is measured exactly once, at arm time, and reused unchanged for the rest of
 # the session. A single transient arm-time spike (disk contention, the box
 # momentarily at 50-70 concurrent sessions) can commit the watch to an
@@ -261,7 +261,7 @@ def _inbox_frontmatter_status(path: str) -> Optional[str]:
     an unreadable memo is not an open one, but it is also not silently
     dropped from `total_count` -- the caller counts the file either way.
     """
-    # Review: coordinatorcode-reviewer (finding #2) -- UnicodeDecodeError is a
+    # UnicodeDecodeError is a
     # ValueError subclass, not OSError; an undecodable memo must degrade to
     # None per this function's own contract, not propagate through
     # `_inbox_counts`'s uncaught per-entry call and abort the poll tick.
@@ -322,7 +322,7 @@ def _inbox_line(open_count: int, total_count: int, taken_at_epoch: float) -> str
     """One INBOX line: count + population name + struck instant, spelled
     `counts_struck_at`, not a bespoke `taken_at` (C6 brief, C5's ownership).
 
-    Review: overengineering-reviewer finding 1 (ACCEPTED) -- `render_struck_count`
+    `render_struck_count`
     is inlined here, its one remaining production consumer. The helper existed to
     stop three surfaces spelling count+population+instant three ways; DoE-claude's
     contract ruling took `summary_line` off it and the ARMED line spells its own
@@ -566,7 +566,6 @@ def _transcript_idle_seconds(
     only then is a read paid here -- a first read, not a second.
     """
     if activity_epoch is None:
-        # Review: coordinator:code-reviewer.a89481390696514f7 (nitpick, accepted) --
         # a bare `_` loses the reader's cue that the discarded element is a
         # trust/confidence flag, not just "the other tuple slot". `_trusted`
         # documents the discard; Pyright's unused-variable complaint is
@@ -614,7 +613,7 @@ def _parked_line(
 ) -> str:
     """Compose one PARKED line -- observed evidence, framed as evidence.
 
-    Review: review-integrator -- `caller_session_id` was accepted but never
+    `caller_session_id` was accepted but never
     read in this body (Pyright: reportUnusedVariable-adjacent, unused param);
     the caller never needed the callee to see its own id here. Removed rather
     than kept for signature parity nobody was relying on.
@@ -837,7 +836,7 @@ def poll_once(
     emit a line for, with the gate that stopped it -- which is what lets a
     reader tell "looked, nothing to do" apart from "did not look".
 
-    Review: coordinator:overengineering-reviewer -- these were an out-parameter
+    These were an out-parameter
     on the argument that no caller had to unpack a tuple, which was already
     false (the same change added `group_em_session_id` and rewrote the call site).
     A function whose product is split between a return value and a mutated
@@ -868,7 +867,6 @@ def poll_once(
     # order the fleet changed: the peer that left is no longer a candidate
     # for anything below, and a reader scanning `Monitor` output should not
     # meet a PARKED line for a roster that has since shrunk.
-    # Review: review-integrator, per overengineering-reviewer finding #1
     # (accepted) -- GONE was previously gated on `report_gone`, a caller-set
     # flag that suppressed this loop for a tick whose on-disk prior was
     # judged too old. GONE is terminal and self-limiting (module docstring:
@@ -992,7 +990,6 @@ def load_prev_peers(repo_root: str) -> dict[str, dict[str, Any]]:
 def _load_prev_record(repo_root: str) -> dict[str, Any]:
     """Open, parse, and shape-check the carried prior-state record ONCE.
 
-    Review: review-integrator, folding in a finding overengineering-reviewer
     raised outside its own scope but flagged as staff-eng's -- `load_prev_parked`
     and `load_prev_peers` used to each independently `open()`/`json.load()` the
     same `parked_state_path(repo_root)` file, so `tick_once` paid two opens and
@@ -1189,7 +1186,7 @@ def tick_once(
             pass
         return 1
 
-    # Review: coordinatorcode-reviewer.a933f243c20654e60 -- emit happens
+    # Emit happens
     # inside `poll_once`, above, strictly BEFORE this persist step, and that
     # ordering is deliberate, not incidental. Work both failure directions:
     # if persistence raised AFTER a successful emit, the current order
@@ -1292,7 +1289,7 @@ def main(
     peer_count = len(agents)
     holder_name = _holder_name(agents, group_em_session_id)
     interval = _poll_interval_seconds(snapshot_ms)
-    # Review: coordinatorcode-reviewer.a9e1410288878bea9 -- the ARMED line is
+    # The ARMED line is
     # operator-facing; "denominator" is an internal metric name from the
     # interval derivation and reads oddly next to "peers" on that surface.
     # The repo NAME is read off `repo_root`, never written as a literal. A literal
@@ -1313,7 +1310,7 @@ def main(
     # outright; this is the second line of defence for callers that reach
     # `main` without passing through it.
     #
-    # Review: overengineering-reviewer (finding #4, minor, accepted) -- this
+    # This
     # comment used to retell the incident (mangled path, publish-mirror
     # consequence) at full length, the third of four full retellings across
     # this diff. Reduced to a pointer.
@@ -1325,7 +1322,7 @@ def main(
     # tell a real fleet change from a gap inferred between two differently-
     # defined lines (module's C5 note).
     armed_struck_epoch = time.time() if now_epoch is None else now_epoch
-    # Review: coordinatorcode-reviewer (finding #1) -- external module, use the
+    # External module, use the
     # promoted public name; `_iso` is the private alias `iso_instant` retired.
     armed_struck_at = watch_heartbeat.iso_instant(armed_struck_epoch)
     emit(
@@ -1347,7 +1344,7 @@ def main(
         declinations: list = []
         tick_now = datetime.now(timezone.utc)
         try:
-            # Review: coordinator:code-reviewer af0c0865daafdd73a -- the loop
+            # The loop
             # used to reassign `prev_parked` from this return, so every line
             # below it read the CURRENT map under a name saying previous, and
             # `subscribed_peers` in particular reported a coverage figure whose
@@ -1367,7 +1364,7 @@ def main(
             # watching -- `stamp` returns False rather than raising, and the
             # next tick rewrites the whole record anyway.
             #
-            # Review: coordinatorcode-reviewer.a933f243c20654e60 -- `emit`
+            # `emit`
             # inside `poll_once`, above, runs before `prev_parked`/
             # `prev_names` are rebound below, same deliberate emit-then-
             # persist ordering as `tick_once` (see the matching comment
@@ -1410,14 +1407,14 @@ def main(
             prev_names = peer_notes
             prev_inbox_open = cur_inbox_open
         except Exception:
-            # Review: coordinatorcode-reviewer.a9e1410288878bea9 -- reporting
+            # Reporting
             # an error must never be able to fail worse than the error itself.
             # A broken stream at the moment a poll raises would otherwise
             # propagate out of `main` uncaught, ending the watch silently --
             # exactly the "indistinguishable from a quiet repo" failure this
             # module's COVERAGE contract exists to prevent.
             #
-            # Review: coordinatorcode-reviewer.a933f243c20654e60 (nit) -- this
+            # This
             # catches `stamp`'s `ValueError` on an invalid `tick_source`
             # identically to a genuine I/O miss, printing both as the same
             # POLL-ERROR line. That collapse is deliberate for now: both call
@@ -1489,7 +1486,7 @@ def _cli(argv: "list[str] | None" = None) -> int:
     )
     # Pre-2026-09-01 spelling; accepted, unadvertised. Rationale + retirement
     # condition: group_em/tests/test_deprecated_crown_flag_alias.py
-    # Review: overengineering-reviewer -- collapsed duplicated 9-line rationale
+    # Collapsed duplicated 9-line rationale
     # to a pointer; full argument lives in the test file (also the delete unit).
     parser.add_argument(
         "--group-em-session-id",

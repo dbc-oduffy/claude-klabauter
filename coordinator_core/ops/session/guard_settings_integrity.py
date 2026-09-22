@@ -394,7 +394,7 @@ def is_inline_install(config_dir: Path) -> bool:
     except Exception:
         home = None
     if home is not None and _settings_home_scoped_to(config_dir, home):
-        # Review: coordinator:code-reviewer (P3) — build the migrated candidate
+        # Build the migrated candidate
         # from the already-bound `home` rather than calling machine_local_dir(),
         # which internally re-resolves settings_home() a second time for the
         # same path; on this SessionStart boot path resolution cost is a
@@ -898,7 +898,7 @@ def _tail_key(token: str) -> Optional[str]:
     taken from the RAW token text BEFORE any `${CLAUDE_PLUGIN_ROOT}`
     substitution or filesystem resolution.
 
-    Review: coordinator:code-reviewer (P3) -- the `scripts/foo.py` example
+    The `scripts/foo.py` example
     above corrects a stale three-segment example (`hooks/scripts/foo.py`)
     that never matched `_TAIL_KEY_RE`'s actual two-segment capture. Doc-only
     fix: the join width (last two segments) did not change.
@@ -1250,7 +1250,7 @@ def format_hook_delivery_banner(report: HookDeliveryReport) -> str:
     remediation rather than merely the condition (dispatch brief
     requirements #2 and #3).
 
-    Review: code-reviewer (Finding 1) -- the settings-only danger section
+    The settings-only danger section
     used to be nested entirely inside the `double_fire`-only early return,
     so it never rendered in the disjoint case it exists to catch: both
     delivery surfaces live, ZERO script overlap, but settings.json still
@@ -1763,7 +1763,7 @@ def _find_known_good_backup(config_dir: Path) -> Optional[Path]:
     try:
         home = settings_home()
     except Exception:
-        # Review: code-reviewer (Finding 2) -- settings_home() reaches
+        # settings_home() reaches
         # Path.home(), which is documented to raise RuntimeError (not
         # ValueError/OSError) when no home directory resolves at all (no
         # HOME/USERPROFILE, no resolvable passwd/user-profile entry -- a
@@ -1789,6 +1789,28 @@ def _find_known_good_backup(config_dir: Path) -> Optional[Path]:
 
 def evaluate_settings_integrity(config_dir: Optional[Path] = None) -> str:
     """Run the guard against `config_dir`; return the additionalContext text.
+
+    Composes two orthogonal lenses: `_evaluate_settings_integrity_own_config`
+    (THIS session's own settings.json — clobber/restore + reconciliation),
+    and `evaluate_guardless_sessions` (a peer `claude.exe` process on this box
+    with no `--plugin-dir` at all — see that function's docstring for why
+    only an already-guarded peer session can ever surface it). Both are
+    silent in the common case, so composing them costs nothing when neither
+    has anything to report; when either fires, both texts reach the same
+    additionalContext channel rather than one silently dropping the other.
+    """
+    own_config_text = _evaluate_settings_integrity_own_config(config_dir)
+    guardless_text = evaluate_guardless_sessions()
+    if not guardless_text:
+        return own_config_text
+    if not own_config_text:
+        return guardless_text
+    return f"{own_config_text}\n\n{guardless_text}"
+
+
+def _evaluate_settings_integrity_own_config(config_dir: Optional[Path] = None) -> str:
+    """Run the clobber/restore + reconciliation lenses against `config_dir`;
+    return the additionalContext text for THIS session's own settings.json.
 
     Parameters
     ----------

@@ -431,7 +431,7 @@ def _dispatch_archive_stamp_cli(args: list[str], repo_root: Path) -> dict[str, A
             )
         handoff_path = _assert_in_repo_root(Path(args[1]), repo_root)
         at = args[2]
-        # Review: staff-eng — cs_gate_recheck_handoff's real refusal reason
+        # cs_gate_recheck_handoff's real refusal reason
         # (handoff.transition's MutateAbort text) only ever reached
         # sys.stderr; capture it here so it lands in report["error"] instead
         # of being lost to a JSON-consuming caller. No guessed cause: there
@@ -441,7 +441,7 @@ def _dispatch_archive_stamp_cli(args: list[str], repo_root: Path) -> dict[str, A
             with contextlib.redirect_stderr(buf):
                 rc = cs_gate_recheck_handoff(str(handoff_path), at=at, cleared=True)
         finally:
-            # Review: coordinator:code-reviewer — an unexpected exception from
+            # An unexpected exception from
             # cs_gate_recheck_handoff (anything the verb handler itself
             # doesn't catch and convert to an error dict) used to propagate
             # out of the `with` block before the captured buffer was ever
@@ -503,7 +503,7 @@ def _dispatch_archive_stamp_cli(args: list[str], repo_root: Path) -> dict[str, A
         result = cs_claim_memo_stamp(str(memo_path), return_result=True)
         ok = _normalize_primitive_result(result["exit_code"])
         if not ok:
-            # Review: code-reviewer (Finding 3) — surface result["error"] rather
+            # Surface result["error"] rather
             # than a generic "failed", since memo_transition's _err distinguishes
             # write-landed-but-uncommitted from an ordinary pre-write refusal.
             raise RuntimeError(
@@ -533,7 +533,7 @@ def _dispatch_archive_stamp_cli(args: list[str], repo_root: Path) -> dict[str, A
         result = cs_action_memo(str(memo_path), *disposition_args, return_result=True)
         ok = _normalize_primitive_result(result["exit_code"])
         if not ok:
-            # Review: code-reviewer (Finding 3) — surface result["error"] rather
+            # Surface result["error"] rather
             # than a generic "failed", same reasoning as claim-memo-stamp above.
             raise RuntimeError(
                 f"archive-stamp-cli action-memo {args[1]}: "
@@ -1129,7 +1129,7 @@ def apply(
             # apply() never trusts a value computed earlier than the instant
             # right before it gates a mutation.
             #
-            # Review: code-reviewer — Finding 3: `fm` is threaded through from
+            # `fm` is threaded through from
             # `brief_result.decision_object["artifact"]["frontmatter"]` to
             # match `brief()`'s handoff-branch call (`compute_claim_grant(...,
             # fm=fm)`). Without it, AC3e's lineage-handover row degrades to
@@ -1719,7 +1719,7 @@ def drop(
 
                 _fm_holder = read_frontmatter_field(artifact_path_value, "claimed_by")
             except Exception:  # noqa: BLE001 -- unreadable is "cannot tell", not "no holder"
-                # Review: code-reviewer (Finding 4) — a bare `_fm_holder = ""`
+                # A bare `_fm_holder = ""`
                 # here reads exactly like "confirmed no stamp", which retakes
                 # the brief-stage-only lock-release arm on a transient read
                 # failure — the same silent-`released: true`-over-a-stamped-
@@ -1933,7 +1933,7 @@ def drop(
             terminal_deployment = _terminal_deployment_state(resolved_handoff_path)
             if terminal_deployment is not None:
                 unclaimed = None
-                release_artifact(class_, basename, cwd=str(root))
+                release_artifact(class_, basename, cwd=str(root), my_sid=resolved_sid)
                 # No frontmatter mutation happened, so there is nothing for
                 # `_scoped_commit` to commit — skipping it also spares the
                 # git spawn the brightline counts.
@@ -1974,7 +1974,17 @@ def drop(
         # `release_artifact` always returns True (no-op success on every
         # non-holder / already-absent path — see its own docstring); nothing
         # here branches on its return value.
-        release_artifact(class_, basename, cwd=str(root))
+        #
+        # `my_sid=resolved_sid`: the HOLDER GATE above has already validated
+        # this identity against the recorded claim, and it is the identity
+        # `_session_identity` scoped for this block — `release_artifact`'s
+        # own ambient-env fallback (`core.resolve_session_id`) reads a
+        # different, tier-0/os.environ-only ContextVar chain that this
+        # scope never populates, so passing it explicitly here is what makes
+        # the ledger release land under an explicit or warm-carried
+        # `--session-id` rather than silently no-op against an unrelated (or
+        # absent) ambient identity.
+        release_artifact(class_, basename, cwd=str(root), my_sid=resolved_sid)
 
         try:
             scoped_sha = _scoped_commit(root, artifact_path_value, class_, basename, ["drop"])

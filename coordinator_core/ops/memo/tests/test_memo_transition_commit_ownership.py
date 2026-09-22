@@ -355,7 +355,7 @@ class TestNoOpDoesNotCommit:
         assert "resumed" not in result
         assert _head_sha(repo) == before_sha
 
-    # Review: code-reviewer (Finding 4) — release/resolve share the identical
+    # release/resolve share the identical
     # no-op shape as claim/action but had no coverage; asserted against real
     # git state (HEAD unmoved), not just the return field.
     def test_release_noop_creates_no_commit(self, tmp_path):

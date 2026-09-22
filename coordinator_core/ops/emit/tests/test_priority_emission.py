@@ -25,7 +25,7 @@ from unittest.mock import patch
 from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.ops.emit.sections import handoffs as handoffs_section
 
-# Review: coordinator:code-reviewer — Finding 1: _write_node extracted to conftest.py
+# _write_node extracted to conftest.py
 # (shared across the five priority-ledger test modules that used a byte-for-byte copy).
 from coordinator_core.ops.emit.tests.conftest import _write_node  # noqa: F401
 

@@ -89,7 +89,7 @@ def _git(repo: Path, *args: str) -> str:
     this tool reports signal strength and must never fail a whole triage run
     because one path has no history.
 
-    # Review: coordinator:overengineering-reviewer (finding 3) -- routes through
+    # Routes through
     # coordinator_core.ops.ceremony.git_native._git instead of hand-rolling a
     # second subprocess.run wrapper with its own creationflags/timeout/failure
     # mapping.

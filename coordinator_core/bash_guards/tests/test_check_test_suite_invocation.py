@@ -740,7 +740,7 @@ def test_bare_tier_u_em_command_denied_naming_wrapped_form(grant_repo, free_mute
     assert grant_module.write_tier_u_grant(
         "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
     )
-    cmd = "python3 -m pytest --collect-only -q"
+    cmd = "python3 -m pytest -q"
     out = guard.check(_payload(cmd, grant_repo))
     reason = _reason(out)
     assert "with-suite-mutex -- " + cmd in reason
@@ -753,7 +753,7 @@ def test_wrapped_tier_u_em_command_allowed(grant_repo, free_mutex):
     assert grant_module.write_tier_u_grant(
         "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
     )
-    cmd = "with-suite-mutex -- python3 -m pytest --collect-only -q"
+    cmd = "with-suite-mutex -- python3 -m pytest -q"
     assert guard.check(_payload(cmd, grant_repo)) is None
 
 
@@ -818,7 +818,7 @@ def test_wrapper_leg_runs_before_mutex_leg(grant_repo, held_mutex):
 
 
 def test_wrapper_leg_rejects_decoy_wrap_of_a_no_op_segment(grant_repo, free_mutex):
-    """Review: code-reviewer -- ``_command_wrapped_in_suite_mutex`` formerly
+    """``_command_wrapped_in_suite_mutex`` formerly
     asked "is ANY segment of the chained command wrapped", not "is the
     segment that actually invokes the suite wrapped". A granted EM could
     wrap an inert decoy segment (``true``) and run the real ``pytest``
@@ -1119,7 +1119,7 @@ def test_configured_test_cmds_resolves_both_tiers_via_a_real_resolver_module(tmp
 def test_configured_test_cmds_native_resolving_one_tier_still_gets_the_other_via_by_path(
     tmp_path, monkeypatch
 ):
-    """Review: code-reviewer — Finding 2 regression. A native leg that
+    """regression. A native leg that
     resolves only ONE tier must not discard the by-path shim's coverage of
     the other -- fallback is per-tier, not all-or-nothing."""
     _write_minimal_resolver(tmp_path)
@@ -1218,6 +1218,19 @@ class TestGrantLeg:
         assert guard.check(
             _payload("with-suite-mutex -- pytest", grant_repo)
         ) is None
+
+    def test_em_tier_u_collect_only_no_grant_allowed(self, grant_repo, free_mutex):
+        """2026-08-28 row (the-tier-u-guard-refuses-collect-only): a
+        collection pass runs no test body, so it must not need the Tier-U
+        grant ceremony an unbounded RUN does -- the exact same command minus
+        ``--collect-only`` still denies (test_em_tier_u_no_grant_denied)."""
+        assert guard.check(_payload("pytest --collect-only -q", grant_repo)) is None
+
+    def test_em_tier_u_collect_only_co_alias_no_grant_allowed(self, grant_repo, free_mutex):
+        """The ``--co`` short alias gets the same carve-out as
+        ``--collect-only``, through the ``python -m pytest`` invocation
+        shape as well as the bare ``pytest`` one."""
+        assert guard.check(_payload("python3 -m pytest --co", grant_repo)) is None
 
     def test_em_tier_f_no_grant_denied(self, grant_repo, free_mutex, monkeypatch):
         """AC-4 (2026-08-04 PM ruling, tier-f-is-grant-gated): the configured
@@ -1741,7 +1754,7 @@ class TestR6DeclaredUnscopedFastTier:
         out = guard.check(
             _payload("with-suite-mutex -- " + chained, grant_repo)
         )
-        # Review: code-reviewer (WRAPPER-leg decoy-segment fix) -- prefixing
+        # Prefixing
         # ONLY the first sub-command with ``with-suite-mutex --`` never wraps
         # the second: bash parses the top-level ``&&`` as a command
         # separator BEFORE with-suite-mutex ever sees any argv, and
@@ -1776,7 +1789,7 @@ class TestR6DeclaredUnscopedFastTier:
         not rebreak it: the invocation's segment set equals the declared
         command's segment set here, so it still satisfies the exact match.
 
-        Review: code-reviewer (WRAPPER-leg decoy-segment fix) -- this no
+        This no
         longer reaches ``None`` outright: prefixing only the FIRST
         sub-command with ``with-suite-mutex --`` never wraps the second (see
         the sibling test's own comment for why), so the tightened WRAPPER
@@ -1993,7 +2006,7 @@ class TestConfiguredCmdReachability:
         assert [m.tier for m in matches] == ["U"]
 
     # -----------------------------------------------------------------------
-    # Review: code-reviewer — Finding 1 regression. A bare single-token
+    # regression. A bare single-token
     # configured `fast_test_cmd` (no declared arguments) must not swallow a
     # genuinely narrower invocation of that runner into Tier F/U.
     # -----------------------------------------------------------------------
@@ -2245,7 +2258,7 @@ def test_norm_arg_collapses_whitespace_runs():
 
 
 def test_matches_declared_fast_test_cmd_exact_still_rejects_superset_through_norm_head():
-    """Review: code-reviewer — R6's authority exit (`_matches_declared_
+    """R6's authority exit (`_matches_declared_
     fast_test_cmd`) depends on exact-equality semantics, and `exact=True`
     now runs through `_norm_head` (the same python-family head-collapsing
     the containment legs use) after the shared-helper refactor. A head

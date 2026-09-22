@@ -760,7 +760,7 @@ def test_apply_size_cut_large_file_floor_never_selects_live_verdict():
 
 
 def test_large_file_floor_above_ordinary_floor_still_gates_the_upper_cohort(tmp_path):
-    """Review: coordinator:code-reviewer P2 — when large_file_floor_days
+    """When large_file_floor_days
     exceeds floor_days, the day >= floor_int branch must still exclude a
     large-file entry that hasn't reached its own (higher) floor. Pre-fix,
     reaching floor_int admitted the whole cohort unconditionally, deleting

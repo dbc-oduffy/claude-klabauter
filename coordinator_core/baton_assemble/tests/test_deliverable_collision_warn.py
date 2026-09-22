@@ -244,7 +244,7 @@ class TestResolvedAddressWiringAC6:
         assert "the-claim-holder" in captured.err
 
     def test_a_not_reachable_claimed_by_renders_no_address(self, tmp_path, capsys, monkeypatch):
-        """Review: code-reviewer -- P2, regression coverage for the
+        """Regression coverage for the
         `not_reachable` branch of `_resolve_claimed_by_address_suffix`
         falling through to `return ""` rather than the `reachable`
         rendering."""
@@ -273,7 +273,7 @@ class TestResolvedAddressWiringAC6:
         assert "send-message-address" not in captured.err
 
     def test_an_ambiguous_claimed_by_renders_no_address(self, tmp_path, capsys, monkeypatch):
-        """Review: code-reviewer -- P2, regression coverage for the
+        """Regression coverage for the
         `ambiguous` branch, with two candidates present so a regression
         that started rendering a candidate's address would be caught."""
         import coordinator_core.session.reachability as reach
@@ -318,7 +318,7 @@ class TestResolvedAddressWiringAC6:
         assert "claude-klabauter-11 [bbbbbb]" not in captured.err
 
     def test_own_session_claimed_by_renders_the_own_session_marker(self, tmp_path, capsys, monkeypatch):
-        """Review: code-reviewer -- P3, regression coverage for the
+        """Regression coverage for the
         `own_session` rendering path -- the branch previously flagged for a
         bare-vs-`!r`-quoted inconsistency."""
         import coordinator_core.session.reachability as reach

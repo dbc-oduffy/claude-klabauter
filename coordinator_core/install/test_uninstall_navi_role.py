@@ -93,7 +93,7 @@ def test_hand_edited_role_file_is_reported_and_left(tmp_path, shipped, capsys):
     assert "hand-edited" in stderr
 
 
-# Review: overengineering-reviewer(Kira) finding 2 — both setups land on the
+# Both setups land on the
 # same `template is None or not template.is_file()` branch with identical
 # assertions; parametrized rather than kept as two near-duplicate tests.
 @pytest.mark.parametrize(
@@ -142,7 +142,7 @@ def test_force_removes_a_hand_edited_role_file(tmp_path, shipped):
 def test_force_does_not_need_a_resolvable_template(tmp_path, monkeypatch):
     """--force must not depend on the plugin tree still being on disk.
 
-    # Review: overengineering-reviewer(Kira) finding 2 — the prior version
+    # The prior version
     # monkeypatched resolve_coordinator_root to raise, but `if not force`
     # short-circuits before resolution is ever reached, so the raise could
     # never fire; this asserted nothing beyond test_force_removes_a_hand_

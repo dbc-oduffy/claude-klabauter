@@ -476,7 +476,6 @@ def test_post_commit_never_carries_the_no_session_gate():
 # `.exe` fallback makes a lie.
 # ---------------------------------------------------------------------------
 #
-# Review: overengineering-reviewer Finding 4 residual (state/bug-backlog/
 # 2026-08-30-auto-push-main-and-two-launcher-referenc-2d703797edb5.yaml) --
 # the exemplar script name below was "coordinator-auto-push", a script
 # `_append_block` no longer generates a shim for (`ensure_post_commit_hook`

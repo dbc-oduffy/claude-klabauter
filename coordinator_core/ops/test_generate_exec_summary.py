@@ -158,6 +158,48 @@ def test_t5_fail_loud_on_malformed_hand_fence(repo):
     assert sentinel in target.read_text(encoding="utf-8")
 
 
+def test_t5b_hand_edit_inside_managed_fence_warns_and_still_regenerates(repo, capsys):
+    """A hand-edit landing inside a `<!-- BEGIN MANAGED -->` fence (bold
+    narrative with an inline citation, a shape `_derive_progress` never
+    emits) must not be clobbered on the next regen with no trace it had ever
+    been there. The overwrite is still correct (MANAGED sections are always
+    refreshed), so this must warn, not refuse — rc stays 0 and the
+    regenerated content replaces it, but the loss is now visible on stderr."""
+    target = repo / "docs" / "exec-summary.md"
+    mod.main([])
+
+    content = target.read_text(encoding="utf-8")
+    content = content.replace(
+        "<!-- BEGIN MANAGED: progress -->\n",
+        "<!-- BEGIN MANAGED: progress -->\n"
+        "**Shipped the thing:** did narrative work *(narrative-synthesis.md thread 13)*\n",
+        1,
+    )
+    target.write_text(content, encoding="utf-8")
+
+    rc = mod.main([])
+    err = capsys.readouterr().err
+
+    assert rc == 0
+    assert "MANAGED: progress" in err
+    assert "hand-edited" in err
+    assert "*(narrative-synthesis.md thread 13)*" not in target.read_text(encoding="utf-8")
+
+
+def test_validate_managed_shape_is_silent_on_generator_producible_content(repo, capsys):
+    """The paired negative case: ordinary regenerated content (bare bullet
+    lines, no inline citation) must not trip the warning on a routine regen."""
+    target = repo / "docs" / "exec-summary.md"
+    mod.main([])
+    capsys.readouterr()
+
+    rc = mod.main([])
+    err = capsys.readouterr().err
+
+    assert rc == 0
+    assert "hand-edited" not in err
+
+
 def test_t6_git_log_fallback_when_no_week_changelog(repo):
     target = repo / "docs" / "exec-summary.md"
     _git(str(repo), "add", ".")

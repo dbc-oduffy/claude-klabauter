@@ -1313,7 +1313,7 @@ def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
         UnicodeDecodeError,
         IndexError,
         ValueError,
-        # Review: code-reviewer — Finding 2: a cyclic/over-deep REF_DELTA
+        # A cyclic/over-deep REF_DELTA
         # chain (not depth-guarded like the direct OFS_DELTA recursion —
         # see `_MAX_DELTA_DEPTH`) would otherwise propagate an uncaught
         # RecursionError past this "Never raises" chokepoint.
@@ -1736,7 +1736,7 @@ def _is_under_archive_dir(path: Path, repo_root: Path) -> bool:
     that was passed directly rather than discovered by search."""
     if not _is_relative(path, repo_root):
         return False
-    # Review: code-reviewer Finding 4 — pre-existing site left off the
+    # pre-existing site left off the
     # shared rel_id helper when this module's other 12 sites were converted.
     rel = rel_id(path, repo_root)
     return any(rel == d or rel.startswith(d + "/") for d in ARCHIVE_DIRS)
@@ -1982,7 +1982,7 @@ def _reanchor_repo_relative(artifact_path: str, repo_root: Path) -> Optional[Pat
     segments = artifact_path.lstrip("/").split("/")
     if len(segments) >= 2 and segments[0] == basename:
         candidate = repo_root.joinpath(*segments[1:])
-        # Review: code-reviewer — routed through _literal_hit (not a bare
+        # Routed through _literal_hit (not a bare
         # is_file()) for consistency with the three call sites inside
         # resolve_artifact's main chain; a caller no longer has to re-check
         # this function's return value for a Win32 trailing-dot/space
@@ -2633,7 +2633,7 @@ def reply_obligation_at_open(fm: dict[str, Any]) -> Optional[str]:
     # purpose: a new memo kind landing in the schema then defaults to owing a
     # reply, which is the safe direction. A membership test would silently
     # excuse it.
-    # Review: overengineering-reviewer — `_REPLY_OWED_KINDS` frozenset had
+    # `_REPLY_OWED_KINDS` frozenset had
     # zero readers and its own comment argued against ever using a
     # membership test; deleted per "delete on sight".
     if fm.get("kind") == "fyi":
@@ -2742,7 +2742,7 @@ def _adopt_into_baton(
                     kwargs["intent"] = f"(from summary) {summary}"
 
     try:
-        # Review: reviewer(wsc-slice-5) — now_iso() must be called inside this
+        # now_iso() must be called inside this
         # try/except, not while building kwargs above, so a future non-trivial
         # now_iso() can never raise uncaught into brief()'s claim path.
         kwargs["closed_at"] = _session_core.now_iso()
@@ -2778,7 +2778,6 @@ def acquire_brief_claim(
          "liveness_basis": <the session.liveness basis behind "basis", or None>,
          "liveness_live": <the session_verdict boolean behind "basis", or None
                   when no verdict was available (see "holder-absent") --
-                  Review: coordinator:code-reviewer nit. Surfaced alongside
                   "liveness_basis" so an incident-report reader can tell a
                   confirmed-dead "stable-pid" record from a "stable-pid"
                   record that structurally DISAGREED (live=True, folded into
@@ -2887,7 +2886,7 @@ def acquire_brief_claim(
             except Exception:
                 verdict = None
             if verdict is not None:
-                # Review: staff-eng F1 — the live boolean (slot 0) must be
+                # The live boolean (slot 0) must be
                 # consulted, not just the basis string (slot 1). `session_live`
                 # (which `claim_artifact`'s takeover actually acted on) and
                 # `session_verdict` (computed here, for the label only) are
@@ -3681,7 +3680,6 @@ def compute_baton_unification_verdict(
         elif unstamped_skipped:
             no_unify_reason = "unstamped-role-skipped"
         elif unreadable_skipped:
-            # Review: coordinator:code-reviewer ab96d9461a4ded513 Finding 1 —
             # unreadable_skipped was threaded into the returned dict but the
             # reason/message ladder fell through to "nothing-inheritable"
             # when it was the sole skip reason, silently matching the
@@ -4339,7 +4337,7 @@ def compute_sender_reachability(sent_by: Optional[str]) -> dict[str, Any]:
     if outcome == "own_session":
         message = "This memo was sent by this same session — a self-receipt, not a reply target."
     elif outcome == "reachable":
-        # Review: coordinator:code-reviewer — `result.address` already
+        # `result.address` already
         # carries the answer from the one `resolve_address` call above;
         # calling `resolve_advisory_address` here was a second, independent
         # live registry scan for data already in hand (one-snapshot
@@ -4941,7 +4939,7 @@ def build_handoff_directives(
             "id": "d2",
             "cli": "archive-stamp-cli",
             "args": ["claim-handoff", artifact_path],
-            # Review: code-reviewer — Finding 4: every brief() call site overwrites
+            # Every brief() call site overwrites
             # this default explicitly, so an un-reassigned case now degrades to
             # "unconditional" (visible) rather than a stale "j1" literal that may
             # not even be in scope. Matches build_memo_directives's default.
@@ -5734,7 +5732,7 @@ def compute_gate_check_recommendation(blockers: list[dict[str, Any]]) -> dict[st
             "rationale": f"Every blocked_by id resolved terminal: {named}.",
         }
 
-    # Review: code-reviewer — Finding 3: `scan_incomplete` blockers fold
+    # `scan_incomplete` blockers fold
     # into `non_terminal` (failing closed is correct — an unreadable
     # record must not read as cleared), but they are not a confirmed-open
     # fact the way a genuinely `not resolved`/non-terminal blocker is.
@@ -5775,7 +5773,7 @@ def compute_gate_check_recommendation(blockers: list[dict[str, Any]]) -> dict[st
 #: strands unread if answered "cleared" without `gate-recheck` also
 #: recording the clearance (Piece A) — naming them here is what converts
 #: the silent orphaning the memo describes into a visible one.
-# Review: staff-eng — replaced the obsolete/factually-wrong version (it
+# Replaced the obsolete/factually-wrong version (it
 # described gate-recheck as needing a manual follow-on pass and as the
 # owner of retiring blocked_by; neither is true post-Piece-A).
 _JGATE_CLEARED_GUIDANCE = (
@@ -6039,7 +6037,7 @@ def build_gate_recheck_directive(artifact_path: str) -> dict[str, Any]:
 #: entries, never on a `recommendation` object, which the shared seam
 #: (`contract/decision_object/judgment.py`) restricts to
 #: `disposition`/`rationale` only).
-# Review: overengineering-reviewer — this guidance and its comment were
+# This guidance and its comment were
 # duplicated byte-for-byte across the `proposal` and `fyi` "fold-into-plan"
 # entries below; hoisted to one constant so drift between the two copies is
 # no longer possible.
@@ -6611,7 +6609,7 @@ def build_completeness_checklist(fm: dict[str, Any], artifact_path: str) -> dict
     # ordering as its own evidence field (contract § computed-skills.md
     # "Restart-gated hoist/partition (fixed ordering rule)"), independent of
     # `directives[]`'s parallel ordering above.
-    # Review: code-reviewer — Finding 5: `probe` is duplicated here rather
+    # `probe` is duplicated here rather
     # than replaced with an index back into `items[]` intentionally — batches
     # is self-contained ordering evidence, requiring no cross-referencing by
     # consumers.
@@ -6824,7 +6822,7 @@ def _artifact_is_a_plan(artifact_path: str) -> bool:
     no-pointer condition without satisfying the premise, which is the shape
     that fell through -- see the `else` arm there for what it cost.
     """
-    # Review: coordinator:code-reviewer — `str.lstrip("./")` strips a
+    # `str.lstrip("./")` strips a
     # character SET, not a literal prefix: a traversal-shaped input like
     # "../../docs/plans/x.md" has every leading "." and "/" collapsed away
     # to "docs/plans/x.md" and is wrongly classified as an in-tree plan.

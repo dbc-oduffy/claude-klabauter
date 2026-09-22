@@ -31,7 +31,7 @@ import pytest
 
 from coordinator_core.ops.emit.priority_resolve import resolve_priority
 
-# Review: coordinator:code-reviewer — Finding 1: _write_node/_ledger extracted to conftest.py
+# _write_node/_ledger extracted to conftest.py
 # (shared across the five priority-ledger test modules that used a byte-for-byte copy).
 from coordinator_core.ops.emit.tests.conftest import _ledger, _write_node  # noqa: F401
 

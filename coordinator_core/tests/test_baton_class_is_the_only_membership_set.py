@@ -152,7 +152,7 @@ def _string_constants(node: ast.AST) -> Optional[set[str]]:
     collection node, or None if `node` is not a collection shape this test
     understands.
 
-    Review: code-reviewer (P2, Finding 2) — `ast.Dict` was previously never
+    `ast.Dict` was previously never
     recognised as a collection shape, so a dict literal pairing a retired
     value with its successor (e.g. `{"spinoff-roadmap": "legacy",
     "roadmap-baton": "current"}`) walked straight through undetected — a dict

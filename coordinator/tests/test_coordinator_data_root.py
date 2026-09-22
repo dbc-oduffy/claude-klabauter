@@ -186,6 +186,26 @@ def test_f6_marketplace_cache_rung_claude_home_matches_registry_twin(tmp_path, m
     assert result == registry_result
 
 
+def test_cdr_marketplace_cache_rung_excludes_unparseable_version_dirs(tmp_path, monkeypatch) -> None:
+    """Opaque hash-named cache dirs (e.g. a github-sourced install's commit
+    SHAs) must not out-rank a real semver dir via leading-digit coercion —
+    only strictly numeric, <=3-segment dot-versions are ranking candidates.
+    Pre-fix, `021d0d725330` parsed as (21, 0, 0) and `0371a29ed35d` as
+    (371, 0, 0), so the hash with the longer leading-digit run won on an
+    ordering that reflects nothing about install recency."""
+    claude_home_dir = tmp_path / "hash-shaped-cache"
+    cache_parent = claude_home_dir / "plugins" / "cache" / "coordinator-claude" / "coordinator"
+    (cache_parent / "0371a29ed35d").mkdir(parents=True)
+    (cache_parent / "021d0d725330").mkdir(parents=True)
+    (cache_parent / "1.2.3").mkdir(parents=True)
+
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home_dir))
+    monkeypatch.delenv("HOME", raising=False)
+    monkeypatch.delenv("USERPROFILE", raising=False)
+
+    assert cdr._cdr_marketplace_cache_rung() == str(cache_parent / "1.2.3")
+
+
 def test_f6_flat_layout_rung_claude_home_matches_registry_twin(tmp_path, monkeypatch) -> None:
     """F6 regression: same convergence for `_cdr_flat_layout_probe_rung()` /
     `_mp_flat_layout_probe_rung()`."""

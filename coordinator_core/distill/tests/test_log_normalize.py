@@ -82,7 +82,7 @@ ALREADY_CANONICAL_FIXTURE = """\
 - archive/specs/foo.md -> DISTILLED, already migrated (run: 2026-07-12)
 """
 
-# Review: code-reviewer (Finding 1) — a legacy `path` cell with embedded whitespace
+# A legacy `path` cell with embedded whitespace
 # produces a rendered row that cannot round-trip through parse_distillation_log
 # (\S+-anchored path grammar). Must be routed to `skipped`, never miscounted as
 # migrated.
@@ -270,7 +270,7 @@ def test_normalize_log_original_content_preserved_verbatim(tmp_path):
 
 
 def test_normalize_log_refuses_to_clobber_existing_backup(tmp_path):
-    # Review: code-reviewer (Finding 2, P1) — a stale `.legacy-backup` sibling from a
+    # A stale `.legacy-backup` sibling from a
     # prior attempt must never be silently overwritten by a second attempt; that
     # backup may be the only remaining copy of the true original. Fail loud instead.
     log_path = tmp_path / "distillation-log.md"
@@ -300,7 +300,7 @@ def test_normalize_log_write_is_atomic_no_tmp_leftover_on_success(tmp_path):
 
 
 def test_normalize_log_raises_not_legacy_shaped_for_unrecognized_content(tmp_path):
-    # Review: code-reviewer (Finding 4, P2) — a file that is neither canonical nor
+    # A file that is neither canonical nor
     # legacy-pipe-table-shaped (no pipe-delimited lines at all) must not silently
     # produce an empty canonical shell; it must raise instead.
     log_path = tmp_path / "distillation-log.md"
@@ -402,7 +402,7 @@ def test_normalize_log_canonical_rows_use_ascii_arrow(tmp_path):
 
 
 def test_normalize_log_embedded_whitespace_path_is_skipped_not_migrated(tmp_path):
-    # Review: code-reviewer (Finding 1, P1) — a legacy row whose `path` cell contains
+    # A legacy row whose `path` cell contains
     # embedded whitespace cannot round-trip through parse_distillation_log's
     # \S+-anchored grammar. It must be skipped with a reason, never written-but-
     # miscounted as migrated.
@@ -718,7 +718,7 @@ def test_normalize_arrow_dialects_missing_file_raises(tmp_path):
 
 
 def test_normalize_arrow_dialects_split_rewritten_and_already_canonical_counts(tmp_path):
-    # Review: review-integrator — rows_migrated conflates "rewritten from a
+    # rows_migrated conflates "rewritten from a
     # dialect" and "already canonical, left untouched" per the module docstring's
     # own admission. rows_rewritten / rows_already_canonical split the ledger so a
     # consumer need not read that disambiguation to get the true breakdown.
@@ -748,7 +748,7 @@ def test_normalize_log_rows_rewritten_and_already_canonical_are_none():
 # ---------------------------------------------------------------------------
 # any_arrow_dialect_match flag — the BLOCKED-verdict fix
 #
-# Review: reviewer (Finding 1, P1/BLOCKED) — the flag was previously set on
+# The flag was previously set on
 # `_ARROW_DIALECT_ROW_RE` match alone, before the round-trip check could still
 # route the row to `skipped`. A file with exactly one round-trip-failing
 # arrow-dialect row and no already-canonical rows must still raise
@@ -804,7 +804,7 @@ def test_normalize_arrow_dialects_does_not_poison_backup_slot_on_round_trip_fail
 # ---------------------------------------------------------------------------
 # _arrow_dialect_fate — DISTILLED-wrapped-paren fallback with trailing text
 #
-# Review: reviewer (P3 nit) — untested fallback: a DISTILLED row with trailing
+# Untested fallback: a DISTILLED row with trailing
 # content after the closing paren (`-> DISTILLED (harvested; ...) extra note`)
 # falls through to "return rest unmodified, parens included" instead of
 # unwrapping. Not a data-loss bug per the function's own contract (nothing

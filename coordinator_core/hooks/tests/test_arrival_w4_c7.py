@@ -276,7 +276,7 @@ def test_repo_setup_claude_home_refusal_allows_wrong_tool():
 
 
 def test_repo_setup_claude_home_refusal_denies_through_the_wrapped_envelope(tmp_path, monkeypatch):
-    """Review: coordinator-code-reviewer — both engine doors send `params`
+    """Both engine doors send `params`
     as `{"payload": <event>}`, not the flat event this module used to read
     directly. Through the wrapped door the guard was a structural no-op;
     this pins the fix."""

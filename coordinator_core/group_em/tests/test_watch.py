@@ -1325,7 +1325,7 @@ def test_a_departure_across_two_wakes_is_reported_whatever_the_cadence():
 
 
 def test_gone_emits_even_when_persistence_raises(tmp_path):
-    """Review: coordinatorcode-reviewer.a933f243c20654e60, Finding 1 -- pins
+    """Pins
     the emit-then-persist ordering as deliberate, not incidental.
 
     `poll_once` emits its GONE line INSIDE the call, before `save_prev_parked`
@@ -1934,7 +1934,7 @@ def test_inbox_counts_reads_status_off_the_frontmatter_head(tmp_path):
     assert isinstance(taken_at, float)
 
 
-# Review: coordinatorcode-reviewer (finding #2) -- a genuinely undecodable memo must
+# A genuinely undecodable memo must
 # degrade to None per the function's own contract, not raise UnicodeDecodeError
 # uncaught through _inbox_counts's per-entry loop. Real invalid UTF-8 bytes, not a
 # monkeypatched exception, so this pins the behaviour rather than a mock.

@@ -9,7 +9,7 @@ mode selection, opportunistic-vs-hard-fail error handling, argv parsing — not
 the engine behind `handoff.archive_transition` or `handoff.has_live_children`
 (those are coordinator_core's own test surfaces).
 
-Review: code-reviewer (P3) — exception: `ClosedTargetSupersedeChokePointTest`
+exception: `ClosedTargetSupersedeChokePointTest`
 below deliberately does the opposite, calling the real op handler
 (`coordinator_core.ops.handoff_archive_transition._handler`) directly against
 a real on-disk worktree, because the `cc_invoke.route_mutation` seam every
@@ -204,7 +204,7 @@ class ChainSubcommandTest(_StubHarness):
         rc = _cli.cmd_chain(self.handoff_path, [])
         self.assertEqual(rc, 1)
 
-    # Review: code-reviewer — Defect 1's actual new behavior (bare
+    # Defect 1's actual new behavior (bare
     # RuntimeError transport/engine failure -> rc 1) had zero test coverage;
     # a RouteMutationError is a RuntimeError subclass, so the sibling test
     # above alone did not exercise the new `except RuntimeError` branch.

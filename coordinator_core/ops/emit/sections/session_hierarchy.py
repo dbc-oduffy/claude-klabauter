@@ -83,7 +83,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
                 state_dir,
                 exc,
             )
-            # Review: code-reviewer — this is the one malformed-entry shape in this file
+            # This is the one malformed-entry shape in this file
             # that never carries session_id (by construction: it fails before any file is
             # even opened, so no session_id has been read yet). Every other malformed
             # entry below carries a session_id when one is known — a consumer scanning

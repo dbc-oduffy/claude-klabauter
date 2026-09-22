@@ -111,7 +111,7 @@ _LS_REMOTE_TIMEOUT_SECONDS = 5
 # already-resolved DoE clone (peel, log, show, merge-base) — bounded the same
 # way for symmetry, though none of them touch the network.
 #
-# Review: code-reviewer (F6, nit) — per-call timeouts bound each hop but not
+# per-call timeouts bound each hop but not
 # the total. Worst case the happy/degraded path chains up to 5 sequential
 # calls (1x _LS_REMOTE_TIMEOUT_SECONDS + up to 4x _LOCAL_GIT_TIMEOUT_SECONDS),
 # ~45s worst case. Not wired to an overall wall-clock budget today — worth
@@ -151,7 +151,7 @@ def _entry(
     candidate_version: Optional[str] = None,
     candidate_ref: Optional[str] = None,
 ) -> dict[str, Any]:
-    # Review: code-reviewer (F4) — the trailing same-typed (Optional[str])
+    # The trailing same-typed (Optional[str])
     # args are keyword-only so a transposed call fails loudly (TypeError) at
     # the call site instead of type-checking and silently swapping data in
     # the emitted envelope.
@@ -168,7 +168,7 @@ def _entry(
         "candidate": {
             "sha": candidate_sha,
             "contract_version": candidate_version,
-            # Review: code-reviewer (F1) — names exactly what the candidate
+            # Names exactly what the candidate
             # query was scoped to (see module candidate-scope negative-spec),
             # additive field, agreed FRESH/STALE/DIVERGED/UNKNOWN shape
             # unchanged.
@@ -279,7 +279,7 @@ def _peel_to_commit(doe_root: Path, sha: str) -> str:
     tag object, silently breaking the ancestry test downstream. Peel first,
     always, before any ancestry comparison.
 
-    Review: code-reviewer (F2) — if the tag object `ls-remote` reported isn't
+    If the tag object `ls-remote` reported isn't
     yet in the DoE clone's local object database (the ordinary state right
     after a tag is cut, before the next fetch), `rev-parse` exits non-zero.
     Mirroring `doe_drift.probe_freshness_ref`'s documented graceful fallback
@@ -503,7 +503,7 @@ def _compute(checked_at: str) -> dict[str, Any]:
             published_peel=published_peel,
         )
 
-    # Review: code-reviewer (F1) — best-effort annotation naming the scope
+    # best-effort annotation naming the scope
     # `_candidate_sha` measured; never raises, so a resolution failure here
     # must not abort a verdict the SHA comparison below can still determine.
     candidate_ref: Optional[str] = None
@@ -523,7 +523,7 @@ def _compute(checked_at: str) -> dict[str, Any]:
         pass
 
     if published_peel == candidate_sha:
-        # Review: code-reviewer (F5) — same sha, so re-reading the same blob
+        # Same sha, so re-reading the same blob
         # via a second identical `git show` would be a redundant subprocess
         # call; reuse the value already read above.
         candidate_version = published_version

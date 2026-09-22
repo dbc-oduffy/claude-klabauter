@@ -376,7 +376,7 @@ def test_confirm_with_all_predicates_passing_pushes_fast_forward_refspec(tmp_pat
     assert push_calls == [["git", "-C", dest, "push", "origin", "--ff-only", "candidate:main"]]
 
 
-# Review: H-predicate4-soak-floor — the dry-run and confirmed-push success
+# H-predicate4-soak-floor — the dry-run and confirmed-push success
 # messages must not read as an unqualified "all 4 predicates passed" (that
 # claim was dead text under the stub; filling predicate 4 in with a
 # soak-floor proxy made it live and misleading). Pin that both success

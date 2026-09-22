@@ -125,7 +125,7 @@ _LOG = logging.getLogger(__name__)
 
 # Mode token echoed into the fleet act envelope (fleet ops use "already-terminal"
 # for the self-selecting, non-cockpit-round-trip path — parity with session.boot_sweep).
-# Review: code-reviewer F6 — session.boot_sweep also inlines this same literal rather
+# session.boot_sweep also inlines this same literal rather
 # than exporting it as a named constant, so there is nothing to import here; kept local.
 _MODE = "already-terminal"
 
@@ -204,7 +204,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _err(f"handoff_path escapes state/handoffs/: {handoff_path!r}")
 
     rel_id = _wire_rel_id(contained, worktree)
-    # Review: code-reviewer F7 — rel_id is re-resolved inside _stamp_handler and again
+    # rel_id is re-resolved inside _stamp_handler and again
     # inside _ship's own _resolve_path. This is intentional re-validation-in-depth: each
     # sibling op independently re-checks containment rather than trusting this call's
     # resolution, not dead/redundant code.
@@ -215,7 +215,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         # archive/handoffs/, report the terminal already-archived outcome (exit_code:0,
         # parity with the fleet op's "already-archived" skip) rather than a not-found error.
         #
-        # Review: code-reviewer F1 — basename-only matching is not identity-safe: two
+        # basename-only matching is not identity-safe: two
         # distinct handoffs can share the same YYYY-MM-DD-<slug>.md basename across
         # different archive months. Only accept a candidate as THIS call's replay when
         # its frontmatter shipped_in equals the sha this call supplied — that is the one

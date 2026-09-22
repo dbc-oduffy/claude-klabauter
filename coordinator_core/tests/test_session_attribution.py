@@ -15,7 +15,7 @@ comparable size/shape — git_ancestry.py, liveness.py — both have their
 tests in coordinator_core/tests/, not flat beside the module). Originally
 placed flat on a since-corrected claim that flat was the dominant local
 convention for this repo; moved here on review.
-# Review: code-reviewer — flat placement rested on a "dominant convention"
+# Flat placement rested on a "dominant convention"
 # claim the tree contradicts (tests/ subdir outnumbers flat siblings, and
 # the two most comparable modules both use tests/); moved, not just
 # re-justified.
@@ -39,7 +39,7 @@ Coverage:
 Spec backlink: pln-review-trail-scope-guard-refus-d6e42c § C5
 (C5a/C5b/C5c were a dispatch-time wave-map expansion, not plan-doc text —
 the plan carries one C5 task-spine row).
-# Review: code-reviewer — backlink cited a "§ C5b" heading the plan doc
+# Backlink cited a "§ C5b" heading the plan doc
 # never wrote; corrected to the actual § C5 anchor.
 """
 
@@ -325,6 +325,86 @@ def test_trailer_fast_path_matches_coverage_wrapper_for_session_scope(repo_root)
     )
 
     assert direct == via_wrapper == frozenset({theirs_sha})
+
+
+# ---------------------------------------------------------------------------
+# Fallback line-scan — a Session-Id trailer git's own parse cannot see
+# ---------------------------------------------------------------------------
+
+
+def test_dash_marker_immediately_above_trailer_is_still_recognized(repo_root):
+    """A `---` divider sitting directly above `Session-Id:` (no blank line
+    between them) makes the whole final paragraph fail git's
+    all-lines-trailer-shaped rule, so `%(trailers:key=Session-Id,valueonly)`
+    reads empty even though the line is plainly present. Both classifiers
+    must still recognize it via the line-scan fallback."""
+    sid = "sess-attr-dashmark-001"
+    other_sid = "sess-attr-dashmark-001-OTHER"
+    init_sha = _init_repo(repo_root)
+    theirs_sha = _commit(
+        repo_root, f"dash marker case\n\nsome body prose\n\n---\nSession-Id: {other_sid}",
+        files={"dashmark.txt": "dashmark\n"},
+    )
+
+    sha_range = f"{init_sha}..HEAD"
+    foreign = session_attribution.trailer_foreign_shas(
+        sha_range, sid, str(repo_root), {}, run=coverage._run,
+    )
+    assert theirs_sha in foreign
+
+    session_map = session_attribution.bulk_trailer_session_map(
+        sha_range, str(repo_root), run=coverage._run,
+    )
+    assert session_map.get(theirs_sha) == other_sid
+
+
+def test_trailing_non_trailer_paragraph_does_not_hide_session_id(repo_root):
+    """A paragraph following `Session-Id:` that is not itself trailer-shaped
+    (e.g. a merge's `# Conflicts:` block) demotes `Session-Id:`'s own
+    paragraph out of git's last-paragraph trailer block, so the structured
+    parse reads empty. The fallback line-scan must still recover it."""
+    sid = "sess-attr-trailingpara-001"
+    other_sid = "sess-attr-trailingpara-001-OTHER"
+    init_sha = _init_repo(repo_root)
+    theirs_sha = _commit(
+        repo_root,
+        f"conflict-shaped case\n\nSession-Id: {other_sid}\n\n# Conflicts:\n#\tfile.py",
+        files={"trailingpara.txt": "trailingpara\n"},
+    )
+
+    sha_range = f"{init_sha}..HEAD"
+    foreign = session_attribution.trailer_foreign_shas(
+        sha_range, sid, str(repo_root), {}, run=coverage._run,
+    )
+    assert theirs_sha in foreign
+
+    session_map = session_attribution.bulk_trailer_session_map(
+        sha_range, str(repo_root), run=coverage._run,
+    )
+    assert session_map.get(theirs_sha) == other_sid
+
+
+def test_dash_marker_broken_trailer_naming_own_session_is_not_foreign(repo_root):
+    """The fallback recovers the OWN session correctly too — a broken-block
+    commit naming the reviewing session itself must not be misclassified as
+    foreign."""
+    sid = "sess-attr-dashmark-own-001"
+    init_sha = _init_repo(repo_root)
+    own_sha = _commit(
+        repo_root, f"dash marker own case\n\nsome body prose\n\n---\nSession-Id: {sid}",
+        files={"dashmarkown.txt": "dashmarkown\n"},
+    )
+
+    sha_range = f"{init_sha}..HEAD"
+    foreign = session_attribution.trailer_foreign_shas(
+        sha_range, sid, str(repo_root), {}, run=coverage._run,
+    )
+    assert own_sha not in foreign
+
+    session_map = session_attribution.bulk_trailer_session_map(
+        sha_range, str(repo_root), run=coverage._run,
+    )
+    assert session_map.get(own_sha) == sid
 
 
 # ---------------------------------------------------------------------------

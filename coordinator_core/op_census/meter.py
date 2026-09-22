@@ -284,7 +284,7 @@ def generation_paths(repo_root: Path, *, window: str) -> List[Path]:
     sink = _sink_path(git_common_dir(repo_root))
     if window == "current":
         return [sink]
-    # Review: coordinatorcode-reviewer — window is validated at function top, so
+    # Window is validated at function top, so
     # this is always "all" here; the trailing raise was unreachable dead code
     # duplicating the earlier message.
     rotated = sorted(
@@ -438,7 +438,7 @@ def measure(
         filters={
             "ops": sorted(op_filter) if op_filter else None,
             "origins": sorted(origin_filter) if origin_filter else None,
-            # Review: coordinatorcode-reviewer — `started`/`composition` rows are
+            # `started`/`composition` rows are
             # real narrowing dropped before total_rows is counted, and were the
             # unstated gap between GenerationRead.rows and Population.rows (the
             # same class of ambiguity AC3 exists to close; near-miss of D1/D-class
@@ -472,7 +472,7 @@ def render(
         key=lambda m: (sum(m.counts_by_origin.values()), max(m.process_ms, default=0.0)),
         reverse=True,
     )
-    # Review: coordinatorcode-reviewer — `top` must be `is not None`-tested, not
+    # `top` must be `is not None`-tested, not
     # truthiness-tested: `--top 0` is a valid, plausible "show none" request, and
     # truthiness treats it as "unset", silently returning every row.
     shown = ordered[:top] if top is not None else ordered

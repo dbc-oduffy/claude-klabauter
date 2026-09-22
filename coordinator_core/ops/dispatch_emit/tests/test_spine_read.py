@@ -226,7 +226,7 @@ def test_reads_and_depends_on_default_to_empty_list(tmp_path):
 
 
 def test_duplicate_id_raises_invalid_row_id_error(tmp_path):
-    # Review: coordinator:code-reviewer (wsc-A, ecb99d36) P1 — a duplicate
+    # A duplicate
     # id silently collapsed wave_map._predecessors' dict-keyed-by-id graph
     # instead of raising; the fix is to fail loud here, once, for every
     # downstream consumer.
@@ -270,7 +270,7 @@ def test_non_string_id_raises_invalid_row_id_error(tmp_path):
 
 
 def test_falsy_scalar_reads_raises_instead_of_silently_coercing(tmp_path):
-    # Review: coordinator:code-reviewer (wsc-A, ecb99d36) P2 — `reads:` used
+    # `reads:` used
     # `raw.get("reads") or []`, which silently coerced a falsy-but-invalid
     # declared value (e.g. `reads: 0`) to `[]` instead of raising, an
     # asymmetry with `writes:`'s explicit `is None` check.

@@ -148,11 +148,16 @@ to its own measured baseline (targets differ by ~2.4x in module count on this
 machine, so a shared ceiling would either mask a regression on the small target
 or permanently red the large one).
 
-SECONDARY guard per target: a min-of-N `time.process_time()` (CPU time, never
-wall-clock) catastrophic-regression floor -- coarse, not precise; the module-set
-ceiling carries the precision now (see the cited "Primary guard" reasoning in
-`test_pickup_assemble_import_perf`'s docstring, reused here rather than
-re-derived).
+SECONDARY guard per target: a batch-amortised `batched_process_time_ms` (CPU
+time, never wall-clock) catastrophic-regression floor -- coarse, not precise;
+the module-set ceiling carries the precision now (see the cited "Primary
+guard" reasoning in `test_pickup_assemble_import_perf`'s docstring, reused
+here rather than re-derived). Batched rather than single-shot per invocation:
+a fresh-subprocess `time.process_time()` read is ~15.6ms scheduler-tick
+quantised on Windows (`coordinator_core.benchmarks.process_time` module
+docstring, trap 2), close enough to this floor's tighter per-target
+ceilings (as low as 150ms, a bare 9-10 ticks) that a single-shot read is
+not a trustworthy figure.
 
 Dead zone, explicitly (mirrors the model file's own dead-zone disclosure): the
 module-count ceiling does NOT catch a same-module-set cost regression -- an
@@ -220,6 +225,8 @@ from typing import Sequence
 
 import pytest
 
+from coordinator_core.benchmarks.process_time import batched_process_time_ms
+
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
@@ -229,10 +236,12 @@ pytestmark = [
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# See module docstring's "Secondary guard" -- kept at 2 (not 1) purely as cheap
-# redundancy against a one-off subprocess-spawn anomaly, matching
-# test_pickup_assemble_import_perf's own _SAMPLE_COUNT rationale: each sample
-# spawns a fresh interpreter, so this stays low under the parallel fast tier.
+# See module docstring's "Secondary guard" -- `k` passed to
+# `batched_process_time_ms`, kept at 2 (not 1) purely as cheap redundancy
+# against a one-off subprocess-spawn anomaly, matching
+# test_pickup_assemble_import_perf's own _SAMPLE_COUNT rationale: each
+# invocation spawns a fresh interpreter, so this stays low under the
+# cadence tier.
 _SAMPLE_COUNT = 2
 
 
@@ -596,29 +605,63 @@ def _imported_module_names(
     return payload["modules"], payload["sys_path_growth"]
 
 
-def _sample_import_cost_ms(target: _Target) -> float:
-    """One fresh-interpreter sample of `target`'s CPU-time import/fire cost.
+def _verify_every_invocation_succeeds(target: _Target, k: int) -> None:
+    """Fires `target`'s probe body `k` times, each via a plain `check=True`
+    `subprocess.run`, so ANY of the `k` invocations exiting non-zero raises
+    `CalledProcessError` immediately.
 
-    CPU time (`time.process_time`), NOT wall-clock -- see module docstring's
-    "Secondary guard" and the cited 2026-08-03 lesson for why: descheduling
-    under a parallel test tier inflates wall-clock without inflating consumed
-    CPU, so process_time is the only one of the two that still measures the
-    import rather than the machine's momentary load.
+    `batched_process_time_ms` (used by `_measure_import_cost_ms` below for
+    the actual timing) reports only the LAST of its `k` invocations' exit
+    codes (its own docstring is explicit that per-invocation health is the
+    caller's job, not the primitive's) -- amortising K invocations through
+    one job-object/getrusage read is what recovers sub-tick resolution on
+    Windows, and that same amortisation is what makes an individual
+    invocation's exit code unobservable from inside it. This restores the
+    pre-batching guarantee (the old per-sample `subprocess.run(...,
+    check=True)` loop this floor used before it adopted the shared
+    primitive) as a separate, dedicated pass: correctness is checked here,
+    timing is measured by the batched primitive, and neither call's result
+    stands in for the other.
     """
-    lines = ["import time", "t0 = time.process_time()"]
-    lines.extend(_fire_lines(target))
-    lines.append("print((time.process_time() - t0) * 1000.0)")
-    probe = "\n".join(lines) + "\n"
-    proc = subprocess.run(
+    probe = "\n".join(_fire_lines(target)) + "\n"
+    for _ in range(k):
+        subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            check=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            cwd=_REPO_ROOT,
+            env=_probe_env(),
+        )
+
+
+def _measure_import_cost_ms(target: _Target, k: int = _SAMPLE_COUNT) -> dict:
+    """Batch-amortised CPU-time cost of firing `target` in a fresh
+    subprocess, via the shared `batched_process_time_ms` primitive.
+
+    CPU time, NOT wall-clock -- see module docstring's "Secondary guard"
+    and the cited 2026-08-03 lesson for why: descheduling under a parallel
+    test tier inflates wall-clock without inflating consumed CPU, so
+    process time is the only one of the two that still measures the import
+    rather than the machine's momentary load. Batched (never a single-shot
+    self-reported `time.process_time()`) because that reads quantised in
+    ~15.6ms steps on Windows (`coordinator_core.benchmarks.process_time`
+    module docstring, trap 2) -- `batched_process_time_ms` amortises K
+    invocations through one job object/getrusage read and divides by K,
+    recovering sub-tick resolution honestly.
+
+    Does NOT itself verify every invocation's exit status -- see
+    `_verify_every_invocation_succeeds`, which callers of this function run
+    first for that purpose.
+    """
+    probe = "\n".join(_fire_lines(target)) + "\n"
+    return batched_process_time_ms(
         [sys.executable, "-c", probe],
-        capture_output=True,
-        text=True,
-        check=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        cwd=_REPO_ROOT,
+        k=k,
         env=_probe_env(),
+        cwd=str(_REPO_ROOT),
     )
-    return float(proc.stdout.strip())
 
 
 def _assert_module_ceiling(target: _Target, imported: Sequence[str]) -> None:
@@ -681,14 +724,26 @@ def test_hot_path_hook_import_floor(target: _Target) -> None:
     (or, for a CLI-trampoline target, its FULL form) completes within a
     widened CPU-time sanity bound. NOT the precise guard -- see
     `test_hot_path_hook_import_modules` and the module docstring's dead-zone
-    disclosure for what this floor does NOT catch."""
-    samples_ms = [_sample_import_cost_ms(target) for _ in range(_SAMPLE_COUNT)]
-    min_ms = min(samples_ms)
-    assert min_ms <= target.cpu_floor_ms, (
-        f"{target.import_path} import cost regressed: minimum of "
-        f"{_SAMPLE_COUNT} samples was {min_ms:.1f}ms, exceeding {target.name}'s "
-        f"widened catastrophic-regression bound of {target.cpu_floor_ms}ms. All "
-        f"samples (ms): {[round(s, 1) for s in samples_ms]}."
+    disclosure for what this floor does NOT catch.
+
+    Verifies every one of the batched primitive's `_SAMPLE_COUNT`
+    invocations exits zero via `_verify_every_invocation_succeeds` BEFORE
+    measuring -- `batched_process_time_ms`'s own `rc` reflects only its
+    LAST invocation (see that function's docstring), so a bare
+    `result["rc"] == 0` check alone would miss a non-last invocation
+    failing.
+    """
+    _verify_every_invocation_succeeds(target, _SAMPLE_COUNT)
+    result = _measure_import_cost_ms(target)
+    assert result["rc"] == 0, (
+        f"{target.import_path} probe invocation exited non-zero (rc="
+        f"{result['rc']}) while measuring the import-cost floor"
+    )
+    measured_ms = result["process_time_ms"]
+    assert measured_ms <= target.cpu_floor_ms, (
+        f"{target.import_path} import cost regressed: {measured_ms:.1f}ms "
+        f"(batch-amortised over k={result['k']}), exceeding {target.name}'s "
+        f"widened catastrophic-regression bound of {target.cpu_floor_ms}ms."
     )
 
 
@@ -756,3 +811,60 @@ def test_hot_path_hook_import_budget_gate_catches_a_planted_regression() -> None
     )
     with pytest.raises(AssertionError):
         _assert_module_ceiling(target, imported)
+
+
+def test_import_floor_uses_batched_process_time_primitive() -> None:
+    """Regression guard, same defect class as
+    `test_cater_subagent_start_budget.py`'s own AC6 guard (state/bug-
+    backlog/2026-08-21-process-time-on-windows-is-15-625ms-gran-
+    c3711465cae3.yaml): the SECONDARY floor's probe used to self-report a
+    single `time.process_time()` sample from inside the fired subprocess,
+    quantised in ~15.6ms steps on Windows -- `batched_process_time_ms`
+    (module docstring, `coordinator_core.benchmarks.process_time`)
+    amortises K invocations through one job-object/getrusage read instead.
+    Sourced from THIS file's own text rather than re-running the floor
+    tests, since the failure mode this guards is "the measurement
+    mechanism regressed to single-shot", not "the ceiling was breached"
+    (already covered by `test_hot_path_hook_import_floor` above).
+    """
+    # Sliced ahead of THIS guard's own def so its assertion literals (which
+    # necessarily name the very pattern being forbidden) cannot self-match.
+    source = Path(__file__).read_text(encoding="utf-8")
+    guarded_source, _, _ = source.partition(
+        "def test_import_floor_uses_batched_process_time_primitive"
+    )
+    assert "t0 = time.process_time()" not in guarded_source, (
+        "a raw single-shot time.process_time() probe reappeared in this "
+        "file -- the import-cost floor must measure via the batch-"
+        "amortised batched_process_time_ms primitive instead (Windows "
+        "~15.6ms scheduler-tick quantisation)."
+    )
+    assert "batched_process_time_ms(" in guarded_source, (
+        "expected the import-cost floor to measure via batched_process_time_ms"
+    )
+
+
+def test_verify_every_invocation_succeeds_catches_a_failing_probe() -> None:
+    """Regression guard for the specific gap `batched_process_time_ms`'s own
+    docstring names: its `rc` field reflects only the LAST of its `k`
+    invocations, so a bare `result["rc"] == 0` check after it can pass
+    even when an earlier invocation failed. `_verify_every_invocation_succeeds`
+    is the dedicated pass that closes that gap -- this proves it actually
+    raises on a failing probe, rather than trusting an assertion nobody has
+    watched fail (same demonstration discipline as
+    `test_hot_path_hook_import_budget_gate_catches_a_planted_regression`
+    above).
+
+    Uses a scratch `_Target` whose `import_path` names a module that does
+    not exist, so every one of its `k` fired invocations raises `ImportError`
+    inside the subprocess and exits non-zero -- deterministic across the
+    whole loop, not a flaky probe.
+    """
+    bogus_target = _Target(
+        name="scratch_nonexistent_module_probe",
+        import_path="coordinator_core._this_module_does_not_exist_bogus",
+        module_count_ceiling=1,
+        sys_path_entry_ceiling=1,
+    )
+    with pytest.raises(subprocess.CalledProcessError):
+        _verify_every_invocation_succeeds(bogus_target, k=2)

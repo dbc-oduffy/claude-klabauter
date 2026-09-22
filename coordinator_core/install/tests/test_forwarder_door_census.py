@@ -308,7 +308,7 @@ class TestAllowlistPopulation:
         assert set(on_disk["entrypoints"]) == set(merged)
 
     def test_write_allowlist_preserves_door_eligible_entrypoints_on_regen(self, tmp_path):
-        # Review: coordinator:code-reviewer -- pins that a regen after C13's
+        # Pins that a regen after C13's
         # split does not silently DELETE the independently-editable door-
         # cutover key and its provenance comment; `_write_allowlist` only
         # ever owned `$comment`/`entrypoints`.

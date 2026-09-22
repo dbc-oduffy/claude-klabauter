@@ -51,6 +51,8 @@ import pytest
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.session import claims as _session_claims
 from coordinator_core.session import core as _session_core_mod
+from coordinator_core.session import scope as _session_scope
+from coordinator_core.session import touch_record as _touch_record
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workstream_complete import directives_commit_tail
 
@@ -513,3 +515,69 @@ def test_run_close_commit_and_release_claims_releases_on_commit_failure_too(
         )
 
     assert not claim_dir.exists()
+
+
+# ---------------------------------------------------------------------------
+# Bug-backlog 2026-08-19-completed-but-alive-session-holds-touche-27e0ba000d69
+# — `_release_committed_path_claims` releasing only `stage_paths` (a
+# terminal close commit's own pathspec) leaves every OTHER path the session
+# ever `T`-claimed stuck live forever, since a completed session's process
+# staying alive means no later commit is ever coming to release the rest.
+# Exercised through the REAL close-route wiring
+# (`run_close_commit_and_release_claims`), not `session/scope.py` directly
+# — the prior round of this fix pinned `release_all_committed_claims` in
+# isolation but never proved the workstream-complete close route actually
+# calls it with the session's FULL claim surface rather than merely this
+# commit's own `stage_paths`.
+# ---------------------------------------------------------------------------
+
+
+def test_run_close_commit_and_release_claims_releases_full_touch_surface_not_just_stage_paths(
+    hooks_live_repo, monkeypatch
+):
+    """Touches two paths, closes with `stage_paths` naming only ONE of
+    them, and asserts BOTH touch-claims are gone afterward — the path this
+    commit staged AND the one it never staged at all. A regression back to
+    the `stage_paths`-scoped release (`release_committed_claims` instead of
+    `release_all_committed_claims` in `_release_committed_path_claims`)
+    would leave the unstaged path claimed and fail this test, even though
+    the whole existing suite (which never touches an out-of-`stage_paths`
+    path before closing) stays green."""
+    root = hooks_live_repo
+    sid = "c5-touch-release-test-session"
+
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", sid)
+    _session_core_mod.init(sid, cwd=str(root))
+
+    staged_rel = "c5-touch-release-staged.txt"
+    unstaged_rel = "c5-touch-release-unstaged.txt"
+    (root / staged_rel).write_text("staged\n", encoding="utf-8")
+    (root / unstaged_rel).write_text("touched but never staged\n", encoding="utf-8")
+
+    _session_scope.touch(sid, staged_rel, cwd=str(root))
+    _session_scope.touch(sid, unstaged_rel, cwd=str(root))
+
+    common_dir = git_common_dir(root)
+    record = common_dir / "coordinator-sessions" / sid / "touch-record.jsonl"
+
+    # BEFORE close: both paths are live T-claims.
+    projection = _touch_record.project_live_claims(record, cwd=str(root))
+    assert staged_rel in projection.claims
+    assert unstaged_rel in projection.claims
+
+    result = directives_commit_tail.run_close_commit_and_release_claims(
+        root,
+        session_id=sid,
+        subject="C5 full-touch-surface release fixture commit",
+        stage_paths=[staged_rel],
+        caller_paths={staged_rel},
+    )
+
+    assert result.commit_failed is False, result.diagnostics
+    assert result.committed_sha is not None
+
+    # AFTER close: the FULL touch-claim surface is released, not merely the
+    # subset this commit's own `stage_paths` named.
+    projection = _touch_record.project_live_claims(record, cwd=str(root))
+    assert staged_rel not in projection.claims
+    assert unstaged_rel not in projection.claims  # the defect this fix closes

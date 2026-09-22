@@ -160,7 +160,7 @@ def test_redact_values_is_a_copy_not_a_mutation():
 
 
 def test_audit_record_has_run_id_redact_only():
-    # Review: code-reviewer — run_id (audit-record's run_id_placeholder field)
+    # run_id (audit-record's run_id_placeholder field)
     # was a real registry gap, previously patched only in the C6 test's own
     # private _LOCAL_EXTRA_REDACT, not in this frozen registry.
     redact_only = set(vol.redact_only_fields_for("audit-record"))

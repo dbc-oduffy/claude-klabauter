@@ -443,7 +443,7 @@ def run_step(name: str, fn, report: Report) -> None:
 
     Returns nothing: every step must still run and be named in the report
     even after an earlier one fails (the all-steps-failing case
-    `scripts/tests/test_cloud_setup.py` pins), so short-circuiting later
+    `scripts/tests/test_cloud_setup_orchestration.py` pins), so short-circuiting later
     steps on an earlier failure is not this function's job.
 
     Every verdict carries the step's elapsed time, measured here rather than at
@@ -766,7 +766,7 @@ def pin_session_path(report: Report) -> None:
         settings = {}
     settings.setdefault("env", {})["PATH"] = value
     tmp_path = settings_path.with_suffix(settings_path.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(settings, indent=2))
+    tmp_path.write_text(json.dumps(settings, indent=2), newline="\n")
     tmp_path.replace(settings_path)
 
     # Read back off disk, not asserted from the dict just written — the same
@@ -1077,7 +1077,7 @@ def drop_double_fired_settings_hooks(report: Report) -> None:
     if not removed:
         return
     tmp = settings_path.with_suffix(settings_path.suffix + ".tmp")
-    tmp.write_text(json.dumps(settings, indent=2))
+    tmp.write_text(json.dumps(settings, indent=2), newline="\n")
     tmp.replace(settings_path)
     _safe_print(f"[cloud_setup] removed {len(removed)} double-fired hook(s) from {settings_path}")
 
@@ -1186,7 +1186,7 @@ def run_claude_klabauter_setup(report: Report) -> None:
     print(result.stdout, end="")
     report.setup_exit_code = result.returncode
     if result.returncode != 0:
-        # Review: overengineering-reviewer finding 6 — inlined the former
+        # Inlined the former
         # `_output_tail` helper (single call site). The report stores
         # `step.detail` untruncated, but a whole install log per failed step
         # would bury the verdict it exists to deliver, so the raise carries
@@ -1274,7 +1274,7 @@ def _claude_home() -> Path:
     function runs. If the shared rule's shape or message changes, check here
     too.
 
-    # Review: coordinator:code-reviewer Finding 1 -- the refusal only has
+    # The refusal only has
     # standing to judge CLAUDE_HOME. HOME and expanduser("~") are values this
     # process's operator never set and never chose to misconfigure; a VM whose
     # real home legitimately ends in .claude must resolve, not be refused with
@@ -1368,7 +1368,7 @@ def register_plugin_settings() -> None:
     settings[AUTO_COMPACT_WINDOW_SETTING] = CLOUD_AUTO_COMPACT_WINDOW_TOKENS
 
     tmp_path = settings_path.with_suffix(settings_path.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(settings, indent=2))
+    tmp_path.write_text(json.dumps(settings, indent=2), newline="\n")
     tmp_path.replace(settings_path)
 
 
@@ -1513,7 +1513,7 @@ def register_live_plugin_record() -> None:
 
     record_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = record_path.with_name(record_path.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n")
     tmp.replace(record_path)
     print(f"[cloud_setup] plugin record: {key} -> {live}")
 
@@ -1697,7 +1697,7 @@ def _find_doctrine_source() -> tuple[Path | None, list[str]]:
     tried = [str(c) for c in candidates]
     for cand in candidates:
         candidate_doctrine = cand / "CLAUDE.md"
-        # Review: coordinator:code-reviewer Finding 2 -- is_file() does not
+        # is_file() does not
         # test readability (it only needs traversal permission on parent
         # dirs, not read permission on the leaf), so an unreadable CLAUDE.md
         # would previously win the search and a later, good candidate would
@@ -1755,7 +1755,7 @@ def install_global_doctrine(report: Report) -> None:
         rules_dest = claude_home / "rules"
         rules_dest.mkdir(parents=True, exist_ok=True)
         rules_files = sorted(rules_src.glob("*.md"))
-        # Review: coordinator:code-reviewer Finding 3 -- no per-file
+        # No per-file
         # isolation (deliberate: no rollback on a partial copy, see the
         # docstring above), but a mid-loop failure previously left the
         # step's detail as raw exception text with no way to tell "0 of N
@@ -2063,7 +2063,6 @@ def register_machine_local_repo_keys(report: Report) -> None:
     # raises when neither rung is available, and the keys were left as {} —
     # indistinguishable in the report from a step that never ran, against a
     # docstring promising each key's verdict individually.
-    # Review: coordinator:code-reviewer.
     for _key in MACHINE_LOCAL_REPO_KEYS.values():
         report.machine_local_keys.setdefault(_key, "skipped: no machine-local CLI resolved")
     argv = _machine_local_argv()
@@ -2160,7 +2159,7 @@ def install_hooks_fleet(report: Report) -> None:
     for clone_name in TRUST_ANCHOR_KEYS:
         repo_root = Path(CLONES[clone_name]["dest"])
         hook_path = repo_root / ".git" / "hooks" / "prepare-commit-msg"
-        # Review: code-reviewer (finding 1) — presence alone (`is_file()`) is
+        # Presence alone (`is_file()`) is
         # satisfied by a stale, zero-byte, or hand-authored non-executable
         # hook surviving an earlier aborted run; require it be executable too,
         # since git silently skips a non-executable hook at commit time.
@@ -2279,7 +2278,6 @@ def _resolve_rag_project_root(report: Report) -> str:
         # silently and then baked into a registration nothing can read back.
         # This fleet routinely mounts six or more. Record the ambiguity and fall
         # back to the one root that is defensible without guessing.
-        # Review: coordinator:code-reviewer.
         report.rag_project_root_ambiguity = [c.name for c in checkouts]
         return str(_resolved_root(RETRIEVAL_REPO_SLUG, report))
     return str(_resolved_root(RETRIEVAL_REPO_SLUG, report))
@@ -2328,7 +2326,6 @@ def run_example_retrieval_repo_cloud_install(report: Report) -> None:
     # first python3 on PATH the installer would resolve a different one than
     # everything around it, and the pre-boot set would land where the rest of
     # the run does not look. _machine_local_argv already does this.
-    # Review: coordinator:code-reviewer.
     argv = [
         sys.executable,
         str(installer),
@@ -2457,7 +2454,7 @@ def register_retrieval_mcp_entry(report: Report) -> None:
     data["mcpServers"] = servers
     config_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = config_path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8", newline="\n")
     tmp.replace(config_path)
     report.mcp_entry_written = {"config_path": str(config_path), "entry": entry}
     print(f"[cloud_setup] MCP entry registered: {RETRIEVAL_REPO_SLUG} -> {entry['url']}")
@@ -2523,7 +2520,7 @@ def _image_default_path() -> str:
         for line in Path("/etc/environment").read_text(encoding="utf-8").splitlines():
             if line.startswith("PATH="):
                 value = line[len("PATH=") :].strip().strip('"').strip("'")
-                # Review: coordinator:code-reviewer F3 -- /etc/environment is not a
+                # /etc/environment is not a
                 # shell and performs no expansion, so a value written with
                 # shell-expansion syntax (e.g. PATH="$PATH:/opt/foo") is unusable
                 # verbatim: it puts a literal "$PATH" into the env-var box, which
@@ -2557,7 +2554,7 @@ def _image_search_path(default_entries: list[str]) -> str:
     `default_entries` is the caller's already-computed `_image_default_path()`
     split, passed in rather than re-derived here.
     """
-    # Review: coordinator:code-reviewer F4 -- this process' own PATH used to be
+    # This process' own PATH used to be
     # searched AHEAD of the image default, so a transient directory carried
     # only by whatever bootstrap wrapper launched this script (a venv, a shim
     # dir) could win `shutil.which` and get baked into the durable
@@ -2648,7 +2645,7 @@ def _verdict_body(report: Report) -> str:
 
     failed = [step for step in report.steps if not step.ok]
     if failed:
-        # Review: coordinator:code-reviewer F2 -- "".splitlines() is [], so an
+        # "".splitlines() is [], so an
         # empty detail (StepResult.detail's own default) raised IndexError here,
         # which _record_session_surfaces_best_effort then swallowed, losing the
         # whole verdict surface for a `list index out of range` line instead of
@@ -2790,7 +2787,7 @@ def _write_rule_surface(basename: str, body: str | None) -> bool:
         rule_path.unlink(missing_ok=True)
         return False
     rule_path.parent.mkdir(parents=True, exist_ok=True)
-    rule_path.write_text(body, encoding="utf-8")
+    rule_path.write_text(body, encoding="utf-8", newline="\n")
     return True
 
 
@@ -2828,7 +2825,7 @@ def write_session_verdict(report: Report) -> None:
 
 def write_report(report: Report) -> None:
     INSTALL_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    INSTALL_REPORT_PATH.write_text(json.dumps(report.to_dict(), indent=2))
+    INSTALL_REPORT_PATH.write_text(json.dumps(report.to_dict(), indent=2), newline="\n")
 
 
 def _safe_print(text: str) -> None:
@@ -3028,7 +3025,7 @@ def main() -> int:
         print(f"[cloud_setup] refusing: {reason}")
         report = Report()
         report.steps.append(StepResult("host precondition", False, reason))
-        # Review: coordinator:code-reviewer F1 -- the refusal is the single most
+        # The refusal is the single most
         # severe pre-boot outcome, and by write_session_verdict's own rationale
         # is exactly when a session most needs cloud-preboot-verdict.md: the
         # JSON report requires a reader, the rules surface does not.

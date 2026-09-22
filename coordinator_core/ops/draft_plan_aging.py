@@ -247,7 +247,7 @@ def _normalize_prefix(path: str) -> str:
 _COMPLETED_ARCHIVE_DIR = os.path.join("archive", "completed")
 
 
-# Review: overengineering-reviewer — dropped the `root` param; no caller ever
+# Dropped the `root` param; no caller ever
 # passed it, and it was a config axis R2 was written to close off.
 def _load_completed_deliverable_ids() -> frozenset:
     """Read every `archive/completed/**/*.md` completion entry's frontmatter
@@ -278,7 +278,7 @@ def _load_completed_deliverable_ids() -> frozenset:
     if not os.path.isdir(_COMPLETED_ARCHIVE_DIR):
         return frozenset()
     for dirpath, _dirnames, filenames in os.walk(_COMPLETED_ARCHIVE_DIR):
-        # Review: overengineering-reviewer — unsorted; the result feeds a
+        # unsorted; the result feeds a
         # set, so ordering is unobservable, and this is a budgeted path.
         for name in filenames:
             if not name.endswith(".md"):
@@ -286,7 +286,7 @@ def _load_completed_deliverable_ids() -> frozenset:
             path = os.path.join(dirpath, name)
             try:
                 entry_text = Path(path).read_text(encoding="utf-8")
-            # Review: code-reviewer (Finding 1) — UnicodeDecodeError is a
+            # UnicodeDecodeError is a
             # ValueError subclass, not an OSError; without it, one malformed
             # file in the 657-entry externally-authored corpus crashed the
             # whole scan(), taking staleness detection down for every plan.
@@ -298,10 +298,10 @@ def _load_completed_deliverable_ids() -> frozenset:
     return frozenset(ids)
 
 
-# Review: overengineering-reviewer — required, not Optional[...]=None; the
+# required, not Optional[...]=None; the
 # self-load branch had no production consumer and was where a future
 # in-loop caller would silently re-pay the full-corpus read.
-# Review: code-reviewer (Finding 2) — renamed from
+# Renamed from
 # `_has_recent_real_work_commit`: the completion-entry arm below has no time
 # bound (deliberate — delivered work isn't stale regardless of age), so
 # "recent" no longer describes half of what this function returns. Only the
@@ -461,7 +461,7 @@ def _has_active_baton(file: str) -> Tuple[Optional[bool], Optional[str]]:
     return False, None
 
 
-# Review: overengineering-reviewer — completed_deliverable_ids is keyword-only
+# completed_deliverable_ids is keyword-only
 # and required, not Optional[...]=None: every production caller already
 # passes it, and an optional self-loading default is exactly the shape a
 # future in-loop caller silently reacquires the per-plan corpus through.

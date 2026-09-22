@@ -203,7 +203,7 @@ class TestBucketing:
         assert summary["unreadable"] == ["README.md"]
 
     def test_non_utf8_file_counted_unreadable_not_fatal(self, tmp_path):
-        # Review: code-reviewer F1 — a binary/non-UTF-8 file must land in
+        # A binary/non-UTF-8 file must land in
         # unreadable[] rather than raising UnicodeDecodeError out of the
         # whole sweep.
         inbox = tmp_path / "inbox"
@@ -215,7 +215,7 @@ class TestBucketing:
         assert summary["unreadable"] == ["binary.md"]
 
     def test_all_terminal_status_inbox_distinct_from_empty(self, tmp_path):
-        # Review: code-reviewer test-quality note — an all-terminal-status
+        # An all-terminal-status
         # inbox and a genuinely empty inbox degrade through the same
         # open_count == 0 path; assert both explicitly so a future change
         # that special-cases one doesn't silently break the other.
@@ -309,7 +309,7 @@ class TestSupersessionCandidates:
         assert cands[0]["older"] == "2026-07-20-a-em-old.md"
 
     def test_authoritative_disagree_unrelated_clause_is_not_a_candidate(self, tmp_path):
-        # Review: code-reviewer F1 — a same-line "authoritative ... disagree"
+        # A same-line "authoritative ... disagree"
         # pair that shares no "where" clause link is an unrelated coincidence,
         # not a precedence claim, and must not fire even when the memo also
         # cites a legitimate sibling basename elsewhere in the body.
@@ -691,7 +691,7 @@ class TestSupersessionCandidates:
 
 
     def test_declared_direction_wins_over_disagreeing_inferred_dates(self, tmp_path):
-        # Review: code-reviewer F2 — a same-sender pair whose supersedes:
+        # A same-sender pair whose supersedes:
         # claim disagrees with created-date ordering must emit exactly one
         # candidate, with the declared basis and the declared direction, not
         # two candidates with inverted newer/older claims.
@@ -713,7 +713,7 @@ class TestSupersessionCandidates:
         assert cands[0]["older"] == "2026-07-25-a-em-actually-older.md"
 
     def test_unknown_date_memo_not_paired_in_inferred_pass(self, tmp_path):
-        # Review: code-reviewer F3 — a same-sender memo with no resolvable
+        # A same-sender memo with no resolvable
         # date must not be synthesized as "the older" side of a candidate
         # against a dated memo via the datetime.date.min sentinel.
         inbox = tmp_path / "inbox"
@@ -736,7 +736,7 @@ class TestSupersessionCandidates:
         assert cands == []
 
     def test_url_locus_collision_not_a_candidate(self, tmp_path):
-        # Review: code-reviewer F6 — two memos citing different URLs that
+        # Two memos citing different URLs that
         # happen to share a trailing path segment must not collapse to a
         # shared "locus" via basename normalization.
         inbox = tmp_path / "inbox"
@@ -778,7 +778,7 @@ class TestSupersessionCandidates:
         return inbox
 
     def test_small_inbox_floor_still_governs(self, tmp_path):
-        # Review: code-reviewer F4 — small-inbox behaviour must be identical
+        # small-inbox behaviour must be identical
         # to before the corpus-scaled fix: the absolute floor (3) governs.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
@@ -791,7 +791,7 @@ class TestSupersessionCandidates:
         assert cands == []
 
     def test_large_inbox_locus_cited_4_times_still_pairs(self, tmp_path):
-        # Review: code-reviewer F4 — 4 citations out of 100+ open memos is a
+        # 4 citations out of 100+ open memos is a
         # strong discriminating signal the bare floor (3) would wrongly
         # suppress; the share-scaled cutoff must still pass it through.
         inbox = tmp_path / "inbox"
@@ -974,7 +974,7 @@ class TestTrigger:
         assert trig["oldest_open_age_days"] == 16
 
     def test_malformed_created_falls_back_to_filename_date(self, tmp_path):
-        # Review: code-reviewer test-quality note — only "missing created" was
+        # Only "missing created" was
         # tested before; a present-but-unparseable value must exercise the
         # same _created_date ValueError-catch fallback to the filename prefix.
         inbox = tmp_path / "inbox"

@@ -904,7 +904,7 @@ def receiver_em_to_repo_key(receiver_em_id: str) -> str:
     DoE-ratified alias surface: DoE consult 2026-07-05 strang-03 follow-up, Q1.
     """
     shortname = receiver_em_id[:-3] if receiver_em_id.endswith("-em") else receiver_em_id
-    # Review: code-reviewer — removed unreachable `if not shortname` guard; _validate_send_params
+    # Removed unreachable `if not shortname` guard; _validate_send_params
     # rejects empty `to` before this point, so the "-em"-alone → empty-shortname path is
     # unreachable from the handler. Caller gets repos. (missing suffix), correctly fails lookup.
 
@@ -1231,7 +1231,7 @@ def _nearest_receiver_matches(
     if nothing is within a reasonable edit-distance similarity threshold
     (cutoff 0.5) or the registry has no candidates at all.
 
-    Review: code-reviewer — callers detecting uniqueness (`unique_nearest_receiver`)
+    Callers detecting uniqueness (`unique_nearest_receiver`)
     rely on calling this with `n=2` and treating a returned length of exactly 2 as
     "ambiguous" (2+ candidates cleared the cutoff) vs exactly 1 as "unique" — i.e.
     on `difflib.get_close_matches(..., n=2, ...)` returning exactly 2 entries iff

@@ -122,7 +122,7 @@ def published_subset_reason(schemas_dir: str | Path) -> str | None:
     if not directory.is_dir():
         return None
 
-    # Review: code-reviewer — resolve before deriving parent/grandparent so a
+    # Resolve before deriving parent/grandparent so a
     # symlinked or relative schemas_dir walks the real target's markers, not
     # the link's own containing directory or the process CWD.
     directory = directory.resolve()

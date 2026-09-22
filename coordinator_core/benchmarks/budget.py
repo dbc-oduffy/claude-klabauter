@@ -88,7 +88,7 @@ def resolve_budget(
 def _validated_budget(budget: dict, op: str) -> dict:
     """Validate a resolved override budget dict's shape before returning it.
 
-    Review: code-reviewer (Slice A F3, P2) — a malformed manifest override
+    A malformed manifest override
     (missing target_ms/tolerance, or a tolerance missing kind/value) previously
     surfaced as an opaque KeyError/AttributeError deep in gate.py's
     _tolerance_field, far from the actual defect site (the manifest). Fails

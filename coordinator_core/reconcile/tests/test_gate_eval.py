@@ -307,7 +307,7 @@ class TestDanglingBlockedByRefSurfaces:
 
 
 class TestPlaceholderShapedBlockedByDoesNotResolve:
-    """Review: code-reviewer (Finding 1, P1) — `_HANDOFF_ID_PATTERN` is the
+    """`_HANDOFF_ID_PATTERN` is the
     actual runtime matcher deciding whether a `blocked_by` id resolves against
     a live `handoff_id`; `gate_eval.py` never calls schema validation, so the
     `handoff.schema.json` placeholder-id narrow alone does not stop a
@@ -881,7 +881,7 @@ class TestTriageProseGateDominanceReroutesToReviewDueWhenStructuredAllShipped:
         # Structured classification is never even reached — shipped_ids stays
         # the base-case empty list, not ["hnd-b1-000007"], demonstrating the
         # precedence check runs BEFORE the structured walk.
-        # Review: code-reviewer (Finding 2, nit) — restored, still true.
+        # restored, still true.
         assert result["shipped_ids"] == []
 
 
@@ -1183,7 +1183,7 @@ class TestTriageGateEvidencePrecedenceMatrix:
         assert "gate_evidence covers_prose:True" in result["reason"]
 
     def test_blocking_notes_dominates_even_when_covers_prose_satisfied(self) -> None:
-        """Review: code-reviewer — Finding 1 (P1) regression test, updated for
+        """Regression test, updated for
         C4's blocking_notes demotion (docs/plans/2026-08-03-gate-dependency-
         template-emission-spec.md § C4): `blocked_by` is empty on this fixture
         (`_non_roadmap_handoff` sets no `blocked_by`), so `blocking_notes`
@@ -1830,7 +1830,7 @@ class TestC6ExternalGateWitnessedClearsMutatingPath:
         assert result["remaining_blockers"] == []
 
     def test_blocking_notes_dominates_even_when_covers_prose_witnessed(self) -> None:
-        """Review: code-reviewer — Finding 1 (P1) regression test, updated for
+        """Regression test, updated for
         C4's blocking_notes demotion (docs/plans/2026-08-03-gate-dependency-
         template-emission-spec.md § C4): `_oaxis_handoff` carries `blocked_by:
         []`, so `blocking_notes` dominance still applies in its narrowed,
@@ -2382,7 +2382,7 @@ class TestC3DominanceStaleEvidenceAllShipped:
 
 
 class TestC3StalenessEvidenceNormalizationAgreesAcrossEvaluators:
-    """Review: code-reviewer (Finding 1, P1) — `evaluate_gate` and
+    """`evaluate_gate` and
     `evaluate_gate_triage` must key `_all_blocked_by_shipped_evidence` on the
     SAME (str-normalized) `blocked_by` precondition, or a non-`str` member
     (e.g. `None`) lets the two evaluators disagree about whether the

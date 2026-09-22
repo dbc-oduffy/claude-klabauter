@@ -119,7 +119,7 @@ class ProvenanceDivergenceError(RuntimeError):
     """Marks `require_dispatch_engine_on_path`'s divergent-provenance raise
     (C9), distinct from `_resolve_claude_klabauter_root`'s missed-rung RuntimeError.
 
-    Review: code-reviewer P1 (slice f5bdd60b4) — a bare `except RuntimeError`
+    A bare `except RuntimeError`
     around this call (e.g. `agent-worktree-sweep.py`) previously reframed
     EVERY cause under a "CLAUDE_KLABAUTER_ROOT resolution failed" banner, which is
     false for this one (remedy is import ordering, not CLAUDE_KLABAUTER_ROOT).
@@ -183,6 +183,43 @@ class WarmDispatchIndeterminate(RuntimeError):
     def __init__(self, message: str, op: str = "") -> None:
         super().__init__(message)
         self.op = op
+
+
+class AppliedReportUndecodableError(RuntimeError):
+    """Marks a JSON-decode failure at cc_invoke()'s rung (4) — distinct from every
+    other rung, this one only ever runs after the op process has ALREADY exited 0.
+
+    THE INVARIANT THIS RELIES ON, NOT A GUESS. By the time this rung runs,
+    `_raise_on_process_failure` has already returned normally — its own rungs
+    (2)/(3) raise on any nonzero rc or empty stdout, so returning at all means
+    rc == 0 with non-empty stdout. `coordinator_core.invoke.__main__`'s own
+    documented exit codes make rc == 0 exactly the "JSON-RPC success result
+    printed to stdout" case (`_exit_code_for_response`: 0 iff the computed
+    response carries no 'error' key) — and that response is only printed,
+    flushed, THEN the process exits (`_dispatch_argv_body` steps 8/9), in that
+    order. So a decode failure reaching this branch can never mean the op
+    failed or a mutation's write never landed: the child already reported
+    success internally, and for a mutation op that write has already applied.
+    What failed is this PROCESS's parse of the bytes the child wrote — most
+    plausibly stray diagnostic text landing on stdout ahead of (or after) the
+    real envelope, not a malformed envelope the op itself produced.
+    -> state/bug-backlog/2026-08-14-plan-tasks-resolve-reports-failure-after-
+    the-mutation-succeeded.yaml
+
+    Negative-spec: catching this is not licence to retry blindly — the op
+    already ran, and re-running it risks exactly the double-apply the row
+    above warns against. A caller with a reconcile path (e.g.
+    `coordinator-safe-commit.py`'s own `_is_indeterminate_outcome` substring
+    match, unaffected — see below) should reconcile against real state; a
+    caller with none should still not report this as "nothing happened".
+
+    Subclasses RuntimeError, so an existing `except RuntimeError` caller still
+    catches it unchanged — same pattern as `WarmDispatchIndeterminate` above,
+    whose own docstring this mirrors. The literal substring
+    "invoke stdout is not valid JSON" is preserved verbatim in every message
+    this type carries, so `coordinator-safe-commit.py`'s own substring match
+    on that text is unaffected by this type existing.
+    """
 
 
 #: The ledger lives under the user-local runtime base, NOT inside any repo.
@@ -429,7 +466,7 @@ def _reset_op_timeout_cache() -> None:
 # (Plan C de-bash wave R — see state/debt-backlog/ for the tracked entry); this
 # comment previously claimed the opposite (subprocess-into-bash) and drifted
 # from the code four lines below it.
-# Review: code-reviewer — stale docstring at cc_invoke.py:116-119 contradicted
+# Stale docstring at cc_invoke.py:116-119 contradicted
 # _resolve_claude_klabauter_root()'s own docstring ("no bash subprocess anywhere in the
 # ladder"); corrected to describe the native ladder it introduces.
 # ---------------------------------------------------------------------------
@@ -861,7 +898,7 @@ def _report_provenance(caller: str, root: str, axis: str) -> ProvenanceReport:
             return report
         from coordinator_core.engine_provenance_counter import record_engine_provenance
 
-        # Review: code-reviewer P1 — omitting cwd left resolve_git_root_cheap's
+        # Omitting cwd left resolve_git_root_cheap's
         # `if not cwd: return None` guard firing on every call, so the sink
         # silently never wrote a record (indistinguishable at the call site
         # from an intentional unresolvable-root degrade). os.getcwd() is a
@@ -1035,7 +1072,7 @@ def _norm_path_for_split_compare(path: str) -> str:
     """normcase over realpath, falling back to normcase(abspath) if realpath
     raises (e.g. a broken junction or an inaccessible ancestor).
 
-    Review: code-reviewer P2 (slice a6725136cee84332c) — plain
+    Plain
     abspath+normcase never resolves a symlink/junction/8.3-short-name
     spelling to canonical form, so two spellings of one physical tree can
     read as a false split. realpath closes that gap; the fallback keeps
@@ -1427,7 +1464,7 @@ def _emit_should_pass_repo_fail_open(branch: str, op: str) -> None:
     function's docstring), not an unresolved scope. Swallows its own failure:
     a broken stderr write must not take the transport down.
 
-    # Review: coordinator:code-reviewer — keyed on (branch, op), not branch alone,
+    # Keyed on (branch, op), not branch alone,
     # so a second genuinely-different op hitting the same fail-open branch still
     # gets its own warning instead of being silenced by the first op's emission.
     """
@@ -1460,7 +1497,7 @@ def _should_pass_repo(op: str, claude_klabauter_root: str | None = None) -> bool
     hardcoding an op list, so this wrapper and the engine's own refusal can never
     drift apart again.
 
-    Review: code-reviewer (P3) — a bare `from coordinator_core.op_scopes import
+    A bare `from coordinator_core.op_scopes import
     ...` here relies on coordinator_core already being importable from the
     CALLING process's ambient sys.path, which is NOT guaranteed: a caller script
     living at coordinator/bin/*.py (e.g. coordinator-workflow-scaffold.py) has
@@ -1669,6 +1706,14 @@ _IMPORT_ERROR_TOKENS = ("importerror", "modulenotfounderror", "no module named")
 #: stdout is not a parseable JSON-RPC envelope. A traceback or a debug dump can
 #: run to megabytes; the raised message has to stay readable in a terminal.
 _OP_ERROR_DETAIL_CAP = 2000
+
+#: Cap on the raw-stdout prefix `cc_invoke()` includes when the JSON-RPC envelope
+#: itself fails to decode (rung (4), a process-succeeded-but-unparseable-stdout
+#: case distinct from `_op_error_detail`'s nonzero-exit rung above). Without this,
+#: a decode failure reported only `json.JSONDecodeError`'s "line 1 column 1"
+#: text — discarding the bytes that would classify it (stdout pollution ahead of
+#: the envelope vs. a genuinely malformed one) and forcing a fresh repro.
+_JSON_DECODE_FAILURE_PREFIX_CAP = 500
 
 
 #: `warm.client.WARM_DISPATCH_INDETERMINATE`, restated rather than imported.
@@ -2594,6 +2639,10 @@ def cc_invoke(
 
     Raises:
         RuntimeError: on any transport failure. Never returns legacy after a spawn.
+        AppliedReportUndecodableError (a RuntimeError subclass): specifically on rung
+            (4)'s JSON-decode failure — the op process has already exited 0 by that
+            point, so this always means the op already succeeded and the failure is
+            confined to parsing its report. See that type's own docstring.
     """
     # An already-resolved root is accepted from route() to avoid a double resolution
     # on the State-2 path.
@@ -2660,7 +2709,7 @@ def cc_invoke(
 
         try:
             proc = subprocess.run(
-                # Review: cross-slice (DR-148) — sys.executable ensures the same interpreter that
+                # cross-slice (DR-148) — sys.executable ensures the same interpreter that
                 # loaded cc_invoke.py is used; hardcoded "python3" breaks on Windows.
                 argv,  # popup-safe-env-suppressed
                 capture_output=True,
@@ -2693,8 +2742,15 @@ def cc_invoke(
     try:
         envelope = json.loads(stdout_text)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(
-            f"cc_invoke: invoke stdout is not valid JSON (op={op}): {exc}"
+        _prefix = stdout_text[:_JSON_DECODE_FAILURE_PREFIX_CAP]
+        raise AppliedReportUndecodableError(
+            f"cc_invoke: invoke stdout is not valid JSON (op={op}): {exc}\n"
+            "  The invoke process exited 0 — per coordinator_core.invoke's own "
+            "exit-code contract that only happens after a clean success envelope "
+            "was already printed, so this op has ALREADY SUCCEEDED (and, for a "
+            "mutation, already applied). This is a transport-report failure, not "
+            "an op failure — do not retry; reconcile against real state instead.\n"
+            f"  stdout (first {len(_prefix)} of {len(stdout_text)} chars): {_prefix!r}"
         ) from exc
 
     if not isinstance(envelope, dict):

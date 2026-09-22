@@ -92,7 +92,7 @@ from coordinator_core.ipc import register_op
 #: the raised error message.
 _STDERR_TAIL = 2000
 
-# Review: code-reviewer — pip-audit is a live network call (vulnerability
+# pip-audit is a live network call (vulnerability
 # advisory endpoint); an unresponsive network wedges this op's worker thread
 # forever without a cap. The cap is no longer this module's to choose: DR-349
 # grants a network leg no standing carve-out, so it lives inside the
@@ -162,7 +162,7 @@ def _run_pip_audit(params: dict, repo_root: Optional[Path] = None) -> dict:
         ) from exc
 
     stdout = (proc.stdout or "").strip()
-    # Review: code-reviewer — empty stdout + non-zero exit (e.g. "No module
+    # Empty stdout + non-zero exit (e.g. "No module
     # named pip_audit") previously fell into the falsy-stdout branch below
     # and silently substituted a clean-scan payload, identical to a genuine
     # zero-vuln result. Treat that shape as an invocation failure, same as

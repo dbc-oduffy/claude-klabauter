@@ -61,7 +61,7 @@ import pytest
 
 CANON = frozenset({"shipped", "abandoned", "continued", "closed"})
 
-# Review: code-reviewer — the widened >=2-token-overlap property (see
+# The widened >=2-token-overlap property (see
 # test_consumer_agrees_with_handoff_terminal_deployment) surfaces two
 # collections that overlap CANON in >=2 tokens without equaling it, neither
 # of which is a live defect; both are disclosed, individually-verified
@@ -258,7 +258,7 @@ def test_consumer_agrees_with_handoff_terminal_deployment(rel_path: str, expecte
         "before updating this expectation."
     )
 
-    # Review: code-reviewer — a pure-subset check would not have caught the
+    # A pure-subset check would not have caught the
     # actual historical bug tuple {"shipped","abandoned","superseded"} since
     # "superseded" isn't in CANON, so the tuple was never a subset. Widened
     # to a >=2-token-overlap-but-not-equal check (see rationale below).

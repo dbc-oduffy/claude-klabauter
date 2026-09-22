@@ -67,7 +67,7 @@ def _basename_index(worktree_root: Path) -> "Tuple[Dict[str, Tuple[Path, dict]],
             continue
         path = Path(raw_path)
         if path.name in index:
-            # Review: code-reviewer — Finding 5 (nit): basenames are asserted
+            # Basenames are asserted
             # unique elsewhere by convention (timestamp+slug), so this is
             # unlikely to fire, but a collision across live/archive roots
             # (e.g. a handoff duplicated during a concurrent ceremony race)
@@ -128,7 +128,7 @@ def build_ownership_index(
             continue
         _path, meta = entry
         mirror = meta.get("claimed_by") or meta.get("consumed_by")
-        # Review: code-reviewer — Finding 2 (P2): the frontmatter mirror is
+        # The frontmatter mirror is
         # consulted here for a disagreement check only — the claim-store
         # membership decision above (`claimed`/`basename_index.get`) is
         # already final and unaffected by this check either way. A mismatch

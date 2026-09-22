@@ -159,7 +159,7 @@ def test_cut_tag_empty_merge_sha_fails_loud(repo_env):
 
 
 def test_cut_tag_leading_dash_tag_rejected(repo_env):
-    """Review: code-reviewer (F5, nit) — tag is passed positionally to
+    """Tag is passed positionally to
     several git subcommands with no `--` separator; a value starting with
     '-' would be misparsed as a git option."""
     repo, _bare, merge_sha, _fake = repo_env

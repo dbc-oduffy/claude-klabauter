@@ -223,3 +223,47 @@ def test_doctrine_surface_split_regenerate_no_spawn(
         )
     )
     assert result == {"exit_code": 0}
+
+
+def test_doctrine_surface_split_regenerate_default_path_spawns_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The default call (both `check_mode` and `allow_dirty` omitted) is the
+    ONE branch that is not spawn-free: `regenerate_split_dir()` ->
+    `dirty_bodies()` -> `git_native._git(["status", "--porcelain", ...])`,
+    a real `subprocess.run`. Review-confirmed load-bearing (§ module
+    docstring negative-spec) -- this pins the count at exactly 1 rather than
+    asserting zero, so a regression either direction (a second spawn, or the
+    dirty-check silently dropped) fails this test."""
+    from coordinator_core.ops.grind_ops import _load
+
+    split_module = _load("generate-doctrine-surface-split")
+
+    split_dir = tmp_path / "some-doc"
+    source_text = "# Some Doc\n\n## Section One\n\nBody one.\n\n## Section Two\n\nBody two.\n"
+    build = split_module.build_split("some-doc", source_text, "some-doc")
+    files = split_module.render_files(build)
+    split_dir.mkdir(parents=True)
+    for filename, content in files.items():
+        (split_dir / filename).write_text(content, encoding="utf-8", newline="\n")
+    (split_dir / split_module.PREAMBLE_BASENAME).write_text(
+        build["preamble"], encoding="utf-8", newline="\n"
+    )
+
+    spawn_count = 0
+    real_run = subprocess.run
+
+    def _counting_run(*args, **kwargs):
+        nonlocal spawn_count
+        spawn_count += 1
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", _counting_run)
+
+    result = asyncio.run(
+        grind_ops._doctrine_surface_split_regenerate(
+            {"split_dir": str(split_dir)}, tmp_path
+        )
+    )
+    assert result == {"exit_code": 0}
+    assert spawn_count == 1

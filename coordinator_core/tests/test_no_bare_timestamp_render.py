@@ -165,7 +165,7 @@ def _scan_module(path: str) -> list[tuple[int, str]]:
     return found
 
 
-# Review: overengineering-reviewer -- this walk and `scan_engine`'s were
+# This walk and `scan_engine`'s were
 # byte-identical in traversal/exclusion rules and parsed every non-test file
 # under coordinator_core/ twice per run. One shared walk, filtered two ways,
 # halves the parse cost and removes the risk of the two rules drifting apart.

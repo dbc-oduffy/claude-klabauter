@@ -66,13 +66,13 @@ class OpClass(enum.Enum):
 #          moment of archival to guard against TOCTOU races between plan/decision).
 #   D2-5. Ungated-UDS-only (reachable only over the ungated UDS; HTTP surface is excluded,
 #          not merely ungated — DR-211 D2(v)).
-# Review: code-reviewer (slice-A F2) — strengthened from token-level wording to
+# Strengthened from token-level wording to
 # transport-surface exclusion; the prior text could be read as permitting ungated HTTP.
 #
 # Authority: docs/decisions/DR-211-fleet-op-substrate-write-boundary.md § D2
 #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
 # ---------------------------------------------------------------------------
-# Review: code-reviewer — wrapped in MappingProxyType so mutation attempts raise TypeError
+# Wrapped in MappingProxyType so mutation attempts raise TypeError
 # rather than silently corrupting the classification surface (test-pollution and runtime-
 # privilege-escalation risk). Any caller doing OP_CLASSIFICATION["x"] = ... now fails loud.
 OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType({
@@ -324,7 +324,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # guard-kira-verdict-routed leg (read-only) and three sentinel-writing
     # wrappers over library op()s. See coordinator_core/hooks/stop_dispatch.py's
     # own module docstring for the full eight-leg disposition.
-    # Review: overengineering-reviewer (Kira) — the four sibling op-key rows
+    # The four sibling op-key rows
     # formerly here (guard_kira_verdict_routed, stop_em_report_altitude,
     # nudge_harness_directive_dispatch, nudge_unrouted_sizing) were removed
     # with their registrations; no consumer found for any of them.
@@ -451,7 +451,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # memo.transition — MUTATING: native Python port (strang-09) that writes memo
     # frontmatter in-place (claim/action/release verbs). No subprocess / node reach-back —
     # byte-faithful port of the DoE memo-transition.js oracle, not a delegation to it.
-    # Review: code-reviewer (F8) — DR-208 five-question affirmation added to match the file's
+    # DR-208 five-question affirmation added to match the file's
     # established affirmation discipline (citing ops/memo_transition.py; plan strang-09).
     # DR-208 five-question affirmation:
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
@@ -1775,7 +1775,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # addressee verdict via the shared _memo_resolver; never writes, commits, or
     # reaches the network (repo_root is read-only used to derive self_root via
     # main_worktree_root — see memo_check_addressee.py handler docstring).
-    # Review: code-reviewer (Finding 4) — moved out of the memo.list/draft/compose
+    # Moved out of the memo.list/draft/compose
     # trio's shared comment block (whose header says "all COMPUTE_ONLY: none of
     # the three...") so that header's "three" framing stays accurate; this is a
     # separate op, not a fourth member of that trio.
@@ -1792,7 +1792,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
     #      changelog_ops.py:append_day — atomic _atomic_write (mkstemp+os.replace) creates
     #      or replaces state/week-changelog/{date}.md in the caller's worktree.
-    #      Review: code-reviewer (Finding 3) — corrected stale {date}-{machine}.md filename
+    # Corrected stale {date}-{machine}.md filename
     #      shape to match the per-day filename collapse (PM ruling 2026-07-19).
     #   2. Writes into rag's relational store?                                 No.
     #      Writes only coordinator state/week-changelog/ markdown. Dual-write ban satisfied.
@@ -3739,7 +3739,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      Whether a given invocation spawns mypy depends on which dimension
     #      checks run/are registered; the write is not guaranteed on every
     #      call but is not ruled out either.
-    #   Review: coordinator:code-reviewer (wsc-D-registration) — the C1-era
+    # The C1-era
     #   affirmation above was written before C2/C3/C5/C7 landed their real
     #   dimension implementations in this tree; those implementations are
     #   already unconditionally imported by this module (not deferred), so a
@@ -4475,7 +4475,7 @@ def classify(op_name: str) -> OpClass:
         Do NOT add a default= fallback — silent treat-as-compute-only is the real
         privilege-escalation path (detect-then-fail-loud, not detect-then-silently-pick).
     """
-    # Review: code-reviewer — explicit guard replaces try/except/raise-from-None; single
+    # Explicit guard replaces try/except/raise-from-None; single
     # lookup makes the fail-closed intent immediately obvious without exception chain games.
     if op_name not in OP_CLASSIFICATION:
         raise KeyError(

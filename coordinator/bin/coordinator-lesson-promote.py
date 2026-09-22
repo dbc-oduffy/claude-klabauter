@@ -620,7 +620,7 @@ def _slug_from_title(title: str) -> str:
     slug = title.lower()
     slug = re.sub(r"[^a-z0-9]+", "-", slug)
     slug = slug.strip("-")
-    # Review: code-reviewer — F1/F3: strip("-") before truncation, but truncation can
+    # strip("-") before truncation, but truncation can
     # leave a trailing hyphen (e.g. "foo-bar-" at char 40). rstrip("-") after
     # truncation, matching coordinator-queue-append and migrate-queues-to-base.py:292.
     return slug[:_SLUG_MAX_CHARS].rstrip("-")
@@ -652,7 +652,7 @@ def _yaml_str(value: str) -> str:
     """
     if "\n" in value:
         # Block scalar — indent each line by 2 spaces.
-        # Review: code-reviewer Slice-B — (B-F8) changed | (clip chomping) to |- (strip
+        # Changed | (clip chomping) to |- (strip
         # chomping) for byte-fidelity parity with coordinator-queue-append._yaml_block_scalar.
         # Clip chomping adds a trailing newline on round-trip; strip chomping preserves exact bytes.
         indented = "\n".join("  " + line if line.strip() else "" for line in value.splitlines())
@@ -683,7 +683,7 @@ def _compose_yaml(fields: dict[str, str | list[str] | None]) -> str:
                 for item in value:
                     lines.append(f"  - {_yaml_str(item)}")
         else:
-            # Review: code-reviewer — collapsed the former "\n" in str(value) elif and
+            # Collapsed the former "\n" in str(value) elif and
             # this else branch: both emitted byte-identical code since _yaml_str already
             # internally branches on newline presence (block scalar vs. quoted scalar).
             lines.append(f"{key}: {_yaml_str(str(value))}")
@@ -861,7 +861,7 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = _build_parser(change_kind_values)
     args = parser.parse_args(argv)
-    # Review: code-reviewer Slice-B — (B-F3) deleted unreachable dead block that re-validated
+    # Deleted unreachable dead block that re-validated
     # change_kind after argparse; argparse choices= already rejects invalid values with exit 2
     # naming the valid set, so the explicit check was dead code.
 
@@ -950,7 +950,7 @@ def main(argv: list[str] | None = None) -> int:
 
     entry_id = str(uuid.uuid4())
     created = _now_iso()
-    # Review: code-reviewer strang-08-slice3 — (F3) hoist _current_repo_root() so git rev-parse
+    # Hoist _current_repo_root() so git rev-parse
     # spawns exactly once per invocation; pass resolved root to _resolve_from_repo and reuse
     # for _cc_route repo_root arg below.
     _raw_root = _current_repo_root()
@@ -1035,7 +1035,7 @@ def main(argv: list[str] | None = None) -> int:
         why this is usually a no-op degrade. Both legacy_fn call sites below
         route through this instead of calling legacy_fn directly.
 
-        Review: coordinator:code-reviewer — the LESSON_PROMOTE_OUTBOX_ROOT
+        The LESSON_PROMOTE_OUTBOX_ROOT
         test-isolation gate is not a rare edge case: it is exactly the shape
         this repo's own test suite invokes, with coordinator_core genuinely
         importable, so `recording_declared_writes`/`declare_write` fire for
@@ -1129,7 +1129,7 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return _EXIT_DOE_UNRESOLVABLE
-        # Review: code-reviewer strang-08-slice3 — (F1) guard out_path access; bare KeyError
+        # Guard out_path access; bare KeyError
         # on unexpected op result shape (missing both out_path and skipped) gives a misleading
         # traceback instead of a clean error. TWO-SIGNAL contract lives in the op, not here.
         out_path = result.get("out_path")

@@ -1189,7 +1189,6 @@ def _main_body(argv: Optional[List[str]] = None) -> int:
         rc = _pkg_install("bash", "bash")
         if rc != EXIT_OK:
             return rc
-        # Review: code-reviewer -- Finding 4 (2026-07-17 BIG_PORT Wave C sidecar):
         # env.bash_ok is intentionally NOT re-derived here. Nothing downstream reads
         # it again -- Step 4c is a native in-process call (platform-localize) that
         # doesn't invoke bash at all (2026-07-21 pure-Python-shop cutover retired

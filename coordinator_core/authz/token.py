@@ -42,7 +42,7 @@ _TOKEN_RO = "token.ro"
 
 # Sentinel directory name (mirrors lifecycle._SENTINEL_DIR — lifecycle.py is the
 # source-of-truth for this name; if renaming, grep: _SENTINEL_DIR = "coordinator-service"
-# Review: code-reviewer (F5) — grep-pattern anchor so a future renamer finds both copies.
+# grep-pattern anchor so a future renamer finds both copies.
 _SENTINEL_DIR = "coordinator-service"
 
 
@@ -135,7 +135,7 @@ def write_tokens(repo_root: Path) -> None:
     Mid-rotation window (F3): the two os.replace() calls are not atomic together, but
     using temp-file-per-token collapses the inconsistency window to two near-simultaneous
     renames — no separate synchronisation mechanism is needed for this use-case.
-    Review: code-reviewer (F1, F3) — atomic write eliminates world-readable window and
+    Atomic write eliminates world-readable window and
     collapses mid-rotation RW/RO inconsistency window to near-zero.
     """
     _ensure_sentinel_dir(repo_root)
@@ -179,7 +179,7 @@ def read_token_ro(repo_root: Path) -> Optional[str]:
 def _read_token_file(path: Path) -> Optional[str]:
     """Read a single token file; return None if absent; log WARNING on other OS errors.
 
-    Review: code-reviewer (F6) — FileNotFoundError/IsADirectoryError are treated as
+    Are treated as
     "not yet written" and return None silently. Any other OSError (e.g., PermissionError)
     is a misconfiguration that would permanently deny all traffic; surface it at WARNING
     so diagnostics are possible rather than silently appearing identical to "no token".

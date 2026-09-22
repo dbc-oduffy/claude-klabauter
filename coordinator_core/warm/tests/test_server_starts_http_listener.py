@@ -26,6 +26,7 @@ site -- without blocking in the accept loop or creating a real named pipe.
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -39,7 +40,7 @@ from coordinator_core.warm import election, server, skew, supervisor
 def _short_warm_runtime_base(monkeypatch: pytest.MonkeyPatch):
     """Overrides the suite-wide HOME quarantine's `warm-runtime-base`
     (`coordinator_core/conftest.py::_quarantine_real_home`) with a short,
-    real on-disk root under `/tmp`.
+    real on-disk root under `/tmp` on POSIX.
 
     `server.main()`'s real boot path derives a socket path
     (`election.socket_path`) before `_patch_boot_seams` stubs the election
@@ -50,10 +51,15 @@ def _short_warm_runtime_base(monkeypatch: pytest.MonkeyPatch):
     `test_election_posix.py::short_runtime_base` (committed b4e300c8f1);
     duplicated here rather than lifted into a shared `conftest.py`
     because this dispatch's scope is this file only.
+
+    `/tmp` does not exist as a drive-relative root on Windows and there
+    is no `sun_path` budget to protect there, so `os.name == "nt"` falls
+    back to the platform default temp root instead, same guard as
+    `conftest.py::_quarantine_real_home` uses for the suite-wide base.
     """
     from coordinator_core.warm import breadcrumb
 
-    base = Path(tempfile.mkdtemp(prefix="wrb-", dir="/tmp"))
+    base = Path(tempfile.mkdtemp(prefix="wrb-", dir=None if os.name == "nt" else "/tmp"))
     try:
         monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(base))
         yield base

@@ -82,7 +82,7 @@ def _engine_worktree_root() -> Optional[Path]:
     "cannot resolve, do nothing" (same fail-soft posture as
     ``handoff_lineage_ancestry``'s absent-``repo_root`` branch).
 
-    Review: code-reviewer (P1) — pre-conversion this called
+    pre-conversion this called
     ``git -C <engine_dir> rev-parse --path-format=absolute --show-toplevel``;
     ``show_toplevel()`` (``coordinator_core.git.repo_root``) does not forward
     ``--path-format=absolute`` to its own spawn fallback. Verified NOT a

@@ -20,7 +20,7 @@ Fixture style mirrors `test_zero_delta_commit_is_refused.py` /
 `test_phantom_deletion_is_refused.py`: a throwaway `mkdtemp` repo per test,
 real git for the seed, `commit_paths` for everything under test.
 
-# Review: overengineering-reviewer (minor) -- this module overlapped
+# This module overlapped
 # `coordinator_core/ops/ceremony/tests/test_commit_v2_splits_the_skipped_warning.py`,
 # which already pins the observable warning-split facts end-to-end through
 # `_handler`, at a cost of ~55 real-git spawns across both files for one

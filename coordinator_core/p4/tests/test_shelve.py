@@ -18,7 +18,7 @@ import pytest
 from coordinator_core.git.run import GitResult
 from coordinator_core.p4 import runner, session_change, shelve, workspace
 
-# Review: overengineering-reviewer F1 (integrator-applied) -- the package
+# The package
 # used to re-export `workspace.session_change` under this same attribute
 # name, shadowing this submodule on a plain import; that facade is gone,
 # so a plain submodule import is unambiguous now (mirrors
@@ -302,7 +302,7 @@ class TestTypedRefusalNeverRaises:
 
 
 class TestFstatRecordsAreKeyedByNameNeverByPosition:
-    """Review: code-reviewer F1. Three paths, two returned fstat records --
+    """
     `zip()` would silently misalign the second record onto the third path.
     Keying by `clientFile` must either resolve correctly or refuse; it must
     never produce a misaligned `ok=True`."""

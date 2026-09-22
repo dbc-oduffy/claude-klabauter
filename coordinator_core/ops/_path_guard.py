@@ -146,7 +146,7 @@ def contained_path(candidate: Path, allowed_roots: Iterable[Path]) -> Optional[P
         print(f"skip: contained_path: candidate.resolve() failed: {sys.exc_info()[1]}", file=sys.stderr)
         return None
     candidate_for_compare = strip_extended_length_prefix(str(resolved))
-    # Review: code-reviewer cb2c4bcd, Finding 2 -- hoisted out of the loop;
+    # Hoisted out of the loop;
     # was rebuilt from the same fixed string on every iteration.
     candidate_compare_path = Path(candidate_for_compare)
     for root in allowed_roots:

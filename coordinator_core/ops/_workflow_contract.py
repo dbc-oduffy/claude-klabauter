@@ -162,7 +162,7 @@ def scrub(script: str) -> str:
 
 FORBIDDEN_GLOBALS = [
     (
-        # Review: code-reviewer (Finding 4, nit) — negative lookbehind so a
+        # Negative lookbehind so a
         # namespaced property access (myObj.Date.now()) does not false-positive
         # on the global Date.now() this check targets.
         re.compile(r"(?<!\.)\bDate\.now\s*\("),
@@ -327,7 +327,7 @@ _PHASE_CALL = re.compile(r"\bphase\s*\(\s*['\"]([^'\"]*)['\"]")
 # declared titles. A script survives that only by carrying an even number of escaped
 # quotes, which is luck, not a property.
 #
-# Review: code-reviewer (Findings 1-3, major, PR #35 follow-up) -- a per-array-element
+# A per-array-element
 # regex pass (`_META_PHASES_TITLE.finditer(body)` gated by a blanket "if titles: return
 # titles") is the same failure class one layer down: (1) it is all-or-nothing across the
 # WHOLE array, so one object-form entry silently drops every bare-string sibling
@@ -665,7 +665,7 @@ def run_checks(script: str) -> List[Finding]:
     """
     scrubbed = scrub(script)
     block = extract_meta_block(script)  # raw block, kept for phase-title extraction
-    # Review: code-reviewer (Finding 1, P0) — check_meta_pure_literal/check_meta_required_fields
+    # check_meta_pure_literal/check_meta_required_fields
     # must consume the SCRUBBED meta block, not raw text, per F1's mandate: a conformant
     # description string whose VALUE contains a call-shape token (e.g. "rank them (top 10)")
     # was false-positiving as a meta-impure-call ERROR because the raw block still exposes

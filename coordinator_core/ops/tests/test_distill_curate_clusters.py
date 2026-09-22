@@ -211,7 +211,7 @@ def test_removing_bare_abstraction_vocab_changes_no_verdict() -> None:
 
 
 def test_misc_and_other_are_structurally_dropped_not_denylisted() -> None:
-    """Review: code-reviewer Finding (2026-08-06) — "misc"/"other" used to be
+    """"misc"/"other" used to be
     listed in `_PLACEHOLDER_VALUES`, which pre-empted the structural test and
     made this the module's ONE actual denylist-as-primary-mechanism spot,
     contradicting its own Negative-spec. This pins that they now reach and

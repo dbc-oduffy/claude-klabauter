@@ -450,7 +450,7 @@ def _find_duplicate_draft_topic(
         if other_topic == topic:
             continue
         try:
-            # Review: coordinatorcode-reviewer — widened from `except OSError:`.
+            # Widened from `except OSError:`.
             # UnicodeDecodeError (raised by read_text on non-UTF-8 bytes) is a
             # ValueError subclass, not an OSError, so a single non-UTF-8
             # sibling draft used to raise straight out of this scan and block
@@ -463,7 +463,7 @@ def _find_duplicate_draft_topic(
             other_text = candidate.read_text(encoding="utf-8")
         except (OSError, ValueError):
             continue
-        # Review: coordinatorcode-reviewer — dropped the dead
+        # Dropped the dead
         # `other_body is None: continue` guard. parse_frontmatter's `body` is
         # always a str (falls back to the whole file text when frontmatter is
         # absent/unparseable), so that branch never fired; the real
@@ -1206,7 +1206,7 @@ def _warn_once(
         if ack.is_file():
             return None
         ack.parent.mkdir(parents=True, exist_ok=True)
-        ack.write_text(marker_text, encoding="utf-8")
+        ack.write_text(marker_text, encoding="utf-8", newline="\n")
     except OSError:
         return None
     return warning
@@ -1574,7 +1574,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     if repo_root is None:
         return build_setup_error_result(
             _MODE, dry_run,
-            # Review: coordinator:code-reviewer — error named the retired root only; now names the canonical root, dual-root read noted.
+            # Error named the retired root only; now names the canonical root, dual-root read noted.
             "memo.send: no repo_root supplied — memo.send reads the CALLING "
             "repo's own .coordinator-local/memo-outbox/ (falling back to the "
             "retired state/memo-outbox/ for pre-relocation drafts) and requires "

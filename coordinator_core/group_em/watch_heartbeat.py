@@ -155,7 +155,6 @@ def write_atomic(path: str, payload: dict) -> bool:
         # root must already exist and only the `state/` leaf under it is ours
         # to create.
         #
-        # Review: overengineering-reviewer (finding #4, minor, accepted) --
         # the fourth full retelling of one incident across this diff, reduced
         # to a pointer plus the part that is this site's own reasoning.
         parent = os.path.dirname(directory)
@@ -574,7 +573,7 @@ ABSENT_UNREADABLE = "unreadable-record"
 #: resolves only from a cwd that can already import the engine, which the repos
 #: this watch is armed FOR generally cannot -- 2026-09-01, example-game-workbench-repo).
 REARM_COMMAND = (
-    # Review: coordinator:code-reviewer (a6cd5e5f3f553af13) -- trailing
+    # Trailing
     # whitespace before the parenthetical was a stray formatting artifact.
     "group-em-watch --repo-root <root> --group-em-session-id <your sid> "
     "(hold it with Monitor, persistent: true; or fire "

@@ -28,7 +28,7 @@ freeform review markdown with no frontmatter block). A directly-authored ``fm.ge
 on the plan's own frontmatter (future-proofing; 0 today) always wins over any sidecar join.
 
 ``superseded_by`` derivation (dead-join fix, 2026-07-21; relocated into ``collect()`` same day —
-Review: code-reviewer Finding 1): authors write the FORWARD edge ``supersedes:`` (scalar path
+code-reviewer Finding 1): authors write the FORWARD edge ``supersedes:`` (scalar path
 or YAML list of paths) on the superseding plan; nothing authors the backward edge directly,
 and asking authors to double-write both directions is redundant and drift-prone. The backward
 edge is derived cross-record as a SECOND PASS at the end of this module's own ``collect()`` —
@@ -99,7 +99,10 @@ _REVIEWER_SIDECAR_PLAIN_TIER = 100
 _REVIEWER_SIDECAR_MODEL_MARKERS: tuple[str, ...] = ("sonnet",)
 _REVIEWER_SIDECAR_MODEL_TIER = 200
 
-# The frozen 9-value PlanStatus enum (bash:1616 / 1672). Order-insensitive membership set.
+# PlanStatus enum, kept in parity with coordinator_core/frontmatter/schemas/plan.schema.json's
+# own `status` enum (originally the frozen 9-value bash:1616 / 1672 set, plus `closed_partial` —
+# terminal/archivable per lifecycle_constants.PLAN_ARCHIVABLE_STATUS). Order-insensitive
+# membership set.
 _PLAN_STATUS_ENUM = frozenset({
     "draft",
     "reviewed",
@@ -107,6 +110,7 @@ _PLAN_STATUS_ENUM = frozenset({
     "executing",
     "landed",
     "implemented",
+    "closed_partial",
     "deferred",
     "abandoned",
     "superseded",

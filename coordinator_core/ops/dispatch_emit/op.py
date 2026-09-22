@@ -35,6 +35,15 @@ Wire params:
                                      ``queue_emit.emit_queue_script``.
     profile_dir (str, required for the queue route) — directory
                                      ``<profile>.yaml`` lives under.
+                                     Deliberately NOT containment-guarded
+                                     against ``repo_root``/``target_root``:
+                                     unlike ``queue`` (row content), a DoE
+                                     profile is an operator-trusted input
+                                     that routinely lives in a different
+                                     repo (DoE-claude) than the one whose
+                                     rows are being closed. Guarding it here
+                                     would refuse a legitimate cross-repo
+                                     profile_dir in production.
     appetite (str, optional, default "standard") — forwarded to
                                      ``queue_emit.emit_queue_script``.
     overrides (dict, optional)    — knob overrides, keys ⊆ {"where", "limit",
@@ -58,11 +67,6 @@ Wire params:
                                      default-derivation shape
                                      ``workflow.validate`` uses for its
                                      READ-only guard.
-                                     (Review: code-reviewer 8479038e, Finding
-                                     1 — the parent-of-output default made
-                                     containment a near no-op for a write op;
-                                     ``target_root`` now prefers the wider,
-                                     actually-constraining ``repo_root``.)
     name (str, optional)          — forwarded to ``emit.emit_script``.
     description (str, optional)   — forwarded to ``emit.emit_script``.
 
@@ -451,7 +455,7 @@ class NoReceiptToRestampError(ValueError):
 class RestampScriptNotFoundError(NoReceiptToRestampError):
     """Raised when ``restamp``'s ``script_path`` itself does not exist.
 
-    Review: code-reviewer -- distinct from the base class's "script exists
+    Distinct from the base class's "script exists
     but has no receipt beside it" case (typo'd path vs. a genuinely
     un-emitted script); a subclass so an existing ``except
     NoReceiptToRestampError`` still catches this, while a caller that cares
@@ -630,7 +634,7 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
                     f"minted spine path escapes its inventory record's directory: "
                     f"{spine_path!r} not under {Path(inventory_path).resolve().parent!r}"
                 )
-            guarded_spine_path.write_text(spine_text, encoding="utf-8")
+            guarded_spine_path.write_text(spine_text, encoding="utf-8", newline="\n")
             plan_path = str(guarded_spine_path)
 
         if not plan_path:

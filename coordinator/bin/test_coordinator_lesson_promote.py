@@ -166,7 +166,7 @@ def _minimal_yaml_parse(content: str) -> dict:
             value = rest.strip()
             if value in ("|", "|-"):
                 # Block scalar — collect subsequent indented lines.
-                # Review: code-reviewer Slice-B — (B-F8) extended to handle "|-" (strip
+                # Extended to handle "|-" (strip
                 # chomping) in addition to "|" (clip chomping). The .rstrip("\n") already
                 # normalises both — behavior is identical for the test's verification needs.
                 block_lines = []
@@ -434,7 +434,7 @@ def test_schema_missing_fails_loud() -> None:
 # ---------------------------------------------------------------------------
 
 def test_multiline_body_roundtrip() -> None:
-    """Review: code-reviewer Slice-B — (B-F8) a multi-line body must round-trip
+    """A multi-line body must round-trip
     without a trailing newline. The _yaml_str fix changes | (clip chomping) to
     |- (strip chomping) so 'First line.\\nSecond line.' parses back as exactly
     that string with NO trailing newline added.

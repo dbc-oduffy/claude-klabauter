@@ -205,17 +205,17 @@ class ReaperSkipBranchesNeverPassReapedFromTest(unittest.TestCase):
 
         calls = []
         real_unclaim = reaper.cs_unclaim_handoff
-        real_ship = reaper.cs_ship_handoff
+        real_ship = reaper._cs_ship_handoff_core
 
         reaper.cs_unclaim_handoff = lambda path, reaped_from=None: (
             calls.append(("unclaim", path, reaped_from)), 0)[1]
-        reaper.cs_ship_handoff = lambda path, sha=None: (
-            calls.append(("ship", path, sha)), 0)[1]
+        reaper._cs_ship_handoff_core = lambda path, sha=None: (
+            calls.append(("ship", path, sha)), (0, False))[1]
         try:
             reaper.apply_dispositions(dispositions)
         finally:
             reaper.cs_unclaim_handoff = real_unclaim
-            reaper.cs_ship_handoff = real_ship
+            reaper._cs_ship_handoff_core = real_ship
         return calls
 
     def test_release_leg_carries_reaped_from(self):
@@ -234,10 +234,11 @@ class ReaperSkipBranchesNeverPassReapedFromTest(unittest.TestCase):
                                reaper._VERDICT_RECLAIM_SHIPPED, "d", sha="abc123"),
         ])
         self.assertNotIn("unclaim", [c[0] for c in calls])
-        # `cs_ship_handoff` ALONE — `apply_dispositions`'s negative-spec forbids a
-        # standalone `stamp_shipped_in` ahead of it, because on a guard-retained
-        # handoff the pre-stamp survives a flip that never happened and leaves the
-        # shipped_in/in_flight half-state the composed verb exists to close.
+        # `_cs_ship_handoff_core` ALONE — `apply_dispositions`'s negative-spec
+        # forbids a standalone `stamp_shipped_in` ahead of it, because on a
+        # guard-retained handoff the pre-stamp survives a flip that never
+        # happened and leaves the shipped_in/in_flight half-state the composed
+        # verb exists to close.
         self.assertEqual([c[0] for c in calls], ["ship"])
 
     def test_skip_verdicts_write_nothing_at_all(self):

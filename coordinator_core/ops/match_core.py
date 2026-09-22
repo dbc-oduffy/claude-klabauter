@@ -77,7 +77,7 @@ from typing import List, Optional, TypedDict
 # to the (b) paraphrase class than to the (c) slug class, which is the
 # direction that matters since a real fork's query belongs to (b). The score
 # gate alone still separates prose queries from slug queries.
-# Review: coordinator:code-reviewer — the prior "~0.26 on both sides" framing
+# The prior "~0.26 on both sides" framing
 # was arithmetically wrong on the (b) side and read as a symmetric safe zone
 # when the margin is asymmetric; retune only against a re-run of the
 # measurement above, not against this restated headroom alone.

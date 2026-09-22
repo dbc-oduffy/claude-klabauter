@@ -1169,7 +1169,7 @@ class TestPlanTasksSpineDeny:
         )
         assert result is None
 
-    # Review: review-a-write-guard (MAJOR) -- `_cf_plan_tasks_writes_declared`
+    # `_cf_plan_tasks_writes_declared`
     # was registered in `_PLAN_TASKS_CROSS_FIELD_RULES` but this guard never
     # forwarded `plan_created`, so the rule's own safe-default ("cannot
     # confirm post-cutoff") stood down unconditionally on every write -- a
@@ -2332,6 +2332,52 @@ class TestUnparseableFrontmatterWarns:
 
         monkeypatch.setattr(guard, "_split_frontmatter", _unreadable)
         assert guard.check(payload) is None, "an I/O error must fail open"
+
+
+class TestRunReportGlobFallbackIsNotAClassifier:
+    """Mirrors the advisory sibling's own class of the same name.
+    `run-report.schema.json`'s `applies_to` is the directory-wide catch-all
+    `.coordinator-local/subagent-share/*/*.md`; an undeclared-kind `.md`
+    dropped there with no run-report-shaped frontmatter must draw nothing
+    from either sibling.
+    """
+
+    def _sidecar_dir(self, tmp_path):
+        d = tmp_path / ".coordinator-local" / "subagent-share" / "sess1"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    @pytest.mark.parametrize("strict", ["0", "1"])
+    def test_no_frontmatter_non_run_report_note_draws_nothing(
+        self, tmp_path, monkeypatch, strict
+    ):
+        if strict == "1":
+            monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
+        fp = self._sidecar_dir(tmp_path) / "staff-eng-review.md"
+        payload = _payload(
+            "Write",
+            str(fp),
+            str(tmp_path),
+            content="# Staff Eng Review\n\nSome free-form review notes.\n",
+        )
+        assert guard.check(payload) is None
+        assert advisory_guard.check(payload) is None
+
+    def test_genuine_run_report_still_warns(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
+        fp = self._sidecar_dir(tmp_path) / "report.md"
+        payload = _payload(
+            "Write",
+            str(fp),
+            str(tmp_path),
+            content="---\nstatus: not-a-real-status\n---\n\n## Observations\nbody\n",
+        )
+        result = guard.check(payload)
+        assert result is not None
+        rendered = _assert_advisory_shape(result)
+        assert "run-report:" in rendered
+        assert "status" in rendered
+        assert advisory_guard.check(payload) is None, "strict mode is the deny sibling's turn"
 
 
 class TestPlanTasksSpineIntegrityDeny:

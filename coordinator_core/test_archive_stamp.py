@@ -2193,7 +2193,7 @@ class TestShipHandoff:
         assert "refusing before any write" in capsys.readouterr().err
 
     def test_a_valid_record_permits_the_stamp_only_flip(self, tmp_path, capsys):
-        """Review: code-reviewer (P2, Finding 2) — the two refusal tests above
+        """The two refusal tests above
         pin `_ship_would_refuse` returning text; nothing added by this slice
         pinned it returning None for an ordinary shippable record. A
         regression making the projection spuriously refuse a valid record
@@ -3447,7 +3447,7 @@ class TestArchiveStampCliCorrectHandoffBodyDispatch:
 
 
 class TestDiskReadHelpersDegradeOnUnicodeDecodeError:
-    """Review: code-reviewer (nit F4) — `_read_current_shipped_in` and
+    """`_read_current_shipped_in` and
     `_reread_supersede_frontmatter` promise "None on unreadable"; a non-UTF-8
     handoff file raises UnicodeDecodeError (a ValueError subclass, not an
     OSError), which must degrade the same as a missing file, not propagate."""

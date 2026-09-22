@@ -46,7 +46,7 @@ from pathlib import Path
 
 import pytest
 
-import coordinator_core.pickup_assemble as pa
+import coordinator_core.pickup_brief as pa
 from coordinator_core.baton_assemble.apply import exec_module_with_own_dir_on_path
 from coordinator_core.ops.handoff_normalize import _normalize_one_text
 from coordinator_core.pickup_assemble import _role_axis_is_unknown
@@ -140,8 +140,6 @@ class TestPickupOfUnstampedLegacyBatonUnaffected:
     handoff, addressed explicitly by the operator, must succeed exactly as
     it did before this axis existed."""
 
-    @pytest.mark.spawns_process
-    @pytest.mark.cadence
     def test_brief_admits_operator_named_unstamped_legacy_baton(self, tmp_path: Path) -> None:
         target = tmp_path / "state" / "handoffs" / "legacy.md"
         target.parent.mkdir(parents=True, exist_ok=True)

@@ -166,6 +166,15 @@ _PRODUCTION_EXEMPT_SITES: frozenset[str] = frozenset({
     # `_is_test_file` check below; no self-entry is needed the way the
     # WSC-disposition gate needed one, because none of this file's own
     # fixture literals live inside a `_SCAN_ROOT`-rooted non-test module.
+    #
+    # ADDED 2026-09-21 (state/bug-backlog/2026-08-31-tf-new-sites-bypass-
+    # standing-declaration-seams.yaml, R32-s) — `_LEGACY_TOUCH_RECORD_
+    # FILENAME` is an existence-only probe (`_has_unreadable_legacy_record`
+    # never parses the retired dialect, only tests for the file's presence),
+    # so there is no content read for the `session.scope` union seam to
+    # replace; see the module's own docstring § "Retired-record filename
+    # constant" for the full citation.
+    "coordinator_core/ops/reap_orphaned_agent_dirs.py::<module>",
 })
 
 
@@ -393,6 +402,20 @@ def test_gate_ignores_test_modules(tmp_path):
     violations = find_legacy_touch_record_literals(tmp_path, repo_root=tmp_path)
 
     assert violations == []
+
+
+def test_reap_orphaned_agent_dirs_module_constant_is_named_exempt():
+    """R32-s regression: the module-level `_LEGACY_TOUCH_RECORD_FILENAME`
+    literal in `reap_orphaned_agent_dirs.py` must be covered by a named,
+    dated exemption, not left as a bare unexempted hit. Scoped to this one
+    file's violations so it fails/passes on this site alone, independent of
+    any other (unrelated) site's standing in the corpus-wide scan."""
+    violations = find_legacy_touch_record_literals(_SCAN_ROOT)
+    site_hits = [
+        v for v in violations
+        if v[0] == "coordinator_core/ops/reap_orphaned_agent_dirs.py"
+    ]
+    assert site_hits == []
 
 
 def test_named_exemption_still_describes_a_real_site():

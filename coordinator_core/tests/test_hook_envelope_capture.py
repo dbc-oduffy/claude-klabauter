@@ -2,7 +2,7 @@
 coordinator_core.tests.test_hook_envelope_capture — instrumentation seam
 coverage for coordinator_core._hook_envelope's capture sink.
 
-Review: coordinator:code-reviewer (Finding 1) — the capture_session()/_record()
+The capture_session()/_record()
 seam introduced for the guard message-size discipline corpus had zero test
 coverage: no test proved capture actually happens, nests correctly, or
 restores the prior sink on exit. A broken restore leaks a sink across tests

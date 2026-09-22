@@ -125,7 +125,7 @@ class TestSubcommandHelp(unittest.TestCase):
 
 
 class TestDeprecatedAliasDispatch(unittest.TestCase):
-    # Review: code-reviewer — only `--help` exercised the alias table before;
+    # Only `--help` exercised the alias table before;
     # nothing proved the rewired `_DEPRECATED_ALIASES.get(subcmd) == "..."`
     # condition actually dispatches to the same engine call as the canonical
     # verb. A typo in a map VALUE would silently fall through to bareword

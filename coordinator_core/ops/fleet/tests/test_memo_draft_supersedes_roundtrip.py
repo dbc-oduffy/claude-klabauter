@@ -18,7 +18,7 @@ accepts. This file verifies two things without a real engine invocation:
      shape — returns a bare string for one occurrence, a list for two-plus,
      and None when the flag is absent.
 
-Review: overengineering-reviewer (2026-08-31) — this file previously also
+This file previously also
 pinned a round-trip through `_parse_outbox_file`'s nested-`supersedes:`
 YAML-sequence reader; that reader had no CLI consumer (both call sites of
 `_parse_outbox_file`'s return value read only `to` and `scoped_to_*`) and
@@ -105,7 +105,7 @@ def test_supersedes_absent_from_send_subparser(mod):
 
 
 def test_cmd_draft_threads_bare_string_for_single_supersedes(mod):
-    # Review: overengineering-reviewer — rewritten to call the extracted
+    # Rewritten to call the extracted
     # _supersedes_invoke_value helper (the actual threading logic _cmd_draft
     # calls) instead of transcribing its one-liner into the test body, so
     # this test can fail for a change to the real threading path.

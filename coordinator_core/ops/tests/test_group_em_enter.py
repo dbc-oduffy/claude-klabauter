@@ -18,6 +18,7 @@ from coordinator_core.session import machinery_paths
 
 def test_payload_has_exactly_nine_keys(tmp_path, monkeypatch):
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-1")
+    monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: [])
     monkeypatch.setattr(
         gee.group_em_read_pass, "build_roster", lambda *a, **k: []
     )
@@ -59,6 +60,7 @@ def test_all_four_registration_points_resolve():
 
 def test_each_leg_degrades_independently(tmp_path, monkeypatch):
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-2")
+    monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: [])
     monkeypatch.setattr(
         gee.group_em_read_pass, "build_roster", lambda *a, **k: []
     )
@@ -106,6 +108,7 @@ def test_roster_failure_degrades_digest_but_not_baseline(tmp_path, monkeypatch):
     three spawns followed by three exits when only one session had left.
     """
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-3")
+    monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: [])
 
     def _boom(*a, **k):
         raise RuntimeError("roster boom")
@@ -131,6 +134,53 @@ def test_roster_failure_degrades_digest_but_not_baseline(tmp_path, monkeypatch):
     # roster AND digest both failed/degraded in this one call -- `as_of` is
     # ONE clock for the whole call, not per-leg, so it must survive both.
     assert result.get("as_of")
+
+
+def test_registry_outage_reports_roster_unknown_not_an_empty_fleet(tmp_path, monkeypatch):
+    """A registry outage (`fetch_live_agents` raising `EmptySnapshotError`, box-wide,
+    before the cwd filter) must not read as "looked, found nobody" for any leg
+    that consumes the shared enumeration.
+
+    Regression for `state/bug-backlog/2026-09-01-build-roster-reports-a-registry-outage-as-an-empty-fleet.yaml`'s
+    residual: `_group_em_enter`'s own `try/except -> agents = None` around
+    `fetch_live_agents` could never fire, because the outage arrived as `[]`
+    rather than as a raised exception. Threading `raise_on_failure=True,
+    raise_on_empty_snapshot=True` alone is not sufficient either: `build_roster`
+    treats `agents=None` as "not yet fetched" and silently re-fetches with its
+    own non-raising defaults, so `_run_roster_and_excluded` must also refuse to
+    forward a `None` enumeration into that call."""
+    monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-outage")
+
+    def _outage_aware_fetch(*a, raise_on_empty_snapshot=False, **k):
+        # Mirrors the real asymmetry: a caller that opts in to
+        # `raise_on_empty_snapshot` sees the outage; a caller that does not
+        # (e.g. `build_roster`'s own internal "agents is None" re-fetch)
+        # would silently get `[]` back, masking it.
+        if raise_on_empty_snapshot:
+            raise gee.group_em_read_pass.peer_roster.EmptySnapshotError(
+                "registry snapshot is empty box-wide"
+            )
+        return []
+
+    monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", _outage_aware_fetch)
+    monkeypatch.setattr(
+        gee.group_em_nomination,
+        "claim",
+        lambda *a, **k: {"claimed": True, "holder": "caller-sid-outage", "superseded_incumbent": None},
+    )
+
+    result = gee._group_em_enter({"repo_root": str(tmp_path)})
+
+    assert result["roster"] is None
+    assert result["roster_error"] == "enumeration-leg-failed"
+    assert result["roster_excluded"] is None
+    assert result["roster_excluded_error"] == "enumeration-leg-failed"
+    assert result["roster_considered"] is None
+    assert result["roster_considered_error"] == "enumeration-leg-failed"
+    assert result["digest"] is None
+    assert result["digest_error"] == "roster-leg-failed"
+    assert result["baseline"] is None
+    assert result["baseline_error"] == "enumeration-leg-failed"
 
 
 def test_baseline_tracks_the_peer_set_not_the_candidate_roster(tmp_path, monkeypatch):
@@ -315,6 +365,7 @@ def test_pid_not_running_incumbent_is_auto_replaced_not_refused(tmp_path, monkey
     `claimed is True` would pass a silent replacement; assert `replaced_holder` is
     populated and distinct from `superseded_incumbent` (which must be None here)."""
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-11")
+    monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: [])
 
     digest_spy_calls: list = []
     monkeypatch.setattr(gee.group_em_read_pass, "build_roster", lambda *a, **k: [])
@@ -373,6 +424,7 @@ def test_pid_not_running_incumbent_is_auto_replaced_not_refused(tmp_path, monkey
 
 def test_successful_claim_still_returns_all_expected_keys(tmp_path, monkeypatch):
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-9")
+    monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: [])
     monkeypatch.setattr(gee.group_em_read_pass, "build_roster", lambda *a, **k: [])
     monkeypatch.setattr(
         gee.group_em_send_pass,
@@ -414,6 +466,7 @@ def test_reentry_by_holder_is_distinguishable_from_fresh_claim(tmp_path, monkeyp
     claim and a refreshed re-entry by the same holder are two different lines to a
     human operator and must be distinguishable from the payload alone."""
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-10")
+    monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: [])
     monkeypatch.setattr(gee.group_em_read_pass, "build_roster", lambda *a, **k: [])
     monkeypatch.setattr(
         gee.group_em_send_pass,
@@ -449,6 +502,7 @@ def test_auto_replace_group_em_is_not_a_refusal_and_runs_roster(tmp_path, monkey
     """`replaced_holder` (case 4 -- pid_not_running) is NOT a refusal: `claimed` is True,
     so roster/digest/baseline must all run, unlike the two refusal cases above."""
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-11")
+    monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: [])
     monkeypatch.setattr(gee.group_em_read_pass, "build_roster", lambda *a, **k: [])
     monkeypatch.setattr(
         gee.group_em_send_pass,
@@ -500,6 +554,7 @@ def test_baseline_leg_writes_under_the_acted_on_repo_root_not_claude_klabauter(t
     it exercises the real function, over a real `tmp_path` `repo_root`, and
     asserts the baseline file lands under THAT root."""
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-6")
+    monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: [])
     monkeypatch.setattr(gee.group_em_read_pass, "build_roster", lambda *a, **k: [])
     monkeypatch.setattr(
         gee.group_em_send_pass,
@@ -564,6 +619,7 @@ def _group_em_with_teammates(tmp_path, monkeypatch, metas, session_id):
 
 def _stub_legs(monkeypatch, session_id, claimed=True):
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: session_id)
+    monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: [])
     monkeypatch.setattr(gee.group_em_read_pass, "build_roster", lambda *a, **k: [])
     monkeypatch.setattr(
         gee.group_em_send_pass,
@@ -936,6 +992,7 @@ def test_shared_roster_call_feeds_both_roster_and_digest_admitted_population(tmp
     receives -- asserted on the digest leg's actual call argument, not merely on the
     payload gaining a key."""
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-rx3")
+    monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: [])
     classified = [
         {"session_id": "peer-candidate", "state": "PAUSED", "candidate": True,
          "unclassifiable": False, "contradicted": False, "reason": "tail-paused"},
@@ -973,6 +1030,7 @@ def test_one_shared_build_roster_call_per_invocation(tmp_path, monkeypatch):
     """AC 7a: exactly one classification pass -- `build_roster` is called ONCE per
     `groupem.enter` invocation, not once for `roster` and again for `roster_excluded`."""
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-rx4")
+    monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: [])
     call_count = {"n": 0}
 
     def _build_roster(*a, **k):

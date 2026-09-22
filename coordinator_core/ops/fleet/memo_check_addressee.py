@@ -134,11 +134,11 @@ def compute_check_addressee_candidate(self_root: Path, to: str) -> dict:
             distinct registered `repos.*` key.
     """
     normalized = to.strip().lower()
-    # Review: code-reviewer (Finding 3) — tracks which central id the redirect
+    # Tracks which central id the redirect
     # branch actually resolved against, so note-selection below checks the
     # RESOLVED id, not the caller's original `to`/`normalized`.
     redirected_central_id: Optional[str] = None
-    # Review: code-reviewer (Finding 4) — cache the manifest read here so the
+    # Cache the manifest read here so the
     # UNRESOLVED branch below reuses it when the redirect branch already
     # read it, instead of re-opening/re-parsing the manifest a second time
     # in the same call. Lazily bound (not read unconditionally at function
@@ -151,7 +151,7 @@ def compute_check_addressee_candidate(self_root: Path, to: str) -> dict:
     if normalized in redirect_aliases:
         central_ids = read_central_receiver_ids()
         if central_ids:
-            # Review: code-reviewer (Finding 1) — manifest-driven, not a
+            # manifest-driven, not a
             # hardcoded literal: derive the redirect target from the
             # manifest's own declared central-id set, taking the FIRST id
             # in sorted order to match resolve_receiver_inbox's own
@@ -170,7 +170,7 @@ def compute_check_addressee_candidate(self_root: Path, to: str) -> dict:
     note = None
     if to_root is None:
         verdict = "UNRESOLVED"
-        # Review: code-reviewer (Finding 3) — check the actually-resolved
+        # Check the actually-resolved
         # central id when the redirect branch fired, not the original `to`.
         central_check_id = (
             redirected_central_id if redirected_central_id is not None else normalized

@@ -196,7 +196,7 @@ def _normalize_path(path: str) -> PurePosixPath:
     case-sensitivity probe — the fold is the conservative branch, not an
     oversight.
 
-    Review: coordinator:code-reviewer (wsc-A, ecb99d36) — both gaps flagged
+    Both gaps flagged
     as path-comparison cases the containment logic missed.
     """
     normalized = posixpath.normpath(path)
@@ -338,7 +338,7 @@ def _predecessors(
                 if normalized in write_paths:
                     collisions.append((read_path, write_paths[normalized]))
                     continue
-                # Review: coordinator:code-reviewer (P2) -- both directions
+                # Both directions
                 # of containment count, matching `_paths_overlap`'s
                 # writes/writes check: the reader's path may sit beneath the
                 # prefix (the ordinary case), or the reader may declare an
@@ -515,7 +515,6 @@ def _detect_cycle(
         # predecessor is visited first (and so which cycle path/member
         # ordering ends up in the raised message) could vary run to run,
         # even though whether a cycle exists is itself deterministic.
-        # Review: coordinator:code-reviewer (wsc-A, ecb99d36).
         for pred in sorted(preds[node]):
             if pred == node:
                 raise WaveCycleError(

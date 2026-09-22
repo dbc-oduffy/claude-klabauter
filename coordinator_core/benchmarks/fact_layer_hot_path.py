@@ -22,9 +22,11 @@ figures and renders them for C3 to state in the artifact:
     per-invocation aggregates, split into computed vs degraded populations (a
     degraded fact short-circuits and is systematically cheaper — blending
     the two would understate the computed cost and overstate the degraded
-    one). No production caller passes `invocation_id` yet (see
-    `record_fact_span`'s own docstring), so today's live corpus still falls
-    back to the `sid`-collapsed aggregate — see
+    one). `coordinator_core/quick_wrap_assemble/__init__.py::brief` mints and
+    threads an `invocation_id` through all five facts it reads (see
+    `record_fact_span`'s own docstring), so rows written by that ceremony
+    group into a real per-ceremony aggregate; a row from any other caller
+    still falls back to the `sid`-collapsed aggregate — see
     `state/bug-backlog/2026-08-27-fact-span-rows-cannot-yield-a-per-ceremo-d9be470c2039.yaml`.
 
 This module is explicitly OFFLINE: it is not itself held to the brightline's
@@ -470,9 +472,10 @@ def compute_timing_distributions(rows) -> dict:
       "process_ms": float|None, "outcome": "computed"|"degraded"}`. Rows are
       grouped by `invocation_id` when present, else `sid`, to recover the
       per-ceremony aggregate — the read-time regrouping `record_fact_span`'s
-      docstring names as the cost of not buffering. No production caller
-      passes `invocation_id` yet, so this still degrades to the `sid`-collapsed
-      aggregate against today's live corpus.
+      docstring names as the cost of not buffering.
+      `quick_wrap_assemble.brief` now passes `invocation_id`, so rows it
+      writes group into a real per-ceremony aggregate; a row from a caller
+      that still omits it degrades to the `sid`-collapsed aggregate.
     - BUFFERED (this plan's PREFERRED shape, never built):
       `{..., "facts": {<name>: {"elapsed_ms": float, "degraded": bool}}}`.
       Kept because it is the shape this module's own tests were written

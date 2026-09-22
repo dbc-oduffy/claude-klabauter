@@ -301,7 +301,7 @@ def _read_last_nonempty_line(path: str) -> tuple[str | None, bool]:
                 fh.seek(pos)
                 buf = fh.read(read_size) + buf
                 chunks_read += 1
-                # Review: coordinator:code-reviewer — b"\n".rstrip(b"\n") only strips a
+                # b"\n".rstrip(b"\n") only strips a
                 # trailing run of pure newline bytes; a trailing blank line carrying any
                 # other whitespace (e.g. "...}\n   \n") left an embedded \n from the
                 # record/blank-line delimiter, which falsely satisfied this check and

@@ -775,7 +775,7 @@ def _build_archived_memo_schema() -> dict[str, Any]:
         "x-bump-note": MEMO_SCHEMA_BUMP_NOTE,
         "x-generated-by": "coordinator_core.contract.emit_memo_schema.emit_schemas",
         "applies_to": "cross-repo/archive/*.md",
-        # Review: code-reviewer — Finding 1 (P1). A top-level "kinds" field
+        # A top-level "kinds" field
         # here re-arms the exact _byKind landmine this module's docstring
         # names as CRITICAL to avoid: load_schemas() special-cases BOTH the
         # literal "x-kinds" and "kinds" keys for _byKind registration, and

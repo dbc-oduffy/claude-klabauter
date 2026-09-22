@@ -327,7 +327,7 @@ _PAIRED_SYS_PLATFORM = {"nt": "win32", "posix": "linux"}
 
 @pytest.mark.parametrize("os_name,expect_suppressed", [("nt", False), ("posix", True)])
 def test_none_path_resolves_to_real_host_not_falsy(os_name, expect_suppressed, monkeypatch, capsys):
-    # Review: EM-found defect (2026-08-07) -- `_resolve_host_is_windows` resolves
+    # EM-found defect (2026-08-07) -- `_resolve_host_is_windows` resolves
     # in THREE steps: (1) the `host_is_windows` kwarg (omitted here, the point of
     # this test), (2) a declared value in the machine-local registry
     # (`_declared_host_is_windows`, `_REGISTRY_KEY = "coordinator.host_is_windows"`),

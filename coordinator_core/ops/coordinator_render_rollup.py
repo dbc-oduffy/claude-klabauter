@@ -131,7 +131,7 @@ def main(argv: Sequence[str]) -> int:
     # render side ahead of the writer flip per the widen-before-flip sequencing.
     # Spec backlink: cross-repo memo 2026-07-22 (claude-klabauter-em),
     # "deliverable-rollup contract: propose additive scan_incomplete field".
-    # Review: code-reviewer -- Finding 8 (nit): `is True` rather than `bool(...)`
+    # `is True` rather than `bool(...)`
     # so a future non-bool truthy sentinel (e.g. a string) fails to trip
     # "(partial scan)" silently -- strict bool-only semantics once the writer flips.
     scan_incomplete = result.get("scan_incomplete", False) is True

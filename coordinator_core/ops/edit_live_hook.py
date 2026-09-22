@@ -300,7 +300,7 @@ def cmd_commit(argv: List[str]) -> int:
         text=True,
         timeout=_SH_N_TIMEOUT_SECS,
         stdin=subprocess.DEVNULL,
-        # Review: code-reviewer -- A4 Windows console-flash suppression, matching
+        # A4 Windows console-flash suppression, matching
         # the pattern already used in generate_exec_summary.py (same slice).
         **no_console_creationflags(),
     )

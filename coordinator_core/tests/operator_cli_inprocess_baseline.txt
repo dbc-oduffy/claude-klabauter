@@ -117,6 +117,16 @@ coordinator/bin/handoff-deliverable-carry.py
 coordinator/bin/lessons-outbox-drain.py
 coordinator/bin/list-orphaned-plans.py
 coordinator/bin/orphan-branch-sweep.py
+# `percolate-mirror.py` (added 2026-09-21): its ONE in-process op reach this
+# gate credits is `compose_message` from
+# `coordinator_core.ops.ceremony.commit_message` — a pure commit-message
+# string composer with no write of its own. The actual commit this CLI
+# performs goes through `coordinator_core.git.commit.commit_paths` (not an
+# `coordinator_core.ops` import, so the gate does not see it), the same
+# zero-spawn in-process commit primitive `percolate-round.py` immediately
+# below uses — there is no op `main(argv)` for `run_op_main` to route to and
+# nothing for `declare_write`/`recording_declared_writes` to claim.
+coordinator/bin/percolate-mirror.py
 # `percolate-round.py` (added 2026-08-25): `scoped-git-commit` (the
 # `ceremony.scoped_git_commit` CLI) was killed 2026-08-23 (PM ruling,
 # DR-344) -- deleted, not suspended, and not replaced by any registered op
@@ -173,8 +183,14 @@ coordinator/bin/query-routine-signals.py
 coordinator/bin/probe-onboarding-currency.py
 coordinator/bin/prune-closed-improvements.py
 coordinator/bin/publish.py
+# `render-ceremony-receipt.py` (added 2026-09-21): its ONE in-process op
+# reach this gate credits is `render_receipt_summary` from
+# `coordinator_core.ops.ceremony.receipt_render` — a pure formatter over an
+# already-loaded receipt dict. The CLI reads one receipt file off disk and
+# prints its rendering; it writes nothing, so there is no write for
+# `declare_write`/`recording_declared_writes` to claim.
+coordinator/bin/render-ceremony-receipt.py
 coordinator/bin/review-brightline-gate.py
-coordinator/bin/safe-commit-offer.py
 coordinator/bin/spinoff-deliverable-and-commit.py
 coordinator/bin/sweep-boot.py
 coordinator/bin/sync-main.py
@@ -182,6 +198,14 @@ coordinator/bin/update-docs-probes.py
 coordinator/bin/verify-orientation-cache-sync.py
 coordinator/bin/verify-parallel-review-lens-orthogonality.py
 coordinator/bin/workday-complete-backfill-scan.py
+# `workday-complete-step3-consolidate.py` (added 2026-09-21): its ONE
+# in-process op reach this gate credits is `push_outstanding` from
+# `coordinator_core.ops.push_outstanding`, which decides whether to push and
+# delegates to `push_with_retry` — a `git push`. That mutates git refs, never
+# file content, the same "nothing a scope-touch claim models" kind the
+# module docstring's bucket 3 already covers for branch renames and worktree
+# reaping.
+coordinator/bin/workday-complete-step3-consolidate.py
 coordinator/bin/workday-start-advisory-counters.py
 coordinator/bin/workweek-complete-advisories.py
 coordinator/bin/workweek-complete-doc-staleness.py

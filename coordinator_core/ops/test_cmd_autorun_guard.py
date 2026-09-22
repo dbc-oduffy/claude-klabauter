@@ -81,7 +81,7 @@ def test_detect_foreign_present(monkeypatch):
 
 
 def test_detect_foreign_present_when_macro_text_is_an_unanchored_substring(monkeypatch):
-    # Review: coordinator:code-reviewer — a foreign AutoRun value embedding
+    # A foreign AutoRun value embedding
     # the macro text without the `_JOIN` delimiter (e.g. inside a `rem`
     # comment, or concatenated by some other tool without " & ") must
     # classify as foreign, not covered — a raw substring test would

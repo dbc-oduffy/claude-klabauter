@@ -51,7 +51,6 @@ from coordinator_core.bash_guards import (
 
 
 def _full_deny_message() -> str:
-    # Review: coordinator:code-reviewer (Finding 4, guard-message-size-
     # discipline) -- `agent_id` dropped from `_deny_reason`'s signature, it
     # was a dead parameter since message-size compression stopped echoing
     # it (see that function's own docstring).

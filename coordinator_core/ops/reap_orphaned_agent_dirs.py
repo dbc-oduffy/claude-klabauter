@@ -62,6 +62,19 @@ Negative-spec:
     never silent data loss — surfaced here for awareness, not fixed by a
     lock, since the current failure mode is a caught exception, not data loss.
 
+Retired-record filename constant (2026-09-21, exempted in
+``coordinator_core/tests/test_no_legacy_touch_record_literal.py`` as
+``coordinator_core/ops/reap_orphaned_agent_dirs.py::<module>``)
+=================================================================
+``_LEGACY_TOUCH_RECORD_FILENAME`` names ``"touched.txt"`` at module scope
+so R3a (``_has_unreadable_legacy_record``) can recognise a dir the current
+``touch-record.jsonl`` seam cannot speak for. This is an existence-only
+comparison (``Path.exists()`` / ``Path.stat()``), never a parse of the
+retired dialect's content — there is no line to read through the
+``session.scope`` union seam here, only a filename to test for presence.
+The same reasoned-retention pattern the file's own module docstring already
+documents for the other legacy-dialect-aware sites in this corpus.
+
 CLI:
   python -m coordinator_core.ops.reap_orphaned_agent_dirs --dry-run [--audit PATH]
   python -m coordinator_core.ops.reap_orphaned_agent_dirs --apply [--audit PATH]
@@ -188,7 +201,6 @@ def _has_unreadable_legacy_record(agent_dir: Path) -> bool:
     # check in `_classify` (R1 liveness, R4 mtime) uses an explicit
     # try/except OSError with a stated verdict; this one silently failed open.
     # Re-probe with `stat()`, which RAISES instead of swallowing.
-    # Review: code-reviewer Finding 1 (P2).
     try:
         (agent_dir / _LEGACY_TOUCH_RECORD_FILENAME).stat()
     except FileNotFoundError:
@@ -229,7 +241,7 @@ def _dirty_paths(repo_root: Path) -> set:
 
 
 def _touched_path_is_dirty(touched_paths: List[str], dirty: set) -> Optional[str]:
-    # Review: code-reviewer R3 finding (2026-08-14 slice2) — exact string
+    # Exact string
     # equality failed open on two shapes: (a) a touched.txt entry naming a
     # directory while git reports dirt at file-level paths beneath it, and
     # (b) a case difference between the two sources on this repo's

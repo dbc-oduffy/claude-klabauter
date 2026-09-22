@@ -316,7 +316,7 @@ class TestTypeSpellingIsFoldedForTheComparisonOnly:
         assert cols[2] == "coordinator:Code-Reviewer"
 
     def test_cross_namespace_bare_suffix_collision_still_goes_ambiguous(self):
-        """Review: code-reviewer -- an unconditional split(":")[-1] would fold
+        """An unconditional split(":")[-1] would fold
         `vendor-a:reviewer` and `vendor-b:reviewer` to the same bare `reviewer`
         key, sending a genuinely-different-type collision down the idempotent
         dedup arm instead of AMBIGUOUS. Only the `coordinator:` namespace is

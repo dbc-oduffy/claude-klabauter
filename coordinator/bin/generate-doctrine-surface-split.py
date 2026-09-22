@@ -280,7 +280,7 @@ def build_split(stem: str, source_text: str, split_dir_relpath: str | None = Non
         used_slugs[base_slug] = count + 1
         slug = base_slug if count == 0 else f"{base_slug}-{count + 1}"
         filename = f"{slug}.md"
-        # Review: coordinator:code-reviewer (Finding 3) — disambiguation
+        # Disambiguation
         # above only tracks collisions in `base_slug` space, not in the
         # actual `filename` space it produces. A second `## Foo` disambiguates
         # to `foo-2.md`, but a distinct `## Foo 2` heading slugifies to that
@@ -380,7 +380,7 @@ def _index_order_from_readme(readme_text: str) -> list[str]:
     unrelated entries just because directory listing order differs from
     authoring order.
 
-    Review: coordinator:code-reviewer (Finding 1) — scoped to the text
+    Scoped to the text
     FOLLOWING `GENERATED_MARKER` only, not the whole README. A
     hand-maintained preamble (relocated frontmatter, `_preamble.md` prose)
     can legitimately contain markdown-link-shaped bullet lines cross-
@@ -533,7 +533,7 @@ def dirty_bodies(split_dir: Path) -> list[tuple[str, str]]:
     ergonomic guard over a shared tree, not a correctness gate, and a consumer outside a
     checkout must still be able to regenerate.
 
-    Review: coordinator:overengineering-reviewer (finding 3) -- routes through
+    Routes through
     `coordinator_core.ops.ceremony.git_native._git` instead of a hand-rolled
     `subprocess.run` with its own creationflags handling.
     """
@@ -610,7 +610,7 @@ def regenerate_split_dir(
         return 2
 
     stem = split_dir.name
-    # Review: coordinator:code-reviewer (Finding 2) — `build_split_from_dir`
+    # `build_split_from_dir`
     # raises FileNotFoundError when `split_dir` is a real directory that
     # isn't actually a split (no `_preamble.md`). Every other CLI failure
     # mode here prints a clean stderr message and returns 2; let this one

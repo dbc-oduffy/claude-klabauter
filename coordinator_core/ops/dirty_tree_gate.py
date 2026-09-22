@@ -148,7 +148,7 @@ def _resolve_handoffs_dir(plugin_root: str, repo_root: str) -> str:
     `coordinator_core.state_root.coordinator_state_root()` seam (Rule 5,
     central=False).
 
-    Review: code-reviewer — this used to chdir into `repo_root` for the
+    This used to chdir into `repo_root` for the
     duration of the call because `coordinator_state_root()`'s Rule-5 git-root
     resolution only read the process's CURRENT WORKING DIRECTORY, with no way
     to pass a root explicitly. A process-global `os.chdir()` is a latent
@@ -311,7 +311,7 @@ def _build_known_scope(handoffs_dir: str, repo_root: Optional[str] = None) -> se
         path = os.path.join(handoffs_dir, name)
         if not os.path.isfile(path):
             continue
-        # Review: coordinator:code-reviewer C3 P3 — renamed from `claim_state`,
+        # Renamed from `claim_state`,
         # which shadowed the sibling module `coordinator_core.claim_state`
         # this function imports `resolve_claim_state` from.
         resolved_claim = resolve_claim_state(Path(path), common_dir=common_dir, repo_root=root)
@@ -365,7 +365,7 @@ def main(argv: List[str]) -> int:
         return 1
 
     # --- Resolve git repo root ---
-    # Review: code-reviewer — an explicit --root (mirroring
+    # An explicit --root (mirroring
     # refresh_roadmap_callout.main's `--root` flag) lets a caller that
     # already knows its worktree root skip the cwd-dependent git subprocess
     # entirely, so a ceremony orchestrator no longer needs a process-global
@@ -406,6 +406,12 @@ def main(argv: List[str]) -> int:
         text=True,
         **no_console_creationflags(),
     )
+    if status_result.returncode != 0:
+        print(
+            f"{_PROG} ({terminator}): git status --porcelain failed (rc={status_result.returncode}): "
+            f"{status_result.stderr.strip()} — treating tree as clean, this may be wrong",
+            file=sys.stderr,
+        )
     status_out = status_result.stdout if status_result.returncode == 0 else ""
 
     # Batched EOL-phantom filter: ONE `git diff --no-renames` spawn for the

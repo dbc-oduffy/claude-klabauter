@@ -28,7 +28,6 @@ Coverage:
                                               the spoof diagnostic (naming the
                                               real consumer) wins, matching the
                                               oracle's spoof-first guard order.
-                                              Review: code-reviewer 2026-07-22
                                               slice1 finding #1.
   (c) guard_pass_through_empty_consumed_by -- a B-hit file with empty/absent
                                               consumed_by binds to sid (the

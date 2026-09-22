@@ -441,7 +441,7 @@ class TestVersionBumpDecline:
         assert "error" not in do
 
     def test_bare_decline_tuple_matches_declared_non_version_dispositions(self):
-        # Review: code-reviewer — Finding 1. Pins `_VERSION_BUMP_FINAL_BARE_
+        # `_VERSION_BUMP_FINAL_BARE_
         # DECLINE` against the point's own declared dispositions so a fourth
         # non-d2-resolving disposition added to `version_bump_final` and
         # forgotten here fails loud, instead of quietly falling through to

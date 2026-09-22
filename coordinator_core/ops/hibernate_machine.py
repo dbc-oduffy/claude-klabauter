@@ -85,7 +85,7 @@ def _run_binary(argv: List[str]) -> None:
     Raises HibernateDispatchError on a nonzero exit — the caller never reports
     a failed dispatch as success.
     """
-    # Review: code-reviewer (F1, 2026-07-22) — the ctypes-primary path never
+    # The ctypes-primary path never
     # spawns a subprocess, but this shutdown-/h fallback does; without these
     # two flags it risks the Windows console-popup / interactive-hang classes
     # `git_native.py` and `run_pre_ci_hooks.py` this same wave already guard

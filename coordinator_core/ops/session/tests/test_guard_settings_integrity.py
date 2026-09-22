@@ -407,6 +407,75 @@ def test_guardless_sessions_silent_on_empty_observations(monkeypatch):
     assert evaluate_guardless_sessions() == ""
 
 
+def test_evaluate_settings_integrity_composes_guardless_session_banner(
+    tmp_path, monkeypatch
+):
+    """`evaluate_settings_integrity` -- the function the registered SessionStart
+    op (`session.guard_settings_integrity` -> `_handler`) actually calls -- must
+    surface a guardless peer session, not merely `evaluate_guardless_sessions`
+    in isolation (see that function's own test coverage above). A guardless
+    session cannot self-report (see module section docstring), so an already-
+    guarded peer's OWN SessionStart hook is the only path this signal has to
+    reach an EM at all; a wired-but-uncalled lens is indistinguishable from no
+    lens."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    _write_settings(config_dir, {"foo@bar": True})
+    _write_installed(config_dir, {"foo@bar": [{"scope": "user"}]})
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.detect_guardless_sessions.detect",
+        lambda: DetectionResult(
+            cannot_determine=False,
+            reason=None,
+            observed=[
+                ProcessObservation(
+                    pid=17152, command_line="claude.exe --dangerously-skip-permissions", guarded=False
+                )
+            ],
+            guardless=[
+                ProcessObservation(
+                    pid=17152, command_line="claude.exe --dangerously-skip-permissions", guarded=False
+                )
+            ],
+        ),
+    )
+
+    text = evaluate_settings_integrity(config_dir)
+    assert "17152" in text
+    assert "claude-doe" in text
+
+
+def test_evaluate_settings_integrity_own_config_banner_survives_guardless_composition(
+    tmp_path, monkeypatch
+):
+    """Composition must not let either lens clobber the other: an own-config
+    banner (declared-true-but-unreachable plugin) and a guardless-peer banner
+    firing together both reach the returned text."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    _write_settings(config_dir, {"example-game-repo@example-game-workbench-repo": True})
+    _write_installed(config_dir, {"other@marketplace": [{"scope": "user"}]})
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.detect_guardless_sessions.detect",
+        lambda: DetectionResult(
+            cannot_determine=False,
+            reason=None,
+            observed=[
+                ProcessObservation(pid=17152, command_line="claude.exe", guarded=False)
+            ],
+            guardless=[
+                ProcessObservation(pid=17152, command_line="claude.exe", guarded=False)
+            ],
+        ),
+    )
+
+    text = evaluate_settings_integrity(config_dir)
+    assert "example-game-repo@example-game-workbench-repo" in text
+    assert "17152" in text
+
+
 def test_is_inline_install_true_on_flat_published_mirror(tmp_path):
     """A container registers the flat mirror: its repo root IS the content root,
     gated by `.claude-plugin/plugin.json`, with no `coordinator/` segment."""

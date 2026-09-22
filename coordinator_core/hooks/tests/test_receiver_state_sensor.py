@@ -109,7 +109,7 @@ class TestHandlerWritesSiblingFile:
         assert result == {}
 
 
-# Review: overengineering-reviewer (finding #3, EM-ratified) — `TestTurnObligationWrite`
+# `TestTurnObligationWrite`
 # removed. It existed only to pin `_record_turn_obligation`'s gating behaviour, and that
 # function is deleted: the sensor no longer writes its own turn-boundary row to the
 # obligations intake (see the module docstring's SECOND WRITE note, now removed). The

@@ -848,7 +848,7 @@ def test_sweep_harness_scratchpads_dry_run_deletes_nothing(tmp_path, _patch_scra
     assert total_bytes == 100
 
 
-# Review: code-reviewer -- Finding 7: every other apply-path test monkeypatches
+# Every other apply-path test monkeypatches
 # sweep_scratchpads entirely, so "apply actually deletes" was verified only at
 # the kwarg boundary. This exercises the real (non-monkeypatched)
 # sweep_scratchpads end-to-end against a fixture, asserting an actual deletion.

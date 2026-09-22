@@ -2040,18 +2040,23 @@ def test_module_scope_unknown_promotion_excludes_main_guard_body() -> None:
     )
 
 
-def test_kind_axis_route_layer_unknown_stays_out_of_scope() -> None:
-    """(b) is a documented limitation, not a fix: `test_kind_axis.py` must
-    still be caught by the ratchet as an unmarked spawning file -- its one
-    spawn is behind a function-scope `_RUN_GIT_SPAWN_VERBS` condition this
-    chunk deliberately does not resolve. AC1/AC7/AC10."""
+def test_kind_axis_route_layer_unknown_resolved_by_pickup_brief_cutover() -> None:
+    """`test_kind_axis.py`'s one route-layer-UNKNOWN spawn was reached
+    through `pickup_assemble.brief`'s `_RUN_GIT_SPAWN_VERBS`-guarded
+    `_run_git` call -- the case (b) documented as a detector limitation,
+    not a fix. The C11 cutover re-points the call at `pickup_brief.brief`,
+    which carries no spawn site anywhere in its call graph (`resolve_repo_
+    root` there is walk-only), so the file now registers clean rather than
+    exercising the documented limitation. This pins the resolution so a
+    future regression back onto a spawning route is caught, not silently
+    re-exempted."""
     relpath = "coordinator_core/baton_assemble/tests/test_kind_axis.py"
     full_path = REPO_ROOT / relpath
     assert full_path.is_file(), f"expected file missing: {relpath}"
     report = _analyze_file(full_path, relpath)
-    assert report.has_any_spawn, (
-        "test_kind_axis.py stays a documented, unfixed route-layer-UNKNOWN "
-        "limitation per (b) -- it must still register as spawning"
+    assert not report.has_any_spawn, (
+        "test_kind_axis.py was expected clean of spawns after the "
+        "pickup_brief cutover -- a new spawn route reappeared"
     )
 
 

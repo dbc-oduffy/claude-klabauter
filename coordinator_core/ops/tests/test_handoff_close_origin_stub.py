@@ -335,7 +335,7 @@ def test_try_close_absent_proof_preserves_today_behaviour(tmp_path, monkeypatch)
 
 
 # ---------------------------------------------------------------------------
-# Review: staff-eng Finding 0 (2026-08-13, critical) — degenerate proof
+# Degenerate proof
 # ---------------------------------------------------------------------------
 
 
@@ -390,7 +390,6 @@ def test_try_close_zero_commit_required_proof_falls_back_to_guard(tmp_path, monk
 
 
 # ---------------------------------------------------------------------------
-# Review: staff-eng Finding 2 (test gaps)
 # ---------------------------------------------------------------------------
 
 

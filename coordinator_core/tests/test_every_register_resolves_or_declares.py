@@ -239,7 +239,7 @@ _DOTTED_LEAF_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*
 #: opening line of a multi-line tuple (`_KNOWN_SITES`, `_EXEMPTION_CLASSES` are `Call` nodes, so
 #: their opening line is `NAME = frozenset(` / `NAME: T = frozenset(`, already matched below).
 _CANDIDATE_LINE_RE = re.compile(
-    # Review: coordinatorcode-reviewer.a0bfa3d004796aa42 (Finding 4) -- `set(` alongside
+    # `set(` alongside
     # `frozenset(`/`dict(`; a `NAME: set = set()`-shaped register was invisible to this regex
     # AND to the AST oracle that validates its recall, so it could never be caught by either.
     r"^(_*[A-Z][A-Z0-9_]*)\s*(?::[^=\n]+)?=\s*(?:frozenset\(|dict\(|set\(|\(|\[|\{)"
@@ -329,7 +329,7 @@ def _find_first_assignment_value(tree: ast.Module, name: str) -> ast.expr | None
         elif isinstance(stmt, ast.AnnAssign):
             if isinstance(stmt.target, ast.Name) and stmt.target.id == name:
                 if stmt.value is None:
-                    # Review: coordinatorcode-reviewer.a0bfa3d004796aa42 (Finding 2) -- a
+                    # A
                     # bare-annotation `NAME: T` with no `=` declares a name, it does not bind
                     # one; agree with the sibling AST census below (`if value is None:
                     # continue`) rather than stopping dead here and missing a later real
@@ -490,7 +490,7 @@ def _assert_opaque_rows_have_not_aged_out(
             continue
         candidate_classes = [SubjectClass.REPO_PATH, SubjectClass.BARE_FILENAME]
         if _DOTTED_LEAF_RE.fullmatch(row.subject):
-            # Review: coordinatorcode-reviewer.a0bfa3d004796aa42 (Finding 1) -- a dotted
+            # A dotted
             # subject can age into EITHER MODULE or SYMBOL shape; iterate the shared
             # DOTTED_CLASSES rather than hand-picking MODULE, or the one live opaque
             # register's module.member-shaped subjects (brief.main, apply.main_apply,
@@ -676,7 +676,6 @@ def test_leg1_regex_matches_the_ast_census_once_at_land() -> None:
                     is_collection_call = (
                         isinstance(value, ast.Call)
                         and isinstance(value.func, ast.Name)
-                        # Review: coordinatorcode-reviewer.a0bfa3d004796aa42 (Finding 4) --
                         # `set` alongside `frozenset`/`dict`, so this oracle can validate
                         # leg 1's recall for `set(...)`-shaped registers instead of sharing
                         # the same blind spot.
@@ -854,7 +853,7 @@ def test_opaque_ages_out_helper_actually_detects_a_resolving_subject(
 def test_opaque_ages_out_helper_detects_a_symbol_shaped_resolution(
     _index: TrackedFileIndex,
 ) -> None:
-    """Review: coordinatorcode-reviewer.a0bfa3d004796aa42 (Finding 1) -- the helper must force-
+    """The helper must force-
     classify a dotted opaque subject under BOTH `DOTTED_CLASSES` members, not only `MODULE`. This
     subject, `register_rows.resolve_row`, does not resolve as `module` (no
     `register_rows/resolve_row.py` file exists) but DOES resolve as `symbol` (a real module-level

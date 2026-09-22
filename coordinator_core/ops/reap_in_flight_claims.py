@@ -42,9 +42,11 @@ Negative-spec:
       regex.
     - Does NOT mutate frontmatter directly. `apply_dispositions()` delegates
       every write IN-PROCESS to `coordinator_core.archive_stamp`'s tested
-      functions — `cs_unclaim_handoff` on the release arm, `cs_ship_handoff`
+      functions — `cs_unclaim_handoff` on the release arm, `_cs_ship_handoff_core`
       alone on the reclaim arm — preserving the single-writer invariant
-      without reimplementing it.
+      without reimplementing it. The core (not the public `cs_ship_handoff`
+      int wrapper) is used so the reclaim arm can read the `retained` flag
+      the transition op computes, rather than losing it at the int boundary.
     - Does NOT register a JSON-RPC op — both callers import this module
       in-process (the `reap_orphaned_agent_dirs` shape), so there is
       nothing to dispatch over IPC and no eager-module-list entry is owed.
@@ -67,7 +69,7 @@ from coordinator_core.frontmatter.primitives import (
     split_frontmatter,
 )
 from coordinator_core.archive_stamp import (
-    cs_ship_handoff,
+    _cs_ship_handoff_core,
     cs_unclaim_handoff,
 )
 from coordinator_core.lifecycle import git_common_dir
@@ -558,22 +560,24 @@ def survey(repo_root: Path, *, handoffs_dir: Optional[Path] = None) -> SurveyRes
 # ---------------------------------------------------------------------------
 
 
-def apply_dispositions(dispositions: List[Disposition]) -> "tuple[List[str], List[str]]":
+def apply_dispositions(
+    dispositions: List[Disposition],
+) -> "tuple[List[str], List[str], List[str]]":
     """Perform every mutating disposition by calling `coordinator_core.archive_stamp`'s
     tested verbs IN-PROCESS — `release` -> `cs_unclaim_handoff`, `reclaim_shipped` ->
-    `cs_ship_handoff` ALONE. A skip verdict performs no write.
+    `_cs_ship_handoff_core` ALONE. A skip verdict performs no write.
 
-    Negative-spec: does NOT call `stamp_shipped_in` before `cs_ship_handoff` on the
-    reclaim arm. `cs_ship_handoff` composes `handoff.archive_transition` mode
-    `stamp_only`, whose documented ordering is guard-first-then-stamp-then-flip and
-    whose own docstring names its purpose as closing "the incoherent half-state
+    Negative-spec: does NOT call `stamp_shipped_in` before `_cs_ship_handoff_core` on
+    the reclaim arm. `_cs_ship_handoff_core` composes `handoff.archive_transition`
+    mode `stamp_only`, whose documented ordering is guard-first-then-stamp-then-flip
+    and whose own docstring names its purpose as closing "the incoherent half-state
     (shipped_in present while deployment_state stays in_flight) a standalone
     stamp_shipped_in() call could otherwise leave behind." A standalone pre-stamp
     ahead of that guard reintroduces exactly that half-state: on a guard-retained or
-    indeterminate/fail-closed handoff, `cs_ship_handoff` returns 0 (retention is never
-    an error) having flipped nothing, so the pre-stamp is left in place on an
-    unclaimed, still-in_flight handoff and the reap still reports it under `applied`.
-    `cs_ship_handoff(path, sha=...)` alone already derives `kind="ship-commit"`
+    indeterminate/fail-closed handoff, `_cs_ship_handoff_core` returns `(0, True)`
+    (retention is never an error) having flipped nothing, so the pre-stamp would be
+    left in place on an unclaimed, still-in_flight handoff.
+    `_cs_ship_handoff_core(path, sha=...)` alone already derives `kind="ship-commit"`
     internally when a non-empty `sha` is supplied
     (`handoff_archive_transition._handler`), so the pre-stamp buys nothing.
 
@@ -585,12 +589,18 @@ def apply_dispositions(dispositions: List[Disposition]) -> "tuple[List[str], Lis
     the same cost: process creation, not the work. These are the same functions the
     CLI's own verbs dispatch to, so delegation is preserved and the spawn is not.
 
-    Returns `(applied_paths, failed_details)`. `len(applied) + len(failed)` is
-    expected to be LESS than `len(dispositions)` whenever skip verdicts
-    (`_VERDICT_SKIP_LIVE_CHILDREN` / `_VERDICT_SKIP_GOVERNED_PLAN`) are present —
-    a skip performs no write and is not accounted in either list.
+    Returns `(applied_paths, retained_paths, failed_details)`. `applied` holds only
+    paths that actually landed a write (an unclaim, or a genuine ship stamp+flip);
+    `retained` holds reclaim-shipped rows the live-children guard left untouched
+    (`_cs_ship_handoff_core` returned `(0, True)`) — still claimed and in_flight,
+    not resolved, so a caller must not count it toward "N fewer stranded claims".
+    `len(applied) + len(retained) + len(failed)` is expected to be LESS than
+    `len(dispositions)` whenever skip verdicts (`_VERDICT_SKIP_LIVE_CHILDREN` /
+    `_VERDICT_SKIP_GOVERNED_PLAN`) are present — a skip performs no write and is not
+    accounted in any of the three lists.
     """
     applied: List[str] = []
+    retained: List[str] = []
     failed: List[str] = []
     for d in dispositions:
         if d.verdict == _VERDICT_RELEASE:
@@ -605,12 +615,14 @@ def apply_dispositions(dispositions: List[Disposition]) -> "tuple[List[str], Lis
                 failed.append(f"{d.path}: unclaim-handoff failed: rc={rc}")
         elif d.verdict == _VERDICT_RECLAIM_SHIPPED:
             try:
-                rc = cs_ship_handoff(d.path, sha=d.sha or None)
+                rc, was_retained = _cs_ship_handoff_core(d.path, sha=d.sha or None)
             except Exception as exc:  # noqa: BLE001
                 failed.append(f"{d.path}: ship-handoff raised: {exc}")
                 continue
-            if rc == 0:
-                applied.append(d.path)
-            else:
+            if rc != 0:
                 failed.append(f"{d.path}: ship-handoff failed: rc={rc}")
-    return applied, failed
+            elif was_retained:
+                retained.append(d.path)
+            else:
+                applied.append(d.path)
+    return applied, retained, failed

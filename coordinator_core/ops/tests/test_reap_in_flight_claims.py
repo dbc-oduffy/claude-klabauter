@@ -560,21 +560,23 @@ def test_apply_release_calls_unclaim_handoff(monkeypatch):
                         lambda path, reaped_from=None: (calls.append((path, reaped_from)), 0)[1])
 
     dispositions = [mod.Disposition("state/handoffs/a.md", "dead1", mod._VERDICT_RELEASE, "detail")]
-    applied, failed = mod.apply_dispositions(dispositions)
+    applied, retained, failed = mod.apply_dispositions(dispositions)
 
     assert applied == ["state/handoffs/a.md"]
+    assert retained == []
     assert failed == []
     assert calls == [("state/handoffs/a.md", "dead1")]
 
 
 def test_apply_reclaim_shipped_calls_ship_handoff_exactly_once(monkeypatch):
-    """The reclaim arm must make exactly ONE mutating call — `cs_ship_handoff`
+    """The reclaim arm must make exactly ONE mutating call — `_cs_ship_handoff_core`
     alone, which already stamps+flips atomically. A standalone `stamp_shipped_in`
     pre-write ahead of it reintroduces the incoherent half-state
-    `cs_ship_handoff` exists to close (see apply_dispositions docstring)."""
+    `_cs_ship_handoff_core` exists to close (see apply_dispositions docstring).
+    A genuine flip (`retained=False`) lands in `applied`, never `retained`."""
     calls = []
-    monkeypatch.setattr(mod, "cs_ship_handoff",
-                        lambda path, sha=None: (calls.append(("ship", path, sha)), 0)[1])
+    monkeypatch.setattr(mod, "_cs_ship_handoff_core",
+                        lambda path, sha=None: (calls.append(("ship", path, sha)), (0, False))[1])
 
     def _boom(*a, **k):
         raise AssertionError("apply_dispositions must not call stamp_shipped_in directly")
@@ -585,17 +587,20 @@ def test_apply_reclaim_shipped_calls_ship_handoff_exactly_once(monkeypatch):
     dispositions = [
         mod.Disposition("state/handoffs/a.md", "dead1", mod._VERDICT_RECLAIM_SHIPPED, "detail", sha="deadbeef")
     ]
-    applied, failed = mod.apply_dispositions(dispositions)
+    applied, retained, failed = mod.apply_dispositions(dispositions)
 
     assert applied == ["state/handoffs/a.md"]
+    assert retained == []
     assert failed == []
     assert calls == [("ship", "state/handoffs/a.md", "deadbeef")]
 
 
 def test_apply_reclaim_shipped_guard_retained_leaves_no_stamp(monkeypatch):
-    """A guard-retained ship (`cs_ship_handoff` returns 0 having retained rather
-    than flipped) must not be reported as applied via a leftover standalone
-    stamp — there is no standalone stamp call to leave one behind."""
+    """A guard-retained ship (`_cs_ship_handoff_core` returns `(0, True)` having
+    retained rather than flipped) must not be reported as applied via a leftover
+    standalone stamp — there is no standalone stamp call to leave one behind —
+    nor counted as a resolved claim: it lands in `retained`, never `applied`,
+    since the handoff is still claimed and in_flight."""
     stamp_calls = []
     if hasattr(mod, "stamp_shipped_in"):
         def _stamp(*a, **k):
@@ -605,14 +610,15 @@ def test_apply_reclaim_shipped_guard_retained_leaves_no_stamp(monkeypatch):
 
     # Retention returns exit_code 0 (retention is never an error) without
     # flipping anything — the reap must not fabricate a second write around it.
-    monkeypatch.setattr(mod, "cs_ship_handoff", lambda path, sha=None: 0)
+    monkeypatch.setattr(mod, "_cs_ship_handoff_core", lambda path, sha=None: (0, True))
 
     dispositions = [
         mod.Disposition("state/handoffs/a.md", "dead1", mod._VERDICT_RECLAIM_SHIPPED, "detail", sha="deadbeef")
     ]
-    applied, failed = mod.apply_dispositions(dispositions)
+    applied, retained, failed = mod.apply_dispositions(dispositions)
 
-    assert applied == ["state/handoffs/a.md"]
+    assert applied == []
+    assert retained == ["state/handoffs/a.md"]
     assert failed == []
     assert stamp_calls == []
 
@@ -632,8 +638,9 @@ def test_apply_never_spawns_a_subprocess(monkeypatch):
         mod.Disposition(f"state/handoffs/{n}.md", "dead1", mod._VERDICT_RELEASE, "detail")
         for n in "abcde"
     ]
-    applied, failed = mod.apply_dispositions(dispositions)
+    applied, retained, failed = mod.apply_dispositions(dispositions)
     assert applied == [f"state/handoffs/{n}.md" for n in "abcde"]
+    assert retained == []
     assert failed == []
 
 
@@ -642,14 +649,15 @@ def test_apply_skip_verdicts_perform_no_write(monkeypatch):
         raise AssertionError("a skip verdict must never write")
 
     monkeypatch.setattr(mod, "cs_unclaim_handoff", _boom)
-    monkeypatch.setattr(mod, "cs_ship_handoff", _boom)
+    monkeypatch.setattr(mod, "_cs_ship_handoff_core", _boom)
 
     dispositions = [
         mod.Disposition("state/handoffs/a.md", "dead1", mod._VERDICT_SKIP_LIVE_CHILDREN, "detail"),
         mod.Disposition("state/handoffs/b.md", "dead2", mod._VERDICT_SKIP_GOVERNED_PLAN, "detail"),
     ]
-    applied, failed = mod.apply_dispositions(dispositions)
+    applied, retained, failed = mod.apply_dispositions(dispositions)
     assert applied == []
+    assert retained == []
     assert failed == []
 
 
@@ -657,8 +665,9 @@ def test_apply_reports_failure_without_raising(monkeypatch):
     monkeypatch.setattr(mod, "cs_unclaim_handoff", lambda path, reaped_from=None: 3)
 
     dispositions = [mod.Disposition("state/handoffs/a.md", "dead1", mod._VERDICT_RELEASE, "detail")]
-    applied, failed = mod.apply_dispositions(dispositions)
+    applied, retained, failed = mod.apply_dispositions(dispositions)
     assert applied == []
+    assert retained == []
     assert len(failed) == 1
     assert "rc=3" in failed[0]
 
@@ -675,8 +684,9 @@ def test_apply_reports_a_raising_verb_without_aborting_the_reap(monkeypatch):
         mod.Disposition("state/handoffs/a.md", "dead1", mod._VERDICT_RELEASE, "detail"),
         mod.Disposition("state/handoffs/b.md", "dead1", mod._VERDICT_RELEASE, "detail"),
     ]
-    applied, failed = mod.apply_dispositions(dispositions)
+    applied, retained, failed = mod.apply_dispositions(dispositions)
     assert applied == ["state/handoffs/b.md"]
+    assert retained == []
     assert len(failed) == 1
     assert "boom" in failed[0]
 

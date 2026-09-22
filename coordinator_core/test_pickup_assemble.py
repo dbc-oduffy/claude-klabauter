@@ -196,6 +196,75 @@ class TestHandoffBranch:
         # matching live session, so the claim is stale, not a collision.
         assert result.exit_code == pa.EXIT_OK
 
+    def test_bare_single_artifact_brief_takes_over_a_stale_claim(self, tmp_path, monkeypatch):
+        """Baseline for the `--no-claim` carve-out below: a bare, single-
+        artifact `brief` (the CLI's default `brief_multi` path, `claim_at_
+        brief=True`) still performs the brief-stage takeover of a dead
+        holder's claim today — this is the behaviour `--no-claim` exists to
+        let an inspection-only caller opt out of, not a change to it."""
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "my-test-sid")
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+        claim_dir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / "h1.md"
+        claim_dir.mkdir(parents=True)
+        (claim_dir / "session_id").write_text("dead-peer-sid\n", encoding="utf-8")
+        (claim_dir / "claimed_at").write_text("2026-01-01T00:00:00Z\n", encoding="utf-8")
+
+        results = pb.brief_multi("state/handoffs/h1.md", repo_root=repo)
+
+        assert (claim_dir / "session_id").read_text(encoding="utf-8").strip() == "my-test-sid"
+        assert results[0].decision_object["gates"]["claim_reclaim"]["holder"] == "dead-peer-sid"
+
+    def test_no_claim_flag_leaves_a_stale_claim_untouched(self, tmp_path, monkeypatch):
+        """The read-only-inspection defect (state/bug-backlog/2026-08-18-
+        pickup-assemble-brief-takes-over-a-stale-claim-4e91c7d38a05.yaml):
+        `brief_multi(..., no_claim=True)` — wired from the CLI's `--no-claim`
+        — must leave a dead holder's claim in place rather than taking it
+        over, while still surfacing the stale-claim verdict in `gates.
+        claim_grant` so an inspecting caller learns the claim is takeable
+        without the read itself taking it."""
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "my-test-sid")
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+        claim_dir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / "h1.md"
+        claim_dir.mkdir(parents=True)
+        (claim_dir / "session_id").write_text("dead-peer-sid\n", encoding="utf-8")
+        (claim_dir / "claimed_at").write_text("2026-01-01T00:00:00Z\n", encoding="utf-8")
+
+        results = pb.brief_multi("state/handoffs/h1.md", repo_root=repo, no_claim=True)
+
+        assert (claim_dir / "session_id").read_text(encoding="utf-8").strip() == "dead-peer-sid"
+        decision_object = results[0].decision_object
+        assert "claim_reclaim" not in decision_object["gates"]
+        claim_grant = decision_object["gates"]["claim_grant"]
+        assert claim_grant["holder"] == "dead-peer-sid"
+        assert claim_grant["verdict"] == "granted-with-warning"
+
+    def test_cli_no_claim_flag_is_accepted_and_wired(self, tmp_path, monkeypatch, capsys):
+        """End-to-end through `pickup_brief.main()`'s own argv parser — the
+        actual CLI surface callers invoke — rather than only the in-process
+        `brief_multi` kwarg: `pickup-assemble brief <artifact> --no-claim`
+        must not be rejected as an unrecognized argument, and stdout must
+        stay a single parseable JSON document."""
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "my-test-sid")
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+        claim_dir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / "h1.md"
+        claim_dir.mkdir(parents=True)
+        (claim_dir / "session_id").write_text("dead-peer-sid\n", encoding="utf-8")
+        (claim_dir / "claimed_at").write_text("2026-01-01T00:00:00Z\n", encoding="utf-8")
+        monkeypatch.chdir(repo)
+
+        exit_code = pb.main(["brief", "state/handoffs/h1.md", "--no-claim"])
+
+        assert exit_code == pa.EXIT_OK
+        assert (claim_dir / "session_id").read_text(encoding="utf-8").strip() == "dead-peer-sid"
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["gates"]["claim_grant"]["holder"] == "dead-peer-sid"
+
 
 class TestSpinoffBranch:
     def test_spinoff_classified_via_kind_field(self, tmp_path):
@@ -3308,7 +3377,7 @@ class TestBriefLiveClaimRevalidateJudgmentPoint:
         # `TestRevalidateHonorsProceed` below).
         assert jp["revalidate_at_dispatch"] is False
 
-    # Review: code-reviewer — Finding 1: the sibling of the test above —
+    # The sibling of the test above —
     # `claim_grant.verdict == "granted"` (self-claim) must SKIP the early
     # bail entirely and reach normal directive computation, rather than
     # only re-confirming the unchanged `denied` branch survives.
@@ -4357,7 +4426,7 @@ class TestExecutionStampMatchCanonicalRecipeParity:
         assert gate["computed_sha"] != own_body_sha
 
     def test_handoff_with_stale_mirrored_sha_still_targets_the_plans_own_sha(self, tmp_path):
-        """Review: code-reviewer — Finding 2: strengthens the mirrored-stamp
+        """Strengthens the mirrored-stamp
         regression above by making the handoff's own `execution_authorized_sha`
         deliberately WRONG/stale (not merely equal-and-unobserved) relative to
         the plan's own field. If the fix were reading the handoff's own field

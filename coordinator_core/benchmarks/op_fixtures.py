@@ -99,7 +99,7 @@ def materialize_fixture_repo(dest: Optional[Path] = None) -> Path:
     # gives git rev-list an actual chain to walk (representative of real invocation
     # cost, not a degenerate single-commit no-op). A local bare "origin" remote is
     # sufficient; no network access required.
-    # Review: code-reviewer (Slice B F1, P1) — nested INSIDE dest (not a dest.parent
+    # Nested INSIDE dest (not a dest.parent
     # sibling) so harness.run()'s single `shutil.rmtree(worktree_root)` cleans this up
     # too; a sibling path previously escaped that cleanup and leaked one bare repo per run.
     origin_dir = dest / ".bench-origin.git"
@@ -159,7 +159,7 @@ def _run_git(cwd: Path, args: list) -> None:
             creationflags=SUBPROCESS_CREATIONFLAGS,
         )
     except subprocess.TimeoutExpired as exc:
-        # Review: code-reviewer (Slice B F3, P2) — a hung git subprocess (e.g.
+        # A hung git subprocess (e.g.
         # blocked on a lock file) must fail loud like any other fixture-
         # materialization error, not wedge the run forever.
         raise RuntimeError(

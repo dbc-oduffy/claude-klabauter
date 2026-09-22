@@ -66,7 +66,7 @@ from coordinator_core.ipc import register_op
 async def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Agent) op: offer to strip `name` off a named Explore/Plan
     dispatch, denying only on this guard's own fail-closed leg."""
-    # Review: coordinator-code-reviewer — normalize the two params shapes
+    # Normalize the two params shapes
     # both engine doors and the cold chain send (see block_worktree_tool).
     params = payload_of(params)
     if not params:

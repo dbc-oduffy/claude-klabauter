@@ -85,7 +85,7 @@ def test_preuse_bash_dispatch_fails_open_when_chain_raises(monkeypatch):
 #: whenever the manifest does not resolve -- true under pytest -- which would
 #: make these tests pass or fail on ambient env rather than on the handler.
 #
-# Review: coordinator-code-reviewer — a bare hardcoded `/tmp/x` bakes a
+# A bare hardcoded `/tmp/x` bakes a
 # POSIX-only absolute path into a shared fixture; `_banned_command` takes
 # `tmp_path` instead so the argument is platform-neutral, matching this
 # repo's macOS+Windows portability lens (never executed, only fed to the
@@ -271,7 +271,7 @@ def test_named_dispatch_restriction_passes_unnamed_ordinary_type():
 
 
 def test_named_dispatch_restriction_denies_through_the_wrapped_envelope():
-    """Review: coordinator-code-reviewer — both engine doors send `params`
+    """Both engine doors send `params`
     as `{"payload": <event>}`. Through the wrapped door this guard's own
     fail-closed leg (an unrecognised `tool_input` key on a named
     Explore/Plan dispatch) was unreachable, same defect class as

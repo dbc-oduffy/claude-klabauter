@@ -72,7 +72,7 @@ def test_extract_empty_block(tmp_path, capsys):
 
 
 def test_usage_string_pins_retired_js_filename(capsys):
-    # Review: code-reviewer — usage string hardcodes the retired
+    # Usage string hardcodes the retired
     # sentinel-blocks-cli.js filename deliberately, for byte-parity with the
     # JS CLI's own usage string. Pin the exact text so a future "modernize
     # away from .js" edit fails loud instead of silently drifting from the

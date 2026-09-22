@@ -479,7 +479,7 @@ def _commit_and_push_origin_stub_close(
     push_status = derive_push_status(push_outcome)
 
     if push_status == PUSH_STATUS_PUSHED:
-        # Review: code-reviewer — Finding 1 (P1): `push_with_retry` can
+        # `push_with_retry` can
         # fetch+`git rebase --onto` this follow-up commit on a rejected
         # push before re-pushing, which REWRITES its SHA. The pre-push
         # `follow_up_sha` captured above is therefore stale in exactly the
@@ -791,7 +791,7 @@ async def _run_deliverable_cascade(
         if result.get("exit_code") == 0:
             advanced = result.get("advanced") or []
             acted.extend(a.get("handoff_path", "") for a in advanced)
-            # Review: coordinator:code-reviewer -- `commit_error` (AC8) is
+            # `commit_error` (AC8) is
             # present in the op's own result dict independent of exit_code
             # (a commit failure never flips exit_code, which stays keyed off
             # `advanced` alone), but was never read here, so it never reached

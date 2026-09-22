@@ -271,7 +271,7 @@ def test_memo_triage_has_common_dir_scope():
 
 
 def test_deferral_detect_orphan_memo_has_common_dir_scope():
-    """Review: code-reviewer Finding 6 — deferral.detect_orphan_memo's
+    """deferral.detect_orphan_memo's
     handler resolves main-worktree-rooted cross-repo/inbox/ +
     docs/plans/ + state/handoffs/ + docs/decisions/, mirroring memo.triage's
     common_dir scope. Absent from op_scopes.py this op silently degrades to
@@ -290,7 +290,7 @@ def test_deferral_detect_orphan_memo_has_common_dir_scope():
 
 
 def test_deferral_detect_partial_strangle_has_common_dir_scope():
-    """Review: code-reviewer Finding 6 — same common_dir precedent for
+    """Same common_dir precedent for
     Detector 1 (sibling op key, added by the same commit)."""
     assert "deferral.detect_partial_strangle" in ipc.OP_KEY_SCOPE, (
         "'deferral.detect_partial_strangle' is missing from ipc._OP_KEY_SCOPE "

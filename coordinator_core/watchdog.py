@@ -148,7 +148,7 @@ class Watchdog:
         (e.g. an unreadable system clock can surface as OSError on some
         platforms) — this try/except keeps the same degrade contract for
         that rare case instead of letting the whole watchdog check crash.
-        Review: code-reviewer F4 — prior "never raises" docstring overclaimed
+        Prior "never raises" docstring overclaimed
         parity with the oracle's explicit fail-soft handling.
         """
         try:

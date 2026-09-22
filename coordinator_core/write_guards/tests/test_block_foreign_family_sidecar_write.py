@@ -340,7 +340,7 @@ class TestAcceptanceOracle:
 
 
 class TestCaseInsensitiveFilesystemBypass:
-    """Review: coordinator:code-reviewer -- Finding 4. A case-insensitive-
+    """A case-insensitive-
     but-preserving filesystem (NTFS, default APFS) resolves an
     uppercase-extension or mixed-case-label variant of a leaf to the SAME
     physical file as the canonical-case one this guard protects; every
@@ -383,7 +383,7 @@ class TestCaseInsensitiveFilesystemBypass:
 
 
 class TestCanonicalIdDivergence:
-    """Review: coordinator:code-reviewer -- Finding 3. A canonical-shaped
+    """A canonical-shaped
     (``<name>@session-<short>``) ``agent_id`` whose embedded short is STALE
     relative to the live/EM session gets rewritten by this guard's own
     ``_resolve_subagent_identity`` (leg (d)), but ``provision_report``'s

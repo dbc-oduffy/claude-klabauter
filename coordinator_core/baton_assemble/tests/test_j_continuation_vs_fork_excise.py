@@ -288,7 +288,7 @@ class TestExciseReachesTheDivergenceCheck:
         assert lineage["standalone_no_predecessor_reason"] == note
 
     def test_predecessor_file_arm_self_resolved_from_ledger_is_cut(self, tmp_path, monkeypatch):
-        """Review: coordinatorcode-reviewer-25d61c87 Finding 2. The OTHER
+        """
         arm of the rung rule: `artifact_path` empty, predecessor self-
         resolved from the durable claim ledger via
         `_resolve_held_handoff_for_session`. Per the plan's rule, an empty
@@ -339,7 +339,7 @@ class TestExciseReachesTheDivergenceCheck:
 
 
 class TestExciseInertWhenRungsAgree:
-    """Review: coordinatorcode-reviewer-25d61c87 Finding 1 (P2). When the
+    """
     claimed-plan and predecessor rungs AGREE on `deliverable_id`, there is
     nothing for excise to rescue -- `resolve_lineage` would not have raised
     `DivergentDeliverableIdError` even without excise. Before the fix,

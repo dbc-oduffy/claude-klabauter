@@ -915,7 +915,7 @@ def test_live_corpus_promote_set_matches_golden():
     # Narrow the comparison to golden entries still present, which preserves the
     # real signal (a LIVE memo silently flipping to promoted/unscored) while
     # tolerating the deletions this corpus is designed to receive.
-    # Review: coordinator:code-reviewer — resolve through the same dual-root
+    # Resolve through the same dual-root
     # resolver production code uses (state/cross-repo/ preferred, legacy
     # cross-repo/ fallback) instead of hardcoding the retired legacy path,
     # which made this leg's comparison set vacuously empty.

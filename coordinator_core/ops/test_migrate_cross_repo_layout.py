@@ -210,7 +210,7 @@ def test_help_flag_exits_0(capsys):
 
 
 def test_untracked_move_with_live_session_relocates_touch_claim(tmp_path, capsys, monkeypatch):
-    """Review: code-reviewer — the other tests in this suite never resolve a
+    """The other tests in this suite never resolve a
     live session, so they only exercise the plain-shutil.move fallback in
     `_move_one`'s untracked branch. This is the first to route through the
     real relocate_touched_path claiming path, modeled on

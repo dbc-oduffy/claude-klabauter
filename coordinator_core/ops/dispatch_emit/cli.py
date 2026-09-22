@@ -36,7 +36,11 @@ Negative-spec:
     a bare `Path(...)` does — `--repo-root` feeds ONLY the op's
     `target_root`/prompt-anchoring `repo_root` parameter, a narrower and
     deliberately separate use (`op.py :: _repo_root_for_plan`,
-    `contained_path`).
+    `contained_path`). On the plan route `--repo-root` is pure prompt
+    anchoring and genuinely optional; on the queue route it is load-bearing
+    for `--queue`/`--profile-dir` containment (`op.py ::
+    QueueRootMissingError` fires without it) — treat the two routes'
+    requirement on this flag as different, not one shared "optional" claim.
   - Does NOT invent a second session-identity resolution. `--restamp`
     resolves via `coordinator_core.session.core.resolve_session_id`, the
     same fleet-canonical ladder `op.py :: _receipt_session_id` reads —
@@ -76,6 +80,13 @@ EXIT_USAGE = 2
 
 # Exceptions `_dispatch_emit` and `restamp` raise as data/refusal errors —
 # mapped to EXIT_DATA_ERROR, never re-derived here.
+# A bare `ValueError` for a missing required param
+# (e.g. `_dispatch_emit`'s `plan_path`/`output_path`/`profile_dir` checks)
+# lands here as EXIT_DATA_ERROR even though this module's own pre-checks
+# above return EXIT_USAGE for the identical logical error. Not reachable
+# today (every required-param case is pre-checked before `_dispatch_emit`
+# ever raises), but a future required param added on only one side would
+# fire this latent taxonomy mismatch.
 _DATA_ERRORS = (
     InventoryPathConflictError,
     QueuePlanConflictError,

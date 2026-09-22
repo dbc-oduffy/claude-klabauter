@@ -325,7 +325,7 @@ def assert_paths_in_session_scope(
     the resolution is to narrow the arm to the dirty set, NOT to widen the
     definition (see that row for the reasoning and the cost).
 
-    Review: staff-eng F2/F3 (2026-08-03) — `allow_orphans` additionally
+    `allow_orphans` additionally
     requires POSITIVE EVIDENCE that `session_id` names a session directory
     that exists on disk AND contains a `meta.json` (written by
     `coordinator_core.session.core.init`, which every real touch-tracked
@@ -334,7 +334,7 @@ def assert_paths_in_session_scope(
     call falls back to the strict allow-list exactly as if `allow_orphans`
     were `False`.
 
-    Review: staff-eng R2/R3 re-review (2026-08-03, pass 2) — softened from an
+    Softened from an
     earlier draft of this paragraph that claimed this check "closes two
     same-shaped holes" against the AC18 obfuscated-payload threat model. It
     does not hold against that model: every caller of this function already
@@ -452,7 +452,7 @@ def assert_paths_in_session_scope(
     except Exception as exc:  # noqa: BLE001 - fail-closed on ANY error beneath
         return False, "claim_index.classify_paths raised: %s" % (exc,)
 
-    # Review: staff-eng F2/F3 - `allow_orphans` takes effect only given
+    # staff-eng F2/F3 - `allow_orphans` takes effect only given
     # positive evidence `session_id` names a real, previously-initialized
     # session (see this function's own docstring paragraph). A fabricated
     # id, or a bare directory some non-tracked writer created with no
@@ -464,7 +464,7 @@ def assert_paths_in_session_scope(
         and _session_has_positive_evidence(session_id, cwd)
     )
 
-    # Review: staff-eng R3 - an `allow_orphans` request this call did not
+    # staff-eng R3 - an `allow_orphans` request this call did not
     # honor (because `_session_has_positive_evidence` failed) must not read
     # the same as "you never asked". Threaded through so
     # `_classify_denied_path` can name it distinctly.
@@ -641,7 +641,7 @@ def _session_has_positive_evidence(session_id: str, cwd: Optional[str]) -> bool:
     `allow_orphans` is gated on; see `assert_paths_in_session_scope`'s own
     docstring for why a bare directory (or none at all) is not enough.
 
-    Review: staff-eng R3 (2026-08-03, pass 2) — this is a MISTAKE guard, not
+    This is a MISTAKE guard, not
     an authentication check: it requires evidence a session was initialized
     through the tracked hot path, which raises the cost of a fabricated
     identity from "invent a string" to "create a directory and a file" for a
@@ -900,7 +900,7 @@ def _classify_denied_path(
     caller's deny reason names the classification rather than a bare "outside
     scope" (see :func:`assert_paths_in_session_scope`'s docstring).
 
-    Review: staff-eng F6 — this does not take the ORIGINAL `allow_orphans`
+    This does not take the ORIGINAL `allow_orphans`
     parameter back: that branch was unreachable (with `allow_orphans` True
     and `orphans` a list, a path in `orphan_set` already `continue`d in the
     caller's loop before reaching here), and stays unreachable. The new
@@ -914,7 +914,7 @@ def _classify_denied_path(
     defect-A comment, for why a real session dir with no `meta.json` is a
     documented shape, not a hypothetical).
 
-    Review: staff-eng P3 (2026-08-03, pass 3) — `call_indeterminate` (mirrors
+    `call_indeterminate` (mirrors
     `offer["indeterminate"]`, i.e. `ScopeResult.indeterminate`) is a THIRD,
     independent signal, checked ahead of the `all_orphans` membership test
     rather than inside it: when R1's whole-call withhold zeroed

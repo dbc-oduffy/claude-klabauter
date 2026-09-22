@@ -1175,7 +1175,7 @@ async def _delete_tracked_and_append_log(
                 resync_argv, cwd=worktree_root, env=main_env
             )
             if resync_err is not None:
-                # Review: code-reviewer P2 (2026-08-13) — `git update-index`
+                # `git update-index`
                 # applies its argv positionally and can partially succeed
                 # before failing on a later path, so the batch below is NOT
                 # a confirmed-affected list — it is everything that WAS IN

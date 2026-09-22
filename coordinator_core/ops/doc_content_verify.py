@@ -128,7 +128,7 @@ TargetTextReader = Callable[[str], Optional[str]]
 # Extraction
 # ---------------------------------------------------------------------------
 
-# Review: code-reviewer — Finding 4 (P2). CommonMark/GFM permit tilde fences
+# CommonMark/GFM permit tilde fences
 # (`~~~`) as well as backtick fences; a tilde-fenced block was previously
 # silently invisible to extraction (total silence, not degraded coverage).
 # Group 1 captures which marker opened the fence so the tracking loop below
@@ -139,7 +139,7 @@ _SHELL_FENCE_LANGS = {"bash", "sh", "shell", "zsh", "python", "python3", "py"}
 _PATH_TOKEN_RE = re.compile(r"[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+")
 _CODE_SPAN_RE = re.compile(r"`([^`\n]+)`")
 _MD_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
-# Review: code-reviewer — Finding 1 (P1). Boundary chars for fenced-code-path
+# Boundary chars for fenced-code-path
 # word-splitting: whitespace + shell quoting/grouping metachars. Deliberately
 # does NOT include `$`/`~`/glob chars — those must survive into the word so
 # `is_excluded()` sees them (see extract_citations' in_fence branch).
@@ -179,7 +179,7 @@ def extract_citations(doc_rel_path: str, text: str) -> List[Citation]:
                 continue
 
         if in_fence:
-            # Review: code-reviewer — Finding 1 (P1). Split into whole shell
+            # Split into whole shell
             # words (on whitespace and non-truncation-risk shell metachars —
             # quotes/parens/backticks — but NOT on `$`/`~`/glob chars, which
             # are the exclusion-relevant prefix) and test each whole word
@@ -317,7 +317,7 @@ def _slugify_heading(heading: str) -> str:
 def _anchors_in(text: str) -> set:
     """All valid in-doc anchor slugs, including GitHub's dedup-suffix forms.
 
-    Review: code-reviewer — Finding 3 (P2). GitHub appends `-1`, `-2`, ... to
+    GitHub appends `-1`, `-2`, ... to
     repeated slugs in document order (e.g. two `## Overview` headings produce
     `#overview` and `#overview-1`). A plain set collapses same-slug headings
     to one entry, so a correct link to the SECOND occurrence's anchor was
@@ -588,7 +588,7 @@ _DEFAULT_HUMAN_FACING_DOCS = ["README.md", "INSTALL.md", "CONTEXT.md", "CONTRIBU
 def _contained_doc_path(root: Path, doc_rel_path: str) -> Optional[Path]:
     """Resolve `root / doc_rel_path` and confirm the result stays under `root`.
 
-    Review: code-reviewer — Finding 5 (P2). `main()` previously joined
+    `main()` previously joined
     `--doc`/`--root` argv values with no traversal/allowlist check — a
     `--doc ../../../etc/passwd`-shaped argument would attempt to read
     outside the intended repo root. Returns `None` (and prints a clear
@@ -610,7 +610,7 @@ def _contained_doc_path(root: Path, doc_rel_path: str) -> Optional[Path]:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    # Review: code-reviewer — Finding 3. Was a hand-rolled `while i <
+    # Was a hand-rolled `while i <
     # len(argv)` loop with no `-h`/`--help` handling and a silent no-op on
     # any unrecognized token (a typo'd flag ran at full cost against the
     # wrong root with no error). argparse matches the sibling

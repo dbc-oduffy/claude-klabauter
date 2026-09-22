@@ -293,7 +293,7 @@ def _write_stub(
     blocked_by=None,
     kind: str = "spinoff-roadmap",
 ) -> None:
-    # Review: code-reviewer (P1, Finding 1) — `kind` defaults to the retired
+    # `kind` defaults to the retired
     # spelling for byte-parity with existing callers; new tests below pass
     # `kind="roadmap-baton"` to prove `run_check_mode` actually finds
     # canonical-spelling stubs (the live defect the `where=` fix closed).
@@ -913,7 +913,7 @@ def test_state_mode_c7_one_query_fails_plus_empty_result_returns_2(
 
 
 # ---------------------------------------------------------------------------
-# Review: code-reviewer, Finding 3 — third distinct branch of the C2/C7
+# Third distinct branch of the C2/C7
 # exit-code change: exactly one corpus raises but the OTHER corpus returns
 # real (non-empty) results. `_roadmap_state_error_exit` must NOT exit(2) here
 # — the surviving corpus's results are usable — but the run must still WARN

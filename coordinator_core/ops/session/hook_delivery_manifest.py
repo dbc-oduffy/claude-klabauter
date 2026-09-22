@@ -86,7 +86,7 @@ _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 class ManifestGuard:
     id: str
     script: str
-    # Review: coordinator:code-reviewer — contract-mandated field (per
+    # contract-mandated field (per
     # docs/reference/hook-delivery-manifest.md), stored/exposed only; no
     # matcher logic consumes this yet (a separate plan owns that).
     tool_names: Tuple[str, ...] = ()
@@ -208,7 +208,7 @@ def read_hook_delivery_manifest(
     `hooks.json` itself declares, already `_tail_key`-normalized by the
     caller — used only to compute `stale` (C1's exhaustiveness
     requirement)."""
-    # Review: coordinator:code-reviewer — `declared_script_keys` is caller-
+    # `declared_script_keys` is caller-
     # supplied like everything else this reader touches; a non-iterable
     # (e.g. `None`) must degrade, not raise, per the never-raise contract.
     # Element-level garbage (e.g. an unhashable `dict`/`list` element) is a

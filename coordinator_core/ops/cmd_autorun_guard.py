@@ -170,7 +170,7 @@ def _macro_present_as_token(current: str) -> bool:
     comment, or concatenated without `" & "` by some other tool) as
     "covered" — see module docstring § Idempotency.
 
-    Review: coordinator:code-reviewer — token-boundary anchoring, matches
+    token-boundary anchoring, matches
     the composition/decomposition symmetry `write`/`strip` already rely on.
     """
     return (

@@ -229,7 +229,7 @@ def test_classification_of_an_existing_hook(content: str | None, expected: str) 
 
 
 def test_foreign_hook_merely_mentioning_git_lfs_pre_push_is_not_misclassified() -> None:
-    """Review: code-reviewer P1 — a hand-written foreign hook that merely
+    """A hand-written foreign hook that merely
     MENTIONS the stock-lfs marker inside a comment must classify as
     `foreign`, never `stock-lfs`. A plain substring probe would misclassify
     this and `install()` would silently overwrite it."""

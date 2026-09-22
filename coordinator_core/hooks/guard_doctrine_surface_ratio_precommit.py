@@ -354,7 +354,7 @@ def _save_baseline(baseline: dict) -> None:
         dir=str(_ACCUMULATOR_STATE_PATH.parent), prefix=".doctrine-surface-ratio-accumulator-"
     )
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(payload)
         os.replace(tmp_path, str(_ACCUMULATOR_STATE_PATH))
     except Exception:

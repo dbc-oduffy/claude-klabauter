@@ -314,7 +314,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if fnmatch.fnmatchcase(file_path_norm, "*improvement-queue.md"):
             legacy_prose_note = _LEGACY_PROSE_NOTE.format(queue_dir="improvement-queue")
 
-        # Review: code-reviewer P1 -- COORDINATOR_QUEUE_PUNT is
+        # COORDINATOR_QUEUE_PUNT is
         # reason-shaped, not flag-shaped; its own _is_trivial_reason
         # denylists the literal "1", so the default VAR=1 render would be
         # refused by the very guard printing it. reason_placeholder

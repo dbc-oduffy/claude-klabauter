@@ -310,7 +310,7 @@ def test_first_agent_dispatch_sentinel_write_failure_degrades_to_silence(monkeyp
 
 
 def test_first_agent_dispatch_sentinel_partial_write_failure_allows_retry(monkeypatch):
-    """Review: code-reviewer (Finding 3) -- if open() succeeds but write()
+    """If open() succeeds but write()
     raises mid-write (e.g. disk full), the sentinel file already exists on
     disk. Without cleanup, every later call in the session would see the
     partial file and stay silent forever. The failed write must remove the
@@ -380,7 +380,7 @@ def test_handler_first_agent_dispatch_composes_with_existing_advisories():
     assert session_id in context
     assert "\n\n" in context
 
-    # Review: code-reviewer (Finding 4) -- membership alone doesn't pin the
+    # Membership alone doesn't pin the
     # merge order the commit message claims (cp -> rt -> first-agent-dispatch);
     # a future reorder of the join would pass the assertions above unnoticed.
     assert context.index("cp text") < context.index("rt text") < context.index(
@@ -590,7 +590,7 @@ def test_runtime_tripwire_arms_only_on_exactly_one(value, tmp_path, monkeypatch)
 
 
 def test_runtime_tripwire_resolves_repo_root_via_seam_not_a_spawn(monkeypatch):
-    # Review: code-reviewer (P2, W2) -- `_fail_on_spawn` raising AssertionError
+    # `_fail_on_spawn` raising AssertionError
     # is itself an Exception, and every spawn site it could intercept lives
     # inside `_check_runtime_tripwire_sync`'s own `except Exception: return ""`,
     # so a bare `assert result == ""` still passes against the OLD (spawning)
@@ -628,7 +628,7 @@ def test_runtime_tripwire_resolves_repo_root_via_seam_not_a_spawn(monkeypatch):
 def test_runtime_tripwire_happy_path_resolves_through_seam_and_fires(
     tmp_path, monkeypatch
 ):
-    """Review: code-reviewer (P3, W4) -- both existing seam tests stub
+    """Both existing seam tests stub
     show_toplevel to None/raise, so only the earliest early-exit
     (`if not git_root: return ""`) is ever driven. This test resolves a real
     root through the seam and continues into the agents-dir / back-pointer /
@@ -662,7 +662,7 @@ def test_runtime_tripwire_happy_path_resolves_through_seam_and_fires(
         repo_root_seam, "show_toplevel", lambda cwd=None: str(git_root)
     )
 
-    # Review: code-reviewer (F6) -- this test's bark-once sentinel
+    # This test's bark-once sentinel
     # (rt-bark-once-{session_id}) lives under the REAL tempfile.gettempdir(),
     # the same directory this module's autouse _sweep_test_session_state_files
     # globs before/after every test in the file. Under xdist (--dist load

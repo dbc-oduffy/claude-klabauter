@@ -36,7 +36,7 @@ from ..provenance import ProvenanceEnvelope
 class _ObservedWindow(BaseModel):
     """Observation window this signal aggregates over. Anonymous nested shape (inlined, no $ref)."""
 
-    # Review: code-reviewer — populate_by_name=True so the `from`/`from_`
+    # populate_by_name=True so the `from`/`from_`
     # reserved-word alias round-trips via kwargs, matching roadmap_dag_edge.py's
     # identical pattern.
     model_config = ConfigDict(extra="forbid", populate_by_name=True)

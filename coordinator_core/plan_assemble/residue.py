@@ -348,7 +348,7 @@ def _unpack(row: Any, *fields: str) -> dict[str, Any]:
     """
     if _is_undetermined(row):
         return {field: row for field in fields}
-    # Review: F2 fix — `row[field]` (not `.get`) so a producer that omits a
+    # F2 fix — `row[field]` (not `.get`) so a producer that omits a
     # documented field raises KeyError instead of silently synthesizing a
     # `None` the coverage oracle cannot distinguish from a legitimately-
     # None-valued field. A legitimately-`None`-valued field stays legal —
@@ -718,7 +718,7 @@ def brief(
         Path(sizing_object_path) if sizing_object_path is not None else None
     )
 
-    # Review: F1 fix — the git shell-out only matters to a `predicates.*`
+    # F1 fix — the git shell-out only matters to a `predicates.*`
     # producer, and every producer resolves `undetermined` on a bare
     # wave-1 call regardless of `repo_root`'s value. Only spawn the
     # subprocess when predicates were actually requested; `Path.cwd()` is

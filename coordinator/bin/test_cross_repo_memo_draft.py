@@ -223,7 +223,7 @@ def _parse_frontmatter(content: str) -> dict[str, str]:
                             elif nc == 'n':
                                 chars.append('\n')
                             elif nc == 'r':
-                                # Review: code-reviewer — _yaml_quote emits \r but parser did not handle it
+                                # _yaml_quote emits \r but parser did not handle it
                                 chars.append('\r')
                             elif nc == 't':
                                 chars.append('\t')
@@ -942,7 +942,7 @@ def test_discard_removes_file() -> None:
         """)
         outbox_path = _make_outbox_file(sender_repo, topic, content)
 
-        # Review: code-reviewer — use fail_test instead of bare assert for consistent error reporting
+        # Use fail_test instead of bare assert for consistent error reporting
         if not os.path.isfile(outbox_path):
             raise AssertionError(f"{name}: " + (f"Test setup failed — file not written: {outbox_path}"))
 

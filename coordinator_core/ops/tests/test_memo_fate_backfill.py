@@ -179,7 +179,7 @@ def test_backfill_quarantined_set_never_truncated(tmp_path: Path):
     reason="root bypasses POSIX permission bits -- chmod 0o000 does not make a file unreadable to root",
 )
 def test_backfill_unreadable_memo_surfaces_read_error_not_silently_dropped(tmp_path: Path):
-    # Review: code-reviewer Finding (2026-08-06) — a per-file OSError used to
+    # A per-file OSError used to
     # `continue` with only a stderr log; the memo vanished from the corpus
     # with zero trace in the returned outcome. Pins that it now surfaces via
     # `read_errors`, distinct from (and never folded into) the four-way

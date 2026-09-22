@@ -251,7 +251,7 @@ def _is_excluded(rel_path: str) -> bool:
     one, and the alternative (anchoring to the first component) would let
     scratch parked one level down go on failing this guard.
 
-    Review: code-reviewer — verified (via `git ls-files`) that only the
+    Verified (via `git ls-files`) that only the
     top-level `scratchpad/` currently exists in the tree, so any-depth
     matching is presently indistinguishable from anchoring to `parts[0]`;
     this choice is about future nested scratch, not present blindness.

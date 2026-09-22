@@ -195,7 +195,7 @@ def test_fallback_line_must_be_a_string():
 
 
 def test_absent_literal_must_be_a_string():
-    # Review: code-reviewer (Finding 3) — backfilled alongside fallback_line since
+    # Backfilled alongside fallback_line since
     # this is the direct precedent the finding named for the same untested gap.
     bad = {
         "format_version": tf.FORMAT_VERSION,
@@ -219,7 +219,7 @@ def test_absent_literal_must_be_a_string():
 
 
 def test_absent_comment_must_be_a_string():
-    # Review: code-reviewer (Finding 3) — backfilled alongside fallback_line since
+    # Backfilled alongside fallback_line since
     # this is the direct precedent the finding named for the same untested gap.
     bad = {
         "format_version": tf.FORMAT_VERSION,
@@ -249,7 +249,7 @@ def test_load_template_raises_on_invalid_file(tmp_path):
         tf.load_template(bad_path)
 
 
-# Review: code-reviewer (Finding 2) — the docstring's numbered idiom list,
+# The docstring's numbered idiom list,
 # FIELD_KINDS's size, and "N conditional idioms" prose were hand-maintained
 # integers with nothing asserting they agree; this drifted stale 3 separate
 # times in one session. Parse the prose rather than hardcoding a literal, so

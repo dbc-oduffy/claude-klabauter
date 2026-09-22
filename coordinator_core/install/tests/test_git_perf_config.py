@@ -119,7 +119,7 @@ def test_maintenance_register_is_never_invoked(tmp_path, monkeypatch):
     monkeypatch.setattr(gpc, "run_git", recording_run_git)
     gpc.apply(repo)
 
-    # Review: review-integrator (Finding 4, slice B) -- dropped the substring
+    # Dropped the substring
     # assertion (fragile: would false-fail on any unrelated arg containing
     # "register"). `args[:1] == ("maintenance",)` alone pins the real
     # invariant: no `git maintenance ...` invocation of any kind.
@@ -156,7 +156,7 @@ def test_index_is_actually_extended_not_just_config_key(tmp_path):
 
     assert _config_get(repo, "core.untrackedCache") == "true"
 
-    # Review: coordinator:code-reviewer -- `update-index --test-untracked-cache`
+    # `update-index --test-untracked-cache`
     # is git's filesystem-support probe; it returns 0 regardless of whether the
     # index was ever extended, so it would still pass with the `update-index
     # --untracked-cache` call in apply() deleted entirely. The genuine proof

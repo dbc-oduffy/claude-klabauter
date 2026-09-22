@@ -120,44 +120,52 @@ _SURFACE_MODULES = frozenset(
 # fix is to convert the site and remove its row, never to add rows freely.
 KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
     {
-        "coordinator/bin/claude-doe.py:368",
-        "coordinator/bin/claude-doe.py:389",
-        "coordinator/bin/lib/git_hook_install.py:159",
-        "coordinator/lib/percolate/resolve_target.py:215",
-        "coordinator/lib/resolve-coordinator-clone.py:223",
-        "coordinator_core/engine_root.py:191",
-        "coordinator_core/ops/gen_claude_doe_shim.py:414",
-        "coordinator_core/ops/gen_doe_root_pointer.py:127",
-        "coordinator_core/ops/new_project_scaffold.py:159",
-        "coordinator_core/ops/render_template_tree.py:97",
-        "coordinator_core/ops/repo_bootstrap.py:141",
-        "coordinator_core/resolve_coordinator_clone.py:143",
+        "coordinator/bin/claude-doe.py:592",
+        "coordinator/bin/claude-doe.py:613",
+        "coordinator/bin/lib/git_hook_install.py:199",
+        "coordinator/lib/resolve-coordinator-clone.py:225",
+        "coordinator_core/engine_root.py:193",
+        "coordinator_core/ops/gen_claude_doe_shim.py:415",
+        "coordinator_core/ops/gen_doe_root_pointer.py:146",
+        "coordinator_core/ops/new_project_scaffold.py:164",
+        "coordinator_core/ops/render_template_tree.py:99",
+        "coordinator_core/ops/repo_bootstrap.py:135",
+        "coordinator_core/resolve_coordinator_clone.py:168",
         # 2026-08-20 C3 (resolver-call-indirection widening) -- this file's own
         # two sites, see "2026-08-20 C3 WIDENING" note below.
-        "coordinator/bin/lib/coordinator_registry.py:160",
-        "coordinator/bin/lib/coordinator_registry.py:431",
+        "coordinator/bin/lib/coordinator_registry.py:174",
+        "coordinator/bin/lib/coordinator_registry.py:439",
         # 2026-08-20 C3 widening also surfaced the pre-existing `_machine_local_get`
         # helper family below -- same shape, previously invisible. See note below.
-        "coordinator/bin/coordinator-doc-new.py:481",
-        "coordinator/bin/coordinator-doc-new.py:523",
-        "coordinator/bin/coordinator-lesson-add.py:109",
-        "coordinator/bin/fan-out-dispatch.py:360",
+        "coordinator/bin/coordinator-doc-new.py:731",
+        "coordinator/bin/coordinator-doc-new.py:781",
+        "coordinator/bin/coordinator-lesson-add.py:207",
+        "coordinator/bin/fan-out-dispatch.py:372",
         "coordinator/bin/gen-claude-klabauter-root-pointer.py:139",
-        "coordinator/bin/lib/cc_invoke.py:396",
-        "coordinator/bin/lib/cli_shared.py:100",
-        "coordinator/bin/lib/cli_shared.py:148",
+        # `cc_invoke.py:396` moved (not converted) to `engine_bootstrap.py:197`
+        # in the C2 CLI-bootstrap-tax module split -- see the "cc_invoke.py
+        # helper family" note below.
+        "coordinator/bin/lib/engine_bootstrap.py:197",
+        "coordinator/bin/lib/cli_shared.py:233",
+        "coordinator/bin/lib/cli_shared.py:281",
         "coordinator/bin/tests/test_claude_machine_local.py:110",
-        "coordinator/bin/workday-start-step0.py:145",
+        "coordinator/bin/workday-start-step0.py:206",
         "coordinator_core/ops/check_arch_audit_staleness.py:118",
-        "coordinator_core/ops/check_weekly_staleness.py:119",
-        "coordinator_core/ops/deliverable_rollup.py:133",
-        "coordinator_core/ops/list_review_trail_records.py:127",
+        "coordinator_core/ops/check_weekly_staleness.py:123",
+        "coordinator_core/ops/deliverable_rollup.py:129",
         "coordinator_core/ops/list_week_changelog.py:100",
-        "coordinator_core/ops/queue_append.py:754",
+        "coordinator_core/ops/queue_append.py:791",
         "coordinator_core/ops/workday_complete_backfill_scan.py:202",
-        "coordinator_core/orientation/regenerate_cache.py:282",
+        "coordinator_core/orientation/regenerate_cache.py:300",
         "coordinator_core/pyresolve.py:168",
-        "coordinator_core/roadmap/audit.py:173",
+        "coordinator_core/roadmap/audit.py:221",
+        # `repos.<key>` resolved via the 4-rung autodiscovery ladder, same
+        # correctness-boundary class as the other `repos.*` rows above (see
+        # "2026-08-16 REPOS.* LADDER-LOSS FIX" below) -- `registry_get` only
+        # ever reaches the last rung, so a flat conversion would silently
+        # drop autodiscovery for a script whose own manifest output is a
+        # ratchet baseline other tooling trusts.
+        "coordinator/bin/classify-legacy-engine-noun-references.py:111",
     }
 )
 # Burn-down inventory (33 sites, 2026-08-20 census -- 13 carried forward from
@@ -258,16 +266,24 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
 # un-deleted rather than removed on no evidence it is safe to drop.
 #
 # `coordinator/lib/percolate/resolve_target.py:215` (`_machine_local_get`)
-# was NOT converted: its whole contract (see its own docstring and
-# `coordinator/tests/test_percolate_resolve_target.py::
+# was believed unconvertible for the same rc-distinguishing reason as the
+# `check_machine_local_regeneratability.py` exception above (see its own
+# docstring and `coordinator/tests/test_percolate_resolve_target.py::
 # test_exec_failure_reported_as_transport_error_not_unset`,
 # `::test_present_but_not_executable_is_transport_error_not_unset`,
-# `::test_absent_machine_local_still_raises_bare_code_3`) is distinguishing
-# rc 3 (CLI absent) from rc 4 (CLI present but exec itself failed, e.g. a
-# non-executable file on disk) from rc 1 (CLI ran, key genuinely unset) --
-# three observably different outcomes a pure TOML reader cannot produce,
-# because there is no CLI exec to fail. Same correctness-boundary class as
-# the `check_machine_local_regeneratability.py` exception above.
+# `::test_absent_machine_local_still_raises_bare_code_3` -- rc 3 CLI-absent
+# vs rc 4 CLI-present-but-exec-failed vs rc 1 CLI-ran-key-unset). CONVERTED
+# in the SAME 2026-08-25 pass described below for `targets.py:120`: the
+# function now reads `_dump_registry(machine_local_bin).get(key)` (one
+# `machine-local dump` per distinct binary path, memoized for the process's
+# lifetime) instead of spawning a per-key `get`. The rc distinction survived
+# the conversion by moving rungs -- `_resolve_machine_local_or_raise` still
+# raises code 3/4 for CLI-absent/not-executable before `_dump_registry` ever
+# runs, and `_dump_registry`'s own `OSError` handling still raises code 4 for
+# an exec failure during the `dump` call itself -- so the three tests above
+# still pin the same three outcomes, just off `dump` instead of per-key
+# `get`. No `get`/`keys` subprocess argument remains anywhere in this file --
+# removed from `KNOWN_UNCONVERTED_SITES`.
 #
 # `coordinator/lib/percolate/targets.py:120` (`_machine_local_get_multi`,
 # gated by `_machine_local_has` + `is_executable(machine_local_bin)`) was left

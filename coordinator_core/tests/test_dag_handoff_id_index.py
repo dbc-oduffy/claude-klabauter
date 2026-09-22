@@ -161,7 +161,7 @@ class TestResolveTargetIdIndex:
         assert without_index == with_none_index == str(target.absolute())
 
     def test_lazy_index_eligible_but_empty_converges_with_plain_empty_dict(self, tmp_path):
-        """Review: code-reviewer (slice 1, P3) — `_LazyHandoffIdIndex.__bool__`
+        """`_LazyHandoffIdIndex.__bool__`
         is always True, unlike a genuinely empty dict (falsy). Pin that this
         divergence is harmless: an id-shaped ref against an eligible-but-
         empty corpus resolves identically whether id_index is the lazy

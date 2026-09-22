@@ -152,7 +152,7 @@ def _render_entry(
     """Serialized via ``yaml.safe_dump`` — fixed key order preserved via
     ``sort_keys=False``.
 
-    Review: code-reviewer — the previous hand-rolled ``"\\n".join(...)`` form
+    The previous hand-rolled ``"\\n".join(...)`` form
     did not escape embedded newlines in ``note``/``source_repo``. Since C7
     made both fields externally-reachable (example-cockpit-repo's priority-intent
     records, routed through priority_drain.py — "outside our review

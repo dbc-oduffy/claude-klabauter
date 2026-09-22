@@ -24,7 +24,7 @@ hook stopped invoking this module at all once C6/C7 landed, leaving `main()`
 with no production caller. Every surviving function here is called
 in-process.
 
-Review: coordinator:code-reviewer (P1, 2026-08-30) -- this docstring
+This docstring
 previously claimed `warm.push_cadence.sweep_repos` was "the current
 production entry into `run_push_with_retry`". Traced and found false:
 `sweep_repos` -> `push_outstanding` -> `coordinator_core/ops/ceremony/
@@ -212,7 +212,7 @@ _ENV_NO_SLEEP = "COORDINATOR_AUTO_PUSH_NO_SLEEP"
 # wrapper's interpreter rather than the real host interpreter that launched it.
 _ENV_HOST_PYTHON = "COORDINATOR_HOST_PYTHON"
 
-# Review: overengineering-reviewer Finding 5 -- the sole-publisher
+# The sole-publisher
 # suppression axis (this constant, `_ENV_SUPPRESS_FOR_SYNC_PUSH`, plus
 # its only reader, `main()`, deleted per Finding 4) is gravestoned.
 # Verified at HEAD: `git_native.ensure_post_commit_hook` no longer
@@ -829,7 +829,7 @@ def branch_gate(branch: str) -> tuple[bool, str | None]:
     non-canonical branch. The create-time denier this originally leaned on
     (`block-off-daily-branch.sh`) was retired 2026-07-05, which makes this
     allowlist the surviving enforcement point, not a redundant second one.
-    Review: the Staff Engineer F12 (auto-push tightening) + c474ee1 follow-up.
+    the Staff Engineer F12 (auto-push tightening) + c474ee1 follow-up.
 
     AC9b (docs/plans/2026-08-25-push-re-homes-onto-the-cadence-surfaces.md):
     named owner per declined class, so a branch this gate skips is never
@@ -1484,7 +1484,7 @@ def _refresh_engine_currency_cache(repo_root: str) -> None:
 # pushes-and-when.md C8)
 # ---------------------------------------------------------------------------
 #
-# Review: coordinator:code-reviewer (P3, 2026-08-30) -- this header used to
+# This header used to
 # describe the os.fork()/Windows subprocess.Popen re-spawn machinery
 # (`_detach_and_run`, `spawn_detached_push`) in the present tense. Both are
 # gravestoned along with the per-commit respawn they implemented; only

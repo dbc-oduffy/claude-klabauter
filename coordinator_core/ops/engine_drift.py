@@ -127,7 +127,7 @@ def _git_is_behind(running_sha: str, floor_sha: str) -> Optional[bool]:
         return False
 
     engine_dir = Path(__file__).resolve().parent.parent
-    # Review: code-reviewer (Finding 3) — bounded timeout so this read-only probe
+    # Bounded timeout so this read-only probe
     # can never hang the op's per-invocation budget on a pathological checkout
     # (index lock held, network-mounted .git, corrupt history). Timeout collapses
     # to the same indeterminate sentinel as any other git failure — never a false

@@ -110,7 +110,7 @@ class TestWalkForwardDefaultExcludesOriginHandoff:
         Default walk starting from spinoff.md should visit ONLY spinoff.md.
         source.md must NOT appear in nodes.
 
-        Review: code-reviewer (F2) — this test (b) IS the structural lock on the effective
+        This test (b) IS the structural lock on the effective
         internal default (walk_forward body line ~571: ``if edge_kinds is None: edge_kinds =
         {'predecessor'}``). The signature-inspection test was removed as vacuous — it asserted
         only that the param default is None/empty (always true under the None-sentinel pattern),
@@ -194,7 +194,7 @@ class TestReferencedByDefaultExcludesOriginHandoff:
         predecessor: reference — confirming the default set is live and the negative
         assertion above is meaningful, not vacuously true.
 
-        Review: code-reviewer (F4) — without this companion, test (c) could pass because
+        Without this companion, test (c) could pass because
         referenced_by is broken and finds nothing at all, not because it correctly excludes
         origin_handoff. This test proves the live_set is actually being scanned.
         """
@@ -307,7 +307,7 @@ class TestReferencedByExplicitOriginHandoff:
 class TestHandoffEdgesOriginHandoff:
     """Direct lock on handoff_edges for the origin_handoff edge kind.
 
-    Review: code-reviewer (F5) — walk_forward / referenced_by cover handoff_edges only
+    walk_forward / referenced_by cover handoff_edges only
     transitively; a bug in the multi=False branch for origin_handoff would surface as a
     walk failure with an indirect stack. This direct lock isolates the kernel function.
     """

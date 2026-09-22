@@ -297,7 +297,7 @@ def test_missing_bash_interpreter_override_bypasses_the_block(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Review: code-reviewer F3 (2026-07-28) — parity with
+# Parity with
 # test_install_meta_repo_precommit_hook.py's
 # test_wrapper_override_never_bypasses_a_real_gate_finding: the
 # COORDINATOR_OVERRIDE_PRECOMMIT_{NODE,BASH}_MISSING escape hatches only

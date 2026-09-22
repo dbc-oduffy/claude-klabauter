@@ -483,7 +483,7 @@ def test_dual_mode_verb_write_spelling_still_bumps(repos, monkeypatch, verb):
     assert result is not None
 
 
-# Review: code-reviewer (a99136f2, P3) -- the original version of this test
+# The original version of this test
 # used `branch -qXz topic` and passed only because of the trailing
 # positional `topic`, which `_branch_is_read`'s flagless fallback would have
 # classified as a write on its own (same as `git branch newtopic`); the
@@ -553,7 +553,7 @@ def test_write_git_verb_still_bumps(repos, monkeypatch, verb):
 
 
 # ---------------------------------------------------------------------------
-# Review: code-reviewer (run-report brief, items 2-5) -- regression coverage
+# Regression coverage
 # for the four production defects fixed since the last two review passes
 # (symbolic-ref/hash-object/pack-refs write-membership, config get/list
 # reads), the `cd <foreign> && git <verb>` candidate-extraction leg, the
@@ -676,7 +676,7 @@ def test_config_unset_flag_write_still_bumps(repos, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Review: code-reviewer (a99136f2 and a386c4ea, both P2) -- the `cd
+# The `cd
 # <foreign> && git <verb>` candidate-extraction leg is the OTHER extractor
 # `_iter_write_sink_candidates` documents and was untested for any of the
 # new verb spellings; every case above uses `git -C` only.
@@ -717,7 +717,7 @@ def test_cd_and_git_plain_read_verb_never_bumps(repos, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Review: code-reviewer (a99136f2, P2) -- nothing exercised a GIT_DIR/
+# Nothing exercised a GIT_DIR/
 # --work-tree/-c core.worktree= override combined with a dual-mode
 # predicate; the env-resolution fix and the dual-mode predicates were each
 # tested in isolation but never at their seam.
@@ -791,7 +791,7 @@ def test_dash_c_core_worktree_override_with_dual_mode_write_verb_bumps(repos, mo
 
 
 # ---------------------------------------------------------------------------
-# Review: code-reviewer (a386c4ea, P3) -- adversarial shapes named by the
+# Adversarial shapes named by the
 # slice-2 reviewer, hand-traced but not previously present in the
 # parametrize lists.
 # ---------------------------------------------------------------------------
@@ -2212,7 +2212,7 @@ def test_c2_ac6_backslash_normalization_removed_would_fail(monkeypatch, repos):
 
 
 def test_c2_p1_quoted_escaped_quote_survives_preserve_windows_backslashes():
-    """Review: coordinator:code-reviewer P1 (05fb6ef70 follow-up) -- C2's
+    """C2's
     original `preserve_windows_backslashes=True` shape set `lex.escape = ""`
     for the WHOLE `shlex` lexer state, which also disables `escapedquotes`
     handling. `\\"` inside a double-quoted token no longer escaped the
@@ -2239,7 +2239,7 @@ def test_c2_p1_quoted_escaped_quote_survives_preserve_windows_backslashes():
 
 
 def test_c2_p0_unquoted_escaped_quote_does_not_swallow_separator():
-    """Review: coordinator:code-reviewer P0 (d8a8b14c) -- an UNQUOTED
+    """An UNQUOTED
     `\\'`/`\\"` is an atomic escaped-literal-quote pair in real bash, not a
     quote-open. Before the fix, `_mask_unquoted_backslashes` sentinel-masked
     the bare backslash on one loop iteration and then toggled quote state on
@@ -2279,7 +2279,7 @@ def test_c2_p0_unquoted_escaped_quote_does_not_swallow_separator():
 
 
 def test_c2_p2_backslash_before_punctuation_pairs_like_backslash_before_quote():
-    """Review: coordinator:code-reviewer P2 (36bfdde30 follow-up) --
+    """
     `_mask_unquoted_backslashes` only special-cased an unquoted backslash
     immediately before a QUOTE (`'`/`"`); one before `;`/`&`/`|` still fell
     through to plain sentinel-masking, so `a\\;b` tokenized to
@@ -2311,7 +2311,7 @@ def test_c2_p2_backslash_before_punctuation_pairs_like_backslash_before_quote():
 
 
 def test_c2_p2_consecutive_backslashes_before_quote_pair_left_to_right():
-    """Review: coordinator:code-reviewer P2 (36bfdde30 follow-up) -- pairing
+    """Pairing
     an unquoted backslash with a following quote per-character (rather than
     over the whole RUN of consecutive backslashes) mis-paired `\\\\'` (two
     backslashes then a quote) as `(\\)(\\')` instead of real bash's own

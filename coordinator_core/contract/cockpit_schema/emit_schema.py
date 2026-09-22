@@ -1093,7 +1093,7 @@ def assert_no_version_desync(
     try:
         committed_json = json.loads(committed_path.read_text())
     except (json.JSONDecodeError, OSError) as exc:
-        # Review: code-reviewer (cockpit-schema-a F2, P2) — was print()+return,
+        # Was print()+return,
         # a fail-open no-op that would let this guard silently never fire
         # again once the committed file went unparseable. This guard exists
         # solely to catch an unbumped CONTRACT_VERSION; a corrupt/unreadable
@@ -1172,7 +1172,7 @@ def _schema_out_dir(out_dir: str | os.PathLike[str] | None = None) -> Path:
     env_override = os.environ.get("COCKPIT_SCHEMA_OUT_DIR")
     if env_override:
         return Path(env_override).resolve()
-    # Review: code-reviewer (cockpit-schema-a F1, P1) — was 4 levels of ".."
+    # Was 4 levels of ".."
     # (Path(__file__).parent / .. / .. / .. / .. / "schema"), which from
     # coordinator_core/contract/cockpit_schema/ resolves to the PARENT of the
     # claude-klabauter repo, silently writing every *.schema.json + bundle

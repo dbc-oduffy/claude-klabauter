@@ -80,7 +80,7 @@ def _repos_snapshot(ml: str) -> Dict[str, str]:
             capture_output=True,
             text=True,
             timeout=10,
-            # Review: code-reviewer — Windows portability convention applied
+            # Windows portability convention applied
             # inconsistently across this wave's siblings; align this call site.
             **no_console_creationflags(),
         )

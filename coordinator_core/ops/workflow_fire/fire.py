@@ -865,7 +865,7 @@ def _annotate_record(record: dict) -> dict:
     # the child is reaped and its log will never become readable, so
     # re-attempting the open on every sweep buys nothing and is paid by
     # every future fire (``count_live_fires`` walks the whole registry).
-    # Review: coordinator:code-reviewer. An ``unknown`` on a record that has
+    # coordinator:code-reviewer. An ``unknown`` on a record that has
     # not yet been observed to end stays unsettled, which is the case that
     # must keep re-checking.
     outcome_now = annotated.get("outcome")

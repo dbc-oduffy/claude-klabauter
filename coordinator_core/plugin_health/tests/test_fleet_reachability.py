@@ -111,7 +111,7 @@ def test_extension_normalization_qualified_citation_matches_js_oracle(tmp_path: 
 
 
 def test_non_oracle_subdir_and_placeholder_tokens_filtered(tmp_path: Path):
-    """Review: code-reviewer (Finding 2) — the original fixture cited
+    """The original fixture cited
     `bin/lib/schema.js` bare, so `_is_namespace_qualified_citation` dropped
     the match before execution ever reached `_NON_ORACLE_SUBDIR_NAMES` (this
     test's actual subject); it would have passed identically with that
@@ -153,7 +153,7 @@ def test_hooks_and_pipelines_dirs_are_swept(tmp_path: Path):
 
 
 def test_qualified_citation_trailing_period_does_not_swallow_punctuation(tmp_path: Path):
-    """Review: code-reviewer (Finding 2) — a bare, unfenced citation at the
+    """A bare, unfenced citation at the
     end of a prose sentence (no space before the period) must not capture
     the sentence-terminating "." into the token; a prior version of
     `_DOE_BIN_TOKEN_RE` did, producing a spurious "missing" false-positive
@@ -172,7 +172,7 @@ def test_qualified_citation_trailing_period_does_not_swallow_punctuation(tmp_pat
 
 
 def test_cmd_extension_normalizes_to_match_claude_klabauter_oracle(tmp_path: Path):
-    """Review: code-reviewer (Finding 3) — a Windows-launcher `.cmd`
+    """A Windows-launcher `.cmd`
     citation must normalize to the same stem as the `.py` claude-klabauter oracle,
     not false-positive as missing. Namespace-qualified (2026-07-27)."""
     agent_bin = tmp_path / "claude-klabauter-bin"
@@ -470,7 +470,7 @@ def test_glob_wildcard_family_reference_is_not_demand(tmp_path: Path):
     stem before the wildcard; without this filter that truncated stem
     reports as a phantom missing oracle.
 
-    Review: code-reviewer (Finding 2) — the original fixture cited both
+    The original fixture cited both
     globs bare, so `_is_namespace_qualified_citation` dropped each match
     before execution ever reached `_GLOB_TRUNCATION_RE` (this test's actual
     subject); it would have passed identically with that filter deleted.
@@ -689,6 +689,39 @@ def test_ci_no_silent_skip_on_this_machine_when_registered():
     fr.assert_registered_implies_no_skip()
 
 
+def _raw_bin_token_count(doe_root: Path) -> int:
+    """A deliberately unfiltered sibling of `fr._doe_demand_tokens` over the
+    same swept subdirectories: every narrowing filter the production sweep
+    applies (file-class exclusion, namespace-qualification, system-path
+    exclusion, glob-truncation exclusion) is skipped here, so this count can
+    only ever be >= the production `demand_count` and moves with this
+    machine's own DoE-claude corpus size rather than a value fixed at the
+    time some other assertion was written. Exists only to give
+    `test_live_tree_reachability_ok_on_this_machine_when_registered` a
+    churn-tolerant regression floor -- never a stand-in for the production
+    sweep's own precision."""
+    names: set[str] = set()
+    coordinator_dir = fr.content_root_for(doe_root)
+    if coordinator_dir is None:
+        return 0
+    for subdir in fr._SWEEP_SUBDIRS:
+        root = coordinator_dir / subdir
+        if not root.is_dir():
+            continue
+        for path in root.rglob(f"*{fr._SWEEPABLE_SUFFIX}"):
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            for match in fr._DOE_BIN_TOKEN_RE.finditer(text):
+                normalized = fr._normalize(match.group(1))
+                if normalized:
+                    names.add(normalized)
+    return len(names)
+
+
 # Marked @pytest.mark.real_home as of 2026-07-27 (commit b1bc5789's own follow-up): the
 # remaining three false positives from the scan-side-widening pass -- check-fixture-sync,
 # coordinator-handoff-archive, ensure-coordinator-venv -- are now resolved and verified,
@@ -710,7 +743,7 @@ def test_ci_no_silent_skip_on_this_machine_when_registered():
 # breakdown this diagnosis is based on.
 @pytest.mark.real_home
 def test_live_tree_reachability_ok_on_this_machine_when_registered():
-    """Review: code-reviewer (Finding 1) — the ONLY test in this file that
+    """The ONLY test in this file that
     asserts `result.ok` against REAL (unmocked) claude-klabauter + DoE-claude disk
     state, closing the gap where every content-asserting test above uses
     synthetic tmp_path fixtures and the pre-existing
@@ -734,21 +767,31 @@ def test_live_tree_reachability_ok_on_this_machine_when_registered():
         f"live fleet-reachability gate failed against real disk state — "
         f"missing oracle(s): {result.missing}"
     )
-    # Review: code-reviewer (Finding 1) — `ok is True` alone is satisfied
-    # identically by today's real ~140-citation sweep AND by a demand-filter
+    # `ok is True` alone is satisfied
+    # identically by a genuinely clean sweep AND by a demand-filter
     # regression that zeroed `doe_demand` out entirely (missing_normalized
     # would be [] either way). `demand_count` makes the sweep's actual
     # coverage a first-class, asserted fact instead of something visible
-    # only in stdout. Floor of 50 (not >0): the real count was 140 at the
-    # time this assertion was written (see the module-level comment above
-    # this test, and the 2026-07-27 fleet-reachability report), so 50 leaves
-    # headroom for ordinary fleet churn (new/retired skills, doc reshuffles)
-    # while still catching a >60% over-filter regression — a bug that
-    # accidentally excludes, say, an entire sweep subdirectory or inverts a
-    # qualification check would collapse the count far below this floor long
-    # before it could ever reach zero outright.
-    assert result.demand_count > 50, (
+    # only in stdout.
+    #
+    # A fixed floor here drifts with this machine's own DoE-claude corpus
+    # size — a box with a leaner checkout than the one this assertion was
+    # originally calibrated against trips a floor that was never actually
+    # about THIS box's state. The floor is instead a fraction of
+    # `_raw_bin_token_count` — the same sweep with every
+    # narrowing filter removed, so it can only be >= `demand_count` and
+    # rises/falls with this box's real corpus rather than staying pinned to
+    # a value some other box once measured. A quarter of that unfiltered
+    # baseline still catches a regression that accidentally excludes an
+    # entire sweep subdirectory or inverts a qualification check (either would
+    # collapse `demand_count` far below this floor long before reaching
+    # zero) while tolerating ordinary fleet churn (new/retired skills, doc
+    # reshuffles) that moves both counts together.
+    raw_baseline = _raw_bin_token_count(fr._resolve_doe_root())
+    floor = max(1, raw_baseline // 4)
+    assert result.demand_count >= floor, (
         f"fleet-reachability demand sweep found only {result.demand_count} citation(s) against "
-        "real DoE-claude disk state — expected >50; this is the vacuous-pass shape Finding 1 "
-        "closes (a demand-filter regression could zero doe_demand and still report ok=True)"
+        f"real DoE-claude disk state — expected >= {floor} (a quarter of the unfiltered baseline "
+        f"of {raw_baseline}); this is the vacuous-pass shape Finding 1 closes (a demand-filter "
+        "regression could zero doe_demand and still report ok=True)"
     )

@@ -594,7 +594,7 @@ def build_labels(repo_root: Optional[Path] = None) -> dict:
 
 
 if __name__ == "__main__":
-    # Review: overengineering-reviewer — `out_path` used to be computed and
+    # `out_path` used to be computed and
     # never written, so the golden below had no committed regeneration path
     # at all (a hand gesture in an ended session produced it). `--write` is
     # the closed gap; the default stays a dry summary print so running this
@@ -639,5 +639,5 @@ if __name__ == "__main__":
     print(json.dumps(summary, indent=2))
 
     if args.write:
-        out_path.write_text(json.dumps(labels, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        out_path.write_text(json.dumps(labels, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
         print(f"wrote {out_path}", flush=True)

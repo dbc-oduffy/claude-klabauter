@@ -355,6 +355,7 @@ from coordinator_core.frontmatter.schema_validate import (
 )
 from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+from coordinator_core.module_load_lock import held_during_load
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.wire_paths import rel_id
@@ -433,7 +434,7 @@ _FENCE_CLOSE = "\n```"
 
 
 def _has_tasks_heading(source: str) -> bool:
-    # Review: code-reviewer — reuse body_blocks._compile_heading_re instead of
+    # Reuse body_blocks._compile_heading_re instead of
     # a third hardcoded copy of the same heading regex; hoisted `import re` to
     # module scope (F4).
     return _compile_heading_re("Tasks").search(source) is not None
@@ -459,7 +460,7 @@ def _synthesize_tasks_section(source: str, body_yaml: str) -> str:
 
     Used only when no '## Tasks' heading exists at all.
     """
-    # Review: code-reviewer — collapsed dead-branch ternary (middle and final
+    # Collapsed dead-branch ternary (middle and final
     # arms both produced "\n\n"; only two distinct outcomes exist) (F1/F6).
     separator = "" if source.endswith("\n\n") else "\n\n"
     section = f"{_TASKS_HEADING_LINE}\n\n{_FENCE_OPEN}{body_yaml}{_FENCE_CLOSE}\n"
@@ -547,7 +548,7 @@ def _validate_all(
     none), so a caller can surface them as a warning without vetoing the
     write.
 
-    Review: code-reviewer — shared uniformly by add-task's ABSENT and LOCATED
+    Shared uniformly by add-task's ABSENT and LOCATED
     branches and by stamp's post-update validation loop (F3), replacing what
     was previously an asymmetric shape (ABSENT validated only the single new
     `task`, relying on `rows == []` making that equivalent to validating the
@@ -751,7 +752,7 @@ def _add_task(plan_path: str, task: dict, worktree: Path, repo_root: Path) -> di
         if result.status is LocateStatus.ABSENT:
             rows: list = []
             new_rows = rows + [task]
-            # Review: code-reviewer — validate new_rows uniformly via the
+            # Validate new_rows uniformly via the
             # shared _validate_all helper in both ABSENT and LOCATED branches,
             # instead of validating `task` alone here (F3).
             try:
@@ -888,7 +889,7 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
 
         rows_by_id = {row.get("id"): row for row in rows if isinstance(row, dict)}
 
-        # Review: code-reviewer — fail-loud on a duplicate id within one
+        # fail-loud on a duplicate id within one
         # `updates` batch, mirroring add-task's fail-loud-dup discipline
         # (EM decision: reject, not last-write-wins) (F2). Checked before any
         # row mutation begins so an abort here leaves `rows` untouched.
@@ -911,7 +912,7 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
                 row[field] = value
             stamped_ids.append(task_id)
 
-        # Review: code-reviewer — reuse the shared _validate_all helper for
+        # Reuse the shared _validate_all helper for
         # stamp's final validation loop (F3), consistent with add-task.
         # `touched_ids=set(stamped_ids)` (2026-08-16, untouched-invalid-row
         # deadlock fix): a pre-existing invalid row this batch did not
@@ -1093,6 +1094,12 @@ def _load_harvest_module() -> ModuleType:
     loaded module's internals) to inject a lightweight fake exposing the
     same attribute surface — see test_plan_tasks_mutate.py's
     `_make_fake_harvest_module`.
+
+    The check-cache/register/exec sequence runs under `module_load_lock.
+    held_during_load(module_name)` so a second concurrent caller (warm
+    engine, shared threads) blocks on the first's `exec_module` rather than
+    racing it over the same `sys.modules[module_name]` slot — see that
+    module's docstring for the half-executed-module hazard this closes.
     """
     global _HARVEST_MODULE
     if _HARVEST_MODULE is not None:
@@ -1103,24 +1110,27 @@ def _load_harvest_module() -> ModuleType:
             f"{_HARVEST_CLI_PATH} — cannot delegate backlogged row-routing"
         )
     module_name = "_plan_tasks_mutate_harvest_deferrals_cli"
-    spec = importlib.util.spec_from_file_location(module_name, _HARVEST_CLI_PATH)
-    if spec is None or spec.loader is None:
-        raise MutateAbort(
-            f"resolve: could not load coordinator-harvest-deferrals from {_HARVEST_CLI_PATH}"
-        )
-    module = importlib.util.module_from_spec(spec)
-    # Register in sys.modules BEFORE exec — mirrors
-    # workday_complete.apply._load_cli_module's identical fix (some
-    # coordinator/bin scripts resolve sys.modules[cls.__module__] during
-    # class-body execution; an unregistered module makes that lookup crash).
-    sys.modules[module_name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        sys.modules.pop(module_name, None)
-        raise
-    _HARVEST_MODULE = module
-    return module
+    with held_during_load(module_name):
+        if _HARVEST_MODULE is not None:
+            return _HARVEST_MODULE
+        spec = importlib.util.spec_from_file_location(module_name, _HARVEST_CLI_PATH)
+        if spec is None or spec.loader is None:
+            raise MutateAbort(
+                f"resolve: could not load coordinator-harvest-deferrals from {_HARVEST_CLI_PATH}"
+            )
+        module = importlib.util.module_from_spec(spec)
+        # Register in sys.modules BEFORE exec — mirrors
+        # workday_complete.apply._load_cli_module's identical fix (some
+        # coordinator/bin scripts resolve sys.modules[cls.__module__] during
+        # class-body execution; an unregistered module makes that lookup crash).
+        sys.modules[module_name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(module_name, None)
+            raise
+        _HARVEST_MODULE = module
+        return module
 
 
 def _find_evidence_file(key: str, search_dirs: list) -> Optional[str]:
@@ -1764,7 +1774,7 @@ def _resolve(
         # not be able to block the write — see _validate_all's own
         # docstring.
         #
-        # Review: code-reviewer — if `resolved_ids` is incomplete relative to
+        # If `resolved_ids` is incomplete relative to
         # what Phase 1 already wrote in-memory (Phase 2 raised partway
         # through a `_dispatch_backlogged`/`_dispatch_spun_off` call), that
         # mismatch never reaches this line: `locked_rmw` discards `rows` and
@@ -1832,7 +1842,7 @@ def _resolve(
     # for (AC3-adjacent: the caller's resolve already applied) — reported
     # in the result dict, never raised.
     #
-    # Review: code-reviewer (P3 #3) -- `_stamp_plan_landed` is a leading-
+    # `_stamp_plan_landed` is a leading-
     # underscore "private" symbol imported across a module boundary. That
     # is deliberate, not an oversight: the plan's one-writer decision (§
     # Key decision above) requires calling this EXACT existing primitive

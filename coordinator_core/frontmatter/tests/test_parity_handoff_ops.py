@@ -400,7 +400,7 @@ def _js_normalize(repo_root: Path) -> Tuple[int, str, str]:
     With both guards set, seamPresent() returns False → legacy_normalize() runs, and
     we compare the JS text-transform core against the Python port.
     """
-    # Review: code-reviewer — F5: PYTHONSAFEPATH silently vacuous on Python < 3.11; skip if < 3.11
+    # Silently vacuous on Python < 3.11; skip if < 3.11
     # so we don't compare Python-routed-to-Python instead of JS-text-transform vs Python port.
     if sys.version_info < (3, 11):
         pytest.skip(
@@ -626,7 +626,7 @@ def _assert_dlv_shape(fm: str, *, label: str) -> None:
     dlv = _field(fm, "deliverable_id")
     if dlv is None:
         return
-    # Review: code-reviewer — F11: explicit single-pair removal to avoid stripping ''-quoted values
+    # Explicit single-pair removal to avoid stripping ''-quoted values
     raw = dlv[1:-1] if (dlv.startswith("'") and dlv.endswith("'")) else dlv
     assert _DLV_SHAPE_RE.match(raw), (
         f"{label}: deliverable_id '{raw}' does not match dlv-<slug>-<6hex> shape"
@@ -1368,7 +1368,7 @@ class TestOvercapSummaryRejectionParity:
         py_repo = tmp_path / "py_repo"
         _init_git_repo(py_repo)
 
-        # Review: code-reviewer (Finding 3) — relocated from repo root ("h.md") to
+        # Relocated from repo root ("h.md") to
         # state/handoffs/ so this exercises the overcap-summary validation
         # rejection it's named for, not the path-containment guard (which now
         # confines handoff_path to state/handoffs/ and would reject a repo-root
@@ -1427,7 +1427,7 @@ class TestOvercapSummaryRejectionParity:
         py_repo = tmp_path / "py_repo"
         _init_git_repo(py_repo)
 
-        # Review: code-reviewer (Finding 3) — relocated to state/handoffs/, see note above.
+        # Relocated to state/handoffs/, see note above.
         py_file = py_repo / "state" / "handoffs" / "h.md"
         _write_handoff(py_file, _OVERCAP_FIXTURE)
         py_original = py_file.read_text(encoding="utf-8")
@@ -1475,7 +1475,7 @@ class TestEmptySessionIdParity:
         py_repo = tmp_path / "py_repo"
         _init_git_repo(py_repo)
 
-        # Review: code-reviewer (Finding 3) — relocated to state/handoffs/ so this
+        # Relocated to state/handoffs/ so this
         # exercises the empty-session-id validation rejection, not the path guard.
         py_file = py_repo / "state" / "handoffs" / "h.md"
         _write_handoff(py_file, _BASIC_FIXTURE)
@@ -1525,7 +1525,7 @@ class TestEmptySessionIdParity:
         py_repo = tmp_path / "py_repo"
         _init_git_repo(py_repo)
 
-        # Review: code-reviewer (Finding 3) — relocated to state/handoffs/, see note above.
+        # Relocated to state/handoffs/, see note above.
         py_file = py_repo / "state" / "handoffs" / "h.md"
         _write_handoff(py_file, _BASIC_FIXTURE)
 

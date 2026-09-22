@@ -209,7 +209,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         identity.client,
         ["-ztag", "fstat", "-T", "headType,otherOpen,otherLock", abs_path],
         cwd=repo_root,
-        # Review: coordinator-code-reviewer F3 -- explicit timeout stating
+        # Explicit timeout stating
         # this call site deliberately accepts the engine-wide default
         # rather than inheriting it silently; value unchanged.
         timeout=runner.DEFAULT_TIMEOUT_S,
@@ -234,7 +234,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         identity.client,
         ["edit", "-c", str(cl), abs_path],
         cwd=repo_root,
-        # Review: coordinator-code-reviewer F3 -- explicit timeout, same
+        # Explicit timeout, same
         # rationale as the fstat call above; value unchanged.
         timeout=runner.DEFAULT_TIMEOUT_S,
     )

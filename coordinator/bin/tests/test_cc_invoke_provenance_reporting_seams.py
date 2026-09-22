@@ -269,7 +269,7 @@ def test_front_insert_on_path_body_was_not_modified():
 def test_unimported_hot_path_makes_no_filesystem_call_via_the_wrapper_reporting_seam(
     monkeypatch, tmp_path, clean_sys_path, clean_sys_modules_coordinator_core
 ):
-    # Review: code-reviewer P1 (slice f80de67e1) — an `AssertionError` raised
+    # An `AssertionError` raised
     # from inside a monkeypatched `Path.resolve` would be swallowed by
     # `_report_provenance`'s own outer `except Exception` (a broad catch
     # required by hard constraint 3), so a trap that RAISES from inside that
@@ -519,7 +519,7 @@ def test_a_sys_modules_state_left_by_seam_present_is_not_restored(
 
 
 # ---------------------------------------------------------------------------
-# Review: code-reviewer P1 — `_report_provenance` must pass a real `cwd` to
+# `_report_provenance` must pass a real `cwd` to
 # the sink, or `resolve_git_root_cheap(None)`'s `if not cwd: return None`
 # guard fires unconditionally and the counter silently never writes. A test
 # that only mocks the sink and asserts it was called would NOT catch this —

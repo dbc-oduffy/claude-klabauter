@@ -691,7 +691,7 @@ def dep_probe_all(
         sibling_dir = str(dep.get("sibling_dir_name", ""))
         upstream_url = dep.get("upstream_url", "")
 
-        # Review: code-reviewer (Finding 2, 2026-08-03) — call the SAME
+        # Call the SAME
         # _sibling_fallback helper dep_probe uses (both candidates: the
         # "-claude"-strip AND the upstream_url-basename), rather than
         # re-deriving a narrower, stale fallback inline. The prior inline
@@ -1580,7 +1580,7 @@ def main(argv: list[str], out=None, err=None) -> int:
             "i_am_agent": flags["i_am_agent"],
             "check": flags["check"],
         }
-        # Review: code-reviewer (Finding 1, 2026-07-17) — an i_am_agent-True
+        # An i_am_agent-True
         # invocation reaching here has already cleared the agent-direct
         # short-circuit's override_pair/chain_preinstall_consented gate
         # above; re-running run_mode_prompt's own unconditional i_am_agent

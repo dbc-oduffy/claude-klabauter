@@ -169,7 +169,7 @@ def parse_ledger(ledger_path: Path) -> List[LedgerRow]:
             continue
         cells = _split_table_cells(stripped)
         if len(cells) != 5:
-            # Review: code-reviewer — F4: a malformed row (e.g. a Reason
+            # A malformed row (e.g. a Reason
             # cell embedding an unescaped "|") must fail loud, not silently
             # drop the row -- a dropped row causes over-refusal ("no ledger
             # row") that is indistinguishable from an unclassified heading,

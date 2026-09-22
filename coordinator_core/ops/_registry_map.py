@@ -99,7 +99,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.plan_persistence_check":           "coordinator_core.hooks",
     "hooks.runtime_tripwire_em_check":        "coordinator_core.hooks",
     # hooks.stop_dispatch (C3, docs/plans/2026-08-31-six-hook-scripts-become-engine-ops.md).
-    # Review: overengineering-reviewer (Kira) — the four sibling residue/
+    # The four sibling residue/
     # wrapper keys this module also defined (guard_kira_verdict_routed,
     # stop_em_report_altitude, nudge_harness_directive_dispatch,
     # nudge_unrouted_sizing) had no consumer anywhere in claude-klabauter or

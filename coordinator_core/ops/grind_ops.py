@@ -45,10 +45,19 @@ verify_extraction` <1ms, `doctrine.surface_split_regenerate` ~18ms
 Negative-spec:
     - Do NOT re-derive `extract()`/`verify()`/`regenerate_split_dir()`'s own
       decision logic here — thin adapters only.
-    - Do NOT spawn a subprocess anywhere in this module — every backing
-      script loads via `cli_dispatch.load_cli_module` and calls its Python
-      functions directly, never `main(argv)` via a spawned process and
-      never `subprocess.run`/`Popen`.
+    - Do NOT spawn a subprocess in `lessons.extract` or `lessons.
+      verify_extraction` — both load their backing script via
+      `cli_dispatch.load_cli_module` and call its Python functions directly,
+      never `main(argv)` via a spawned process and never `subprocess.run`/
+      `Popen`. `doctrine.surface_split_regenerate` is the one exception:
+      load-bearing — its default call path (both `check_mode` and
+      `allow_dirty` false/omitted) runs `regenerate_split_dir()` ->
+      `dirty_bodies()` -> `git_native._git(["status", "--porcelain", ...])`,
+      exactly ONE real `subprocess.run` per call. This is what stops the op
+      silently overwriting a peer's uncommitted doctrine body — see
+      `dirty_bodies()`'s own docstring in `generate-doctrine-surface-
+      split.py`. Pinned at exactly 1 spawn by `test_grind_ops.py::
+      test_doctrine_surface_split_regenerate_default_path_spawns_exactly_once`.
     - Do NOT resolve a repo path via `Path.cwd()`/`Path(__file__)` in any
       handler — the per-request resolved `repo_root` parameter is the only
       source for a params path that is not already absolute.
@@ -183,6 +192,10 @@ async def _lessons_verify_extraction(
         with redirect_stderr(stderr_buf):
             exit_code = module.verify(extraction_path, routing_path)
     finally:
+        # tmp.close() is idempotent; call
+        # it unconditionally here so a json.dump failure before the happy
+        # path's own close() can't leak an open fd past the unlink below.
+        tmp.close()
         Path(tmp.name).unlink(missing_ok=True)
 
     if exit_code == 0:

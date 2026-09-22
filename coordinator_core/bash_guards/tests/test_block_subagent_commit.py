@@ -1691,7 +1691,7 @@ def test_redirection_target_is_not_treated_as_a_pathspec_element():
 
 
 def test_pathspec_token_after_a_mid_pathspec_redirect_is_still_checked():
-    """Review: coordinator:code-reviewer -- a redirect interspersed mid-
+    """A redirect interspersed mid-
     pathspec previously truncated the guard's own ownership check at the
     first redirection token, silently dropping every real path after it
     (backstopped by the sink's independent re-validation, but the pre-check

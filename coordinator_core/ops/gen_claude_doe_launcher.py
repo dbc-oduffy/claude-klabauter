@@ -265,7 +265,7 @@ def main(argv: List[str]) -> int:
         for kind, tmpl, dest in (("cmd", cmd_tmpl, cmd_dest), ("ps1", ps1_tmpl, ps1_dest)):
             with open(tmpl, "rb") as fh:
                 lines = fh.read().count(b"\n")
-            # Review: code-reviewer (2026-07-17 Finding 1) — hardcoded POSIX "/tmp"
+            # Hardcoded POSIX "/tmp"
             # fallback crashed --check-only on real Windows (no TMPDIR there).
             # tempfile.gettempdir() resolves TMPDIR/TEMP/TMP per-platform.
             tmp_fd, tmp_out = tempfile.mkstemp(

@@ -216,11 +216,17 @@ def run_admission(
     *,
     reserve: int,
     max_agent_calls: Optional[int] = None,
+    budget_tokens: Optional[int] = None,
     budget: Any,
     agent: Callable[[str, str], Any],
 ) -> dict:
     """Drive the admission policy over ``batches`` (``(batch_id,
     [row_id, ...])`` pairs, in queue order).
+
+    ``budget_tokens``, when given, mirrors the rendered `.mjs`'s
+    ``BUDGET_TOKENS`` ceiling: admission halts once the next batch's
+    ``reserve`` would carry cumulative spend past it -- independent of
+    ``budget.total``/``remaining()`` below.
 
     ``agent(stage_kind, unit_id) -> result`` is the caller's stub. ``unit_id``
     is a batch id for ``triage``/``refute-close``, a row id for
@@ -325,7 +331,21 @@ def run_admission(
                 continue
             row.removed_files = list(row.removed_files) + [row.path]
             row.touched_files = list(row.touched_files) + [item.get("new_path", "")]
-            _apply_route(row, follow_edge(routing, row.node, "confirmed", row), "refute-close confirmed")
+            action = follow_edge(routing, row.node, "confirmed", row)
+            _apply_route(row, action, "refute-close confirmed")
+            # Parity with the rendered
+            # `.mjs`'s inline archive-move-commit branch: a confirmed-close
+            # row whose route is a direct handback (no explicit `commit`
+            # node between it and its terminal type) is committed here,
+            # inline, and its successful commit is recorded in `settled` --
+            # never silently dropped from `HANDBACK.settled`/`_counts`.
+            if action[0] == "handback":
+                commit_result = _record_call("commit", row.row_id) or {}
+                if commit_result.get("outcome") == "committed":
+                    row.sha = commit_result.get("sha", "")
+                    settled.append({"row": row.row_id, "outcome": "committed", "sha": row.sha})
+                else:
+                    _handback(row, "commit-failed", "close's archive-move commit did not land")
         for entry in result.get("refuted", []):
             row = rows[entry["row"]]
             if row.node is None or row.done:
@@ -448,7 +468,14 @@ def run_admission(
         if max_agent_calls is not None and len(call_log) >= max_agent_calls:
             exhausted = True
             break
-        # Review: overengineering-reviewer finding 3 -- one ceiling check via
+        # Parity with the rendered `.mjs`'s
+        # BUDGET_TOKENS ceiling (a caller-supplied hard cap, distinct from
+        # budget.total/remaining() below): halts admission once the next
+        # batch's reserve would carry cumulative spend past it.
+        if budget_tokens is not None and (budget.spent() - start_spent) + reserve > budget_tokens:
+            exhausted = True
+            break
+        # One ceiling check via
         # budget.total/remaining(); budget_tokens/spent_delta was a redundant
         # second check over the same number on the default path.
         if budget.total is not None and (budget.remaining() or 0) <= reserve:
@@ -462,12 +489,6 @@ def run_admission(
         for bid in queue:
             for rid in batch_objs[bid].row_ids:
                 handed_back.append({"row": rid, "type": "budget-exhausted", "reason": "admission ceiling reached"})
-        for batch in admitted.values():
-            for rid in batch.row_ids:
-                if not rows[rid].done:
-                    handed_back.append(
-                        {"row": rid, "type": "budget-exhausted", "reason": "admission ceiling reached"}
-                    )
 
     end_spent = budget.spent()
     return {
@@ -662,6 +683,7 @@ def _ledger_commit_block(
         run_id_js="RUN_ID",
         is_drain=is_drain,
         record_js="JSON.stringify(_runCostRecord())" if is_drain else None,
+        repo_root=".",
         agent_type_host=agent_type_host,
     )
     run_record_note = ""
@@ -731,12 +753,12 @@ def compose_grind_script(
     grouped = _group_into_batches(manifest, knobs)
     window = int(knobs.get("window", 6))
     batch_size_knob = knobs.get("batch_size", 4)
-    flat_batch_size = batch_size_knob if not isinstance(batch_size_knob, Mapping) else 4
+    reserve_batch_size = max(batch_size_knob.values()) if isinstance(batch_size_knob, Mapping) else batch_size_knob
     max_agent_calls = knobs.get("max_agent_calls")
     budget_tokens = knobs.get("budget_tokens")
     triage_depth_knob = knobs.get("triage_depth", "standard")
     triage_node_id = _triage_node_id(profile)
-    # Review: overengineering-reviewer finding 5 -- inlined single-caller comprehension.
+    # Inlined single-caller comprehension.
     node_kind = {node_id: node.kind for node_id, node in profile.graph.items()}
 
     # Per-batch-key data (a small const, NOT unrolled per row/per batch --
@@ -783,8 +805,7 @@ def compose_grind_script(
     lines.append(_ROUTING_HELPERS)
 
     lines.append(f"const WINDOW = {window};")
-    lines.append(f"const BATCH_SIZE = {flat_batch_size};")
-    lines.append(f"const RESERVE = {batch_reserve(flat_batch_size)};")
+    lines.append(f"const RESERVE = {batch_reserve(reserve_batch_size)};")
     lines.append(f"const MAX_AGENT_CALLS = {json.dumps(max_agent_calls)};")
     lines.append(f"const BUDGET_TOKENS = {json.dumps(budget_tokens)};")
     lines.append(f"const RUN_ID = args.run_stamp;")
@@ -907,7 +928,7 @@ def compose_grind_script(
         label="commit", phase_title="Grind", profile=profile.name, row_id_js="row.rowId",
         outcome_js="row.lastOutcome || 'settled'",
         touched_files_js="row.touchedFiles", removed_files_js="row.removedFiles.concat([_ledgerPathFor(row.rowId)])",
-        agent_type_host=agent_type_host,
+        repo_root=".", agent_type_host=agent_type_host,
     )
     lines.append("async function _commitCall(row) {\n" + _indent_block(_capture(commit_raw, "commit"), "  ") + "\n}")
 
@@ -1009,7 +1030,8 @@ def compose_grind_script(
         "    if (route.kind === 'handback') {\n"
         "      const _cresult = await withLock(['@commit'], async () => _commitCall(row));\n"
         "      if (_cresult.outcome !== 'committed') { _handBack(itemRow, 'commit-failed', \"close's archive-move commit did not land\"); }\n"
-        "      else { row.sha = _cresult.sha || ''; _ledgerCommitted.add(itemRow); }\n"
+        "      else { row.sha = _cresult.sha || ''; _ledgerCommitted.add(itemRow); "
+        "_settled.push({ row: itemRow, outcome: 'committed', sha: row.sha }); }\n"
         "    }\n"
         "  }\n"
         "  for (const entry of (result.refuted || [])) {\n"
@@ -1189,8 +1211,6 @@ def compose_grind_script(
         "  if (_exhausted) {\n"
         "    for (const bid of _queue) { for (const r of BATCHES.find((b) => b.id === bid).rows) "
         "_handBack(r, 'budget-exhausted', 'admission ceiling reached'); }\n"
-        "    for (const bid of Object.keys(_admitted)) { for (const r of BATCHES.find((b) => b.id === bid).rows) "
-        "if (!_rows[r].done) _handBack(r, 'budget-exhausted', 'admission ceiling reached'); }\n"
         "  }\n"
         "  await _drainCommit();\n"
         "}\n"

@@ -246,7 +246,7 @@ class _ClaudeKlabauterUnresolvable(RuntimeError):
 # ---------------------------------------------------------------------------
 
 
-# Review: code-reviewer — _schema_cli_describe was called up to 5x per append for the
+# _schema_cli_describe was called up to 5x per append for the
 # identical schema (unmemoized), each paying full Node process-startup cost; safe to
 # cache (Finding 1). The in-process schema_validate.describe() call is far cheaper
 # than the former Node subprocess spawn, but the memo is retained: it is now a pure
@@ -310,7 +310,7 @@ def _output_dir_for_schema(schema_name: str) -> str:
     try:
         described = _schema_cli_describe(cli_name)
     except RuntimeError as exc:
-        # Review: code-reviewer — do not relabel infra failures (node missing, timeout,
+        # Do not relabel infra failures (node missing, timeout,
         # non-JSON describe output) as "unknown schema": the schema may be perfectly
         # valid and the operator would waste time checking spelling instead of their
         # Node install. Surface the underlying cause text instead (Finding 5).
@@ -319,7 +319,7 @@ def _output_dir_for_schema(schema_name: str) -> str:
         ) from exc
 
     applies_to = described.get("applies_to")
-    # Review: code-reviewer — this op only ever writes YAML queue entries (state/<dir>/
+    # This op only ever writes YAML queue entries (state/<dir>/
     # *.yaml); the .yaml/state/ suffix requirement below is a deliberate scope boundary,
     # not an accidental byproduct of the current 5 schemas' shape (Finding 3).
     if not applies_to or not isinstance(applies_to, str):
@@ -327,7 +327,7 @@ def _output_dir_for_schema(schema_name: str) -> str:
             f"queue.append: schema {schema_name!r} has no usable applies_to location "
             f"(got {applies_to!r})."
         )
-    # Review: code-reviewer — require a subdirectory segment under state/ (>= 2 slashes)
+    # Require a subdirectory segment under state/ (>= 2 slashes)
     # so a malformed-but-suffix-matching applies_to like "state/*.yaml" (no queue
     # subdirectory) fails the guard instead of silently dirname()-ing to top-level
     # "state" (Finding 4).
@@ -572,7 +572,7 @@ def _build_yaml(schema_name: str, fields: dict) -> str:
         elif key == "deliverables" and isinstance(value, list):
             # workstream.schema.json requires block-map items ({text: "..."}) —
             # distinct from specs/dependency_annotations, which stay plain strings.
-            # Review: review-integrator (Finding 2) — the prior truthiness-gated
+            # The prior truthiness-gated
             # dispatch (`value and isinstance(value[0], dict)`) fell through to
             # _emit_yaml_field for an explicit empty list, which emits a bare
             # "deliverables:\n" (parses as null, not []). Normalization upstream
@@ -638,7 +638,7 @@ def _content_digest(schema_name: str, fields: dict) -> str:
             if opt not in emit_order:
                 emit_order.append(opt)
 
-    # Review: code-reviewer — hand-joined "key=value" pipe strings had no delimiter
+    # hand-joined "key=value" pipe strings had no delimiter
     # escaping; free-text fields (body, risk, proposed_action, etc.) containing '|' or
     # '=' could collide two distinct entries onto one digest. Structured JSON serialization
     # handles internal escaping so no field value can inject a false separator (Finding 1).
@@ -684,7 +684,7 @@ _WORKSTREAM_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 # the wrong oracle for it (dashes are load-bearing date separators, not an
 # arbitrary charset). Used by ``_validate_workstream_created`` below.
 #
-# Review: code-reviewer (Finding 1/2) — `\d` on a str pattern matches any Unicode
+# `\d` on a str pattern matches any Unicode
 # category-Nd digit (fullwidth, Devanagari, etc.), not just [0-9]; and `.match()`
 # against a `$`-terminated pattern accepts one trailing "\n" that `.fullmatch()`
 # would reject. [0-9] (over re.ASCII) is more obviously scoped at this call site,
@@ -695,7 +695,7 @@ _WORKSTREAM_CREATED_DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 def _validate_workstream_created(value: str) -> None:
     """Reject a non-ISO-date ``created`` value before it reaches ``_output_path``.
 
-    Review: review-integrator (Finding 1) — ``created`` is interpolated into the
+    ``created`` is interpolated into the
     ``workstream-event`` filename (``{created}-{workstream}-{session}.yaml``) by
     ``_output_path`` but is not a declared property of workstream-event.schema.json
     and the schema has no top-level ``additionalProperties: false``, so ``_validate``
@@ -712,11 +712,11 @@ def _validate_workstream_created(value: str) -> None:
     ``else`` branch) — this is validation-coverage symmetry only, not a traversal
     guard there.
 
-    Review: coordinator:code-reviewer (Finding 3) — the docstring previously
+    The docstring previously
     overclaimed a traversal rationale for both call sites without distinguishing
     them; the CLI's parallel docstring already draws this distinction.
 
-    Review: review-integrator (Finding 6) — this validates DATE SHAPE only
+    This validates DATE SHAPE only
     (``YYYY-MM-DD``, ASCII digits); it does not confirm the value is a real
     calendar date (e.g. ``"9999-99-99"`` passes). Not a traversal risk either way.
     """
@@ -748,7 +748,7 @@ def _validate_workstream_identifier(param_name: str, value: str) -> None:
 
     Spec backlink: pln-teach-the-native-queue-append--8bd701 § C4, AC14
     """
-    # Review: coordinator:code-reviewer — .match() against a `$`-anchored
+    # .match() against a `$`-anchored
     # pattern lets a trailing "\n" through (Python's `$` is satisfied before a
     # single trailing newline); .fullmatch() requires the whole string consumed.
     if not value or not _WORKSTREAM_IDENTIFIER_RE.fullmatch(value):
@@ -1031,7 +1031,7 @@ def _validate(schema_name: str, fields: dict) -> None:
     """
     # Fail-fast unknown-schema guard (its raise IS the check; the real output-dir
     # computation happens later in _output_path).
-    # Review: code-reviewer — this duplicates the guard call in append_queue_entry and
+    # This duplicates the guard call in append_queue_entry and
     # _output_path; intentional defense-in-depth across independently-callable boundaries
     # (_validate and _output_path are each called on their own, e.g. in tests) — do not
     # "simplify" this away. With Finding 1's memoization these repeat calls are cache
@@ -1268,7 +1268,7 @@ def append_queue_entry(
     """
     # Validate schema. Fail-fast unknown-schema guard (its raise IS the check; the
     # real output-dir computation happens later in _output_path).
-    # Review: code-reviewer — same intentional defense-in-depth as _validate's guard
+    # Same intentional defense-in-depth as _validate's guard
     # call below; see that call site's comment (Finding 2).
     _output_dir_for_schema(schema)
 
@@ -1356,7 +1356,7 @@ def append_queue_entry(
     # (the in-file precedent for contract-derivation over a hand-copy). A key
     # the contract does not declare for this schema is silently dropped here; a
     # required field the caller omits still surfaces via _validate below.
-    # Review: review-integrator (Finding 4) — safe to call describe() here without
+    # Safe to call describe() here without
     # re-checking schema validity: _output_dir_for_schema(schema) above already
     # fail-fasted (ValueError) if `schema` were unresolvable, so this describe()
     # call can never be the first one to observe an unknown schema. Do not reorder
@@ -1373,7 +1373,7 @@ def append_queue_entry(
         if key in contract_field_names and key not in fields:
             fields[key] = value
         elif key not in contract_field_names:
-            # Review: code-reviewer (Finding 1) — WARN, do not raise: an optional
+            # WARN, do not raise: an optional
             # contract field not yet reflected in a stale schema cache would
             # otherwise be rejected here even though it is legitimately valid
             # (forward-compat), so a hard failure is the wrong shape. A warning
@@ -1411,13 +1411,13 @@ def append_queue_entry(
         if _identifier_value is not None:
             _validate_workstream_identifier(_identifier_param, str(_identifier_value))
 
-    # Review: review-integrator (Finding 1) — `created` is also a filename component
+    # `created` is also a filename component
     # for `workstream-event` (_output_path's f"{created}-{workstream}-{session}.yaml"
     # branch) but is a bare keyword param, never routed through schema_fields/the
     # contract, so it sits outside the identifier-allowlist loop above. Validate it
     # as an ISO date here, before _content_digest/_output_path/os.makedirs, mirroring
     # the AC14 guard's placement discipline.
-    # Review: review-integrator (Finding 7) — `workstream`'s `created` is not a
+    # `workstream`'s `created` is not a
     # filename component (no traversal exposure), but is required and otherwise
     # left asymmetrically unvalidated next to the discipline just applied above;
     # validated here too for validation-coverage symmetry (informational only).

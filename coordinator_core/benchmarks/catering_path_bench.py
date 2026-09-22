@@ -388,7 +388,6 @@ def _measure_procs_floor() -> int:
     """
     global _PROCS_FLOOR
     if _PROCS_FLOOR is None:
-        # Review: coordinatorcode-reviewer.a075e39a58642def2, Finding 1 --
         # k=1 is the single-sample mode batched_process_time_ms's own
         # docstring exists to avoid; a transient spawn landing in that one
         # sample would corrupt the memoized floor for the whole run. k=10

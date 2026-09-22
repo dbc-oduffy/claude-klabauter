@@ -187,7 +187,7 @@ def data_root(dir_name: str) -> Path:
         f"{flat_candidate} (OSS-flat layout, not found)."
     )
 
-# Review: overengineering-reviewer Q1 — `content_root_for` and its marker are
+# `content_root_for` and its marker are
 # PURE, no-intra-package-import primitives, moved to a leaf module so any
 # `coordinator_core` module can import them at module level without risking
 # the cycle that used to force `resolve_coordinator_clone.py` and
@@ -198,7 +198,7 @@ def data_root(dir_name: str) -> Path:
 # `coordinator_core/_content_root_primitive.py` for the implementation and the
 # full rationale.
 #
-# Review: overengineering-reviewer finding 1 — `resolved_content_root()` (the
+# `resolved_content_root()` (the
 # no-arg convenience wrapper around this) is deleted: it had zero call sites
 # anywhere in the diff that introduced it, in either twin.
 from coordinator_core._content_root_primitive import (  # noqa: E402,F401

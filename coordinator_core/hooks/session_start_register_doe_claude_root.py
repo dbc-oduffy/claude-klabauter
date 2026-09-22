@@ -148,7 +148,7 @@ def _write_doe_root_pointer(root_str: str) -> None:
             pass
         try:
             pointer.parent.mkdir(parents=True, exist_ok=True)
-            pointer.write_text(root_str + "\n", encoding="utf-8")
+            pointer.write_text(root_str + "\n", encoding="utf-8", newline="\n")
         except Exception:
             continue
 

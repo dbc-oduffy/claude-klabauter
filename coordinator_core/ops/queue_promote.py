@@ -348,7 +348,7 @@ def _content_digest(fields: dict) -> str:
     NO disk read — computed entirely from in-hand params (DR-213 D4; op remains
     write-always / additive-create, not a dedup pre-check).
     """
-    # Review: code-reviewer — derive emit_order from fields.keys() minus provenance
+    # Derive emit_order from fields.keys() minus provenance
     # (id/created) rather than a hardcoded literal list, so a future field added to
     # promote_lesson's fields dict (line ~502) participates automatically instead of
     # silently dropping out of the digest (Finding 5). fields is built in fixed
@@ -356,7 +356,7 @@ def _content_digest(fields: dict) -> str:
     # is deterministic across calls.
     emit_order = [k for k in fields if k not in ("id", "created")]
 
-    # Review: code-reviewer — hand-joined "key=value" pipe strings had no delimiter
+    # hand-joined "key=value" pipe strings had no delimiter
     # escaping; free-text fields (body, title, etc.) containing '|' or '=' could collide
     # two distinct entries onto one digest. Structured JSON serialization handles
     # internal escaping so no field value can inject a false separator (Finding 1).

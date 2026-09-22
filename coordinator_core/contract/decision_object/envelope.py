@@ -134,7 +134,7 @@ emit = _emit
 # instead of silently starving one of its two readers (`resume` +
 # `pickup_assemble.apply`).
 #
-# Review: overengineering-reviewer -- `legal_disposition_values` used to live
+# `legal_disposition_values` used to live
 # here too on the same two-readers argument, but it has exactly one
 # production caller (`resume.resume_decisions`, the file it was extracted
 # from); moved back to `resume.py` as `_legal_disposition_values`, private to

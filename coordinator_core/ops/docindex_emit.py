@@ -326,7 +326,7 @@ def _docindex_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         written = False
         if write and not cmp_result.hand_edit and cmp_result.has_drift:
             new_text = render(document_text, spec, entries)
-            (guarded_root / rel_path).write_text(new_text, encoding="utf-8")
+            (guarded_root / rel_path).write_text(new_text, encoding="utf-8", newline="\n")
             written = True
 
         results.append(

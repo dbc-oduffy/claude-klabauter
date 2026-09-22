@@ -63,7 +63,7 @@ def test_resolves_depends_on_invariant_catches_dangling_edge() -> None:
             "dispositions": [{"value": "proceed", "resolves": ["dX"]}],
         }
     ]
-    # Review: code-reviewer — pytest.raises over bare try/except for
+    # pytest.raises over bare try/except for
     # idiomatic style and a clearer failure message on regression.
     with pytest.raises(RuntimeError):
         _assert_resolves_depends_on_invariant(directives, judgment_points)

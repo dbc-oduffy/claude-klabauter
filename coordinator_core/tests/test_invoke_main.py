@@ -678,7 +678,7 @@ def test_params_file_dash_empty_stdin_rejects_same_as_malformed():
     """Empty/EOF stdin fails the same exit-1/"Invalid params_json" contract
     as malformed JSON, distinct from the malformed-JSON case above.
 
-    Review: code-reviewer (nit, Finding 4) — empty stdin (json.loads("")
+    Empty stdin (json.loads("")
     raises JSONDecodeError) is a plausible accidental-invocation shape (a
     caller forgets the heredoc body) that was not separately pinned.
     """
@@ -702,7 +702,7 @@ def test_params_file_dash_reads_non_ascii_stdin_as_utf8():
     locale codec -- reproduced even when the child's own locale is forced
     to a non-UTF-8 codec.
 
-    Review: code-reviewer (P2, Finding 3) -- a str payload piped via
+    A str payload piped via
     subprocess.run(text=True, input=<str>) is encoded by the PARENT using
     its own locale default, so parent and child agree and a
     locale-vs-UTF-8 mismatch never reproduces even with non-ASCII content.
@@ -960,7 +960,7 @@ def test_dump_op_timeouts_requires_no_op_argument():
 def test_dump_op_timeouts_takes_priority_over_op_positional():
     """--dump-op-timeouts wins when an <op> positional is also passed.
 
-    Review: code-reviewer (nit) -- the precedence ("flag wins, <op> is
+    The precedence ("flag wins, <op> is
     silently ignored") was previously undocumented and untested; this locks
     it in as intended behavior rather than incidental control flow.
     """

@@ -548,7 +548,7 @@ def render_summary(manifest: dict[str, Any], counts: dict[str, int]) -> str:
     """Render the short human scope summary (b) — stdout-shaped, never the
     ~25KB batch table itself (central-em #3).
 
-    # Review: review-integrator — the data-driven cohort names in `counts`
+    # The data-driven cohort names in `counts`
     # (beyond the fixed harvest/skip/sidecars/scannable/batches/harvest_debt_*
     # core — see `_FIXED_COUNT_KEYS`) are rendered generically here, sorted by
     # name, instead of hardcoding `handoffs=`/`memos=`. Hardcoding those two
@@ -623,7 +623,7 @@ def _handler(params: dict, repo_root: Path | None = None) -> dict:
         if raw_specs == "pm_ruling_2026_08_06":
             kwargs["cohort_specs"] = list(PM_RULING_2026_08_06_COHORT_SPECS)
         elif isinstance(raw_specs, list):
-            # Review: review-integrator — a malformed row (typo'd/extra key) must
+            # A malformed row (typo'd/extra key) must
             # not leak a raw TypeError from CohortSpec's __init__ unpacking; wrap
             # it into the same friendly ValueError posture used for the
             # not-a-literal-string-or-list branch below, so a JSON-RPC caller

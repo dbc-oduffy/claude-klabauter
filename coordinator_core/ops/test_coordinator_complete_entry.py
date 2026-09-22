@@ -739,7 +739,7 @@ class TestRollupSentence:
         )
         shim.chmod(0o755)
 
-        # Review: code-reviewer (Finding 1 consolidation) — `_which_render_rollup_shim`
+        # `_which_render_rollup_shim`
         # delegates to `coordinator_core.launchable.which_path_ordered`, which walks
         # `os.environ["PATH"]` directly rather than calling `shutil.which` (that's the
         # whole point of the fix: `shutil.which` never finds a `.sh`-suffixed name on
@@ -778,7 +778,7 @@ class TestRollupSentence:
 class TestResolveEntryTitle:
     def test_computed_from_plan_title(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
-        # Review: overengineering-reviewer finding 6 -- these tests assert
+        # These tests assert
         # frontmatter-scan/title-ladder behaviour, not git; stub the git
         # runner so C3's added spawn doesn't cost a real process per test.
         monkeypatch.setattr(m, "_git_log_runner_for_commits", _RecordingGitRunner(rc=0, out=""))
@@ -817,7 +817,7 @@ class TestResolveEntryTitle:
 
     def test_computed_from_handoff_title_when_no_plan_slug(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
-        # Review: overengineering-reviewer finding 6 -- these tests assert
+        # These tests assert
         # frontmatter-scan/title-ladder behaviour, not git; stub the git
         # runner so C3's added spawn doesn't cost a real process per test.
         monkeypatch.setattr(m, "_git_log_runner_for_commits", _RecordingGitRunner(rc=0, out=""))
@@ -847,7 +847,7 @@ class TestResolveEntryTitle:
 
     def test_placeholder_retained_when_neither_source_exists(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
-        # Review: overengineering-reviewer finding 6 -- these tests assert
+        # These tests assert
         # frontmatter-scan/title-ladder behaviour, not git; stub the git
         # runner so C3's added spawn doesn't cost a real process per test.
         monkeypatch.setattr(m, "_git_log_runner_for_commits", _RecordingGitRunner(rc=0, out=""))
@@ -868,7 +868,7 @@ class TestResolveEntryTitle:
 
     def test_authored_title_survives_a_rerun_untouched(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
-        # Review: overengineering-reviewer finding 6 -- these tests assert
+        # These tests assert
         # frontmatter-scan/title-ladder behaviour, not git; stub the git
         # runner so C3's added spawn doesn't cost a real process per test.
         monkeypatch.setattr(m, "_git_log_runner_for_commits", _RecordingGitRunner(rc=0, out=""))
@@ -921,7 +921,7 @@ class TestResolveEntryTitle:
 
     def test_plan_title_already_accomplished_prefixed_does_not_double_prefix(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
-        # Review: overengineering-reviewer finding 6 -- these tests assert
+        # These tests assert
         # frontmatter-scan/title-ladder behaviour, not git; stub the git
         # runner so C3's added spawn doesn't cost a real process per test.
         monkeypatch.setattr(m, "_git_log_runner_for_commits", _RecordingGitRunner(rc=0, out=""))
@@ -950,7 +950,7 @@ class TestResolveEntryTitle:
 
     def test_title_containing_double_quote_is_escaped(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
-        # Review: overengineering-reviewer finding 6 -- these tests assert
+        # These tests assert
         # frontmatter-scan/title-ladder behaviour, not git; stub the git
         # runner so C3's added spawn doesn't cost a real process per test.
         monkeypatch.setattr(m, "_git_log_runner_for_commits", _RecordingGitRunner(rc=0, out=""))
@@ -1106,7 +1106,7 @@ class TestResolveSessionCommits:
     def test_no_op_rerun_on_fully_authored_entry_spawns_zero_git_calls(
         self, tmp_path, monkeypatch
     ):
-        # Review: code-reviewer P2 — a re-run over an already-fully-authored
+        # A re-run over an already-fully-authored
         # entry must not pay `_resolve_session_commits`'s git spawn, since
         # `_write_entry`'s own early return discards the result anyway.
         repo = _make_repo(tmp_path)

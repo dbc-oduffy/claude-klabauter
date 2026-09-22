@@ -101,7 +101,7 @@ class TestBothConsumersReadTheSameBuiltObject:
     in `judgment.py` or `envelope.py` that reached only one of them fails
     here, on whichever half stopped seeing the point.
 
-    Review: overengineering-reviewer -- a sibling `TestSharedReadersSeeThe
+    A sibling `TestSharedReadersSeeThe
     WritersOutput` class used to assert `judgment_points_by_id`/
     `legal_disposition_values` directly; it was strictly subsumed here (its
     two tests could never be the only red) and was dropped. That subsumption

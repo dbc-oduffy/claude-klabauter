@@ -41,7 +41,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 def _run(result_or_coro):
     """Run an async coroutine or return a sync result directly.
 
-    Review: code-reviewer — F1: _handler converted to sync def; _run now handles both
+    _handler converted to sync def; _run now handles both
     shapes so test bodies need no update beyond the helper.
     """
     if asyncio.iscoroutine(result_or_coro):
@@ -119,7 +119,7 @@ class TestNatureDerivation:
     # --- prefix taxonomy ---
 
     def test_bugfix_param_override(self) -> None:
-        # Review: code-reviewer — F8: removed dead first trailers= assignment (overwritten
+        # Removed dead first trailers= assignment (overwritten
         # immediately, result never used). Renamed to match what the test actually exercises:
         # the param override path for "bugfix", not the subject-prefix derivation path.
         trailers = _parse_trailers(self._call(nature_param="bugfix"))
@@ -204,7 +204,7 @@ class TestNatureSubjectDerivation:
     def test_handler_commit_editmsg_to_nature_integration(self, tmp_path) -> None:
         """Integration: _handler reads COMMIT_EDITMSG → subject → Nature: end-to-end.
 
-        Review: code-reviewer — F6: closes the untested seam where _read_commit_subject
+        Closes the untested seam where _read_commit_subject
         and the common_dir/COMMIT_EDITMSG path derivation could silently regress.
         Tests the primary Nature derivation route in hook usage (no nature param supplied).
         """

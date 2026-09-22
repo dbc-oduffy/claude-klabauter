@@ -374,7 +374,7 @@ class TestTierB:
 
 
 class TestTierA5EnvOverride:
-    """Review: code-reviewer (F1, P1) — `_merged_flat_registry` only merges
+    """`_merged_flat_registry` only merges
     the two registry TOML files and never consulted the per-key
     `MACHINE_LOCAL_<KEY>` env override rung that `machine_resolver.
     registry_get` honors, a silent behaviour loss vs. the old `machine-local

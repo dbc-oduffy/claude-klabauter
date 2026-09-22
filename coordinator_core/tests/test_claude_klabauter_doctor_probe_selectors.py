@@ -297,7 +297,7 @@ class TestDoctorProbeSelectors:
         envelope = json.loads(result.stdout)
         probe_ids = {p["probe"] for p in envelope["probes"]}
 
-        # Review: code-reviewer — F3: was <= (subset); changed to == to catch unexpected extras.
+        # Was <= (subset); changed to == to catch unexpected extras.
         assert probe_ids == _IMPLEMENTED_IDS, (
             f"Probe set mismatch in default output: "
             f"missing={_IMPLEMENTED_IDS - probe_ids!r}, "
@@ -312,7 +312,7 @@ class TestDoctorProbeSelectors:
         result = _run("--probe", "bogus.id")
 
         # exit 2 = argparse/manifest rejection before any probe runs (not exit 1 probe failure).
-        # Review: code-reviewer — F4: was != 0; pinned to == 2 per documented contract.
+        # Was != 0; pinned to == 2 per documented contract.
         assert result.returncode == 2, (
             f"Expected exit 2 (argparse/manifest rejection) for unknown --probe id, "
             f"got {result.returncode}"
@@ -884,7 +884,7 @@ class TestPythonVersionBrokenEnvelope:
             pytest.skip("bin/claude-klabauter-doctor-probe.py not on disk or not importable")
 
         mod._TOMLLIB_AVAILABLE = False
-        # Review: code-reviewer — F5: also patch mod.tomllib to match the non-step-zero
+        # Also patch mod.tomllib to match the non-step-zero
         # variant; without this, real tomllib is still bound and step-zero code that calls
         # tomllib.loads() directly can succeed even though _TOMLLIB_AVAILABLE is False.
         mod.tomllib = None

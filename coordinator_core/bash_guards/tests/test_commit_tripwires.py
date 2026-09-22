@@ -460,7 +460,7 @@ class TestCheckRegistrationQuadCompleteness:
             ),
         ]
         monkeypatch.setattr(registration_quad_module, "check_registration_quad", lambda: planted)
-        # Review: code-reviewer (Finding 5) -- isolate against the real 65-entry
+        # Isolate against the real 65-entry
         # production baseline, matching TestRegistrationQuadBaselinePruning's own
         # explicit-injection pattern; this test's fixture keys ("fake.new_op",
         # "unrelated.worktree_op") happen never to collide with real baseline
@@ -519,7 +519,7 @@ class TestCheckRegistrationQuadCompleteness:
         monkeypatch.setattr(classification_module, "OP_CLASSIFICATION", {"fake.already_ok": "read"})
         monkeypatch.setattr(op_scopes_module, "_OP_KEY_SCOPE", {"fake.already_ok": "none"})
         monkeypatch.setattr(registry_map_module, "OP_MODULE_MAP", {"fake.already_ok": "x.y"})
-        # Review: code-reviewer (Finding 1) -- stage 1.5's fast path now also
+        # Stage 1.5's fast path now also
         # requires the op's OP_MODULE_MAP module path ("x.y") to be present in
         # the live _EAGER_OP_MODULES set; without this the op is no longer
         # "already complete" on all five surfaces and the fast path correctly
@@ -575,7 +575,7 @@ class TestCheckRegistrationQuadCompleteness:
 
         assert commit_tripwires.check_registration_quad_completeness(root) is None
 
-    # Review: code-reviewer (Finding 1) -- proves the gate now denies an op
+    # Proves the gate now denies an op
     # complete on OP_CLASSIFICATION/_OP_KEY_SCOPE/OP_MODULE_MAP but missing
     # only from _EAGER_OP_MODULES -- the exact live gap (roadmap.link_stubs,
     # 2026-08-05) the stage-1.5 fast path used to let sail through unreachable.
@@ -639,7 +639,7 @@ class TestCheckRegistrationQuadCompleteness:
         assert commit_tripwires.check_registration_quad_completeness(root) is None
         assert not any("diff" in c and "--cached" in c for c in calls)
 
-    # Review: code-reviewer (Finding 1) -- proves the "cheap" stage-1 gate stays
+    # Proves the "cheap" stage-1 gate stays
     # O(1) subprocess spawns regardless of how many non-registering .py files a
     # commit touches under coordinator_core/, mirroring the call-counting pattern
     # in test_wrong_repo_returns_before_stage_one_fires. The prior implementation

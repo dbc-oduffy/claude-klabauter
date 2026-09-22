@@ -267,7 +267,7 @@ def test_execution_stamp_match_delta_class_present_on_stamped_plan_baton(tmp_pat
         f"gates keys were: {sorted(do['gates'].keys())}"
     )
     assert "delta_class" in do["gates"]["execution_stamp_match"]
-    # Review: coordinator:code-reviewer — self-check that the fixture actually
+    # self-check that the fixture actually
     # exercises the "match" verdict path this test's docstring claims, not
     # merely that the key is present under some other verdict.
     assert do["gates"]["execution_stamp_match"]["verdict"] == "match"

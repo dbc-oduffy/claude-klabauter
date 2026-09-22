@@ -53,7 +53,7 @@ def _outbox_dir(root: Path) -> Path:
     return d
 
 
-# Review: coordinator:code-reviewer (Finding 3) — every fixture above stages
+# Every fixture above stages
 # only at the retired root, so `_reconcile`'s own new-root behavior was
 # unproven at exactly the root the engine now writes to. This stages at the
 # canonical `.coordinator-local/memo-outbox/` root instead.
@@ -138,7 +138,7 @@ class TestSweep:
         )
         assert (outbox / "live.md").is_file(), "a draft's home IS the outbox"
 
-    # Review: coordinator:code-reviewer (Finding 3) — the core "non-draft
+    # The core "non-draft
     # moves to sent/" case, proven at the NEW canonical root with no legacy
     # dir present, so a regression isolating new-root behavior in
     # `_reconcile` itself has a test here to catch it.

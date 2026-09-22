@@ -94,7 +94,7 @@ def _collect_initiatives(initiatives_dir: Path) -> List[dict]:
         if raw_status in _VALID_STATUS:
             status_val = raw_status
         else:
-            # Review: code-reviewer — log a warning for present-but-unrecognised status so
+            # Log a warning for present-but-unrecognised status so
             # callers receiving status:null can distinguish "absent" from "rejected value"
             # (mirrors the missing-id/label quarantine warning pattern in this function).
             if raw_status is not None:

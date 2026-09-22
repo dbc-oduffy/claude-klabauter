@@ -261,8 +261,46 @@ def test_no_token_posts_nothing_rather_than_assuming_covered(monkeypatch):
     assert computed == [], "an unpostable run must not spend the verdict computation"
 
 
+def test_no_token_reason_names_export_remedy_on_non_windows_host(monkeypatch):
+    """THE ROW THIS TEST EXISTS FOR (state/bug-backlog/2026-08-28-...).
+
+    Leg 4 (the in-process keyring reader) is Windows-only by construction,
+    so on a POSIX host with a `gh` that keyrings its token -- a perfectly
+    valid logged-in `gh` -- every leg misses. The unpostable reason must
+    name the operator's actual recourse (export GITHUB_TOKEN/GH_TOKEN)
+    rather than only listing the legs already tried.
+    """
+    _isolate_ladder(monkeypatch)
+    monkeypatch.setattr(pcs_mod.sys, "platform", "linux")
+
+    result = pcs_mod.post_coverage_status("o", "r", "sha", "main..HEAD")
+
+    assert result.posted is False
+    assert "export" in result.reason.lower()
+    assert "GITHUB_TOKEN" in result.reason
+
+
+def test_no_token_reason_names_credential_manager_on_windows(monkeypatch):
+    """THE ROW THIS TEST EXISTS FOR (state/bug-backlog/2026-08-28-...).
+
+    Windows sibling of the non-Windows case above: leg 4 (the in-process
+    keyring reader) IS reachable on `win32`, so the unpostable reason must
+    name the Windows Credential Manager rung instead of the export remedy
+    -- the two branches of `_no_token_reason()` must not bleed into each
+    other's platform.
+    """
+    _isolate_ladder(monkeypatch)
+    monkeypatch.setattr(pcs_mod.sys, "platform", "win32")
+
+    result = pcs_mod.post_coverage_status("o", "r", "sha", "main..HEAD")
+
+    assert result.posted is False
+    assert "Credential Manager" in result.reason
+    assert "export" not in result.reason.lower()
+
+
 def test_credential_manager_leg_is_inert_off_windows():
-    # Review: coordinatorcode-reviewer Finding 1 -- inject the platform value
+    # Inject the platform value
     # rather than mutating the process-wide sys.platform singleton.
     assert pcs_mod._token_from_windows_credential_manager(platform="linux") is None
 

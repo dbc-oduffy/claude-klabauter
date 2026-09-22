@@ -159,7 +159,7 @@ def test_negative_floor_delta_never_changes_verdict():
     module docstring: "There is no floor subtraction anywhere in this
     module").
 
-    Review: code-reviewer (Slice C F1, P2) -- the previous version of this
+    The previous version of this
     test called evaluate() twice with IDENTICAL args and asserted the two
     results were equal, which proves only that evaluate() is deterministic
     (a fact true even if a latent bug consumed a floor value from module

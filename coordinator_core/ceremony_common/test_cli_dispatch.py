@@ -76,7 +76,7 @@ def test_load_cli_module_caches_on_resolved_script_path(tmp_path: Path):
 def test_load_cli_module_does_not_collide_across_script_paths_sharing_a_module_name(
     tmp_path: Path,
 ):
-    # Review: coordinator:code-reviewer (Finding 1) — the cache is keyed by
+    # The cache is keyed by
     # resolved script path, not caller-chosen module_name; two different
     # on-disk scripts loaded under the same module_name must not alias.
     first_script = _write_script(tmp_path, "first.py", "def main(argv):\n    return 1\n")
@@ -87,6 +87,45 @@ def test_load_cli_module_does_not_collide_across_script_paths_sharing_a_module_n
     assert first is not second
     assert first.main([]) == 1
     assert second.main([]) == 2
+
+
+def test_load_cli_module_binds_script_own_lib_over_a_preceding_namespace_package(
+    tmp_path: Path,
+):
+    """A bare `import lib` at a loaded script's top level must resolve
+    against the script's OWN sibling `lib/` package, never against a
+    same-named PEP-420 namespace package (no `__init__.py`) that happens to
+    sit earlier on the process's ambient `sys.path` -- the failure mode
+    `_exec_with_own_dir_on_path` closes (module docstring, "What this
+    module does NOT isolate")."""
+    decoy_root = tmp_path / "decoy_root"
+    (decoy_root / "lib").mkdir(parents=True)
+
+    script_dir = tmp_path / "script_dir"
+    real_lib = script_dir / "lib"
+    real_lib.mkdir(parents=True)
+    (real_lib / "__init__.py").write_text("MARKER = 'real-package'\n", encoding="utf-8")
+    script = _write_script(
+        script_dir,
+        "uses_lib.py",
+        "import lib\n"
+        "def main(argv):\n"
+        "    return 0\n",
+    )
+
+    module_name = "test_cli_dispatch_uses_lib"
+    saved_sys_path = list(sys.path)
+    sys.path.insert(0, str(decoy_root))
+    sys.modules.pop("lib", None)
+    try:
+        module = load_cli_module(module_name, script)
+        assert hasattr(module.lib, "__file__")
+        assert module.lib.__file__ is not None
+        assert module.lib.MARKER == "real-package"
+    finally:
+        sys.path[:] = saved_sys_path
+        sys.modules.pop(module_name, None)
+        sys.modules.pop("lib", None)
 
 
 def test_load_cli_module_propagates_import_time_exception(tmp_path: Path):

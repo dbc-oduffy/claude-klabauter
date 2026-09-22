@@ -57,17 +57,19 @@ chdir first.
 
 What this module does NOT isolate (say so explicitly, so the next reader
 never assumes otherwise): process cwd (see above — never read, never
-mutated); `sys.path` (an invoked script's own top-level imports run exactly
-as they would un-isolated); `os.environ` (read/written by the invoked
-script exactly as ambient); any module-level side effect the invoked
-script's own top-level code performs at `exec_module` time; and any
-non-`SystemExit` exception raised either at import time (`exec_module`) or
-from `main()` itself — both propagate straight to this module's caller,
-uncaught; and concurrency — `invoke_cli_main` swaps `sys.argv`/
-`sys.stdin` at process-global scope for the duration of a call
-(restored in `finally`), so this primitive requires single-threaded,
-non-reentrant callers. Two concurrent `invoke_cli_main` calls race on
-both globals.
+mutated); `sys.path` beyond `load_cli_module`'s own transient insert of the
+loaded script's directory for the duration of `exec_module` (see
+`_exec_with_own_dir_on_path` — removed by value before the call returns, and
+an invoked script's own top-level imports otherwise run exactly as they
+would un-isolated); `os.environ` (read/written by the invoked script
+exactly as ambient); any module-level side effect the invoked script's own
+top-level code performs at `exec_module` time; and any non-`SystemExit`
+exception raised either at import time (`exec_module`) or from `main()`
+itself — both propagate straight to this module's caller, uncaught; and
+concurrency — `invoke_cli_main` swaps `sys.argv`/`sys.stdin` at
+process-global scope for the duration of a call (restored in `finally`),
+so this primitive requires single-threaded, non-reentrant callers. Two
+concurrent `invoke_cli_main` calls race on both globals.
 
 Contested behaviours across the trio (named per `docs/wiki/record-at-
 write-time.md` § Two negative lessons — a lift that silently picks a
@@ -143,10 +145,15 @@ Negative-spec:
     - Does NOT read or mutate process cwd, call `os.chdir`, or otherwise
       establish a working-directory invariant for anything it loads or
       invokes — see "CWD IS A LOAD-BEARING GAP" above.
-    - Does NOT isolate `sys.path`, `os.environ`, an invoked script's own
-      module-level side effects, or a non-`SystemExit` exception raised at
-      import time or from `main()` — all of these propagate or apply
-      exactly as if the call were un-isolated (see the enumeration above).
+    - Does NOT isolate `os.environ`, an invoked script's own module-level
+      side effects, or a non-`SystemExit` exception raised at import time or
+      from `main()` — all of these propagate or apply exactly as if the
+      call were un-isolated (see the enumeration above). `sys.path` is the
+      one exception: `load_cli_module` inserts the loaded script's own
+      directory for the duration of `exec_module` and removes it by value
+      before returning (see "What this module does NOT isolate" above and
+      `_exec_with_own_dir_on_path`) — everything else about `sys.path` is
+      left exactly as ambient.
 """
 
 from __future__ import annotations
@@ -157,6 +164,7 @@ import importlib.util
 import inspect
 import io
 import sys
+import threading
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable, Optional
@@ -165,6 +173,45 @@ from coordinator_core.ceremony_common.cli_rejection import (
     CliExitClass,
     classify_cli_exit,
 )
+
+#: Guards `_exec_with_own_dir_on_path`'s insert/remove pair against a
+#: concurrent caller's own insert landing between this one's insert and its
+#: restore (see that function's docstring) -- mirrors `baton_assemble.
+#: apply._BY_PATH_LOAD_LOCK`'s discipline, kept as a private module-level
+#: lock here rather than imported from that module so this module's own
+#: dependency surface (module docstring's negative-spec) is unchanged.
+_BY_PATH_LOAD_LOCK = threading.Lock()
+
+
+def _exec_with_own_dir_on_path(loader: Any, module: ModuleType, script_dir: str) -> None:
+    """Runs `loader.exec_module(module)` with `script_dir` on `sys.path[0]`,
+    then restores `sys.path` to what it was.
+
+    A script loaded BY PATH (as every caller of `load_cli_module` loads one)
+    never gets the one thing a direct `python script.py` invocation gives it
+    for free: its own directory as `sys.path[0]`. `exec_module` on a
+    file-backed spec contributes nothing to `sys.path`, so a bare `import
+    lib` at the top of a loaded consumes-manifest script instead binds
+    whatever PEP-420 namespace package named `lib` sits earliest on the
+    process's ambient `sys.path` -- the import succeeds, no error is raised,
+    and the script proceeds against a partially-populated module.
+
+    Removal is BY VALUE under `_BY_PATH_LOAD_LOCK`, never a positional pop --
+    this dispatch primitive is used from a warm, multi-session engine process
+    where an unrelated concurrent `sys.path` insert landing between this
+    function's own insert and its restore would otherwise make an
+    index-based pop remove someone else's entry and leak this one for the
+    life of the process."""
+    with _BY_PATH_LOAD_LOCK:
+        added = script_dir not in sys.path
+        if added:
+            sys.path.insert(0, script_dir)
+        try:
+            loader.exec_module(module)
+        finally:
+            if added and script_dir in sys.path:
+                sys.path.remove(script_dir)
+
 
 #: Per-process cache of already-loaded CLI modules, keyed by the RESOLVED
 #: ABSOLUTE `script_path` (`str(Path.resolve())`) — never by the caller-
@@ -231,7 +278,15 @@ def load_cli_module(module_name: str, script_path: Path) -> ModuleType:
     module docstring, Contested behaviour 4 — a dataclass's class-body
     execution resolves `sys.modules[cls.__module__]` during `exec_module`
     and crashes with an unrelated `AttributeError` if the module is not
-    registered yet)."""
+    registered yet).
+
+    `exec_module` runs via `_exec_with_own_dir_on_path`, which puts
+    `script_path.parent` on `sys.path[0]` for the duration of the call and
+    restores it after — every consumes-manifest script this function loads
+    ships alongside its own `coordinator/bin/lib` package, and a bare
+    `import lib` at that script's top level resolves correctly only when its
+    own directory precedes whatever namespace package named `lib` the
+    caller's ambient `sys.path` would otherwise bind first."""
     cache_key = str(script_path.resolve())
     if cache_key in _LOADED_MODULES:
         return _LOADED_MODULES[cache_key]
@@ -244,7 +299,7 @@ def load_cli_module(module_name: str, script_path: Path) -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     try:
-        spec.loader.exec_module(module)
+        _exec_with_own_dir_on_path(spec.loader, module, str(script_path.resolve().parent))
     except BaseException:
         sys.modules.pop(module_name, None)
         raise

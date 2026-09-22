@@ -183,7 +183,7 @@ class _ScopeCallVisitor(ast.NodeVisitor):
     with its ENCLOSING SCOPE (`"<module>"`, `"func"`, or `"Class.method"`)
     rather than only its raw line number.
 
-    Review: code-reviewer (P2) -- `KNOWN_UNCONVERTED_SITES` previously keyed
+    `KNOWN_UNCONVERTED_SITES` previously keyed
     on exact `path:lineno`, so any unrelated edit that shifted line numbers
     ABOVE a listed site (a docstring tweak, an added import) produced a
     spurious "stale: X, new: Y" failure for the same logical site, not a
@@ -317,7 +317,7 @@ def _collect_all_hits() -> list[tuple[str, str, int]]:
 # sites` below): the fix for a new site is to convert it, never to add a row
 # here.
 #
-# Review: code-reviewer (P2) -- keyed on `path:qualname` (the site's
+# Keyed on `path:qualname` (the site's
 # enclosing function/class.method, `<module>` if module-level), NOT
 # `path:lineno` -- see `_ScopeCallVisitor`'s docstring for why. Each entry
 # below is exactly one root-derivation call per named function today.

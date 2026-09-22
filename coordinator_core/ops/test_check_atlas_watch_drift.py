@@ -313,7 +313,7 @@ def test_stale_walk_threshold_configurable(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-# Review: code-reviewer — Finding 1 named a blind spot: no test covered
+# Named a blind spot: no test covered
 # _watch_line's subprocess.run timeout bound (module docstring's "never
 # blocks a caller pipeline" contract). Covers the fix, not just the fixture.
 def test_watch_script_timeout_emits_error_not_hang(tmp_path, monkeypatch):

@@ -299,7 +299,7 @@ class TestEmptyPayloadGuards:
         valid set. Example-cockpit-repo-em could not tell a typo'd `--type` from a
         real internal fault and triaged the wrong one.
         """
-        # Review: F10 — pass a real git_dir so only the unknown-type guard fires,
+        # F10 — pass a real git_dir so only the unknown-type guard fires,
         # not the absent-repo_root guard.
         git_dir, _worktree = tmp_repo
         with pytest.raises(CallerFacingValidationError) as exc_info:
@@ -440,7 +440,7 @@ class TestBooleanCoercion:
 
     def test_bool_field_true_matches(self, tmp_path: Path):
         """draft=true query matches a handoff with `draft: true` YAML frontmatter."""
-        # Review: F2 — smoke test for boolean coercion parity
+        # F2 — smoke test for boolean coercion parity
         worktree = tmp_path / "repo"
         git_dir = _make_git_repo(worktree)
         handoffs_dir = worktree / "state" / "handoffs"
@@ -1038,7 +1038,7 @@ class TestLegacyProseQueueSignal:
         dated_pipe_row = "- 2026-07-01 | self | notes | proposed target: x"
         assert _WRITE_GUARD_ENTRY_LINE_RE.search(dated_pipe_row)
         assert _LEGACY_PROSE_ENTRY_LINE_RE.search(dated_pipe_row)
-        # Review: code-reviewer (Finding 3) — the divergence itself is proven
+        # The divergence itself is proven
         # behaviorally: a real bug/debt-backlog table row the write guard's
         # narrow dated-pipe shape does NOT recognise, but this module's
         # widened regex does. A bare `.pattern != .pattern` string inequality
@@ -1094,7 +1094,7 @@ class TestLegacyProseQueueSignal:
             # not ALL-CAPS, so branch (c) can't match (digit presence in "2"
             # is irrelevant) — real fleet false-positive candidate: project-
             # rag-ue-addon bug-backlog.md "Notes" section.
-            # Review: code-reviewer (Finding 1) — comment was swapped with
+            # Comment was swapped with
             # the C3-priming line below; each now describes its own line.
             "- **Round-2 regressions retrospective:** three round-1 fixes broke tests.",
             # short label starting with an ALL-CAPS-with-digit token ("C3")
@@ -1123,7 +1123,7 @@ class TestLegacyProseQueueSignal:
         coverage without losing precision."""
         assert not _LEGACY_PROSE_ENTRY_LINE_RE.search(line), f"unexpected match: {line!r}"
 
-    # Review: code-reviewer (Finding 2) — branch (b) (markdown-table ID cell)
+    # Branch (b) (markdown-table ID cell)
     # has no digit requirement or case constraint, unlike its sibling ID
     # branches, so it has no adversarial negative coverage for its own
     # broadest failure mode. These document the current (accepted) false-
@@ -1569,7 +1569,7 @@ class TestEachNewTypeCollectsAndParses:
         assert rec["frontmatter"]["present_count"] == 5
 
     def test_archived_memo_collects_and_reports_done_liveness(self, tmp_path: Path):
-        """Review: code-reviewer (F2) — regression net for F1: an
+        """Regression net for F1: an
         ``archived-memo`` record whose status is memo-vocabulary
         ("actioned", not in handoff's `_TERMINAL_STATUS`) must still resolve
         to DONE liveness, since every file under cross-repo/archive/ is

@@ -217,7 +217,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
         return {"ancestry": [], "terminated_early": ""}
 
-    # Review: code-reviewer (Finding 5) — plural `handoffs_dir` (this module's
+    # Plural `handoffs_dir` (this module's
     # convention, mirrors handoff_match.py/handoff_children.py) vs. singular
     # `handoff_dir` (dag.walk_forward's param name) is an intentional naming
     # mismatch across the module boundary, not a typo.

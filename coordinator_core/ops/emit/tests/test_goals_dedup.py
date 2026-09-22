@@ -107,7 +107,7 @@ def test_legacy_row_without_goal_id_is_not_dropped(tmp_path: Path) -> None:
     records, malformed = goals_section.collect(ctx)
     assert malformed == []
     assert len(records) == 1, f"expected the legacy row to survive, got {len(records)}"
-    # Review: code-reviewer (Finding 1) — collect() now emits the reader's resolved
+    # collect() now emits the reader's resolved
     # deterministic-hash fallback id (row.goal_id) instead of "" for legacy rows, so the
     # emit consumer and the close-out consumer agree on identity for the same wire row.
     assert records[0]["goal_id"] != ""
@@ -203,7 +203,7 @@ def test_legacy_content_hash_row_does_not_unify_with_later_explicit_goal_id_row(
 
 
 def test_non_dict_json_line_is_quarantined_not_raised(tmp_path: Path) -> None:
-    """Review: code-reviewer (Finding 5) — a syntactically valid JSON line that isn't an
+    """A syntactically valid JSON line that isn't an
     object (bare int, bare list) must be skipped, not crash collect() via AttributeError
     on the non-dict value (Finding 2's regression test)."""
     ctx = _make_ctx(tmp_path)
@@ -223,7 +223,7 @@ def test_non_dict_json_line_is_quarantined_not_raised(tmp_path: Path) -> None:
 
 
 def test_cross_machine_dedup_winner_names_its_own_shard_in_provenance(tmp_path: Path) -> None:
-    """Review: code-reviewer (Finding 4) — two DIFFERENT machine shards each declaring the
+    """Two DIFFERENT machine shards each declaring the
     same goal_id at different declared_at must collapse to the later row, and the winning
     record's provenance.path must name that machine's own shard file, not the other
     machine's shard and not the glob pattern used to find them."""

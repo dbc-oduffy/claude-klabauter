@@ -10,7 +10,7 @@ or call _eager_import_all() directly for the rare full-registration need.
 
 Op registration list is maintained in coordinator_core/op_scopes.py::_OP_KEY_SCOPE
 (coordinator_core/ipc.py:441 only imports it from there).
-Review: code-reviewer — replaced stale hand-enumeration (8 of 19+ ops) with a canonical
+Replaced stale hand-enumeration (8 of 19+ ops) with a canonical
 reference to _OP_KEY_SCOPE, which is kept current as each op lands.
 
 Lazy op registration (F6 / claude-klabauter-windows-portability § C4, made unconditional
@@ -257,7 +257,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         # KILLED (max 2062ms against the 2000ms bar); its sole caller was the CLI
         # trampoline `coordinator/bin/query-record-history.py`, which now surfaces
         # the refusal. Nothing this module declares dispatches.
-        # Review: overengineering-reviewer (finding #1, major) asked this row
+        # overengineering-reviewer (finding #1, major) asked this row
         # struck entirely rather than re-annotated. Left in place: the module
         # still declares `@register_op("records.history")`
         # (coordinator_core/ops/record_history.py:657), and

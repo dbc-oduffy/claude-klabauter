@@ -583,6 +583,7 @@ def _run_dispatch(msg: dict, *, caller: Optional[CallerContext] = None, isolated
         resolve_caller_cwd,
         resolve_request_repo,
     )
+    from coordinator_core.telemetry.op_latency import new_correlation_id
 
     # THE SETTINGS-HOME GATE (C2, docs/plans/2026-08-31-the-settings-home-
     # crosses-the-warm-boundary.md). Gated on `isolated=False` -- an isolated
@@ -630,6 +631,11 @@ def _run_dispatch(msg: dict, *, caller: Optional[CallerContext] = None, isolated
     _process_start = _time.process_time()
     _spawn_start = _spawn_count_or_none()
     _caller_route = "coordinator_core.warm.server._run_dispatch"
+    # Minted here, not inside dispatch_message, so this function's own
+    # process-time row below can carry the SAME corr_id as the
+    # started/complete rows dispatch_message records for this call, making the
+    # two row families for one dispatch joinable on that shared id.
+    _corr_id = new_correlation_id()
     session_id = caller.session_id if caller is not None else None
     caller_pid = caller.pid if caller is not None else None
     env_for_bind = caller.env if caller is not None else None
@@ -652,7 +658,9 @@ def _run_dispatch(msg: dict, *, caller: Optional[CallerContext] = None, isolated
             isolated=isolated,
         ):
             with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
-                response = asyncio.run(dispatch_message(msg, caller=_caller_route))
+                response = asyncio.run(
+                    dispatch_message(msg, caller=_caller_route, corr_id=_corr_id)
+                )
     finally:
         _process_ms = (_time.process_time() - _process_start) * 1000.0
         _repo_root = resolve_request_repo(msg) or resolve_caller_cwd(msg)
@@ -665,6 +673,7 @@ def _run_dispatch(msg: dict, *, caller: Optional[CallerContext] = None, isolated
             t_start=_t_start,
             repo_root=_repo_root,
             sid=session_id or None,
+            corr_id=_corr_id,
             spawns=_spawn_delta(_spawn_start, _spawn_count_or_none()),
             caller=_caller_route,
         )
@@ -749,6 +758,7 @@ def _pool_dispatch_worker(msg: dict, caller: Optional[CallerContext]) -> dict:
         resolve_caller_cwd,
         resolve_request_repo,
     )
+    from coordinator_core.telemetry.op_latency import new_correlation_id
 
     diagnostics: list = []
     _handler_stdout = _io.StringIO()
@@ -764,6 +774,11 @@ def _pool_dispatch_worker(msg: dict, caller: Optional[CallerContext]) -> dict:
     _process_start = _time.process_time()
     _spawn_start = _spawn_count_or_none()
     _caller_route = "coordinator_core.warm.server._pool_dispatch_worker"
+    # Minted here, not inside dispatch_message, so this function's own
+    # process-time row below can carry the SAME corr_id as the
+    # started/complete rows dispatch_message records for this call, making the
+    # two row families for one dispatch joinable on that shared id.
+    _corr_id = new_correlation_id()
     session_id = caller.session_id if caller is not None else None
     caller_pid = caller.pid if caller is not None else None
     env_for_bind = caller.env if caller is not None else None
@@ -779,7 +794,9 @@ def _pool_dispatch_worker(msg: dict, caller: Optional[CallerContext]) -> dict:
             isolated=True,
         ):
             with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
-                response = asyncio.run(dispatch_message(msg, caller=_caller_route))
+                response = asyncio.run(
+                    dispatch_message(msg, caller=_caller_route, corr_id=_corr_id)
+                )
     finally:
         _process_ms = (_time.process_time() - _process_start) * 1000.0
         _repo_root = resolve_request_repo(msg) or resolve_caller_cwd(msg)
@@ -792,6 +809,7 @@ def _pool_dispatch_worker(msg: dict, caller: Optional[CallerContext]) -> dict:
             t_start=_t_start,
             repo_root=_repo_root,
             sid=session_id or None,
+            corr_id=_corr_id,
             spawns=_spawn_delta(_spawn_start, _spawn_count_or_none()),
             caller=_caller_route,
         )
@@ -1019,10 +1037,10 @@ def _register_stack_dump_signal(engine_root=None) -> "str | None":
         # Line-buffered and append: several dumps over one server life must
         # accumulate rather than truncate, and a handler firing mid-write must
         # not leave the previous dump half-flushed.
-        _STACK_DUMP_FILE = open(path, "a", buffering=1, encoding="utf-8")
+        _STACK_DUMP_FILE = open(path, "a", buffering=1, encoding="utf-8", newline="\n")
         faulthandler.register(sig, file=_STACK_DUMP_FILE, all_threads=True, chain=False)
     except Exception:  # noqa: BLE001 -- see docstring; a server that cannot describe itself still serves
-        # Review: coordinator-code-reviewer -- close before dropping the
+        # Close before dropping the
         # reference so a failure after open() doesn't leak the fd.
         if _STACK_DUMP_FILE is not None:
             _STACK_DUMP_FILE.close()
@@ -2778,7 +2796,7 @@ def _run_guarded() -> int:
 
     _stack_dump_remedy = _register_stack_dump_signal(repo_root)
     print(
-        # Review: coordinator-code-reviewer -- parens make the truthy branch
+        # Parens make the truthy branch
         # unambiguous against the ternary's precedence on a skim.
         ("[warm-server] stack dump: " + _stack_dump_remedy)
         if _stack_dump_remedy

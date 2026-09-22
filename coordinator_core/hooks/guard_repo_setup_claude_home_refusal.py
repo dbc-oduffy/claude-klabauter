@@ -222,7 +222,7 @@ def _deny_reason() -> str:
 async def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Bash|PowerShell) op: deny a command that scaffolds
     repo-setup against ~/.claude."""
-    # Review: coordinator-code-reviewer — normalize the two params shapes
+    # Normalize the two params shapes
     # both engine doors and the cold chain send (see block_worktree_tool).
     params = payload_of(params)
     if params.get("tool_name") not in _COMMAND_TOOL_NAMES:

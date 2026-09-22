@@ -128,7 +128,7 @@ def _git(repo_root: str, *args: str, timeout: float = _GIT_TIMEOUT_SECS) -> subp
             capture_output=True,
             text=True,
             timeout=timeout,
-            # Review: code-reviewer — Windows portability convention applied
+            # Windows portability convention applied
             # inconsistently across this wave's siblings; align this call site.
             **no_console_creationflags(),
         )

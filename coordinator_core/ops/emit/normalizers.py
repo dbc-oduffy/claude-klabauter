@@ -28,7 +28,7 @@ import re as _re
 # ---------------------------------------------------------------------------
 # Typed sentinels
 # ---------------------------------------------------------------------------
-# Review: code-reviewer — F1: typed sentinels per AC5-PROVENANCE oracle.
+# Typed sentinels per AC5-PROVENANCE oracle.
 # Oracle: DoE emission-conformance-contract.md § AC5-PROVENANCE (three distinct sentinels).
 _TS_SENTINEL = "1970-01-01T00:00:00Z"                      # epoch-zero for all timestamp fields
 _SHA_SENTINEL = "0000000000000000000000000000000000000000"  # zero SHA for git commit SHA fields
@@ -48,7 +48,7 @@ _VOLATILE_TIME_KEYS = frozenset({
     "last_commit_at",       # branch tip commit time
     "last_commit_message",  # branch tip commit subject
     "last_activity_at",     # GitHub API — repo last-push timestamp, moves with each push
-    # Review: overengineering-reviewer (Kira) — "period" removed. Both `_local_day` and
+    # "period" removed. Both `_local_day` and
     # `_iso_week` now derive from `ctx.observed_at` (frozen in the parity fixture), not the
     # wall clock, so the field is deterministic and the golden should pin it, not normalize
     # it away.
@@ -118,7 +118,7 @@ _SECTION_DERIVED_NULL_KEYS = frozenset({"deliverable_status", "shipped_sha"})
 # byte-parity COMPARISON only, never from the actual emitted envelope (sections/
 # cross_repo_memos.py::collect() still stamps both on every real record).
 #
-# Review: code-reviewer (F5) — `body` (CrossRepoMemoSummary, 2026-07-24 C8, same plan) is
+# `body` (CrossRepoMemoSummary, 2026-07-24 C8, same plan) is
 # a THIRD same-chunk-family additive field but is DELIBERATELY NOT added here, unlike its
 # archived/decision_note siblings above. archived/decision_note are dropped from the golden
 # comparison because their presence/value never needs to match byte-for-byte; `body` is
@@ -268,7 +268,7 @@ def _norm_handoff_path(path: str) -> str:
 # anchor one segment shallower kept the ``root/`` segment in the output, desyncing
 # comparison against a source-relativized value that never carries it).
 #
-# Review: code-reviewer — Finding 1 (anchor/root granularity mismatch) + Finding 5
+# + Finding 5
 # (Windows backslash-delimited paths silently no-op the forward-slash-only anchor).
 #
 # Canonicalizes three input forms to the same ``state/...`` result:
@@ -323,7 +323,7 @@ def _normalize(value):
     if isinstance(value, dict):
         out = {}
         for key, val in value.items():
-            # Review: code-reviewer — F1: apply the correct typed sentinel per
+            # Apply the correct typed sentinel per
             # AC5-PROVENANCE field class (emission-conformance-contract.md § AC5-PROVENANCE).
             if key in _VOLATILE_TIME_KEYS:
                 out[key] = _TS_SENTINEL

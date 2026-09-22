@@ -651,6 +651,52 @@ class TestResolveCrashRecovery(unittest.TestCase):
         self.assertIsNone(outcome[1])
         self.assertIsNone(outcome.match_facts)
 
+    def test_multiple_matches_narrowed_by_own_sid_consume_stamp(self):
+        """Scope-intersection alone is ambiguous across two stale batons, but
+        one of them carries this session's own sid as tracked-frontmatter
+        claimer (the `/pickup` consume-stamp) -- the engine resolves to it
+        deterministically instead of delegating disambiguation to the
+        operator."""
+        wsc._bootstrap_engine_imports()
+        h1 = self.repo_root / "h1.md"
+        h1.write_text(
+            "claimed_by: this-session\npredecessor: none\nscope:\n  - coordinator/bin/foo.py\n"
+        )
+        h2 = self.repo_root / "h2.md"
+        h2.write_text("predecessor: none\nscope:\n  - coordinator/bin/bar.py\n")
+        diagnostics: list[str] = []
+        result, status = wsc._resolve_crash_recovery(
+            [(str(h1), "dead-1"), (str(h2), "dead-2")],
+            ["coordinator/bin/foo.py", "coordinator/bin/bar.py"],
+            self.repo_root,
+            diagnostics,
+            sid="this-session",
+        )
+        self.assertEqual(result, "h1.md")
+        self.assertEqual(status, "crash-recovery")
+        self.assertTrue(any("consume-stamp" in d for d in diagnostics))
+
+    def test_multiple_matches_without_a_consume_stamp_still_ambiguous(self):
+        """Regression companion: when no candidate (or more than one)
+        carries this session's own sid as claimer, the ambiguous/WARN
+        fallback is unchanged -- lineage narrowing must not manufacture a
+        resolution where none is actually evidenced."""
+        wsc._bootstrap_engine_imports()
+        h1 = self.repo_root / "h1.md"
+        h1.write_text("predecessor: none\nscope:\n  - coordinator/bin/foo.py\n")
+        h2 = self.repo_root / "h2.md"
+        h2.write_text("predecessor: none\nscope:\n  - coordinator/bin/bar.py\n")
+        diagnostics: list[str] = []
+        result, status = wsc._resolve_crash_recovery(
+            [(str(h1), "dead-1"), (str(h2), "dead-2")],
+            ["coordinator/bin/foo.py", "coordinator/bin/bar.py"],
+            self.repo_root,
+            diagnostics,
+            sid="this-session",
+        )
+        self.assertIsNone(result)
+        self.assertEqual(status, "ambiguous")
+
     def test_baton_match_and_scope_entry_match_are_named_not_positional_tuples(self):
         """`BatonMatch`/`ScopeEntryMatch` are NamedTuples with the fields
         `_resolve_crash_recovery` and its callers read by name
@@ -1433,7 +1479,7 @@ class TestDispositionResolutionDetectionRecord(unittest.TestCase):
 
 
 class TestResolveDispositionDetectorCLegWiring(unittest.TestCase):
-    """Review: coordinatorcode-reviewer-84151312 Finding 1 — drives
+    """Drives
     `resolve_disposition()` itself (not `_resolve_crash_recovery` in
     isolation) through the "detector-c" and "archive" legs and asserts on
     the REAL `.detection` return value, so the `_detection()` merge at
@@ -1519,7 +1565,7 @@ class TestSessionShapeGateRoundTrip(unittest.TestCase):
     consumed_handoff — assert both fields round-trip through the NamedTuple
     without the scalar being dropped.
 
-    Review: coordinatorcode-reviewer-84151312 Finding 2 — this class covers
+    This class covers
     the NamedTuple's field shape only (a hand-authored `detection` dict goes
     in, the same dict comes back out). It does NOT cover
     `compute_session_shape_gate`'s wiring (whether a real
@@ -2020,7 +2066,7 @@ class TestMemoPredecessorLeg(unittest.TestCase):
             self.assertEqual(result.detection["memo_path"], "cross-repo/inbox/memo-numeric-sid.md")
 
     def test_unresolvable_session_start_with_no_memo_is_byte_identical_to_head(self):
-        """Review: coordinator-code-reviewer (Finding 3) — the docstring's
+        """The docstring's
         "no memo matched at all -> every return path is byte-identical to
         pre-memo-leg HEAD" claim had an untested exception: `find_memo_
         predecessor` used to resolve the session-start git ladder BEFORE

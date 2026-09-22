@@ -1280,7 +1280,6 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
         # for the false-positive measurement that drove the arm removal, and this
         # module's own docstring (L106) for the decision to retain the class name
         # as an empty BLOCKING slot rather than delete it outright.
-        # Review: coordinator:code-reviewer (2026-08-14, wfc-S1 finding 2) --
         # the two REPO_DOE_CLAUDE entries formerly here
         # (coordinator/bin/stable-suite-run.py,
         # coordinator/tests/test_cc_root_source_guard.py) exempted a class
@@ -3034,7 +3033,7 @@ def main(argv: List[str]) -> int:
 
     stale_markers_ok, stale_markers_msg = check_no_stale_fixture_markers(root)
 
-    # Review: coordinator:code-reviewer (2026-08-14, wfc-S1) -- AC13's
+    # AC13's
     # check_no_stale_exemptions was defined and unit-tested but never
     # wired into main(), so the gate binary could never fail on a stale
     # EXEMPTIONS entry in production; only pytest running this module's

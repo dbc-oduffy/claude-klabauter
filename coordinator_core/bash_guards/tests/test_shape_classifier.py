@@ -254,7 +254,7 @@ class TestMultiProbeBannerIsSemanticNotJustFormatting:
         assert result.primary.shape is Shape.MULTI_PROBE_BANNER
 
     def test_sudo_prefixed_probe_still_fires(self) -> None:
-        # Review: coordinator:code-reviewer (Finding 2) -- a `sudo`-wrapped
+        # A `sudo`-wrapped
         # probe is still a genuine session-fact re-derivation.
         result = classify_command(
             'echo "=== facts ==="; sudo git status; pwd; whoami'

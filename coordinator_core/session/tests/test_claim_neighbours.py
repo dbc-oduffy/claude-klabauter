@@ -53,7 +53,7 @@ def _session_touched(base, sid, lines):
 
 
 def _epoch(ts):
-    # Review: code-reviewer P3 — every call site passes the `datetime` (or
+    # Every call site passes the `datetime` (or
     # `None`) `parse_touch_event` already returned, never a string; the
     # former str()->fromisoformat round-trip existed to handle an input
     # shape this helper is never actually called with.

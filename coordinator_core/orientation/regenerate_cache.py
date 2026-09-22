@@ -1300,7 +1300,7 @@ _TRUST_CAVEAT_TMPL = (
 
 
 def _render_cache(
-    # Review: coordinator:code-reviewer a56496f0 finding 3 — keyword-only
+    # keyword-only
     # closes the mid-signature-insertion recurrence at every call site,
     # not only the one the publish gate happened to check.
     *,
@@ -1931,7 +1931,7 @@ def _atomic_replace(cache_file: Path, output: str) -> None:
                 existing_mode: Optional[int] = cache_file.stat().st_mode & 0o777
             except FileNotFoundError:
                 existing_mode = None
-            # Review: coordinator:code-reviewer 9b8765ad finding 4 — narrowed
+            # Narrowed
             # from a broad `except OSError` to `FileNotFoundError` only. A
             # permission-denied or other real stat failure on an EXISTING
             # file must not silently fall through to the first-write default

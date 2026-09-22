@@ -657,7 +657,7 @@ def test_cli_dep_probe_prints_status(tmp_path, capsys):
 
 
 def test_cli_dep_probe_empty_string_manifest_path_falls_back_to_default_resolution(tmp_path, monkeypatch):
-    # Review: code-reviewer F1/F2 — bash's "${2:-}" idiom produces a real empty-string
+    # bash's "${2:-}" idiom produces a real empty-string
     # positional arg (not an omitted one) when a caller doesn't pass a manifest path.
     # This must take the layout-aware default-resolution path, not raise
     # ManifestCorruptError("manifest not found: .") from Path("").

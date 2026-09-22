@@ -439,11 +439,11 @@ class GroupResult(TypedDict):
     # commit AND a benign no-op (paths already committed / handler not
     # reached). Distinct from `error`, which is None on the benign no-op
     # even though `committed` is also False there -- see `_commit_group`.
-    reason: Optional[str]  # Review: code-reviewer (Finding 3) — the op's own
+    reason: Optional[str]  # The op's own
     # benign-no-op reason (e.g. "empty-commit-set"), threaded through so
     # `_render_report`'s benign branch can say WHY, not merely that it was a
     # no-op. `None` on a landed commit or a genuine `commit_failed`.
-    declared_absent_from_head: List[str]  # Review: code-reviewer (Finding 1,
+    declared_absent_from_head: List[str]
     # 8f787b71-c) — `outcome.declared_absent_from_head` (commit.py), threaded
     # through so a claimed path this call classified as a phantom deletion
     # (absent from the worktree AND from HEAD) is operator-visible here too,
@@ -1151,7 +1151,7 @@ def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer
     # failed readout still labels every owner `undetermined` exactly as the
     # deleted per-path helper did.
     try:
-        # Review: coordinator:code-reviewer — no leading underscore; this is
+        # No leading underscore; this is
         # not a throwaway, it's the resolved value every loop iteration below
         # depends on.
         live_now = live_session_ids(cwd)
@@ -1382,7 +1382,7 @@ def _current_dirty_paths(cwd: Optional[str]) -> List[str]:
         return []
     if result.returncode != 0:
         return []
-    # Review: code-reviewer (Finding 3) — reuse the ONE sanctioned porcelain
+    # Reuse the ONE sanctioned porcelain
     # parser (`dirty_tree_gate.parse_porcelain_paths`) rather than a second
     # hand-rolled copy; that function's own docstring forbids a second copy.
     # `--untracked-files=all` is set on the `git status` call above, not by
@@ -1613,7 +1613,7 @@ def _reconcile_offer(
     session_id: str,
     offer: SafeCommitOffer,
     worktree_root: Optional[str],
-) -> Reconciliation:
+) -> "Tuple[Reconciliation, List[str]]":
     """`Reconciliation` for an offer that has NOT committed anything -- the
     `dry_run` seam.
 
@@ -1627,17 +1627,35 @@ def _reconcile_offer(
     the decision it informs was already taken. Reported by doe-claude-em
     2026-08-30 as the third recorded occurrence.
 
-    REPORT-ONLY, exactly like its post-commit twin: the caller attaches this
-    to the returned envelope and never reads it back into a pathspec, so it
-    cannot widen what any ceremony commits. Nothing here is attributed to
-    this session -- see `Reconciliation.unclaimed`'s own contract.
+    REPORT-ONLY on `unclaimed`, exactly like its post-commit twin: the caller
+    attaches `unclaimed` to the returned envelope and never reads it back
+    into a pathspec, so it cannot WIDEN what any ceremony commits. Nothing
+    here is attributed to this session -- see `Reconciliation.unclaimed`'s
+    own contract.
+
+    The second return value NARROWS instead -- the subset of `claimed_absent`
+    that this call's own dirty read (`_current_dirty_paths`, the one `git
+    status` this seam already pays for) does not recognise as a pending
+    deletion either: no tracked entry went missing, nothing untracked sits at
+    that path. A claim that stat-fails AND leaves no trace in `git status` is
+    not a deletion of anything HEAD or the index ever held -- a ledger entry
+    that never named a real path, the way a bare basename or a heredoc
+    delimiter can be misread off a shell command's own token stream -- and the
+    caller drops it from `safe_paths` before handing the pathspec to an
+    operator, per `claimed_absent`'s own docstring ("a deletion this session
+    made is a legitimate thing to commit" -- this is the entries for which
+    that is NOT true). A genuinely HEAD-tracked deletion stays in
+    `safe_paths`: `git status` reports it, so it is excluded from this second
+    list.
 
     Costs ONE `git status` (`_current_dirty_paths`) plus one claim-index read
     on a path that previously took neither; it does not re-run
     `compute_offer`, which the caller already holds and passes in. Measured
     2026-08-30 on this repo's own worktree (65 dirty paths): 288ms end-to-end
     for the whole `dry_run` handler, of which ~145ms is that one `git status`
-    and ~55ms the claim read -- under the 500ms bar, and one spawn.
+    and ~55ms the claim read -- under the 500ms bar, and one spawn. The
+    junk-path split above reuses that same one `git status` read; it adds no
+    spawn of its own.
 
     Deliberately a SEPARATE function taking the offer as an argument, rather
     than a dirty read added inside `compute_offer`: that read is exactly what
@@ -1652,21 +1670,52 @@ def _reconcile_offer(
         "unclaimed": [],
     }
     if not worktree_root:
-        return unchecked
+        return unchecked, []
     owned_paths = {
         e["path"]
         for e in offer.get("excluded") or []
         if str(e.get("reason", "")).startswith("owned by session")
     }
     peer_claimed = claim_index.commit_set(session_id, cwd=worktree_root).peers
-    return _reconciliation_from(
+    dirty = _current_dirty_paths(worktree_root)
+    reconciliation = _reconciliation_from(
         worktree_root,
-        dirty=_current_dirty_paths(worktree_root),
+        dirty=dirty,
         committed_paths=frozenset(),
         owned_paths=owned_paths,
         peer_claimed=peer_claimed,
         mine_now=set(offer.get("safe_paths") or []),
     )
+    dirty_set = set(dirty)
+    junk_claimed_absent = sorted(
+        p for p in reconciliation["claimed_absent"] if p not in dirty_set
+    )
+    return reconciliation, junk_claimed_absent
+
+
+def _drop_junk_from_offer(
+    offer: SafeCommitOffer, junk_paths: List[str]
+) -> SafeCommitOffer:
+    """Narrow a `dry_run` offer's `safe_paths` (and `ownership.mine`, the same
+    list under a second name) by `junk_paths` -- `_reconcile_offer`'s second
+    return value, entries the claim ledger names but that have nothing to
+    commit (see that function's own docstring). Returns a new mapping; `offer`
+    itself is never mutated, since `compute_offer` callers elsewhere may still
+    hold the original.
+
+    Purely a NARROWING of a pathspec `compute_offer` already computed -- no
+    path is ever added, only ones already known to have no commit-worthy
+    content are removed -- so this does not touch the "REPORT-ONLY, never
+    widens" contract `_reconcile_offer`'s `unclaimed` bucket carries.
+    """
+    junk_set = set(junk_paths)
+    safe_paths = [p for p in offer["safe_paths"] if p not in junk_set]
+    ownership = dict(offer["ownership"])
+    ownership["mine"] = list(safe_paths)
+    narrowed: SafeCommitOffer = dict(offer)  # type: ignore[assignment]
+    narrowed["safe_paths"] = safe_paths
+    narrowed["ownership"] = ownership  # type: ignore[assignment]
+    return narrowed
 
 
 # ---------------------------------------------------------------------------
@@ -1955,7 +2004,7 @@ async def commit_session_offer_async(
                     }
                 )
             if kept:
-                # Review: code-reviewer (Finding 4) — carry the caller-
+                # Carry the caller-
                 # supplied `prose` body through; it was previously dropped
                 # here, so only the mechanical `_default_groups` fallback
                 # ever produced a commit body.
@@ -1997,7 +2046,7 @@ async def commit_session_offer_async(
             "declared path would classify as deleted against an unresolved "
             "root. Nothing was committed." % (cwd or "<no cwd>")
         )
-        # Review: overengineering-reviewer (minor) — this fail-closed exit
+        # This fail-closed exit
         # used to hand-assemble the full report literal a second time,
         # independently of the normal-exit construction below; the two would
         # drift the first time a key was added to one and not the other.
@@ -2124,7 +2173,7 @@ def _log_failed_groups_diagnostic(
     groups failed and why -- not merely that something did. Never raises; a
     diagnostics-write failure must not break the op's own return path.
 
-    Review: code-reviewer (Finding 1) — `failed_groups` was computed and
+    `failed_groups` was computed and
     tested but never surfaced anywhere a human or the hook actually reads.
     The hook only inspects the subprocess exit code (never stdout), so this
     module's own `main()` must both (a) return a distinct exit code and (b)
@@ -2600,7 +2649,7 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
             )
             absent = g.get("declared_absent_from_head") or []
             if absent:
-                # Review: code-reviewer (Finding 1, 8f787b71-c) — mirrors
+                # Mirrors
                 # commit_v2._render_outcome's SKIPPED warning: a phantom
                 # deletion this group named alongside paths that DID commit
                 # is not itself a failure, but silently dropping it here is
@@ -2751,9 +2800,11 @@ def _handler(params: dict, repo_root=None) -> dict:
 
     if params.get("dry_run"):
         offer = compute_offer(session_id, cwd)
-        reconciliation = _reconcile_offer(
+        reconciliation, junk_claimed_absent = _reconcile_offer(
             session_id, offer, core.git_root(cwd) or cwd or "."
         )
+        if junk_claimed_absent:
+            offer = _drop_junk_from_offer(offer, junk_claimed_absent)
         return {
             "dry_run": True,
             "rendered": _render_dry_run(offer, reconciliation),

@@ -730,7 +730,7 @@ def _average_batched_over_fresh_repos(
         total_time += result["process_time_ms"]
         total_procs += result["procs_per_call"]
         rcs.append(result["rc"])
-    # Review: coordinatorcode-reviewer.afafdec30cc2f009d Finding 1 — a
+    # A
     # non-zero rc from any sample must not be silently averaged away; only
     # the last sample's rc used to survive into the returned dict, so a
     # crash on an earlier throwaway repo could hide behind a later success.

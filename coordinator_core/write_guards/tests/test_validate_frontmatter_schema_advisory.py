@@ -324,7 +324,7 @@ class TestSchemaValidationWarn:
     def test_missing_required_fields_warns(self, tmp_path):
         fp = self._handoff_path(tmp_path)
         fp.write_text("---\ntitle: t\n---\nold body", encoding="utf-8")
-        # Review: staff-eng (B8 leg (d)+(f)) -- the override-key pointer is
+        # The override-key pointer is
         # now audience-gated via `operator_override_note`
         # (`session.identity.resolves_em_audience`), which requires a
         # real envelope (a `session_id`, no `agent_id`) to positively
@@ -354,7 +354,7 @@ class TestSchemaValidationWarn:
         assert OVERRIDE_KEYS_DOC_DISPLAY in text
 
     def test_missing_required_fields_subagent_audience_no_pointer(self, tmp_path):
-        # Review: staff-eng (B8 leg (d)+(f)) -- this module used to hand-roll
+        # This module used to hand-roll
         # the override-doc pointer for EVERY audience,
         # a dispatched subagent included. A subagent-shaped payload (an
         # `agent_id`) must now degrade to no pointer at all.
@@ -396,6 +396,44 @@ class TestSchemaValidationWarn:
             _payload("Edit", str(fp), str(tmp_path), old_string="old", new_string="new")
         )
         assert result is None
+
+
+class TestRunReportGlobFallbackIsNotAClassifier:
+    """`run-report.schema.json`'s `applies_to` is the directory-wide
+    catch-all `.coordinator-local/subagent-share/*/*.md`. An undeclared-kind
+    `.md` dropped in that shared sidecar directory with no run-report-shaped
+    frontmatter is unclassified noise, not a malformed run-report, and must
+    draw no warning.
+    """
+
+    def _sidecar_dir(self, tmp_path):
+        d = tmp_path / ".coordinator-local" / "subagent-share" / "sess1"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def test_no_frontmatter_non_run_report_note_draws_no_warning(self, tmp_path):
+        fp = self._sidecar_dir(tmp_path) / "staff-eng-review.md"
+        payload = _payload(
+            "Write",
+            str(fp),
+            str(tmp_path),
+            content="# Staff Eng Review\n\nSome free-form review notes.\n",
+        )
+        assert guard.check(payload) is None
+
+    def test_genuine_run_report_still_validates(self, tmp_path):
+        fp = self._sidecar_dir(tmp_path) / "report.md"
+        payload = _payload(
+            "Write",
+            str(fp),
+            str(tmp_path),
+            content="---\nstatus: not-a-real-status\n---\n\n## Observations\nbody\n",
+        )
+        result = guard.check(payload)
+        assert result is not None
+        text = _advisory_text(result)
+        assert "run-report:" in text
+        assert "status" in text
 
 
 class TestWholeDocumentRecordsMatchMode:
@@ -838,7 +876,7 @@ class TestPlanTasksSpineWarn:
             f"warn at the schema layer: {result}"
         )
 
-    # Review: review-a-write-guard (MAJOR) -- `_cf_plan_tasks_writes_declared`
+    # `_cf_plan_tasks_writes_declared`
     # was registered in `_PLAN_TASKS_CROSS_FIELD_RULES` but this guard never
     # forwarded `plan_created`, so it never fired here either -- mirrors the
     # deny sibling's identical fix (2026-08-19): `_plan_tasks_spine_errors`

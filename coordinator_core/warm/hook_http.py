@@ -383,7 +383,7 @@ def env_from_headers(
             "(see FORWARDED_ENV_PREFIXES / FORWARDED_ENV_NAMES) -- the registration asked "
             "for a value the op would never have seen" % ", ".join(refused)
         )
-    # Review: overengineering-reviewer -- `refused` empty already proves every key in
+    # `refused` empty already proves every key in
     # `candidates` is forwardable; re-filtering the return line re-derives that proof.
     return dict(candidates), None
 

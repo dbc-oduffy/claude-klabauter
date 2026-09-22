@@ -468,7 +468,7 @@ def test_synthetic_generated_draft_conforms_structurally_to_frozen_schema_subset
         assert date_re.match(entry["date"]), f"date {entry['date']!r} must match YYYY-MM-DD"
         assert isinstance(entry["bullets"], list)
 
-    # Review: code-reviewer (F3) — derive from the frozen schema (competitor required-keys minus
+    # Derive from the frozen schema (competitor required-keys minus
     # the human-curated-only "relationship" field), not a hardcoded literal, so a regression
     # in the schema's generatable subset is caught here rather than silently passing.
     generator_competitor_keys = competitor_full_required - {"relationship"}

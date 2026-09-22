@@ -56,7 +56,7 @@ _FIELD_RE = re.compile(r"^\*\*([^*]+):\*\*\s*(.*)$")
 # are the meaningful signal; commit counts/branch/validation noise are skipped.
 _BULLET_FIELDS = ("Plans touched", "Decisions", "Handoffs")
 
-# Review: code-reviewer (F2) — "Plans touched" is curated separately (see _summarize_plans_touched)
+# "Plans touched" is curated separately (see _summarize_plans_touched)
 # rather than copied verbatim; the other bullet fields keep their raw pass-through.
 _PLANS_TOUCHED_FIELD = "Plans touched"
 _PLANS_TOUCHED_CAP = 8

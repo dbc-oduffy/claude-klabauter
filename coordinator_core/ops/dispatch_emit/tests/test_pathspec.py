@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
     NoTestTargetError,
     _map_written_path_to_test_target,
     NoWritesDeclaredError,
+    candidate_test_additions,
     commit_pathspec,
     commit_pathspec_or_none,
     is_concrete_surface,
@@ -593,6 +594,48 @@ def test_candidate_test_targets_matches_suffix_by_own_source_suffix_not_prefix(t
     # foo.test.js has suffix .js, not .ts -- the configured *.test.ts pattern
     # does not cover it, and it is not itself a .py test file, so it is prose.
     assert terminal_test_scope(waves, repo_root=tmp_path) == []
+
+
+# ---------------------------------------------------------------------------
+# candidate_test_additions — state/bug-backlog/2026-08-26-emitted-wave-
+# commit-legs-are-handed-a-wr-c0f443ac1fdb.yaml: a wave's writes:-derived
+# pathspec never includes the test file an AC-satisfying executor is
+# required to write, so that executor's own reported test file reads as an
+# unaccounted-for divergence to the commit agent.
+# ---------------------------------------------------------------------------
+
+
+def test_candidate_test_additions_derives_the_co_located_test_for_a_py_path():
+    assert candidate_test_additions(
+        ["coordinator_core/ops/dispatch_emit/brand_new.py"]
+    ) == ["coordinator_core/ops/dispatch_emit/tests/test_brand_new.py"]
+
+
+def test_candidate_test_additions_ignores_non_py_paths():
+    assert candidate_test_additions(["docs/wiki/dispatch-emit.md"]) == []
+
+
+def test_candidate_test_additions_ignores_a_path_that_is_already_a_test_file():
+    # A test file is its own target, never a source a further test is derived
+    # for -- deriving would ask for `tests/test_test_foo.py`.
+    assert candidate_test_additions(["coordinator_core/ops/tests/test_foo.py"]) == []
+
+
+def test_candidate_test_additions_dedupes_and_preserves_order():
+    assert candidate_test_additions(
+        [
+            "coordinator_core/ops/a.py",
+            "coordinator_core/ops/b.py",
+            "coordinator_core/ops/a.py",
+        ]
+    ) == [
+        "coordinator_core/ops/tests/test_a.py",
+        "coordinator_core/ops/tests/test_b.py",
+    ]
+
+
+def test_candidate_test_additions_empty_for_an_empty_pathspec():
+    assert candidate_test_additions([]) == []
 
 
 # ---------------------------------------------------------------------------

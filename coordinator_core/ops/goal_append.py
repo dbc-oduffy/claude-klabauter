@@ -384,7 +384,7 @@ def append_goal(
     # included in the goal_id content key above; they are metadata, not identity).
     if isinstance(key_results_status, list) and key_results_status:
         row["key_results_status"] = key_results_status
-    # Review: code-reviewer (Finding 3) — mirror the key_results_status list guard so a
+    # Mirror the key_results_status list guard so a
     # malformed weekly_perceptible (e.g. the string "true" instead of the bool True) is
     # quarantined (omitted) rather than written to disk and passed through to the wire.
     if isinstance(weekly_perceptible, bool):

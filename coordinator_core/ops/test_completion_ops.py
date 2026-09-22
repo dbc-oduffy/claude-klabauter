@@ -640,7 +640,7 @@ def test_day_coverage_sweep_rejects_malformed_day(repo: Path) -> None:
 
 
 def test_day_coverage_sweep_exact_midnight_boundaries(repo: Path) -> None:
-    """Review: code-reviewer — F4. Pin commits to the exact instants
+    """Commits to the exact instants
     ``_day_commit_log`` computes as its boundaries (``00:00:00``/``23:59:59``
     UTC), not an arbitrary interior time — the prior boundary test used
     ``08:00:00`` on both sides, nowhere near either edge the code actually

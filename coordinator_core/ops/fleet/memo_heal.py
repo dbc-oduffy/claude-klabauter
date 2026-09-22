@@ -288,7 +288,7 @@ def _restore_one(worktree_root: Path, filename: str, blob_sha: str, common_dir: 
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(content)
     except FileExistsError:
-        # Review: eng-director F7 — a peer already restored this memo.
+        # A peer already restored this memo.
         # Neither a rollback (we created nothing) nor a failure (the memo
         # IS back) — the anchor's own re-key is picked up by a LATER heal's
         # "present + anchored + commit gone" rule, not lost.
@@ -491,7 +491,7 @@ def _memo_heal_inbox(params: dict, repo_root=None) -> dict:
             # is whether the CONTENT differs from what is committed; a line-ending
             # difference is not a content difference.
             #
-            # Review: code-reviewer F2 -- the CRLF-collapsed candidate is only
+            # The CRLF-collapsed candidate is only
             # tried when it is actually reachable via git's own checkin-side
             # normalization (`_repo_autocrlf_true` + no `.gitattributes` pin on
             # this path, `git.content_hash`'s canonical helpers, the single
@@ -506,7 +506,7 @@ def _memo_heal_inbox(params: dict, repo_root=None) -> dict:
             if head_blob_sha not in candidates:
                 adopt_skipped += 1
                 continue
-            # Review: code-reviewer F1 -- a raw on-disk inbox filename is
+            # A raw on-disk inbox filename is
             # untrusted input to the ref namespace: `write_anchor` (the
             # `memo.send` path) refuses the same shape via these same two
             # validators before ever building a ref string, so ADOPT must

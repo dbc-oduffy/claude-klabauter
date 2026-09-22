@@ -269,7 +269,7 @@ def _is_marketplace_install_live(config_dir: Path) -> bool:
     for key in matching_keys:
         if enabled.get(key) is not True:
             continue
-        # Review: code-reviewer (Finding 1) -- installed_plugins.json stores
+        # installed_plugins.json stores
         # a LIST of records per key (user-scope + project-scope installs can
         # both exist under the same key), and a stale/destroyed first record
         # must not shadow a live, healthy later one. Iterate every record

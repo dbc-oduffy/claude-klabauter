@@ -37,7 +37,7 @@ Negative-spec:
 provenance validator normalizes `Z` -> `+00:00` before parsing (see example-retrieval-repo
 `core/workstate_store/provenance.py`) — do not assume other ISO-8601 offset shapes are
 exercised by this module's tests.
-# Review: code-reviewer (Finding 3) — noting the exact observed_at shape this module relies on.
+# Noting the exact observed_at shape this module relies on.
 
 Spec backlink: docs/plans/strategic-feed-emission stub.md (tasks/strategic-feed-emission/stub.md)
 """
@@ -73,7 +73,7 @@ def read_canonical(target_root: Path) -> Optional[dict]:
             non-dict (e.g. a bare list or scalar) — a present-but-garbage canonical
             fails loud rather than crashing opaquely or silently degrading (matches
             the surrounding detect-then-fail-loud discipline).
-            # Review: code-reviewer (Finding 1) — read_canonical previously let
+            # read_canonical previously let
             # yaml.YAMLError bubble uncrafted out of the JSON-RPC handler, or silently
             # forwarded a non-dict parse result.
     """

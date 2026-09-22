@@ -348,7 +348,7 @@ def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
     for repo_path in candidates:
         key = _derive_key(os.path.basename(repo_path.rstrip("/")))
         if not key:
-            # Review: code-reviewer — repo basenames that collapse to "" (all
+            # Repo basenames that collapse to "" (all
             # non-alnum, e.g. "---") were silently dropped with no diagnostic;
             # mirrors the bash oracle's behavior (not a regression) but the
             # silence erodes trust in "why didn't repo X register" (Finding 2).

@@ -923,7 +923,7 @@ class TestPostCommitResidueReport:
     # module can lift it.
     @pytest.mark.designed_red
     def test_residue_rendering_bounded_across_many_classes(self, tmp_path):
-        """Review: code-reviewer (Finding 1/Finding 5) regression guard —
+        """
         many repo-root residue files, each its own class per
         `_residue_class`, must NOT render one line per class. Direct
         perturbation guard for the pinned
@@ -1208,7 +1208,6 @@ class TestOwnershipLegRebuilt:
         assert denied_ok is False
 
     def test_indeterminate_call_names_the_degradation(self, tmp_path, monkeypatch):
-        # Review: coordinator:code-reviewer, coordinatorcode-reviewer.a8583fd1571c29519
         # (P2) — scope_report.py's `_CLASSIFICATION_INDETERMINATE` comment
         # asserts "TRUNCATION IS EXPECTED AND CORRECT HERE ... the capped
         # path still carries 'indeterminate'/'adoption withheld'" and cited

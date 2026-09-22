@@ -291,7 +291,7 @@ def test_untrustworthy_record_tip_omitted_falls_back_to_session_start_sha(monkey
 
 
 def test_root_honoured_even_when_cwd_differs(monkeypatch, tmp_path):
-    """Review: code-reviewer (P2 #1) — `_resolve_review_brightline_floor_
+    """`_resolve_review_brightline_floor_
     kwargs` must scan `root`'s own `state/review-trail/`, never the
     process cwd's. Chdir into an UNRELATED directory (with its own,
     different `state/review-trail/` record for the same session id) and
@@ -318,7 +318,7 @@ def test_root_honoured_even_when_cwd_differs(monkeypatch, tmp_path):
 
 
 def test_own_records_present_zero_commits_since_start_falls_back_to_todays_call(tmp_path):
-    """Review: code-reviewer (P2 #2) — own trail record(s) exist, but ZERO
+    """Own trail record(s) exist, but ZERO
     commits have landed since `session_start_time` (a trail record written
     to disk before this session's own commit lands, or a clock-skew edge).
     `_resolve_session_start_sha` must not return the literal `"HEAD"` here

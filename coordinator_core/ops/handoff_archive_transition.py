@@ -323,7 +323,7 @@ from coordinator_core.ops.fleet._common import (
     main_worktree_root,
 )
 from coordinator_core.ops.handoff_transition import _ship, build_ship_mutate
-# Review: code-reviewer (P2, Finding 1) — `_ship_would_refuse` used to
+# `_ship_would_refuse` used to
 # re-derive the stamp's own insert/replace/anchor/quoting logic by hand
 # instead of calling the real one; it now projects through this SAME helper
 # `handoff.stamp`'s own handler builds its mutate closure from, so the
@@ -352,7 +352,7 @@ _VALID_MODES = frozenset({"chain", "stamp_shipped", "stamp_only", "supersede"})
 # "closed" are the three lifecycle terminals; "awaiting_gate" |
 # "ready_to_fire" | "in_flight" are not.
 #
-# Review: coordinator:code-reviewer — this vendored copy had drifted to
+# This vendored copy had drifted to
 # 3 members, silently omitting "abandoned" (the old-vocabulary terminal
 # deployment_state), so a baton in that state was treated as non-terminal
 # here while every SSOT-importing caller treated it as terminal. Now
@@ -429,7 +429,7 @@ def _usage_error(msg: str) -> dict:
 def _current_fm_field(handoff_abs: Path, field: str) -> Optional[str]:
     """Read a single frontmatter field's current on-disk value, or None.
 
-    Review: code-reviewer (P2, Finding 3) — extracted from four byte-identical
+    Extracted from four byte-identical
     read/split/unquoted-read helpers (`_current_shipped_in`,
     `_current_deployment_state`, `_current_kind`, `_current_continued_into`)
     that differed only in the field name and a debug string; kept as named
@@ -466,7 +466,7 @@ def _current_shipped_in(handoff_abs: Path) -> Optional[str]:
 # asks "would the frontmatter validate once both writes land", and the schema
 # checks shipped_in's SHAPE, never whether the commit exists.
 #
-# Review: code-reviewer (nit, Finding 3) — this placeholder means the
+# This placeholder means the
 # pre-check cannot distinguish "no sha resolves, but the record is otherwise
 # fine" from "a sha resolves" — both project `would_refuse=None` here. Not a
 # correctness gap: the pre-existing downstream "no shipped_in could be
@@ -495,7 +495,7 @@ def _ship_would_refuse(handoff_abs: Path, rel_id: str, stamp_sha: Optional[str],
     hit, not from a hand-rolled copy of either. Nothing is written; the
     caller refuses before the stamp when this returns text.
 
-    Review: code-reviewer (P2, Finding 1) — this used to re-derive the
+    This used to re-derive the
     stamp's insert-vs-replace/anchor/quoting behavior by hand
     (`insert_fm_field(..., "deployment_state", ...)`), a SEPARATE anchor
     from the real op's own `claimed_at`/`consumed_at` anchor
@@ -542,7 +542,7 @@ def _current_deployment_state(handoff_abs: Path) -> Optional[str]:
     AFTER any do_stamp/do_supersede mutation earlier in the same call, so a
     stamp_shipped/supersede call sees its own fresh write.
 
-    Review: code-reviewer (P3) — normalized (stripped + case-folded) at this
+    Normalized (stripped + case-folded) at this
     single accessor rather than at each of its three raw `==`/membership
     call sites (the replay-convergence check, the closed-baton gate, and the
     terminal-state-precondition membership test against
@@ -804,7 +804,7 @@ def _sha_canonically_matches(supplied: str, prior_value: str) -> bool:
     a prefix of `supplied`; neither being a prefix of the other means they
     are provably different commits.
 
-    Review: code-reviewer (nit F3) — `supplied` shorter than `prior_value` is
+    `supplied` shorter than `prior_value` is
     refused outright rather than prefix-matched. Two distinct commits can
     share a 7-char prefix (git only guarantees short-SHA uniqueness at
     generation time, not permanently as a repo grows), so an
@@ -1128,7 +1128,7 @@ def _commit_retained_supersede_flip(
     caller folds into the retain `message` (AC6) so a caller reading
     `retained: True` is never left inferring the tree's state.
 
-    Review: code-reviewer (P2, Finding 2) — narrowed from "never raises":
+    Narrowed from "never raises":
     `git_native._git` and `commit_authored_content` both return a `GitResult`
     on every path (true, unguarded), but the `tempfile.NamedTemporaryFile`
     open above the try/finally is not guarded and can still propagate (e.g.
@@ -1514,7 +1514,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     rel_id = _wire_rel_id(contained, worktree)
 
-    # Review: code-reviewer (Finding 1, C5 slice) — DR-242 gate moved to this
+    # DR-242 gate moved to this
     # op choke point. This op is reachable directly via
     # `coordinator_core.invoke handoff.archive_transition`, which bypasses
     # every wrapper-level claimed_or_shipped_at_path check
@@ -1908,7 +1908,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                     _commit_retained_supersede_flip,
                     worktree,
                     rel_id,
-                    # Review: code-reviewer (P3, Finding 1) — plain subscript,
+                    # Plain subscript,
                     # not `.get()`: every exit_code:0 return of
                     # `_supersede_continued` (including the idempotent no-op
                     # branch) always carries `written_text`, populated from a

@@ -70,7 +70,7 @@ def test_main_never_exits_nonzero_even_on_ambiguous_warn(monkeypatch, capsys):
 
 
 def test_main_survives_unexpected_exception_from_resolve(monkeypatch, capsys):
-    # Review: code-reviewer (Finding 2) — pins the "unexpected internal
+    # Pins the "unexpected internal
     # exception still returns 0" contract that Finding 1's guard now
     # enforces; UnicodeDecodeError is the concrete real-world trigger
     # (non-UTF-8 Windows codepage decoding subprocess output) but any
@@ -249,7 +249,7 @@ def test_classify_unresolvable_warns(capsys):
         "C:/Program Files/Git/usr/bin/ssh",
         r"C:\Users\me\AppData\Local\GitHubDesktop\app\resources\app\git\usr\bin\ssh.exe",
         "C:/Program Files (x86)/Microsoft Visual Studio/2019/Team Explorer/Git/usr/bin/ssh.exe",
-        # Review: code-reviewer (Finding 2) — the no-space "teamexplorer"
+        # The no-space "teamexplorer"
         # pattern is distinct from "team explorer" (above) and had no
         # dedicated realistic-path test.
         r"C:\Program Files (x86)\Microsoft Visual Studio\2019\TeamExplorer\Git\usr\bin\ssh.exe",

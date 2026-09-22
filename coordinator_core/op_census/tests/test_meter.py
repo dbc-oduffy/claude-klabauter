@@ -101,7 +101,7 @@ def test_partial_trailing_line_is_tolerated_as_a_live_append(tmp_path):
 
 
 def test_bad_line_then_trailing_blank_line_is_still_tolerated(tmp_path):
-    """Review: coordinatorcode-reviewer — pins an untested branch of AC4's
+    """Pins an untested branch of AC4's
     trailing-line tolerance: a blank line after a bad line hits `continue`
     before `last_line_bad` is reset, so the bad line still reads as trailing.
     Defensible (blank lines are noise, not content), but was incidental rather
@@ -291,7 +291,7 @@ def test_process_time_rows_do_not_double_count_invocations(tmp_path, monkeypatch
 
 
 def test_started_and_composition_rows_are_excluded_not_counted(tmp_path, monkeypatch):
-    """Review: coordinatorcode-reviewer — the sink genuinely writes one
+    """The sink genuinely writes one
     `kind="started"` row per invocation (per `op_latency.py`), so the
     kind-exclusion in `measure()` was unpinned against its actual common case.
     A `started` row must not appear in `counts_by_origin`, must not inflate

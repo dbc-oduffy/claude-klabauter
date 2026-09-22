@@ -18,6 +18,14 @@ measurement silently undercounts) and sums every line's SELF-time column
 (microseconds), converted to milliseconds. This is the same total the C1
 chunk body's "66.6ms across 203 modules" baseline was measured against.
 
+Repeat-and-take-best: ambient scheduling contention (this box's own
+75.7-114ms spawn-to-exit jitter band) only ever adds delay on top of the
+true self-time, never removes it, so a single spawn conflates a real
+regression with an unlucky scheduling slice. Spawning several times and
+keeping the minimum reading approximates the unloaded cost without needing
+to know the current load — the ceiling stays a regression gate, not a
+load-insensitivity gate a single sample can trip on its own.
+
 Spec backlink: pln-seven-measured-levers-against-f1ee97 § C1
                (AC1: "add an importtime regression assert — a ceiling, not
                an exact figure").
@@ -61,22 +69,36 @@ _SELF_TIME_RE = re.compile(r"^import time:\s+(\d+)\s+\|\s+\d+\s+\|\s+")
 # while still catching a psutil-sized (or larger) regression.
 _SELF_TIME_CEILING_MS = 100.0
 
+# How many spawns feed the best-of-N reading (see the module docstring's
+# "Repeat-and-take-best" rationale). Three keeps the file's own process
+# budget bounded while giving jitter more than one chance to be absent.
+_SELF_TIME_SAMPLES = 3
 
-def _measure_import_self_time_ms() -> float:
-    proc = subprocess.run(
-        [sys.executable, "-X", "importtime", "-m", "coordinator_core.invoke", "ping", "{}"],
-        capture_output=True,
-        text=True,
-        cwd=str(REPO_ROOT),
-        timeout=30,
-        **no_console_creationflags(),
-    )
+
+def _sum_self_time_ms(importtime_stderr: str) -> float:
+    """Sum every SELF-time column (microseconds) in one `-X importtime`
+    stderr capture, converted to milliseconds."""
     total_us = 0
-    for line in proc.stderr.splitlines():
+    for line in importtime_stderr.splitlines():
         m = _SELF_TIME_RE.match(line)
         if m:
             total_us += int(m.group(1))
     return total_us / 1000.0
+
+
+def _measure_import_self_time_ms(samples: int = _SELF_TIME_SAMPLES) -> float:
+    readings = []
+    for _ in range(samples):
+        proc = subprocess.run(
+            [sys.executable, "-X", "importtime", "-m", "coordinator_core.invoke", "ping", "{}"],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+            timeout=30,
+            **no_console_creationflags(),
+        )
+        readings.append(_sum_self_time_ms(proc.stderr))
+    return min(readings)
 
 
 def test_import_self_time_stays_below_ceiling():
@@ -86,6 +108,23 @@ def test_import_self_time_stays_below_ceiling():
         f"(ceiling {_SELF_TIME_CEILING_MS}ms) — see docs/plans/2026-08-08-"
         "seven-measured-levers-load-norm.md § C1"
     )
+
+
+def test_measure_import_self_time_ms_discards_a_noisy_sample(monkeypatch):
+    """One scheduling-delayed spawn among several clean ones must not move
+    the reading — see the module docstring's "Repeat-and-take-best"
+    rationale. Regression coverage for a single-sample reading conflating
+    ambient jitter with a real import-cost regression."""
+    readings_us = iter([120_000, 60_000, 95_000])
+
+    def _fake_run(*args, **kwargs):
+        total_us = next(readings_us)
+        return subprocess.CompletedProcess(
+            args=args, returncode=0, stdout="", stderr=f"import time:      {total_us} |      {total_us} |   some.module\n"
+        )
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    assert _measure_import_self_time_ms(samples=3) == pytest.approx(60.0)
 
 
 def test_psutil_not_imported_by_bare_ping():

@@ -67,9 +67,39 @@ NEGATIVE SPEC:
     relativize_pathspec`, or the SC-DR-022 orphan-adoption block --
     `assert_pathspec_shape_permitted` calls the extracted
     `block_subagent_commit._pathspec_shape_permitted` directly.
+
+`assert_no_undeclared_staged_deletion` closes the op-route leg of
+`state/bug-backlog/2026-08-31-four-bug-blitz-commits-deleted-five-file-
+6216c89502b9.yaml`: the bash-route tripwire
+(`bash_guards.commit_tripwires.check_undeclared_staged_deletion`) fires only
+on a `git commit` the harness's own PreToolUse guard can see, and the four
+accident commits that row was filed against landed through `commit_paths`
+instead, which no bash guard is ever invoked for. Same predicate, ported
+in process: a genuine (HEAD-tracked) staged deletion whose commit message
+never says so anywhere in its body is refused rather than landed.
 """
 
 from __future__ import annotations
+
+import re
+from typing import Sequence
+
+#: Same word list `bash_guards.commit_tripwires._DELETION_VERBS` validates
+#: (0 false positives over the 699-commit measurement recorded in the row
+#: above) -- kept as its own copy rather than imported, since this module's
+#: own negative spec is zero cross-module coupling beyond the two lazy
+#: `commit.py`/`block_subagent_commit` imports it already carries, and this
+#: predicate needs neither of those.
+_DELETION_VERBS = re.compile(
+    r"\b("
+    r"delet\w*|remov\w*|rm|retir\w*|drop(s|ped|ping)?|gravestone\w*|"
+    r"prun\w*|purg\w*|kill(s|ed|ing)?|untrack\w*|discard\w*|quarantin\w*|"
+    r"obsolet\w*|sunset\w*|revert\w*|supersed\w*|retract\w*|withdraw\w*|"
+    r"mov(e|es|ed|ing)|mv|renam\w*|relocat\w*|archiv\w*|migrat\w*|"
+    r"clean(s|ed|up)?|strip(s|ped|ping)?|excis\w*|unregister\w*"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 def assert_pathspec_shape_permitted(
@@ -149,4 +179,43 @@ def assert_noncooperative_identity_available() -> None:
         "identity-at-the-in-process-op-route.md, not-viable), so this seam "
         "refuses rather than trust a caller-supplied session_id as a "
         "substitute for a harness-stamped agent_id"
+    )
+
+
+def assert_no_undeclared_staged_deletion(paths: Sequence[str], message: str) -> None:
+    """Raises `coordinator_core.git.commit.CommitDeniedByActionGuard` when
+    `paths` (the GENUINE, HEAD-tracked deletions this commit is about to
+    land -- never a declared-but-already-absent path; see `commit_paths`'
+    own `declared_absent_from_head` split) is non-empty and `message` does
+    not mention a removal anywhere in its body.
+
+    `paths` costs its caller nothing extra to supply: `commit_paths` already
+    walks its tree spine to separate a real deletion from a phantom one
+    (`no_delta`/`declared_absent_from_head`), so this reuses that walk
+    rather than adding one of its own -- zero added spawns, zero added
+    reads, matching the bash-route sibling's own cost note.
+
+    Fails open (no raise) on an empty `paths` -- an ordinary commit that
+    declares no deletion pays nothing here, same as the bash-route check.
+    """
+    if not paths:
+        return
+    if _DELETION_VERBS.search(message or ""):
+        return
+
+    from coordinator_core.git.commit import CommitDeniedByActionGuard
+
+    shown = list(paths)[:10]
+    more = len(paths) - len(shown)
+    listed = "\n".join("  D  %s" % p for p in shown)
+    if more > 0:
+        listed += "\n  ... and %d more" % more
+
+    raise CommitDeniedByActionGuard(
+        "UNDECLARED STAGED DELETION: this commit removes %d tracked "
+        "file(s), and its message does not mention a removal.\n\n"
+        "%s\n\n"
+        "If that is intended, say so in the message and this stops firing. "
+        "If it is not, drop the path(s) from `deleted_paths` before "
+        "retrying." % (len(paths), listed)
     )

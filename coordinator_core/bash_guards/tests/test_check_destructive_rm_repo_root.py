@@ -339,7 +339,7 @@ class TestGitLockTarget:
         assert _denied(f"rm -rf {git_dir}")
 
     def test_lock_suffixed_directory_still_denied(self, repo_outside_any_repo):
-        """Review: code-reviewer (dispatch d6708a9c, finding 2) -- the lock
+        """The lock
         leg's allow is scoped to a lock FILE; a `.lock`-suffixed directory
         under the git store carries no rename-onto-index safety argument and
         must fall through to the general git-store deny."""

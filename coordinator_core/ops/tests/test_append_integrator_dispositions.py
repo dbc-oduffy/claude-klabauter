@@ -1949,7 +1949,7 @@ class TestMultiPassEnvelopeSidecar:
         assert result["partition_audit"] == {"ambiguous_block": ["true"]}
 
     def test_a_bare_block_coexisting_with_a_real_envelope_is_still_ambiguous(self, tmp_path):
-        # Review: S8 reviewer F1 -- the union-of-envelopes branch used to
+        # The union-of-envelopes branch used to
         # hardcode candidate_blocks=1 whenever any real envelope existed,
         # silently dropping a co-existing bare (unidentified) block instead
         # of tripping `ambiguous_block`. This is the missing arm: one real

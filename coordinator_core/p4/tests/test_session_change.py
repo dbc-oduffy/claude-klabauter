@@ -20,7 +20,7 @@ import pytest
 from coordinator_core.git.run import GitResult
 from coordinator_core.p4 import runner, session_change, workspace
 
-# Review: overengineering-reviewer F1 (integrator-applied) -- the package
+# The package
 # used to re-export `workspace.session_change` under this same attribute
 # name, shadowing this submodule on a plain import; that facade is gone,
 # so a plain submodule import is unambiguous now.
@@ -124,7 +124,7 @@ class TestEnsureSessionChange:
     def test_duplicate_repo_root_registration_raises_never_picks_arbitrary_match(
         self, monkeypatch, tmp_path, sdir
     ):
-        """Review: code-reviewer F4 (integrator-applied). Two repo_keys
+        """
         resolving to the same physical repo_root (a stale row left behind
         by a re-registration) must raise, not silently pick the
         alphabetically-first key."""

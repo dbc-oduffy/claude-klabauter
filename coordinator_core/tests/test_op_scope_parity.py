@@ -278,7 +278,7 @@ def test_every_scope_table_key_resolves_to_a_registered_op():
 def test_dr_279_blast_radius_table_matches_live_registry():
     """DR-279's hand-copied 73-op enumeration must equal the live registry's none-scoped ops.
 
-    Review: code-reviewer (P3) — the table was presented as "enumerated from the live
+    The table was presented as "enumerated from the live
     registry... not guessed" but had no test pinning it to that registry, so it could
     drift silently exactly like the op docstrings C10 swept. This test re-derives the
     same set the DR's own enumeration methodology describes (every op in the eager

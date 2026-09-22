@@ -105,7 +105,7 @@ _KNOWN_FIELDS = (
     "created",
 )
 
-# Review: code-reviewer 49e8b242 P2 — was a locally-hand-typed regex that
+# Was a locally-hand-typed regex that
 # near-missed frontmatter.body_blocks._compile_heading_re's grammar; now the
 # canonical one shared with every detection site (see
 # coordinator_core.session_ledger's module docstring).
@@ -208,7 +208,7 @@ def resolve_state_root(coordinator_root: Path, cwd: Path) -> Path:
     DoE/claude-klabauter roots via its own resolvers) and is retained only for call-site
     compatibility with existing callers of this function.
 
-    Review: code-reviewer — *cwd* is threaded explicitly to
+    *cwd* is threaded explicitly to
     ``coordinator_state_root(git_root=...)`` rather than left to that seam's
     own ambient-``os.getcwd()`` ``git rev-parse``, so this function is
     provably scoped to the *cwd* argument (not the process's ambient cwd) on
@@ -285,7 +285,7 @@ def resolve_handoff_path(
         return str(in_handoffs)
 
     # 4. Recursive search under archive/handoffs/**/
-    # Review: code-reviewer — return the FIRST match in os.walk traversal
+    # Return the FIRST match in os.walk traversal
     # order (no sort). The bash oracle takes `find ... | head -1`, whose
     # result order is filesystem-traversal order (arbitrary/OS-dependent,
     # NOT lexicographic); sorting here silently re-resolved duplicate
@@ -764,7 +764,7 @@ def aggregate(
     # dirname(terminal_abs), exactly mirroring the bash oracle's `node
     # walk-handoff-dag.js --start <path>` invocation (no --handoff-dir flag).
     # See module docstring negative-spec.
-    # Review: code-reviewer — _EDGE_KINDS is already a set literal;
+    # _EDGE_KINDS is already a set literal;
     # walk_forward only reassigns edge_kinds when None (never mutates a
     # passed-in set), so the set(...) copy here was a no-op.
     walk = walk_forward(terminal_abs, edge_kinds=_EDGE_KINDS)
@@ -891,7 +891,7 @@ def aggregate(
         first_dt = _parse_date_prefix(first_created)
         last_dt = _parse_date_prefix(last_created)
         if first_dt is not None and last_dt is not None:
-            # Review: code-reviewer — match the bash oracle's local-tz
+            # Match the bash oracle's local-tz
             # epoch-second diff (date -d/-j -> epoch, // 86400) rather than
             # a naive calendar-day subtraction. time.mktime() interprets the
             # naive midnight datetime as local time (DST-aware, same as the

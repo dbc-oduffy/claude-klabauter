@@ -215,7 +215,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if p is None:
         return _err(f"sizing_path escapes state/sizings/: {sizing_path_raw!r}")
     if not p.is_file():
-        # Review: coordinator-code-reviewer — deliberately distinct wording
+        # Deliberately distinct wording
         # from the locked_rmw FileNotFoundError branch below: this refusal
         # means the path never resolved to a file at all (pre-check, before
         # any lock is taken), while the other means the file existed a moment
@@ -299,7 +299,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     try:
         locked_rmw(p, mutate, repo_root=repo_root)
     except FileNotFoundError:
-        # Review: coordinator-code-reviewer — distinct from the pre-check
+        # Distinct from the pre-check
         # refusal above: this means the file was present when the pre-check
         # ran but disappeared before `locked_rmw` could acquire the lock —
         # deleted between check and lock, not "never existed".

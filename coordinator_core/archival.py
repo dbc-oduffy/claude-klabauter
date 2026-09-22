@@ -132,7 +132,7 @@ def _is_terminal_or_archived_child(path: str) -> bool:
     definitive archive-residency removes a child from the live set;
     indeterminacy must never cause a parent to look archivable.
 
-    Review: code-reviewer F2 — the archive-residency check (rule 1) assumes
+    The archive-residency check (rule 1) assumes
     callers scan the conventional archive/handoffs/ tree; a future caller
     supplying a differently-shaped archive convention (e.g. a symlinked mount
     whose resolved path doesn't literally contain "handoffs" as the immediate
@@ -145,7 +145,7 @@ def _is_terminal_or_archived_child(path: str) -> bool:
 
     meta = _read_meta(path)
     status = meta.get("status") if meta else None
-    # Review: code-reviewer F1 — normalize case/whitespace so `status: Consumed`/
+    # Normalize case/whitespace so `status: Consumed`/
     # `CONSUMED` are recognized; fail-closed default (None/absent) is untouched
     # since (None or "") == "".
     normalized_status = (status or "").strip().lower()
@@ -480,7 +480,7 @@ def claimed_or_shipped_at_path(path: str) -> bool:
     if claimed_or_shipped(fm):
         return True
     try:
-        # Review: coordinator:code-reviewer (slice A, P3) — renamed from
+        # Renamed from
         # `claim_state` to avoid shadowing the sibling module
         # `coordinator_core.claim_state` imported one line above this
         # function.

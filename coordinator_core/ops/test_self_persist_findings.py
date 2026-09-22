@@ -228,7 +228,7 @@ def test_content_with_embedded_quotes_and_backticks(tmp_path):
 # ---------------------------------------------------------------------------
 # (k) Missing intermediate directory — locked_rmw creates it, not this module
 # ---------------------------------------------------------------------------
-# Review: code-reviewer (F6) — self_persist_findings.py has no explicit
+# self_persist_findings.py has no explicit
 # mkdir(parents=True) call (contrast write_identity_file.py); this asserts
 # locked_rmw's own write-step mkdir handles a target_path whose immediate
 # parent (and grandparent) don't yet exist but whose ancestor chain still

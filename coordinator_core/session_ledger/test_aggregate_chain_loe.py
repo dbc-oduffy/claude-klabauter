@@ -142,7 +142,7 @@ def test_main_defaults_to_sys_argv(tmp_path, monkeypatch, capsys):
 
 
 def test_resolve_state_root_is_scoped_to_passed_cwd_not_ambient_cwd(tmp_path, monkeypatch):
-    """Review: code-reviewer (F1) — resolve_state_root(coordinator_root, cwd)
+    """resolve_state_root(coordinator_root, cwd)
     must resolve against *cwd*, not the process's ambient os.getcwd(). Two
     distinct (non-meta) repos: chdir the process into repo_a, then resolve
     against repo_b explicitly — the result must be scoped to repo_b."""

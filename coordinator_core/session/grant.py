@@ -332,7 +332,7 @@ def revoke_tier_u_grant(
     ):
         return True
     try:
-        # Review: coordinator:code-reviewer — unlink(missing_ok=True) inside
+        # unlink(missing_ok=True) inside
         # the try/except closes the TOCTOU window between an existence check
         # and unlink(): a concurrent double-revoke racing this call must not
         # turn an already-satisfied postcondition into a false infra failure.

@@ -132,7 +132,7 @@ def test_jest_config_glob_inserted_in_fence_order(tmp_path):
 
 
 def test_jest_config_glob_inserted_before_cmakelists_when_tsconfig_absent(tmp_path):
-    # Review: code-reviewer — Finding 2. tsconfig.json absent, CMakeLists.txt
+    # tsconfig.json absent, CMakeLists.txt
     # present: jest.config.* must still land BEFORE CMakeLists.txt (fence
     # order), not appended after it.
     root = tmp_path / "repo"

@@ -168,7 +168,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
         return no_advisory()
 
     try:
-        hook_path.write_text(new_text, encoding="utf-8")
+        hook_path.write_text(new_text, encoding="utf-8", newline="\n")
         current_mode = hook_path.stat().st_mode
         hook_path.chmod(current_mode | 0o111)
     except Exception:

@@ -282,7 +282,7 @@ _INTAKE_OPS = ("open", "progress", "blocked", "discharge")
 # That module is stdlib-only and does no import-time work: this hook is on the
 # per-turn path for every session on the box.
 #
-# Review: overengineering-reviewer (finding #2, minor, accepted) -- call
+# Call
 # sites below now name `machinery_paths.<name>` directly; `_session_share_dir`
 # was an alias with no in-module caller and is dropped outright.
 
@@ -652,7 +652,7 @@ def _sizing_route_and_exemption(repo_root: str, rel_path: str):
     """Return (route, exempt). Any read failure returns (None, True) --
     "cannot prove the exemption doesn't apply" fails toward silence."""
     try:
-        # Review: coordinator:code-reviewer Finding 5 -- match every other
+        # Match every other
         # read in this module (`_read_records`, `_touch_record_jsonl_paths`,
         # `_touched_txt_paths`, `_drain_intake`), which decodes with
         # errors="replace" rather than letting UnicodeDecodeError escape

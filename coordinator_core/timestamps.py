@@ -78,7 +78,7 @@ def age_phrase(seconds: float) -> str:
     return f"{seconds / 3600:.1f} hours"
 
 
-# Review: overengineering-reviewer -- this pair (plus `day_phrase`) is a
+# This pair (plus `day_phrase`) is a
 # general calendar-age facility with exactly one caller in the tree today
 # (`with_age_date`, itself serving only `relocation_ledger.retired_at`).
 # Kept private rather than deleted: privatizing matches the module's actual

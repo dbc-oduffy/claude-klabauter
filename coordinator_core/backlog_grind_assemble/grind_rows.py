@@ -38,8 +38,19 @@ Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md § Design
   `state/queue-grind/<P>/<R>.jsonl` if present — idempotent (already-settled
   is not an error). Only the committer calls this, immediately before the
   settling commit (§ Design § Stage library, `commit` (ledger-only)).
+- `run-record --profile P --run-id T --record-file F --repo-root D`: writes
+  `state/queue-grind/<P>/runs/<T>.json` atomically (temp file + `os.replace`),
+  contained under `--repo-root`, from the JSON at `--record-file` (or stdin
+  when `F` is `-`). The committer agent has no Write tool, so the drain
+  commit's run-cost record is written through this verb instead of being
+  hand-written, and the write is declared like every other row mutation.
 
-None of the four touches the index or spawns git (§ Design § Row verbs,
+Every one of check/append/close/settle/run-record's ACTUAL writes/moves/
+deletes is declared via `session.declared_writes.declare_write` (DR-276),
+so the session that runs the verb holds the touch-claim the committer's
+own `scoped_git_commit` scope check needs.
+
+None of the five touches the index or spawns git (§ Design § Row verbs,
 "None of the four touches the index").
 
 Exit codes (locally scoped, matching the row's own contract):
@@ -82,7 +93,9 @@ from coordinator_core.contract.grind_vocab import (
 )
 from coordinator_core.frontmatter import primitives as fm_primitives
 from coordinator_core.frontmatter import schema_validate
+from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit import grind_profile
+from coordinator_core.session.declared_writes import declare_write
 
 EXIT_OK = 0
 EXIT_REFUSAL = 1
@@ -132,6 +145,26 @@ def _sha256_file(path: Path) -> str | None:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _declare_before_unlink(path: Path, repo_root: Path) -> None:
+    """Record `path`'s touch-claim NOW, immediately, while it still exists
+    on disk -- then the caller may safely delete it.
+
+    `declare_write` alone is not enough for a path about to be deleted: it
+    only appends to the open collection, and recording (the check that
+    `ipc._resolve_declared_touch_root_and_path` gates on "is this currently
+    an existing regular file") happens on the OUTER `recording_declared_
+    writes()` context's `__exit__` -- which, for every `grind-row` verb, is
+    after this whole `main()` call returns, i.e. strictly after the delete
+    already happened. A nested `recording_declared_writes()` scope records
+    on ITS OWN `__exit__`, immediately, before this function returns --
+    nesting is a documented, supported shape of `session.declared_writes.
+    collecting` (see that module's own docstring), not a second recorder."""
+    from coordinator_core.cli_entry import recording_declared_writes
+
+    with recording_declared_writes(cwd=str(repo_root)):
+        declare_write(path)
+
+
 # ---------------------------------------------------------------------------
 # check
 # ---------------------------------------------------------------------------
@@ -151,8 +184,6 @@ def _extract_manifest(script_text: str) -> list[dict[str, Any]]:
     since a row's `path`/`row_id` may itself contain a `;`. Raises
     `ValueError` naming the sentinel when it is absent or unparseable —
     never a silent empty manifest."""
-    # Review: overengineering-reviewer finding 4 — json.JSONDecoder().raw_decode
-    # replaces a hand-written brace/string-escape balancer over the same span.
     marker = f"const {_MANIFEST_CONST_NAME} = "
     start = script_text.find(marker)
     if start == -1:
@@ -317,6 +348,7 @@ def cmd_append(rest: list[str]) -> int:
 
     with open(ledger_path, "a", encoding="utf-8", newline="\n") as fh:
         fh.write(line + "\n")
+    declare_write(ledger_path)
     return EXIT_OK
 
 
@@ -331,7 +363,11 @@ def _archive_month(run_stamp: str) -> str:
 
 def _stamp_date(run_stamp: str) -> str:
     """YYYY-MM-DD from a run stamp (`20260922T110458Z` or ISO-8601), for a
-    stamp field the queue schema types `format: date`."""
+    stamp field the queue schema types `format: date`.
+
+    Assumes a fixed-width `YYYYMMDD`/`YYYY-MM-DD...` prefix (zero-padded
+    month/day); a non-zero-padded stamp fails the length-8 check below and
+    raises loudly rather than silently mis-dating."""
     digits = run_stamp.replace("-", "")[:8]
     if len(digits) != 8 or not digits.isdigit():
         raise ValueError(f"grind-row close: run stamp {run_stamp!r} carries no YYYYMMDD date")
@@ -368,7 +404,13 @@ def cmd_close(rest: list[str]) -> int:
             "--repo-root D"
         )
 
-    row_path = Path(flags["repo-root"]) / flags["row"]
+    repo_root = Path(flags["repo-root"])
+    row_path = contained_path(repo_root / flags["row"], [repo_root])
+    if row_path is None:
+        return _usage(
+            f"grind-row close: --row escapes --repo-root: {flags['row']!r} not "
+            f"under {repo_root!r}"
+        )
     current_digest = _sha256_file(row_path)
     if current_digest is None:
         print(f"grind-row close: row not found: {row_path}", file=sys.stderr)
@@ -387,8 +429,6 @@ def cmd_close(rest: list[str]) -> int:
             f"grind-row close: --verdict must be one of "
             f"{sorted(CLOSURE_CLOSING_BRANCHES)}, got {verdict!r}"
         )
-
-    repo_root = Path(flags["repo-root"])
 
     try:
         profile = grind_profile.load_profile(flags["profile"], Path(flags["profile-dir"]))
@@ -464,6 +504,17 @@ def cmd_close(rest: list[str]) -> int:
     archive_dir = repo_root / profile.archive_path / month
     new_path = archive_dir / row_path.name
     if new_path.exists():
+        # Reconcile a crash between the prior run's os.replace and unlink
+        # (S4): if the archive copy already matches what THIS run would
+        # write and the source row is still present, finish the interrupted
+        # removal instead of refusing forever on a duplicate a human would
+        # otherwise have to clean up by hand.
+        if new_path.read_bytes() == new_text.encode("utf-8"):
+            _declare_before_unlink(row_path, repo_root)
+            row_path.unlink()
+            declare_write(new_path)
+            print(json.dumps({"old": str(row_path), "new": str(new_path)}, sort_keys=True))
+            return EXIT_OK
         print(f"grind-row close: destination already exists: {new_path}", file=sys.stderr)
         return EXIT_REFUSAL
 
@@ -477,7 +528,9 @@ def cmd_close(rest: list[str]) -> int:
     tmp_path = archive_dir / f".{row_path.name}.tmp-{os.getpid()}"
     tmp_path.write_text(new_text, encoding="utf-8")
     os.replace(tmp_path, new_path)
+    _declare_before_unlink(row_path, repo_root)
     row_path.unlink()
+    declare_write(new_path)
 
     print(json.dumps({"old": str(row_path), "new": str(new_path)}, sort_keys=True))
     return EXIT_OK
@@ -499,7 +552,67 @@ def cmd_settle(rest: list[str]) -> int:
     except RowIdEscapeError as exc:
         return _usage(str(exc))
     if ledger_path.is_file():
+        _declare_before_unlink(ledger_path, repo_root)
         ledger_path.unlink()
+    return EXIT_OK
+
+
+# ---------------------------------------------------------------------------
+# run-record
+# ---------------------------------------------------------------------------
+
+
+def cmd_run_record(rest: list[str]) -> int:
+    """`run-record --profile P --run-id T --record-file F --repo-root D`:
+    atomically writes `<repo_root>/state/queue-grind/<P>/runs/<T>.json` from
+    the JSON at `--record-file` (or stdin when `--record-file -`), contained
+    under `--repo-root`. The sole route the committer agent has for the
+    drain run record -- it carries no Write tool, so it invokes this verb
+    instead of hand-writing the file, and the write is declared like every
+    other row-verb mutation (§ Design § Row verbs, `run-record`)."""
+    flags = _parse_flags(
+        rest, required=("profile", "run-id", "record-file", "repo-root")
+    )
+    if flags is None:
+        return _usage(
+            "usage: grind-row run-record --profile P --run-id T --record-file F "
+            "--repo-root D"
+        )
+
+    repo_root = Path(flags["repo-root"])
+    record_file = flags["record-file"]
+    if record_file == "-":
+        raw_text = sys.stdin.read()
+    else:
+        record_path = Path(record_file)
+        if not record_path.is_file():
+            return _usage(f"grind-row run-record: --record-file not found: {record_path}")
+        raw_text = record_path.read_text(encoding="utf-8")
+
+    try:
+        record = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        print(f"grind-row run-record: --record-file is not valid JSON: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    run_id = flags["run-id"]
+    if "/" in run_id or "\\" in run_id or run_id in (".", "..") or ".." in Path(run_id).parts:
+        return _usage(f"grind-row run-record: --run-id escapes the runs directory: {run_id!r}")
+
+    target = repo_root / "state" / "queue-grind" / flags["profile"] / "runs" / f"{run_id}.json"
+    contained = contained_path(target, [repo_root])
+    if contained is None:
+        return _usage(
+            f"grind-row run-record: resolved path escapes --repo-root: {target!r}"
+        )
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = target.parent / f".{target.name}.tmp-{os.getpid()}"
+    tmp_path.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+    os.replace(tmp_path, target)
+    declare_write(target)
+
+    print(json.dumps({"path": str(target)}, sort_keys=True))
     return EXIT_OK
 
 
@@ -512,6 +625,7 @@ _VERBS = {
     "append": cmd_append,
     "close": cmd_close,
     "settle": cmd_settle,
+    "run-record": cmd_run_record,
 }
 
 

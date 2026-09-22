@@ -241,7 +241,7 @@ def test_snapshot_copy_failure_falls_through_to_git(tmp_path, monkeypatch):
 
 
 def test_settings_home_runtime_error_degrades_to_no_rung3_candidate(tmp_path, monkeypatch):
-    """Review: code-reviewer (Finding 2) regression. `settings_home()`
+    """
     reaches `Path.home()`, which is documented to raise `RuntimeError` (not
     `ValueError`/`OSError`) when no home directory resolves at all (no
     HOME/USERPROFILE, no resolvable passwd entry). `_find_known_good_backup`
@@ -264,7 +264,7 @@ def test_settings_home_runtime_error_degrades_to_no_rung3_candidate(tmp_path, mo
 
 
 def test_malformed_known_good_suffixes_excluded_from_candidates(tmp_path, monkeypatch):
-    """Review: code-reviewer (Finding 4) regression. `_known_good_backup_
+    """
     candidates` must silently exclude filenames that don't match
     `_KNOWN_GOOD_BACKUP_RE` (non-timestamp or dashed-date suffixes) rather
     than crashing the sort or letting them interfere with ordering against
@@ -381,7 +381,7 @@ def test_explicit_override_pointed_at_unrelated_root_still_untrusted(tmp_path, m
 
 
 def test_known_good_backup_restore_banner_labels_rung3_provenance(tmp_path, monkeypatch):
-    """Review: code-reviewer (Finding 3). A rung-3 restore's banner must
+    """code-reviewer (Finding 3). A rung-3 restore's banner must
     visibly label the source as an operator-placed, unauthenticated file --
     distinct from rungs 1/2's identically-worded restore banner -- so an
     operator can tell which rung fired from the banner alone."""

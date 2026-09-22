@@ -175,7 +175,7 @@ def test_mixed_case_hosts_yml_resolves_casefolded(tmp_path, monkeypatch):
     assert result["github"] == "dbc-example-operator"
 
 
-# Review: coordinator:code-reviewer / EM ruling — the mixed-case hosts.yml
+# The mixed-case hosts.yml
 # case (test_mixed_case_hosts_yml_resolves_casefolded above) does not
 # exercise the noreply-fallback branch's casefold call, and that fixture's
 # sentinel handle is already lowercase, so it cannot distinguish "casefolds"
@@ -199,7 +199,7 @@ def test_mixed_case_noreply_fallback_resolves_casefolded(tmp_path, monkeypatch):
     assert result["github_id"] == "999"
 
 
-# Review: coordinator:code-reviewer / EM ruling — person_resolver's casefold
+# person_resolver's casefold
 # set is a second, hardcoded decision independent of
 # tracker_entities.normalize_alias's namespace split; nothing enforced the
 # two stayed in agreement, and F1 (github_id.casefold(), since removed) is a

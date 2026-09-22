@@ -168,7 +168,7 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
 )
 
 
-# Review: code-reviewer (Finding 1, P1) — previously used `--show-toplevel`
+# Previously used `--show-toplevel`
 # and called `resolve_context(repo_root)` directly, bypassing
 # `main_worktree_root`; that scoped the read to the CURRENT worktree while
 # the write leg always scopes to the MAIN worktree, so a ceremony invoked
@@ -645,7 +645,7 @@ def _build_day_goal_closeout_judgment_point(open_day_goals: dict[str, Any]) -> d
     and stale rows DISTINCTLY in both `question` and `evidence` (C2
     partitions them; C4 must not flatten the distinction back out).
 
-    # Review: code-reviewer (Finding 4, P2) — row access uses `.get(...,
+    # Row access uses `.get(...,
     # "?")` rather than bracket access so a malformed row (missing
     # goal_id/text) degrades to a placeholder instead of raising a KeyError
     # out of `brief()`'s top-level backstop.
@@ -1029,7 +1029,7 @@ def brief(
     except Exception as exc:  # noqa: BLE001 - mirrors pickup_assemble.brief's own backstop
         return int(WorkdayExitCode.TRANSPORT_FAIL), {"error": str(exc)}
 
-    # Review: code-reviewer (Finding 4, P2) — _build_directives/
+    # _build_directives/
     # _build_judgment_points now consume live, disk-derived open_day_goals
     # rows (previously pure static construction taking no arguments); widen
     # this backstop to cover them so a malformed row can't crash the WHOLE

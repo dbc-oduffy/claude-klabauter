@@ -372,7 +372,7 @@ def test_unstaged_worktree_deletion_kept_but_repo_root_relative(tmp_path):
 
 
 def test_repo_root_relative_pathspec_uses_forward_slashes(tmp_path):
-    """Review: coordinatorcode-reviewer-c58be590 -- `os.path.relpath` emits
+    """`os.path.relpath` emits
     OS-native separators (backslash on Windows), which never byte-match
     git's own always-forward-slash CWD-relative output. Pins the expected
     string explicitly (never derived from `os.sep`) so this holds on any
@@ -405,7 +405,7 @@ def test_repo_root_relative_pathspec_uses_forward_slashes(tmp_path):
 
 
 def test_sibling_row_subtree_resolves_without_dotdot(tmp_path):
-    """Review: coordinatorcode-reviewer-c58be590 (live-round follow-up) --
+    """
     a real multi-row round's manifest names entries from MANY sibling
     subtrees of one shared worktree (e.g. `coordinator_core`, `coordinator/
     bin`). Passing the actual worktree `<root>` as `repo_root` must resolve

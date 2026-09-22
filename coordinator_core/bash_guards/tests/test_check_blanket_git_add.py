@@ -605,7 +605,7 @@ def test_hazard_registry_repo_roots_reads_repos_star_keys(monkeypatch, tmp_path)
     # either separator. POSIX paths (no backslashes) were never at risk from
     # a double-quoted TOML string -- this is a Windows-path-safety fix, not
     # a general double-quoted-strings-are-unsafe claim.
-    # Review: coordinator:code-reviewer (slice B, P3) -- clarify the fixture
+    # Clarify the fixture
     # comment is Windows-path-specific, not a general TOML-format claim.
     (reg_dir / "registry.toml").write_text(
         "\"repos.claude_klabauter\" = '%s'\n"

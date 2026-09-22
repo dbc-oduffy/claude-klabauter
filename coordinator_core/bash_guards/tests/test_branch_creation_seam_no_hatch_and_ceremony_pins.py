@@ -99,7 +99,7 @@ def _os_environ_getenv_aliases(tree):
     -- the plain `ast.Attribute` shape check (`os.environ`) is blind to
     this form on its own.
 
-    Review: coordinator:code-reviewer Finding 2 -- widened to close the
+    Widened to close the
     importer-aliasing bypass.
     """
     environ_names = set()
@@ -127,7 +127,7 @@ def _environ_key_node(node, environ_names, getenv_names):
     treats that as a hard failure rather than silently skipping it -- see
     the docstring on `test_override_key_absent_from_guard_module_source`.
 
-    Review: coordinator:code-reviewer Finding 2 -- widened to also inspect
+    Widened to also inspect
     `node.keywords` (keyword-arg key form) and bare-`Name` environ/getenv
     aliases, neither of which the original `ast.Attribute`/`node.args`-only
     shape check recognized.

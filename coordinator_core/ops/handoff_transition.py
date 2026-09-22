@@ -312,6 +312,7 @@ from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.reconcile.gate_eval import (
     collapse_to_chain_heads,
     derive_readiness,
+    is_dr173_parked,
     reduce_gate_evidence,
 )
 from coordinator_core.sibling_fact import resolve_leg
@@ -630,6 +631,23 @@ def _apply_derived_readiness(fm: str, worktree: Path) -> str:
         derived_deployment = "awaiting_gate"
         verdict = {**verdict, "pickup_ready": False}
 
+    # DR-173 TIGHTEN-ONLY: the same shape, minus a `blocked_by` id to key on.
+    # A baton `session_baton.promote` parked for an unfilled category/summary
+    # carries a deliberately EMPTY `blocked_by` (the gate has no graph node
+    # to name), so `derive_readiness`'s vacuously-freed branch reads it as
+    # `ready_to_fire` the moment ANY caller of this helper touches the
+    # record — unparking a baton whose category/summary are still
+    # placeholders, the exact lie DR-173 exists to stop. `blocked_by` and
+    # `blocking_notes` are untouched by every caller here (claim/repark/
+    # unclaim never write either field), so `is_dr173_parked` still reads
+    # the record's true parked signature off `fm_dict` even though the
+    # caller may have already re-stamped `deployment_state` itself (repark
+    # and unclaim both hardcode `ready_to_fire` before this recheck). This
+    # transition did not park the record, so it declines to unpark it.
+    elif derived_deployment == "ready_to_fire" and is_dr173_parked(fm_dict):
+        derived_deployment = "awaiting_gate"
+        verdict = {**verdict, "pickup_ready": False}
+
     fm = replace_fm_field(fm, "deployment_state", derived_deployment)
     pickup_ready_value = "true" if verdict["pickup_ready"] else "false"
     if read_fm_field(fm, "pickup_ready") is not None:
@@ -703,7 +721,7 @@ def _claim(handoff_path: str, session_id: str, at: str, worktree: Path, repo_roo
         current_holder = _read_fm_field_new_or_old(split.fm_text, "claimed_by", "consumed_by")
 
         if (deployment or "").strip().lower() in HANDOFF_TERMINAL_DEPLOYMENT:
-            # Review: coordinator:code-reviewer — only "continued" has a
+            # Only "continued" has a
             # successor (continued_into); "shipped"/"closed"/"abandoned"
             # don't, so the advice no longer assumes one exists.
             raise MutateAbort(
@@ -734,7 +752,7 @@ def _claim(handoff_path: str, session_id: str, at: str, worktree: Path, repo_roo
         holder_changed = current_holder is not None and current_holder != session_id
 
         # status → claimed (replace existing; insert after 'title' if missing).
-        # Review: intentional read/mutation asymmetry: status/deployment were read from the
+        # intentional read/mutation asymmetry: status/deployment were read from the
         # ORIGINAL split.fm_text (control-flow gates). claimed_at/claimed_by are re-read
         # from the EVOLVING fm AFTER each insertion (idempotency guards for insert-if-absent
         # fields). This mirrors the JS code-reviewer A7 note.
@@ -1658,7 +1676,7 @@ def _unclaim(
     # Fail-loud on a multi-line note — no write, exit_code=1. serialize_yaml_scalar's
     # own docstring documents it does not handle multi-line values; a raw \n/\r would
     # break out of the intended single-line park_note: value onto its own YAML line.
-    # Review: code-reviewer Finding 5 — mirrors _claim's empty-session_id fail-loud
+    # Mirrors _claim's empty-session_id fail-loud
     # discipline (fail loud on ambiguity rather than silently accepting an
     # unsupported shape).
     if note and ("\n" in note or "\r" in note):
@@ -2158,7 +2176,7 @@ def _read_gate_evidence_resolved(
     Never authors, infers, or backfills a `gate_evidence:` block onto a
     handoff that doesn't already carry one.
 
-    Review: code-reviewer Finding 1 -- the read/parse of this handoff's
+    The read/parse of this handoff's
     frontmatter (`read_text`, `split_frontmatter`, `yaml.safe_load`) is one
     try/except covering (OSError, UnicodeDecodeError, yaml.YAMLError), not
     just the `read_text` OSError case -- one malformed/non-UTF-8 record must
@@ -2182,7 +2200,7 @@ def _read_gate_evidence_resolved(
     if not isinstance(gate_evidence, dict):
         return None
 
-    # Review: code-reviewer Finding 5 -- a `covers_prose`-keyed short-circuit
+    # A `covers_prose`-keyed short-circuit
     # here (skip live leg resolution when covers_prose is falsy) was
     # considered and REJECTED: this reader is shared with
     # `handoff_gate_aging.classify_gate` -> `evaluate_gate_triage`, whose
@@ -3525,7 +3543,7 @@ def _gate_cascade_clear(
                 "retired to blocking_notes)"
             )
 
-        # Review: coordinator-code-reviewer — re-check every blocker id's
+        # re-check every blocker id's
         # clearing verdict immediately before the write, not only once at the
         # top of this closure (mirrors the same fix in _gate_add_blocker, its
         # sibling with the identical shape). The gap between the first
@@ -3692,7 +3710,7 @@ def _gate_add_blocker(
             else:
                 fm = insert_fm_field(fm, "gate_dependency", joined, after_key="blocked_by")
 
-        # Review: coordinator-code-reviewer — re-check every blocker id's
+        # re-check every blocker id's
         # resolution immediately before the write, not only at the top of this
         # closure. The first resolve (above) and this write are the two ends
         # of the window a peer could archive/delete a blocker record in; the
@@ -3945,7 +3963,7 @@ async def _handler(
         at = (params.get("at") or "").strip()
         if not at:
             return _err("claim: 'at' (ISO timestamp) is required")
-        # Review: code-reviewer (F1) — wrap blocking file read+write in asyncio.to_thread
+        # Wrap blocking file read+write in asyncio.to_thread
         # to satisfy DR-212 D3 async-loop mandate; prevents event-loop stall.
         # repo_root is forwarded to locked_rmw for git-common-dir lock sidecar resolution.
         return await asyncio.to_thread(_claim, handoff_path, session_id, at, worktree, repo_root)
@@ -3957,7 +3975,7 @@ async def _handler(
                 "supersede: 'continued_into' (successor handoff id-or-path) is required — "
                 "DR-084 positive succession proof, no automated liveness guess"
             )
-        # Review: code-reviewer (Finding 1, C5 slice) — DR-242 gate moved to
+        # DR-242 gate moved to
         # this op choke point. This generic verb dispatcher is reachable
         # directly via `coordinator_core.invoke handoff.transition`, which
         # bypasses every wrapper-level claimed_or_shipped_at_path check
@@ -3979,12 +3997,12 @@ async def _handler(
                 "(DR-242: a successor-named child is not evidence of succession; "
                 "nothing to supersede)"
             )
-        # Review: code-reviewer (F1) — asyncio.to_thread for DR-212 D3 async-loop mandate.
+        # asyncio.to_thread for DR-212 D3 async-loop mandate.
         # repo_root is forwarded to locked_rmw for git-common-dir lock sidecar resolution.
         return await asyncio.to_thread(_supersede, handoff_path, continued_into, worktree, repo_root)
 
     if verb == "ship":
-        # Review: code-reviewer (F1) — asyncio.to_thread for DR-212 D3 async-loop mandate.
+        # asyncio.to_thread for DR-212 D3 async-loop mandate.
         # repo_root is forwarded to locked_rmw for git-common-dir lock sidecar resolution.
         return await asyncio.to_thread(_ship, handoff_path, worktree, repo_root)
 

@@ -75,7 +75,7 @@ def test_rewriting_is_idempotent():
 
 
 def test_a_worker_request_inside_a_quoted_marker_expression_is_not_a_real_request():
-    """Review: code-reviewer P2 — a literal `-n auto` inside a quoted `-k`/`-m`
+    """A literal `-n auto` inside a quoted `-k`/`-m`
     expression is not a worker request and must not be misdetected or rewritten."""
     cmd = 'pytest -k "not -n auto" -m "not cadence"'
     assert apply_cap_to_command(cmd, 12) == cmd
@@ -89,7 +89,7 @@ def test_an_existing_maxprocesses_inside_a_quoted_expression_is_not_touched():
 
 
 def test_an_unterminated_quote_fails_open_not_closed():
-    """Review: code-reviewer P2 -- `_QUOTE_SPAN` requires a closing quote to
+    """`_QUOTE_SPAN` requires a closing quote to
     match, so a stray/unbalanced opening quote leaves everything after it
     scanned as if unquoted: a `--maxprocesses=` occurrence a human would read
     as still inside the quote gets detected and rewritten anyway. Pinned
@@ -200,7 +200,7 @@ def _repo_with_full(tmp_path, full: str):
 
 
 def test_full_tier_env_var_step_applies_the_cap(monkeypatch):
-    """Review: code-reviewer P1 — `cs_resolve_full_test_cmd`'s own env-var
+    """`cs_resolve_full_test_cmd`'s own env-var
     step must apply the cap directly, not only via its Step-3 fast fallback."""
     monkeypatch.setenv("COORDINATOR_FULL_TEST_CMD", FAST)
     monkeypatch.delenv("COORDINATOR_FAST_TEST_CMD", raising=False)

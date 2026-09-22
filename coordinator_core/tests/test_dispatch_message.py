@@ -355,7 +355,7 @@ def test_version_checked_before_params():
 def test_params_checked_before_method():
     """params=[1,2] (not dict) with method=999 (not str) → -32602 (params gate fires first).
 
-    Review: code-reviewer — F3: guards the second validation-order adjacency
+    Guards the second validation-order adjacency
     (params → method). Validation order is spec-pinned as:
         jsonrpc version → params type → method string → registry lookup → handler invoke
     If this order were swapped, method-integer check would fire first and return -32600
@@ -1070,7 +1070,7 @@ def test_timeout_for_clamps_ceremony_ops_to_the_budget():
 def test_op_timeout_overrides_public_proxy_contents_and_immutability():
     """OP_TIMEOUT_OVERRIDES (public parity surface) mirrors _OP_TIMEOUT_OVERRIDES and is read-only.
 
-    Review: code-reviewer F4 — the public export shipped with zero direct test
+    The public export shipped with zero direct test
     coverage of its own contents or immutability, unlike OP_KEY_SCOPE's coverage test.
     DEC-2 emptied the table, and the `ceremony.scoped_git_commit` row DEC-2's
     revert had readmitted was itself revoked 2026-08-21 (DR-348, ceremony budget) —
@@ -1149,7 +1149,7 @@ def test_near_miss_timeout_env_warns(caplog):
         f"got: {[r.message for r in caplog.records]}"
     )
 
-    # Review: code-reviewer F1 — a legitimate future COORDINATOR_* var that merely
+    # A legitimate future COORDINATOR_* var that merely
     # mentions "timeout" in passing (not shaped like the real knob) must NOT fire.
     # A bare substring test ("COORDINATOR" in key and "TIMEOUT" in key) would have
     # nagged on this; the narrowed suffix-shaped match must not.

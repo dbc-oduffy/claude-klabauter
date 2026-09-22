@@ -114,7 +114,7 @@ def test_ac5_ran_at_rejected_variants_exit_2(tmp_path, bad_ran_at):
 def test_ac6_blank_pipeline_exits_2(tmp_path, bad_pipeline):
     rc = _emit(tmp_path, pipeline=bad_pipeline)
     assert rc == claims_emit.EXIT_INVALID_INVOCATION
-    # Review: coordinator:code-reviewer — pin non-existence of both files for
+    # Pin non-existence of both files for
     # every blank-pipeline variant (not just the "" case, see the sibling
     # test below), so a regression that writes a partial pair before hitting
     # the pipeline check would fail loudly here.
@@ -172,7 +172,7 @@ def test_ac8_mid_pair_failure_leaves_neither_file_and_no_temps(tmp_path, monkeyp
 
     def flaky_replace(src, dst, *args, **kwargs):
         call_count["n"] += 1
-        # Review: coordinator:code-reviewer — assert the semantic identity of
+        # Assert the semantic identity of
         # each ordinal call (not just count it), so a future reorder inside
         # _write_atomic_pair fails this test loudly at the wrong-step
         # assertion rather than silently pinning a different step than the
@@ -248,7 +248,7 @@ def test_a_failed_re_run_leaves_the_pre_existing_pair_intact(tmp_path, monkeypat
         # Order for a re-run over a fully-occupied stem: (1) back up the
         # existing claims.json, (2) back up the existing meta.json, (3) land
         # the new claims.json, (4) land the new sidecar — fail on the last.
-        # Review: coordinator:code-reviewer — assert semantic identity per
+        # Assert semantic identity per
         # call (src for the backup steps, whose dst is an unpredictable temp
         # name; dst for the landing steps) so a reorder fails loudly here
         # instead of silently mistargeting.
@@ -340,7 +340,7 @@ def test_failed_re_run_restores_when_only_claims_json_pre_exists(tmp_path, monke
         call_count["n"] += 1
         # Order when only claims.json pre-exists: (1) back it up, (2) land
         # the new claims.json, (3) land the new sidecar — fail on the last.
-        # Review: coordinator:code-reviewer — assert semantic identity per
+        # Assert semantic identity per
         # call so a reorder fails loudly here rather than silently
         # mistargeting.
         if call_count["n"] == 1:
@@ -380,7 +380,7 @@ def test_failed_re_run_restores_when_only_meta_json_pre_exists(tmp_path, monkeyp
         call_count["n"] += 1
         # Order when only meta.json pre-exists: (1) back it up, (2) land the
         # new claims.json, (3) land the new sidecar — fail on the last.
-        # Review: coordinator:code-reviewer — assert semantic identity per
+        # Assert semantic identity per
         # call so a reorder fails loudly here rather than silently
         # mistargeting.
         if call_count["n"] == 1:

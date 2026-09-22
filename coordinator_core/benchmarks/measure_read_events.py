@@ -214,7 +214,7 @@ def _extrapolate_breach_total_events(
     that hasn't happened yet; falling through would emit a negative,
     already-in-the-past 'breach point' exactly when the baseline is already
     over budget."""
-    # Review: code-reviewer -- baseline["min_ms"] > band_ms made
+    # baseline["min_ms"] > band_ms made
     # (band_ms - baseline["min_ms"]) negative before any slope was applied,
     # so a small positive slope produced a negative total-event count. This
     # branch makes the already-breached case an explicit, unambiguous
@@ -257,7 +257,7 @@ def run_ac3_measurement(*, n: int = DEFAULT_N, warmup: int = DEFAULT_WARMUP) -> 
     from `read_events`'s own per-event work -- it must be captured here, not
     hand-run and transcribed into a commit message, so the conclusion it
     supports is reproducible from this committed artifact.
-    # Review: code-reviewer -- this control point drove the headline
+    # This control point drove the headline
     # "cost is cold-start, not per-event work" conclusion but was never
     # part of the shipped, reusable measurement path; added as a real
     # measured point rather than a memory-transcribed number.

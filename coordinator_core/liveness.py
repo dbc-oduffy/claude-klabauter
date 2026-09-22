@@ -44,7 +44,7 @@ from coordinator_core.engine_root import coordinator_engine_root
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import liveness as _session_liveness
 
-# Review: code-reviewer (F1) — module-level logger matches every other coordinator_core module;
+# module-level logger matches every other coordinator_core module;
 # allows debug-level signal on liveness-read failures instead of silent pass.
 logger = logging.getLogger(__name__)
 

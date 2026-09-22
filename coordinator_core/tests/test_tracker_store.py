@@ -1711,7 +1711,7 @@ class TestTopLevelWalkBiteTest:
         )
 
     def test_aliased_import_is_still_caught_by_the_ast_walk(self, tmp_path):
-        # Review: code-reviewer, Finding 1, 2026-08-05 — an import aliased
+        # An import aliased
         # via `as` (e.g. `from coordinator_core import tracker_store as ts`)
         # must not evade detection just because the locally-bound name no
         # longer contains "tracker_store". _references_tracker_store_in_code

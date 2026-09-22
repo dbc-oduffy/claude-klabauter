@@ -146,7 +146,7 @@ def test_key_absent_handoff_claimed_by_current_session_is_stamped(tmp_path, monk
 
 @pytest.mark.parametrize("write", [False, True])
 def test_batch_sweep_discriminates_per_file_within_one_invocation(tmp_path, monkeypatch, write):
-    # Review: coordinator:code-reviewer (05907de0) WARN #4 — the two
+    # The two
     # single-file-scoped tests above don't prove the discrimination fires
     # per-file *within one sweep*, which is the actual shape of the original
     # defect (one session-derived value resolved once and threaded across
@@ -189,7 +189,7 @@ def test_batch_sweep_discriminates_per_file_within_one_invocation(tmp_path, monk
 
 def test_unresolvable_session_id_stamps_nothing(tmp_path, monkeypatch):
     repo = _setup(tmp_path, monkeypatch, session_id=None)
-    # Review: code-reviewer (05907de0) finding #5 — reworded for WHAT over WHY.
+    # Reworded for WHAT over WHY.
     # session_id=None skips the claim seed, so carried_deliverable_id resolves
     # to None; asserts no deliverable_id carrying happens anywhere in the sweep.
     unclaimed = _write_handoff(repo, "2026-08-12-nobody-claims-me", claimed_by=None)

@@ -193,7 +193,7 @@ def build_fleet_work_state(
         if common is None:
             errors.append({"target_root": key, "reason": "not a git repository"})
             continue
-        # Review: staff-eng (Finding 0) -- a registered `repos.*` entry
+        # A registered `repos.*` entry
         # pointing at a subdirectory of a repo (or a linked worktree) passes
         # the walk-only pre-check above (which WALKS UP) but is not itself
         # the main worktree root; without normalizing through

@@ -437,7 +437,7 @@ def test_branch_gate(branch, expect_push, expect_message):
         assert message is None
 
 
-# Review: overengineering-reviewer Finding 4 -- the two main()-driven
+# The two main()-driven
 # branch-gate-skip stderr tests retired with main(); branch_gate() itself
 # stays covered by test_branch_gate above.
 
@@ -528,7 +528,7 @@ def test_extract_first_err_empty_stderr():
     assert auto_push.extract_first_err("") == ""
 
 
-# Review: overengineering-reviewer Finding 4 -- main()'s exit-0-always and
+# main()'s exit-0-always and
 # internal-error-logging contract was only exercised end-to-end through
 # main() itself; all five tests retired with it. `log_failure` and
 # `_module_provenance`'s own field-level behavior stay covered by the
@@ -772,7 +772,7 @@ def test_backoff_seconds_gh_transient_unchanged_envelope():
 
 
 
-# Review: overengineering-reviewer Finding 4 -- the branch-gate-skip ->
+# The branch-gate-skip ->
 # run_push_with_retry-never-called assertion was only reachable through
 # main(); retired with it.
 
@@ -835,7 +835,7 @@ def test_cockpit_publish_nonzero_exit_does_not_fail_hook_and_warns(monkeypatch, 
 
 
 
-# Review: overengineering-reviewer Finding 4 -- main()'s --branch-flag
+# main()'s --branch-flag
 # bypass-resolve-and-gate contract was only reachable through main();
 # retired with it (spawn_detached_push, main()'s sole caller of this
 # leg, is itself already gravestoned per C8).
@@ -937,7 +937,7 @@ def test_resolved_git_rides_executable_and_never_argv0(invoke, tmp_path, monkeyp
 
 
 
-# Review: overengineering-reviewer Finding 4 -- auto_push.main(),
+# auto_push.main(),
 # _release_claims_for_head, _push_would_be_a_noop, and _ref_sha are all
 # gravestoned (no production caller since C7 removed the post-commit
 # hook's invocation of this module); their driving tests retired with

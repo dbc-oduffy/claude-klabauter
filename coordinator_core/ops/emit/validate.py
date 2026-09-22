@@ -273,7 +273,7 @@ def contract_declares_backlog_history() -> bool:
         bundle = json.loads(VENDOR_SCHEMA_BUNDLE.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, ValueError):
         return False
-    # Review: code-reviewer — guard against non-dict bundle root (list/string/number produces
+    # Guard against non-dict bundle root (list/string/number produces
     # AttributeError on .get(); the docstring guarantees graceful .get()-chaining → False, never raises).
     if not isinstance(bundle, dict):
         return False
@@ -322,7 +322,6 @@ _SOURCE_KIND_ENUM = frozenset(
         "coordinator_artifact",
         "transcript_summary",
         "sec_edgar",
-        # Review: code-reviewer — Finding 2 (2026-07-14 entity_anchor slice review) —
         # v2.17.0 SourceKind widen added code_comparison; the structural mirror had
         # drifted stale relative to the vendored enum.
         "code_comparison",
@@ -338,7 +337,7 @@ _SOURCE_KIND_REQUIRES_NULL_REF = frozenset(
         "coordinator_artifact",
         "transcript_summary",
         "sec_edgar",
-        # Review: code-reviewer — Finding 2 — code_comparison is in the vendored
+        # code_comparison is in the vendored
         # isNonGit list (provenance.ts), so ref must be null for it too.
         "code_comparison",
     }
@@ -466,7 +465,7 @@ def validate_array(records: list, entity_name: str, ctx=None) -> None:
     (the cap is stated explicitly in the output — never a silent truncation) to bound
     output volume on a record failing many independent checks at once.
 
-    Review: code-reviewer — Finding 2: a prior revision of this function used
+    A prior revision of this function used
     ``jsonschema.exceptions.best_match()``, which surfaces exactly ONE (the "most relevant")
     sub-error per record — a record failing on three independent grounds (missing required
     field AND wrong enum value AND bad date format, say) reported only one, forcing an

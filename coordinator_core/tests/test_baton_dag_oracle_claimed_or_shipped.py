@@ -48,7 +48,7 @@ def test_status_consumed_retired_vocabulary_is_true():
 
 
 def test_status_superseded_retired_vocabulary_is_true():
-    """Review: code-reviewer, Finding 2/4 — `superseded` is a documented
+    """`superseded` is a documented
     read-tolerance archived status (handoff-archived.schema.json's `status`
     enum), retired 2026-06-26 on the same fleet-shared archived/legacy
     read-tolerance grounds as `consumed`. A record whose status is literally

@@ -182,7 +182,7 @@ class TestNormalizer:
 
     def test_tab_separators_preserved(self) -> None:
         """Tab delimiters in dispatched-agents.txt survive normalization."""
-        # Review: code-reviewer F8 — test data updated to a pure lowercase hex string so that
+        # Test data updated to a pure lowercase hex string so that
         # _HEX_SID_RE matches (≥12 hex chars, no non-hex suffix like the original 'ghi').
         # The old data "abc123def456ghi" was not normalized because 'ghi' breaks hex-match.
         text = "abcdef1234567890\tclaude-sonnet-4-5\texecutor\t1720000000\n"
@@ -656,7 +656,7 @@ class TestAgentCompletionLog:
         assert "subagent_type" in record
         assert "agentId" in record  # camelCase — mirrors jq output + runtime-tripwire grep
         assert record["agentId"] == aid
-        # Review: code-reviewer F6 — "  " doesn't catch default-sep single-space; check colon-space.
+        # "  " doesn't catch default-sep single-space; check colon-space.
         # Compact JSON uses separators=(",",":"); default json.dumps produces "key": "value"
         # (colon-space) — that is NOT compact even though it has no double-space.
         assert ": " not in line, (
@@ -667,7 +667,7 @@ class TestAgentCompletionLog:
     def test_no_tmp_write_path(self, tmp_path: Path) -> None:
         """The op MUST NOT write to /tmp or any path outside .git/coordinator-sessions/."""
         from coordinator_core.hooks.agent_completion_log import _handler
-        # Review: code-reviewer F11 — import module object first; avoids __import__ in wraps=.
+        # Import module object first; avoids __import__ in wraps=.
         import coordinator_core.hooks.agent_completion_log as acl_mod
         ctx = _FakeCtx(str(tmp_path / ".git"))
         _cs_dir(tmp_path).mkdir(parents=True, exist_ok=True)
@@ -894,7 +894,7 @@ class TestTrackDispatchedAgents:
         unresolvable field arrives as ""), so both absence and empty-string resolve to
         "unknown". This test documents that the key-absent contract matches empty-string.
 
-        Review: code-reviewer F2 (P1) — 4-cascade branch matrix gap: key-absent was not
+        4-cascade branch matrix gap: key-absent was not
         separately tested from empty-string. The op uses field(params, key) which calls
         params.get(key, "") — key-absent == "" == "unknown" fallback.
         """
@@ -1170,7 +1170,7 @@ class TestTrackDispatchedAgents:
         assert len(cols) == 4, f"Expected 4 tab-separated columns; cols={cols!r}"
         # Column-4 must be a Unix epoch (digits only)
         assert cols[3].isdigit(), f"Column-4 must be Unix epoch digits; got {cols[3]!r}"
-        # Review: code-reviewer F1 (P2) — previous disjunction was tautological: "<SID>" in
+        # Previous disjunction was tautological: "<SID>" in
         # normalized is always True for a 16-char hex id, so the disjunction always passes.
         # Replaced with two unconditional assertions + a concrete golden template equality.
         normalized = normalize_snapshot(raw)
@@ -1318,7 +1318,7 @@ class TestConcurrency:
     def test_c1_concurrent_dedup_no_lost_entry(self, tmp_path: Path) -> None:
         """Two concurrent track_touched_files calls on the same touch-record.jsonl — no lost entries."""
         from coordinator_core.hooks.track_touched_files import _handler, _FILE_LOCKS
-        # Review: code-reviewer F10 (nit) — make structural check explicit rather than relying
+        # Make structural check explicit rather than relying
         # on ImportError; if _FILE_LOCKS is renamed, this gives a clear assertion failure.
         assert isinstance(_FILE_LOCKS, dict), "_FILE_LOCKS lock registry must be a dict (D6 write-atomicity)"
         _cs_dir(tmp_path).mkdir(parents=True, exist_ok=True)
@@ -1421,7 +1421,7 @@ class TestConcurrency:
         disp = _cs_dir(tmp_path) / sid / "dispatched-agents.txt"
         content = disp.read_text()
         lines = [l for l in content.splitlines() if l]
-        # Review: code-reviewer F5 (P2) — the row-loop accepted any rows with correct col-1,
+        # The row-loop accepted any rows with correct col-1,
         # which passes even if BOTH coroutines wrote independent rows (2-row corruption).
         # The correct assertion: either dedup won (1 row) OR collision was detected (AMBIGUOUS).
         # A 2-row outcome without AMBIGUOUS IS the race-condition corruption this test catches.
@@ -1779,7 +1779,7 @@ _HANDLER_FILES = [
 
 # Blocking I/O primitives that must NEVER appear bare in an async handler body.
 # Legitimate uses live in sync helper functions (outside the async def).
-# Review: code-reviewer F3 (P2) — added Path method I/O patterns; Path.write_text(),
+# Added Path method I/O patterns; Path.write_text(),
 # Path.read_text(), Path.stat() etc. are synchronous blocking calls and the most
 # idiomatic Python file I/O style — a handler calling path.write_text() without
 # asyncio.to_thread() would have been invisible to the prior pattern set.
@@ -1808,7 +1808,7 @@ def _extract_async_handler_body(source: str) -> str:
             in_handler = True
             continue
         if in_handler:
-            # Review: code-reviewer F9 (nit) — any non-indented, non-blank line ends the
+            # Any non-indented, non-blank line ends the
             # handler body (code OR comment at indent 0). Previously comments at indent 0
             # were excluded from the break condition, causing top-level separator comments
             # between functions to be consumed into body_lines. The _assert_no_bare_io

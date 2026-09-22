@@ -313,7 +313,7 @@ def test_resolve_operator_config_embedded_newline_from_list_registry_value_is_co
 
 
 def test_resolve_operator_config_claude_klabauter_bin_missing_subdir_is_corrupt(tmp_path):
-    # Review: code-reviewer -- Finding 5. `claude_klabauter_bin` is DERIVED
+    # `claude_klabauter_bin` is DERIVED
     # (`os.path.join(claude_klabauter_root, "coordinator", "bin")`), not read from a
     # sentinel file, so its corruption path is structurally different from
     # the other three fields — a valid `claude_klabauter_root` whose `coordinator/bin`
@@ -326,7 +326,7 @@ def test_resolve_operator_config_claude_klabauter_bin_missing_subdir_is_corrupt(
 
 
 def test_resolve_operator_config_settings_home_whitespace_only_is_corrupt(tmp_path):
-    # Review: code-reviewer -- Finding 5. `COORDINATOR_SETTINGS_HOME` pointed
+    # `COORDINATOR_SETTINGS_HOME` pointed
     # at a whitespace-only path.
     env, _settings_home, _claude_klabauter_root, _doe_root_dir = _happy_env(tmp_path)
     env["COORDINATOR_SETTINGS_HOME"] = "   "
@@ -336,7 +336,7 @@ def test_resolve_operator_config_settings_home_whitespace_only_is_corrupt(tmp_pa
 
 
 def test_resolve_operator_config_settings_home_nonexistent_is_corrupt(tmp_path):
-    # Review: code-reviewer -- Finding 5. `COORDINATOR_SETTINGS_HOME` pointed
+    # `COORDINATOR_SETTINGS_HOME` pointed
     # at a path that does not exist as a directory on disk.
     env, _settings_home, _claude_klabauter_root, _doe_root_dir = _happy_env(tmp_path)
     env["COORDINATOR_SETTINGS_HOME"] = str(tmp_path / "no-such-settings-home")

@@ -277,7 +277,7 @@ from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.handoff_archive_transition import _handoff_live_holder_session
 from coordinator_core.ops.handoff_children import _collect_handoff_paths
 
-# Review: coordinator:code-reviewer — vendored 3-member copy (missing
+# Vendored 3-member copy (missing
 # "abandoned") drifted from handoff_archive_transition's own vendored copy,
 # which itself predates this fix. Importing lifecycle_constants directly
 # (a leaf module with zero coordinator_core imports/side effects — see its

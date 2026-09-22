@@ -461,7 +461,7 @@ def test_nodes_built_with_receipt_schema_helpers_validate() -> None:
 @pytest.mark.parametrize("disp", ["single-session", "chain-terminal", ""])
 def test_disposition_values_accepted(disp: str) -> None:
     """PipelineContext accepts 'single-session', 'chain-terminal', and empty string."""
-    # Review: code-reviewer F7 — sid is required once disposition is non-empty
+    # the Game Dev Reviewer is required once disposition is non-empty
     # (see validate()'s sid non-emptiness check); the "" disposition case
     # intentionally omits sid to also cover the pre-resolution fixture shape.
     sid = "sess-003" if disp else ""
@@ -670,7 +670,7 @@ def test_consumed_handoff_predecessor_from_dict_tolerates_predecessor_absent() -
 
 
 def test_from_dict_explicit_empty_plural_list_drops_stale_scalar() -> None:
-    """Review: code-reviewer (Slice C1, Finding 1/2) — a hand-edited or
+    """A hand-edited or
     partially-migrated dict carrying an EXPLICIT empty `consumed_handoffs: []`
     alongside a non-empty legacy `consumed_handoff` scalar must NOT resurrect
     the stale scalar into the plural list. from_dict() reads the plural key
@@ -695,7 +695,7 @@ def test_from_dict_explicit_empty_plural_list_drops_stale_scalar() -> None:
 
 
 def test_validate_rejects_scalar_plural_divergence_via_f4() -> None:
-    """Review: code-reviewer (Slice C1, Finding 1/2) — a hand-constructed
+    """A hand-constructed
     PipelineContext where the scalar and list[0] diverge must fail validate()
     via the Staff Engineer F4 consistency check (not silently pass).
     """

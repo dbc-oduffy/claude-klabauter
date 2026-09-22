@@ -357,7 +357,7 @@ def apply_derivable(path: Path, derivable: Dict[str, Any]) -> bool:
 
     if out == text:
         return False
-    path.write_text(out, encoding="utf-8")
+    path.write_text(out, encoding="utf-8", newline="\n")
     return True
 
 

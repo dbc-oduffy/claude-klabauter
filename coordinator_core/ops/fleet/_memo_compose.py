@@ -166,7 +166,7 @@ def _resolve_engine_sender_id(root: Optional[str] = None) -> str:
             owner = _read_publish_mirrors().get(mirror_key, {}).get("owner")
             if owner:
                 return owner
-    # Review: overengineering-reviewer — _read_registry_repos() is only
+    # _read_registry_repos() is only
     # consumed by the terminal em_id_for_root() leg below; moved past the
     # mirror-owner early return so it is not paid on a path that discards it.
     try:
@@ -273,7 +273,7 @@ def resolve_and_assert_sender_id(from_id: Optional[str], root: Optional[str] = N
     try:
         inbox_dir, _receiver_repo_path, _all_repos = _resolve_receiver_inbox(resolved)
     except (RegistryReadError, AmbiguousReceiverError) as exc:
-        # Review: coordinator-code-reviewer Finding 2 — the degrade itself is
+        # The degrade itself is
         # deliberate (a registry-read hiccup should not block a send
         # resolve_sender_id already degraded through), but it must not be
         # SILENT: this is the compose-time addressability assertion being

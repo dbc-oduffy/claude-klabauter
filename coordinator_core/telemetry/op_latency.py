@@ -198,7 +198,7 @@ TEST = "test"
 BENCHMARK = "benchmark"
 INVOCATION_ORIGINS = frozenset({PRODUCTION, TEST, BENCHMARK})
 
-# Review: coordinatorcode-reviewer -- readers are told "treat absent origin as
+# Readers are told "treat absent origin as
 # unknown, never as production" but had nothing to spell that with, and
 # `entry.get("origin", PRODUCTION)` is the tempting wrong reach given this
 # module's own default direction. This is what a READER substitutes for a
@@ -243,7 +243,7 @@ def invocation_origin() -> str:
     everyone (see this module's `repo_key_source` fallback for the same call
     made the same way, and the 85-hour blind spot that motivated it).
 
-    # Review: coordinatorcode-reviewer -- PYTEST_CURRENT_TEST is inherited as
+    # Is inherited as
     # an env-var SNAPSHOT at spawn time, not live-linked to the parent. A
     # long-lived process (a warm server, most concretely) booted by a test
     # fixture keeps that stale env var baked in for its entire life; if it
@@ -988,14 +988,14 @@ def record_fact_span(
     named: a caller minting one fresh id per ceremony call and passing it to
     every ``_timed_fact`` call within that ceremony lets a reader
     (``compute_timing_distributions``) group by it instead of ``sid`` and
-    recover the real per-ceremony distribution. No caller passes it yet —
-    the production call site,
-    ``coordinator_core/quick_wrap_assemble/__init__.py::brief``, is out of
-    this module's own scope (see that bug-backlog record's
-    ``proposed_action``) — so today's rows still carry ``invocation_id: null``
-    and a reader still falls back to the ``sid``-collapsed aggregate. This is
-    the instrumentation half of the fix; wiring a real caller is the
-    remaining half.
+    recover the real per-ceremony distribution. The production call site,
+    ``coordinator_core/quick_wrap_assemble/__init__.py::brief``, now mints one
+    id per call via ``new_correlation_id()`` and threads it to all five facts
+    it reads, so rows written by that ceremony carry a real
+    ``invocation_id`` and a reader recovers the true per-ceremony
+    distribution rather than the ``sid``-collapsed aggregate. A caller that
+    predates this (or any other served fact called outside ``brief()``)
+    still defaults to ``None`` and falls back to the ``sid`` grouping.
 
     Same fail-open contract as the other three row kinds: resolves the sink
     via ``coordinator_core.lifecycle.git_common_dir``, honours

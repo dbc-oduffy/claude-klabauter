@@ -146,7 +146,7 @@ class TestClassifyDriftIndeterminateAncestry:
         assert result["floor_sha"] == FLOOR
 
 
-# Review: code-reviewer (Finding 1) — _git_is_behind's merge-base --is-ancestor rc
+# _git_is_behind's merge-base --is-ancestor rc
 # mapping was entirely unexercised; a regression flipping the rc0/rc1 branches would
 # have passed the full suite silently. Exercised against this repo's own real git
 # history rather than a throwaway repo fixture, since MIN_KNOWN_GOOD_SHA is a known
@@ -191,7 +191,7 @@ class TestGitIsBehindRealAncestry:
         assert result is None
 
 
-# Review: code-reviewer (Finding 2) — the registered-op wiring (_engine_drift) had zero
+# The registered-op wiring (_engine_drift) had zero
 # test coverage: no test verified it calls resolve_engine_sha() + _git_is_behind() (not
 # some other pair), passes MIN_KNOWN_GOOD_SHA as the floor, or that register_op("engine.drift")
 # application doesn't blow up on import.

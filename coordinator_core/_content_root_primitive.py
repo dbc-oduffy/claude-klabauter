@@ -1,7 +1,6 @@
 """coordinator_core._content_root_primitive — the coordinator CONTENT-root
 join, as a LEAF module.
 
-Review: overengineering-reviewer Q1 (the enabling refactor). `content_root_for`
 is a PURE function over the filesystem — it touches no other `coordinator_core`
 module — yet before this move it lived in `coordinator_core/data_root.py`,
 which DOES import elsewhere in the package (`coordinator_core.ops.
@@ -75,7 +74,7 @@ def content_root_for(doe_root) -> Path | None:
     if isinstance(doe_root, Path):
         base = doe_root
     else:
-        # Review: code-reviewer F1 -- rstrip("/\\") alone collapses "/" or
+        # rstrip("/\\") alone collapses "/" or
         # "//" to "", and Path("") resolves to the process cwd, silently
         # probing cwd instead of failing closed on a degenerate root. Fall
         # back to the un-stripped string when stripping empties it, so an
@@ -94,7 +93,7 @@ def content_root_for(doe_root) -> Path | None:
 def content_root_or_private(doe_root) -> str:
     """`content_root_for`, falling back to the private-shape join.
 
-    Review: overengineering-reviewer finding 2 — the shape ~10 call sites
+    The shape ~10 call sites
     across `coordinator/bin/` actually needed (`content_root_for`, falling
     back to `<doe_root>/coordinator` when neither layout is present) was
     written once, module-locally, as `_shared.py::_content_root_or_private`,

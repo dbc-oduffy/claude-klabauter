@@ -95,7 +95,7 @@ from coordinator_core.win_portability import no_console_creationflags
 DEFAULT_SWEEP_FILES_THRESHOLD = 10  # K
 DEFAULT_SWEEP_LINES_THRESHOLD = 15  # L -- see module docstring, filter (b)
 
-# Review: code-reviewer -- Finding 3. DEFAULT_THRESHOLD_COMMITS/DAYS used to
+# DEFAULT_THRESHOLD_COMMITS/DAYS used to
 # be declared independently here AND in doc_registry.py (the actual
 # registry-driven config-resolution module) -- two editable copies of the
 # same tuned fleet default is a drift risk. doc_registry.py is now the
@@ -109,7 +109,7 @@ _LINK_RE = re.compile(r"\[[^\]]*\]\([^)]*\)|\(https?://[^)\s]+\)|https?://\S+")
 
 
 def _run_git(repo_root: Path, *args: str) -> str:
-    # Review: code-reviewer -- Finding 4. Explicit encoding, never the
+    # Explicit encoding, never the
     # platform locale default (commonly cp1252 on Windows, this fleet's P0
     # primary machine) -- a non-ASCII commit message/author name would
     # otherwise raise UnicodeDecodeError out of an uncaught path.
@@ -123,7 +123,7 @@ def _run_git(repo_root: Path, *args: str) -> str:
         **no_console_creationflags(),
     )
     if result.returncode != 0:
-        # Review: code-reviewer -- Finding 5. Surface stderr on a genuine
+        # Surface stderr on a genuine
         # git failure (not a repo, bad SHA, missing binary) so a
         # misconfigured repo_root is diagnosable rather than silently
         # indistinguishable from "this doc has no content-modifying

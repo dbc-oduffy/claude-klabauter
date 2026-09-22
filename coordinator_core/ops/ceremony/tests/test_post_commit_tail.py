@@ -59,8 +59,9 @@ import pytest
 from coordinator_core import ipc
 from coordinator_core.ops.ceremony import consumed_handoff_stamp
 from coordinator_core.ops.ceremony import post_commit_tail as m
-from coordinator_core.ops.ceremony.push import PUSH_MODE_NONE, PushOutcome
+from coordinator_core.ops.ceremony.push import PUSH_MODE_NONE, PUSH_MODE_SYNC, PushOutcome
 from ._ceremony_lock_guard import assert_no_ceremony_lock_reintroduction
+from .fixtures.push_repo import init_push_repo
 from .fixtures.real_git import make_diverged_path, real_git_repo
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
@@ -347,7 +348,7 @@ def test_run_skip_rendering_distinguishes_live_children_from_indeterminate(
 
 
 def test_render_skip_entry_exact_boundary_suppresses_suffix_at_cap():
-    """Review: code-reviewer — exact-boundary case (exactly
+    """exact-boundary case (exactly
     `_MAX_RENDERED_BLOCKING_CHILDREN` == 3 children, cap not exceeded): the
     `if remaining > 0` guard in `_render_skip_entry` must suppress the
     `(+N more)` suffix entirely, not just at `remaining == 1`."""
@@ -371,7 +372,7 @@ def test_render_skip_entry_exact_boundary_suppresses_suffix_at_cap():
 
 
 def test_render_skip_entry_large_fan_out_remaining_is_len_minus_cap():
-    """Review: code-reviewer — large fan-out (10 children) confirms
+    """Large fan-out (10 children) confirms
     `remaining` is `len(children) - _MAX_RENDERED_BLOCKING_CHILDREN`, not
     off-by-one."""
     children = [f"state/handoffs/{i}.md" for i in range(10)]
@@ -585,6 +586,97 @@ def test_origin_stub_close_follow_up_commit_preserves_peer_staged_divergence(tmp
     # Worktree content is untouched -- commit_scoped never re-derives the
     # diverged path's content from the worktree.
     assert (repo / "docs/plans/some-stub.md").read_text(encoding="utf-8") == "WORKTREE\n"
+
+
+# ---------------------------------------------------------------------------
+# state/bug-backlog/2026-08-10-no-test-exercises-push-with-retry-s-reba-
+# cc84495b2bb1.yaml -- no test drove push_with_retry's reject -> fetch ->
+# rebase --onto -> re-push branch at this follow-up call site, so a
+# regression reverting the post-push sha re-read (Review: code-reviewer,
+# Finding 1, sidecar state/subagent-share/0bbf5710-eb91-434d-b8b3-
+# ed14ceb9893d/coordinatorcode-reviewer-e01429e3.md) would show green. Real
+# bare remote plus a concurrent peer push -- no git call is mocked -- forces
+# the reject for real, exercising the actual rebase.
+# ---------------------------------------------------------------------------
+
+
+def test_origin_stub_close_survives_rebase_retry_and_lands_the_rewritten_sha(
+    tmp_path, monkeypatch
+):
+    """`push_with_retry` can fetch + `git rebase --onto` this origin-stub-
+    close follow-up commit on a rejected push before re-pushing, which
+    rewrites its sha. A concurrent peer push lands on the shared branch
+    first, forcing a genuine non-fast-forward reject; the returned sha must
+    be the post-rebase commit `resolve_post_push_sha` adopted, never the
+    pre-push sha `commit_scoped` minted before the reject fired."""
+    import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    repo = init_push_repo(tmp_path, branch="work/rebase-retry")
+    origin = tmp_path / "origin.git"
+
+    peer = tmp_path / "peer"
+    subprocess.run(
+        ["git", "clone", "-q", "--branch", "work/rebase-retry", str(origin), str(peer)],
+        capture_output=True, text=True, check=True, **no_console_creationflags(),
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "peer@t.example"],
+        cwd=str(peer), capture_output=True, text=True, check=True, **no_console_creationflags(),
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "peer"],
+        cwd=str(peer), capture_output=True, text=True, check=True, **no_console_creationflags(),
+    )
+    (peer / "peer.txt").write_text("peer\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "-A"],
+        cwd=str(peer), capture_output=True, text=True, check=True, **no_console_creationflags(),
+    )
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "peer commit"],
+        cwd=str(peer), capture_output=True, text=True, check=True, **no_console_creationflags(),
+    )
+    subprocess.run(
+        ["git", "push", "-q", "origin", "work/rebase-retry"],
+        cwd=str(peer), capture_output=True, text=True, check=True, **no_console_creationflags(),
+    )
+
+    (repo / "docs" / "plans").mkdir(parents=True, exist_ok=True)
+    (repo / "docs" / "plans" / "some-stub.md").write_text("ours\n", encoding="utf-8")
+
+    captured_pre_push_sha: dict = {}
+    real_resolve_post_push_sha = m.resolve_post_push_sha
+
+    def _spy_resolve_post_push_sha(worktree_root, pre_push_sha):
+        captured_pre_push_sha["sha"] = pre_push_sha
+        return real_resolve_post_push_sha(worktree_root, pre_push_sha)
+
+    monkeypatch.setattr(m, "resolve_post_push_sha", _spy_resolve_post_push_sha)
+
+    follow_up_sha, pushed, push_status, error = m._commit_and_push_origin_stub_close(
+        repo, ["docs/plans/some-stub.md"], "deadbeef", push_mode=PUSH_MODE_SYNC
+    )
+
+    assert error is None, error
+    assert pushed is True
+    assert push_status == m.PUSH_STATUS_PUSHED
+    # The rebase-retry branch genuinely fired: the sha `commit_scoped` minted
+    # before the reject differs from the sha that finally landed.
+    assert captured_pre_push_sha["sha"] is not None
+    assert follow_up_sha != captured_pre_push_sha["sha"]
+
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(repo), capture_output=True, text=True, check=True, **no_console_creationflags(),
+    ).stdout.strip()
+    assert follow_up_sha == head
+    remote_log = subprocess.run(
+        ["git", "--git-dir", str(origin), "log", "--oneline", "work/rebase-retry"],
+        capture_output=True, text=True, check=True, **no_console_creationflags(),
+    ).stdout
+    assert follow_up_sha[:7] in remote_log
 
 
 # ---------------------------------------------------------------------------

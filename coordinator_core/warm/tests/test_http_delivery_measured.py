@@ -166,15 +166,19 @@ def test_an_uncredentialed_curl_is_refused_by_the_same_listener(
     assert proc.stdout.strip().endswith("401")
 
 
-def test_the_delivery_costs_one_spawn_and_beats_an_interpreter_start(
+def test_the_delivery_costs_one_spawn_and_stays_under_the_brightline(
     credentialed_listener, capsys
 ):
-    """AC7's number, with its own comparison rather than an absolute.
+    """AC7's number, against a brightline rather than a peer leg.
 
-    ONE SPAWN: curl, once. The claim being defended is that the cookie
-    reaches the wire without a Python process, so the interpreter floor is
-    the thing worth measuring against -- if delivery cost more than
-    `python -c pass`, the transport's own justification would be spent.
+    ONE SPAWN: curl, once. The bare-interpreter figure is still sampled and
+    printed alongside it for a human reading the output, but it is NOT
+    asserted against: under load the interpreter leg pays process creation
+    only while the curl leg also queues behind the listener, so the two are
+    not common-mode and their ratio inflates with load rather than
+    cancelling it (state/bug-backlog/2026-08-31-ac7-delivery-ratio-does-not-
+    cancel-load-as-its-author-intended.yaml). The generous `curl_ms < 500`
+    ceiling below is the actual regression-of-kind check.
 
     SCOPED TO THE HOOK-FIRE PATH. See the module docstring: the op CLI's
     incumbent is `door.exe` at ~2.34ms over the pipe, and this number does
@@ -203,7 +207,8 @@ def test_the_delivery_costs_one_spawn_and_beats_an_interpreter_start(
     # INTERLEAVED, not one batch then the other: a load spike that lands
     # during a contiguous run of one side would be read as that side being
     # slower. Alternating puts both under the same conditions sample by
-    # sample, which is what makes the ratio mean anything on a busy box.
+    # sample, which keeps the printed comparison honest even though only
+    # the curl leg is asserted against.
     curl_samples, interp_samples = [], []
     for _ in range(SAMPLES):
         curl_samples.append(_spawn_elapsed_ms(curl_argv))
@@ -230,14 +235,33 @@ def test_the_delivery_costs_one_spawn_and_beats_an_interpreter_start(
             f"interpreter {interp_ms:.1f}ms median, k={SAMPLES}, 1 spawn."
         )
 
-    assert curl_ms < interp_ms, (
-        f"curl delivery ({curl_ms:.1f}ms) did not beat a bare interpreter start "
-        f"({interp_ms:.1f}ms). The transport's justification is that reaching the "
-        "listener costs less than starting Python; if that inverts, the saving is gone."
-    )
     assert curl_ms < 500, (
         f"curl delivery {curl_ms:.1f}ms is over the brightline. Elapsed, not process "
         "time, so a busy box inflates it -- but 500ms is the bar the whole transport "
         "is justified against, and a delivery over it is a defect the moment it is "
         "seen. Do not widen this number to make it pass."
+    )
+
+
+def test_a_curl_leg_slower_than_the_interpreter_leg_does_not_fail_the_case(
+    credentialed_listener, capsys, monkeypatch
+):
+    """Regression test for state/bug-backlog/2026-08-31-ac7-delivery-ratio-does-
+    not-cancel-load-as-its-author-intended.yaml.
+
+    Replays the row's own run-2 evidence (curl 169.88ms vs bare interpreter
+    83.81ms, both well under the 500ms brightline) with `_spawn_elapsed_ms`
+    stubbed so no process is actually spawned. Under load, only the curl leg
+    pays server-side queueing, so curl losing the ratio to the interpreter is
+    expected, not a regression -- the case must still pass on the generous
+    ceiling alone.
+    """
+    def fake_elapsed(argv, **_kwargs):
+        return 169.88 if argv[0] == "curl" else 83.81
+
+    monkeypatch.setattr(
+        sys.modules[__name__], "_spawn_elapsed_ms", fake_elapsed
+    )
+    test_the_delivery_costs_one_spawn_and_stays_under_the_brightline(
+        credentialed_listener, capsys
     )

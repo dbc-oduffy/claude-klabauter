@@ -194,7 +194,8 @@ def which_path_ordered(name: str, *, extensions: Optional[List[str]] = None) -> 
     ``name``, before advancing to the next directory. Never checks one candidate
     shape across all directories before another.
 
-    ``extensions`` defaults to ``PATHEXT`` (split on ``os.pathsep``) on Windows and
+    ``extensions`` defaults to ``PATHEXT`` (split on the literal ``;``, which is
+    ``PATHEXT``'s own delimiter regardless of host ``os.pathsep``) on Windows and
     ``[]`` on POSIX, matching ``shutil.which``'s own platform default. Pass ``[]``
     explicitly to force a bare-name-only search even on Windows -- e.g. when
     ``name`` already carries a full, specific filename (such as a ``.sh`` shim) and
@@ -204,7 +205,10 @@ def which_path_ordered(name: str, *, extensions: Optional[List[str]] = None) -> 
     matched anywhere on ``PATH``.
     """
     if extensions is None:
-        extensions = os.environ.get("PATHEXT", "").split(os.pathsep) if _is_windows() else []
+        # PATHEXT is always semicolon-delimited by Windows convention, regardless
+        # of the host OS reading it -- os.pathsep is ':' on POSIX and would leave
+        # the whole value as one unsplit candidate.
+        extensions = os.environ.get("PATHEXT", "").split(";") if _is_windows() else []
     for directory in os.environ.get("PATH", "").split(os.pathsep):
         if not directory:
             continue

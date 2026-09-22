@@ -426,7 +426,7 @@ Negative-spec (hard-won):
       (invoke/__main__.py, test fixtures, ceremony scripts) — no socket, no service loop.
       Backlink: docs/decisions/DR-215-coordinator-core-command-type-execution-model.md
 """
-# Review: code-reviewer (slice-A F1) — added DR-211 to Backlinks so the governing
+# Added DR-211 to Backlinks so the governing
 # authority for the FLEET archival block is visible when scanning the Backlinks section.
 
 from __future__ import annotations
@@ -915,7 +915,7 @@ def _warn_on_near_miss_timeout_env(environ: Optional[Dict[str, str]] = None) -> 
             )
 
 
-# Review: code-reviewer F2 — import-time side effect must never break
+# import-time side effect must never break
 # `import coordinator_core.ipc` for production dispatch, even if a future
 # refactor makes the scan capable of raising.
 try:
@@ -1710,7 +1710,7 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
         # this seam already chose deliberately: under-declaration, never a
         # false claim (see the `_SCOPE_TOUCH_PATHS_KEY` contract comment).
         # Cold is untouched - `os.environ` there is the caller's own.
-        # Review: overengineering-reviewer (finding 2) — routed through the
+        # Routed through the
         # one shared accessor (session.core.attributable_session_id) rather
         # than re-deriving the warm/cold branch here.
         sid = _session_core.attributable_session_id(sid_cwd)
@@ -1910,7 +1910,7 @@ def get_op_handler(name: str, msg: Any = None) -> Optional[Callable]:
     dispatched op. See
     cross-repo/inbox/2026-07-25-doe-claude-em-cutover-advance-cannot-resolve-gate-op.md.
 
-    Review: code-reviewer F11 — added to allow fleet-op callers to resolve handlers
+    Added to allow fleet-op callers to resolve handlers
     via the public op key rather than accessing the op module's private handler
     function name directly.
     """
@@ -2405,7 +2405,7 @@ async def _dispatch_message_impl(msg: dict) -> dict:
     #     an op handler are logged and converted to INTERNAL_ERROR, preventing unexpected
     #     process-level side-effects from propagating to the caller.
     #
-    # Review: code-reviewer — F5: inspect.iscoroutinefunction preferred over
+    # inspect.iscoroutinefunction preferred over
     # asyncio.iscoroutinefunction (deprecated Python 3.12+); no behavior change.
     #
     # Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C3
@@ -2752,7 +2752,7 @@ async def dispatch_message(
     _nested_token = _NESTED_DISPATCH_CPU_MS.set([])
     outcome = "ok"
 
-    # Review: code-reviewer (Finding 2, P2) — sid is resolved once here, in the
+    # the Game Dev Reviewer is resolved once here, in the
     # entry block, not independently re-resolved in the `finally` block below.
     # If the entry block raises after this point but before `sid` is assigned
     # (or `record_op_started` itself raises), the completion row inherits

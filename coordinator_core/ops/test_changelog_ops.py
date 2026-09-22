@@ -309,7 +309,7 @@ class TestPerDayFilenameCollapse:
     def test_append_day_prefix_colliding_machine_names_do_not_clobber(
         self, tmp_path: Path
     ) -> None:
-        """Review: code-reviewer (F1) — a lexically-prefix-colliding machine-name
+        """A lexically-prefix-colliding machine-name
         pair (both safe_id-valid) must NOT clobber each other's section. Prior to
         the fix, section_header lookup was a plain substring search: appending
         machine "host1" after "host10" already had a section would match
@@ -971,7 +971,7 @@ class TestUpsertReviewed:
     def test_upsert_non_contiguous_stray_reviewed_line_preserved(
         self, tmp_path: Path
     ) -> None:
-        """Review: code-reviewer (Finding 1) — a curator-added, non-contiguous
+        """A curator-added, non-contiguous
         stray line that happens to start with "**Reviewed:**" elsewhere in the
         section must NOT be relocated/collapsed by the strip-then-reinsert
         path. old_indices is non-contiguous here, so upsert_reviewed must fall
@@ -1040,7 +1040,7 @@ class TestUpsertReviewed:
     def test_upsert_leaves_sibling_machine_section_byte_identical(
         self, tmp_path: Path
     ) -> None:
-        """Review: code-reviewer (Finding 2) — mirrors append_day's
+        """Mirrors append_day's
         prefix-collision regression test style: a two-machine {date}.md file
         must have machine b's section left byte-identical when machine a's
         Reviewed: line is upserted."""

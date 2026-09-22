@@ -13,7 +13,7 @@ concurrent or sequential full-suite runs collide on the shared singleton lock an
 files — causing RuntimeError "Sentinel not written within 25s" and flaky
 test_singleton_lock_acquire_release failures.
 
-Review: code-reviewer (B-F9) — replaced machine-specific absolute path in docstring with
+Replaced machine-specific absolute path in docstring with
 the generic Path-resolution description that matches the actual implementation below.
 
 Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § C0 / D3
@@ -55,9 +55,9 @@ def _isolated_svc_root(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None,
       - Do NOT use pytest's tmp_path here — it produces deep paths under
         /tmp/pytest-<N>/test_<name>/<N>/ that may approach or exceed 103 bytes.
 
-    Review: code-reviewer (F7, F4) — body extracted to _fixtures.isolated_svc_root_impl;
+    Body extracted to _fixtures.isolated_svc_root_impl;
     return annotation corrected from pytest.fixture to Generator[None, None, None].
     """
-    # Review: code-reviewer (F7) — implementation lives in _fixtures to avoid duplication
+    # Implementation lives in _fixtures to avoid duplication
     # with coordinator_core/invoke/tests/conftest.py.
     yield from isolated_svc_root_impl(monkeypatch)

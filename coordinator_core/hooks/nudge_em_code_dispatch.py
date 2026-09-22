@@ -109,7 +109,7 @@ def _ext_of(file_path: str) -> str:
     """Return the lowercase extension of file_path (empty string if none)."""
     # Use PurePosixPath to avoid platform-specific path parsing on Windows
     # for paths that may use forward slashes from the hook payload.
-    # Review: code-reviewer (B-F7) — body now matches the comment: PurePosixPath, not Path.
+    # Body now matches the comment: PurePosixPath, not Path.
     p = PurePosixPath(file_path)
     return p.suffix.lower()
 
@@ -387,7 +387,7 @@ def _describe_edit(payload: dict) -> str:
         tool_input = {}
     edits = tool_input.get("edits")
     if isinstance(edits, list) and edits:
-        # Review: code-reviewer (Finding 6) -- name the shape of the change
+        # Name the shape of the change
         # (string replacement) for parity with the Edit/Write branches below,
         # not merely a count.
         return f"{tool_name}: {len(edits)} string replacement(s) in this call"
@@ -505,7 +505,7 @@ _WORD_RE = re.compile(r"\w+|\W+")
 def _tokenize_for_classification(src: str) -> list | None:
     """Tokenize src, returning (type, string) pairs, or None if unparseable.
 
-    Review: code-reviewer (Findings 1/2) — raw-text/line-prefix classification
+    raw-text/line-prefix classification
     cannot tell a STRING token's content from cosmetic whitespace, or a real
     `#` COMMENT from a string literal's line that happens to start with `#`.
     Tokenizing and comparing by token TYPE closes both gaps at once. Returns

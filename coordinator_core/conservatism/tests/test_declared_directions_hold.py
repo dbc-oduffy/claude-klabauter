@@ -336,7 +336,7 @@ def test_block_worktree_sentinel_write_raises_as_declared():
     )
 
 
-# Review: code-reviewer -- the per-site tests above assert each site's
+# The per-site tests above assert each site's
 # CURRENT `declaration.direction`, whatever it is; they do not pin what that
 # direction should be. A decorator edit flipping e.g. `default_usable_ram_gb`
 # from RAISE to FALL_BACK would leave its per-site test green under a now-

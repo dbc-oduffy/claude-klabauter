@@ -119,7 +119,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Skill, Workflow) op: nudge toward the emitted-and-fired
     path at either of the two hand-authoring entry points, once per session.
     """
-    # Review: coordinator-code-reviewer — normalize the two params shapes
+    # Normalize the two params shapes
     # both engine doors and the cold chain send (see block_worktree_tool).
     params = payload_of(params)
     tool_name = params.get("tool_name")

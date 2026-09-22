@@ -74,7 +74,7 @@ _DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2})-\d{2}-")
 def _read_plain_yaml(path: Path) -> dict:
     """Read a plain-YAML bug-backlog file and return its content as a dict.
 
-    Review: code-reviewer (F1) — replaces _read_meta() which requires '---' fences;
+    Replaces _read_meta() which requires '---' fences;
     real state/bug-backlog/*.yaml files are plain YAML with no delimiters.
     Returns {} on any parse error or if the file does not contain a mapping.
     """
@@ -293,7 +293,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
         # re-verify above and the git-mv inside archive_and_commit below.  This is the
         # accepted DR-211 D1-at-act residual; the T3 re-verify already narrows the window
         # to the call-site gap (same shape as archive_plans).
-        # Review: code-reviewer (F8) — aligned prefix+count format with sibling handlers.
+        # Aligned prefix+count format with sibling handlers.
         commit_subject = (
             f"fleet: prune {len(moves)} closed bug "
             f"{'entry' if len(moves) == 1 else 'entries'} [fleet.prune_closed_bugs]"

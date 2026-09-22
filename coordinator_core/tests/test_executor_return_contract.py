@@ -65,6 +65,18 @@ def test_self_verify_constraint_reproduces_mise_hand_dispatch_bytes():
     assert rendered == _MISE_SELF_VERIFY
 
 
+def test_self_verify_constraint_step_four_does_not_ban_the_step_two_git_read():
+    """Step (2) mandates a `git status --porcelain` read; step (4) must
+    forbid only mutating git state, not reading it -- an absolute ban
+    contradicts step (2) and an executor resolving that conflict in favour
+    of (4) silently skips the footprint computation step (2) exists to
+    deliver."""
+    rendered = self_verify_constraint(commit_authority="the EM")
+    assert "you do not invoke git under any circumstance" not in rendered
+    assert "git status --porcelain -- <footprint paths>" in rendered
+    assert "Only the EM commits, once per wave" in rendered
+
+
 def test_self_verify_constraint_emitted_path_names_named_authority():
     rendered = self_verify_constraint(
         commit_authority="the `coordinator:git-commit-agent` phase"

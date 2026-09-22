@@ -82,7 +82,7 @@ def _existence_detail(path: str) -> str:
             capture_output=True,
             text=True,
             check=False,
-            # Review: code-reviewer — Windows portability convention applied
+            # Windows portability convention applied
             # inconsistently across this wave's siblings; align this call site.
             **no_console_creationflags(),
         )
@@ -150,7 +150,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
-            # Review: code-reviewer — Windows portability convention applied
+            # Windows portability convention applied
             # inconsistently across this wave's siblings; align this call site.
             **no_console_creationflags(),
         )

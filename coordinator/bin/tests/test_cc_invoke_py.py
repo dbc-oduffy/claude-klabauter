@@ -436,7 +436,7 @@ class TestRouteState2Success(unittest.TestCase):
             _mod.cc_invoke("queue.append", {"a": 1}, "/the/repo")
 
         call_args = _invoke_argv(captured_calls)  # the op spawn, selected by predicate
-        # Review: cross-slice (DR-148) — cc_invoke.py now uses sys.executable, not "python3".
+        # cross-slice (DR-148) — cc_invoke.py now uses sys.executable, not "python3".
         self.assertEqual(call_args[0], sys.executable)
         self.assertEqual(call_args[1], "-m")
         self.assertEqual(call_args[2], "coordinator_core.invoke")
@@ -834,6 +834,41 @@ class TestRouteState2TransportFail(unittest.TestCase):
         mock_proc.stdout = "not-json"
         mock_proc.stderr = ""
         self._assert_raises_not_legacy(mock_proc, contains="valid JSON")
+
+    def test_invalid_json_raises_includes_raw_stdout_prefix(self) -> None:
+        """A decode failure carries the raw bytes received, not just the exception
+        text -- so diagnostic text landing ahead of the JSON-RPC envelope (stdout
+        pollution) classifies itself instead of needing a fresh repro to capture.
+        """
+        mock_proc = unittest.mock.Mock()
+        mock_proc.returncode = 0
+        mock_proc.stdout = "diagnostic text ahead of the envelope\n{}"
+        mock_proc.stderr = ""
+        exc = self._assert_raises_not_legacy(mock_proc, contains="valid JSON")
+        self.assertIn("diagnostic text ahead of the envelope", str(exc))
+
+    def test_invalid_json_raises_distinct_applied_type_and_honest_message(self) -> None:
+        """rung (4) only ever runs once `_raise_on_process_failure` has already
+        confirmed rc == 0 -- the op process has ALREADY exited success by
+        construction, so a decode failure here is never evidence the op (or, for
+        a mutation, its write) failed. This is the behavior the row this fix
+        closes names as the actual defect ("the defect is the report, not the
+        write"): a bare `RuntimeError` here reads exactly like every other
+        transport failure, inviting a caller to retry a mutation that already
+        landed. The raised type must be distinct (mirroring
+        `WarmDispatchIndeterminate`'s own precedent) and the message must state
+        the applied fact outright, not just carry more diagnostic bytes.
+        """
+        mock_proc = unittest.mock.Mock()
+        mock_proc.returncode = 0
+        mock_proc.stdout = "diagnostic text ahead of the envelope\n{}"
+        mock_proc.stderr = ""
+        exc = self._assert_raises_not_legacy(mock_proc, contains="ALREADY SUCCEEDED")
+        self.assertIsInstance(exc, _mod.AppliedReportUndecodableError)
+        self.assertIn("do not retry", str(exc))
+        # coordinator-safe-commit.py :: _is_indeterminate_outcome substring-matches
+        # this exact text -- it must survive verbatim under the new type/wording.
+        self.assertIn("invoke stdout is not valid JSON", str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -2130,7 +2165,7 @@ class TestShouldPassRepoFailOpenDiagnostics(unittest.TestCase):
         """Dedup key is (branch, op): two different ops on the same fail-open
         branch must each get their own diagnostic; the same op twice must not.
 
-        # Review: coordinator:code-reviewer — this test previously asserted the
+        # This test previously asserted the
         # branch-only-keyed suppression as correct behavior, proving the defect
         # instead of catching it. Rewritten to assert the (branch, op) contract.
         """

@@ -335,6 +335,56 @@ def test_ac6_dry_run_preview_excludes_forward_pointer_refused_candidate(tmp_path
     assert ids == {"state/sizings/2026-01-15-plain.yaml"}
 
 
+def test_ac6_all_refused_preview_reports_scan_skipped_not_silently_empty(
+    tmp_path: Path,
+) -> None:
+    """Every terminal sizing AC6-refused at T1 leaves `candidates` empty —
+    exactly the "5 shipped sizings, nothing moved, no reason printed" shape
+    the row reports — but `scan_skipped` (the `_handle_preview` out-param a
+    caller opts into) must still carry a named reason per excluded record,
+    rather than leaving the caller with no way to distinguish "nothing was
+    terminal" from "everything was refused".
+    """
+    worktree = tmp_path / "repo"
+    cid = "state/sizings/2026-01-15-fk-live-plan-only.yaml"
+    _write_sizing(
+        worktree, "2026-01-15-fk-live-plan-only.yaml",
+        "---\nstatus: shipped\ntitle: x\nplan: docs/plans/a-live-plan-3.md\n---\n",
+    )
+    _write_plan(worktree, "docs/plans/a-live-plan-3.md", status="landed")
+
+    scan_skipped: list = []
+    with patched_disposition_seam(archive_sizings, worktree=worktree):
+        result = run(archive_sizings._archive_terminal_sizings(
+            {"mode": "already-terminal", "dry_run": True, "candidate_ids": None},
+            repo_root=str(worktree),
+            scan_skipped=scan_skipped,
+        ))
+
+    assert result["candidates"] == []
+    assert result["skipped"] == []  # the frozen T1 wire envelope stays untouched
+    assert len(scan_skipped) == 1
+    assert scan_skipped[0]["id"] == cid
+    assert "forward-plan-not-terminal" in scan_skipped[0]["reason"]
+
+
+def test_preview_omits_scan_skipped_when_caller_passes_no_out_list(tmp_path: Path) -> None:
+    """A caller that never asks for `scan_skipped` (every existing JSON-RPC
+    dispatch and every pre-existing `_preview` test helper call above) sees
+    no behavior change — the out-param defaults to None and nothing is
+    appended anywhere.
+    """
+    worktree = tmp_path / "repo"
+    _write_sizing(
+        worktree, "2026-01-15-fk-live-plan-default.yaml",
+        "---\nstatus: shipped\ntitle: x\nplan: docs/plans/a-live-plan-4.md\n---\n",
+    )
+    _write_plan(worktree, "docs/plans/a-live-plan-4.md", status="landed")
+
+    preview_result, _ = _preview(worktree)
+    assert preview_result["candidates"] == []
+
+
 # ---------------------------------------------------------------------------
 # AC5 worktree-dirty retention gate
 # ---------------------------------------------------------------------------

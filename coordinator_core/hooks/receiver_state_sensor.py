@@ -13,7 +13,7 @@ Write target: `.git/coordinator-sessions/<session_id>/receiver-state.json` — a
 per-session sibling file (module docstring of `session.receiver_state`; never
 `meta.json`, never `state/`). Classification: MUTATING (it writes).
 
-Review: overengineering-reviewer (finding #3, EM-ratified) — chunk C1 previously
+Chunk C1 previously
 added a SECOND WRITE here: this fire also appended this session's own
 turn-boundary row to `state/subagent-share/<session_id>/obligations-inbound.jsonl`
 via `coordinator_core.group_em.obligations.record`. Removed: the row's content

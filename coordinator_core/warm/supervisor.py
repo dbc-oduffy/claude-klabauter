@@ -510,7 +510,7 @@ def unlink_discovery(
                 except OSError:
                     pass
         except locked_write.LockTimeout:
-            # Review: code-reviewer -- contention past `held_lock`'s own
+            # Contention past `held_lock`'s own
             # timeout must not escape this never-raises contract; a caller
             # (`ctx_shutdown`) relying on that contract to reach its own
             # handle release must not see this branch raise.
@@ -1018,7 +1018,7 @@ class _ServerContext:
 
     def ctx_shutdown(self) -> None:
         self._skew_watchdog_stop.set()
-        # Review: code-reviewer (Finding 2) -- `telemetry.flush` and
+        # `telemetry.flush` and
         # `unlink_discovery` are each best-effort/never-raises BY CONTRACT,
         # but the handle release must not sit downstream of either one's
         # ABILITY to raise: this failure mode is unrecoverable (a leaked
@@ -1410,7 +1410,7 @@ def _make_handler(ctx: "_ServerContext"):
                 # SessionStart posted to either spelling would otherwise get a confident
                 # verdict on a question nobody asked. Both spellings resolve to the same
                 # `op_name`, so both get the same eligibility check.
-                # Review: coordinator:code-reviewer -- explicit /hook/<op> alias bypassed
+                # Explicit /hook/<op> alias bypassed
                 # the bare-/hook safety check because it resolves to the same DEFAULT_OP_NAME
                 # but failed the path-based exclusion; gate on op_name alone instead.
                 if op_name == hook_http.DEFAULT_OP_NAME:
@@ -1642,7 +1642,7 @@ def main() -> int:
         _release_election_handle(handle)
         return 3
 
-    # Review: code-reviewer (Finding 1) -- between the credential check
+    # Between the credential check
     # passing and `ctx` being successfully constructed, `handle` is owned
     # by nothing: `ThreadingHTTPServer` can raise on bind failure,
     # `skew.ServerVersionState` can raise, and `_ServerContext.__init__`
@@ -1680,7 +1680,7 @@ def main() -> int:
     # is not the idle watchdog `warm.server` runs. Started after the
     # discovery write so a poll landing before the first write sees this
     # context's own `engine_token`, never a torn boot sequence.
-    # Review: code-reviewer (Finding 3) -- `try:` moved up to cover the
+    # `try:` moved up to cover the
     # thread start too: `ctx` already owns the election handle by this
     # point, and `threading.Thread(...).start()` can raise `RuntimeError`
     # under resource exhaustion, which must not leak the handle any more

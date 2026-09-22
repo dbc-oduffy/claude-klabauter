@@ -254,7 +254,7 @@ class TestGatedOnNoRemoteNeverNoUpstream:
 
 
 class TestPrecheckIsExceptionIsolated:
-    """Review: coordinator-code-reviewer F1 -- `_p4_leg_precheck` must be as
+    """`_p4_leg_precheck` must be as
     structurally exception-isolated as `_p4_leg_execute`. A raise from any
     callee it reaches (here `workspace.session_change`) must not propagate
     into the git leg, and the returned `PushOutcome` must still report the

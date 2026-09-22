@@ -141,7 +141,7 @@ def test_an_unmeasured_commits_or_surfaces_input_is_named_as_unable_to_change_th
 
 
 def test_an_unmeasured_code_loc_input_is_named_but_not_told_it_cannot_change_the_verdict() -> None:
-    """Review: coordinator:code-reviewer (a67271301efadc596) Finding 1 —
+    """
     `code_loc` is not a peer of `commits`/`surfaces`: it alone carries veto
     power via `code_loc_resolved_zero`. When `commits`/`surfaces` already
     tripped row 4 while `code_loc` is still unmeasured, a later

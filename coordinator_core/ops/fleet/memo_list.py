@@ -646,7 +646,7 @@ def _resolve_candidate(
         }
         if topic:
             today = datetime.date.today().isoformat()
-            # Review: coordinator-code-reviewer Finding 1 — root must be
+            # Root must be
             # threaded from the caller's own repo_root, not left to the
             # ambient-cwd fallback, under the warm resident engine (DR-315)
             # serving several callers' repos out of one process.
@@ -709,7 +709,7 @@ def _memo_list(params: dict, repo_root: Optional[Path] = None) -> dict:
     Receiver enumeration/resolution itself has no sender-worktree dependency
     — unlike memo.send there is no own-inbox check to make here (nothing is
     written) — only the sender-namespaced filename preview needs it.
-    # Review: coordinator-code-reviewer Finding 1 — this claim was true
+    # This claim was true
     # before c563c26174 turned the sender default into a root-dependent
     # resolution, and is false after it.
 

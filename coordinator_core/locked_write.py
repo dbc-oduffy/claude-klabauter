@@ -699,7 +699,7 @@ def locked_rmw(
                 old_text = target_path.read_text(encoding="utf-8")
 
             # --- Mutate ---
-            # Review: code-reviewer (F4) — removed dead try/except that re-raised
+            # Removed dead try/except that re-raised
             # unconditionally from both arms; lock is released by the finally clause
             # regardless, so the try/except had no effect.
             new_text = mutate(old_text)
@@ -935,7 +935,7 @@ def held_lock(
             "Windows); neither is available on this platform"
         )
 
-    # Review: code-reviewer P3 — _assert_anchor_outside_target's realpath
+    # _assert_anchor_outside_target's realpath
     # comparison resolves a relative or Windows drive-relative path (e.g.
     # `C:foo`, no separator) against the process cwd, which could produce a
     # false NEGATIVE (an anchor wrongly judged safe). Both real call sites
@@ -970,7 +970,7 @@ def held_lock(
             ) from None
 
         # Lock held from here through the caller's scope.
-        # Review: code-reviewer P2 — clear any stale metadata (e.g. left
+        # Clear any stale metadata (e.g. left
         # behind by a killed prior holder whose release-side clear never
         # ran) before writing this holder's own, so a concurrent
         # _describe_holder read in the narrow window between the two calls

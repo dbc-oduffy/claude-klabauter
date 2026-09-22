@@ -241,7 +241,7 @@ _SIZING_SCHEMA_PATH: Path = (
 # not silently flipped), but folding it in HERE is the more honest shape: a
 # declined sizing was never a live candidate for this cascade in the first
 # place, not a live one that happens to fail a downstream leg.
-# Review: coordinator:code-reviewer — Finding 5: this file's own hand-copy
+# This file's own hand-copy
 # mirror is `coordinator/bin/coordinator-doc-new.py::_SIZING_TERMINAL_STATUSES`
 # (plural). Not consolidated (EM-adjudicated) — but a future editor of
 # either set should check the other before assuming parity; as of this
@@ -249,7 +249,7 @@ _SIZING_SCHEMA_PATH: Path = (
 # mirror does not).
 _SIZING_TERMINAL_STATUS: FrozenSet[str] = frozenset({"shipped", "declined"})
 
-# Review: staff-eng — Finding 1: leg (c)'s POSITIVE live-set for the sizing
+# Leg (c)'s POSITIVE live-set for the sizing
 # kind. `draft`/`superseded` are excluded deliberately: `draft` has no route
 # chosen yet (nothing downstream to be consistent WITH), and `superseded`
 # names a different fact than "still live" per `_SIZING_TERMINAL_STATUS`'s
@@ -347,7 +347,7 @@ class _KindDescriptor:
     reader: Callable[[str], dict]
     lifecycle_field: str
     terminal_values: FrozenSet[str]
-    # Review: staff-eng — Finding 1: leg (c) needs a POSITIVE live-set check,
+    # Leg (c) needs a POSITIVE live-set check,
     # distinct from `terminal_values`. `terminal_values` alone degenerates
     # leg (c) into a re-test of `_collect_live_candidates_for_kind`'s own
     # exclusion filter (which already dropped every terminal record before
@@ -608,7 +608,7 @@ async def _predicate_refusal(
     if leg_c.applies:
         lifecycle_value = fm.get(kind.lifecycle_field)
         if lifecycle_value not in kind.live_values:
-            # Review: coordinator:code-reviewer — unifying the two kinds'
+            # Unifying the two kinds'
             # branches into one POSITIVE `live_values` check (Finding 1)
             # collapsed the handoff-specific wording into a single generic
             # string, losing operator-facing signal the handoff kind used to
@@ -917,7 +917,7 @@ def _advance_one_sizing(
         whole_doc = split is None
         fm_text = old_text if whole_doc else split.fm_text
 
-        # Review: staff-eng — Finding 0: the idempotency-floor comparison is
+        # The idempotency-floor comparison is
         # against an unquoted in-memory value (_SIZING_TERMINAL_STATUS), so it
         # must read through read_fm_field_unquoted (per that function's own
         # documented use rule) rather than read_fm_field's raw on-disk bytes —
@@ -934,7 +934,7 @@ def _advance_one_sizing(
             raise MutateAbort(f"advance: sizing at {candidate_path} has no 'status' field")
         fm_text = replace_fm_field(fm_text, "status", "shipped")
 
-        # Review: staff-eng — Finding 8 (EM-adjudicated policy): this cascade
+        # This cascade
         # write holds the terminal fact for the `plan` FK and OVERWRITES an
         # existing, differing value without a collision guard — the opposite
         # policy from coordinator-doc-new::_mutate_sizing_reverse_edge, which
@@ -1216,7 +1216,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # schema's `^docs/plans/.+\.md$` pattern, regardless of how `source_path`
     # arrived (absolute, OS-native-separator, or already relative).
     sizing_plan_fk = ""
-    # Review: staff-eng — Finding 4: an unresolvable `source_path` (out-of-
+    # An unresolvable `source_path` (out-of-
     # worktree mount, symlinked temp root, etc.) used to degrade silently to
     # `""` — the record still flips to `shipped` with the `plan` FK dropped
     # and no signal in the response. Track the failure explicitly so the
@@ -1338,7 +1338,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 )
             if did_advance:
                 entry = {
-                    # Review: staff-eng — Finding 7: "path" alongside the
+                    # "path" alongside the
                     # legacy "handoff_path" key, which the sizing kind's own
                     # tests already assert on and stays for compatibility —
                     # a kind-agnostic name for the growing set of non-handoff
@@ -1352,7 +1352,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                     ),
                 }
                 if target_kind is _SIZING_KIND and sizing_plan_fk_unresolved:
-                    # Review: staff-eng — Finding 4: name the dropped join
+                    # Name the dropped join
                     # rather than let a silent "" pass as a clean success.
                     entry["plan_fk_unresolved"] = source_path
                 if target_kind is not _SIZING_KIND:
@@ -1439,7 +1439,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         result["commit_notice"] = commit_notice
     if not advanced:
         if not candidates:
-            # Review: staff-eng — Finding 7: this message was hardcoded to
+            # This message was hardcoded to
             # the handoff kind and named the wrong corpus/artifact class when
             # run with target_kind="sizing" — the zero-candidate path is the
             # only signal an EM gets, so it must name the corpus it actually

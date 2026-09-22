@@ -409,7 +409,7 @@ DEGRADE_LOG_PATH_ENV = "COORDINATOR_FORWARDER_DEGRADE_LOG_PATH"
 #: is answered by the recent tail, never by the whole history.
 _DEGRADE_LOG_MAX_BYTES = 2 << 20
 
-# Review: coordinator:code-reviewer (a4d565927c67359bc) -- guards the stat/truncate/append
+# Guards the stat/truncate/append
 # sequence in `_record_rung` across `ThreadingHTTPServer` handler threads, same reasoning
 # `DialCounter._lock` documents for its own write path: an unsynchronized truncate racing an
 # append can silently drop a degrade row on the exact hot path DR-402 exists to make loud.
@@ -685,7 +685,7 @@ class DialCounter:
                 payload = json.dumps(self._snapshot_locked(), indent=2, sort_keys=True)
                 self._path.parent.mkdir(parents=True, exist_ok=True)
                 tmp = self._path.with_name("{0}.{1}.tmp".format(self._path.name, self._boot_id))
-                with open(tmp, "w", encoding="utf-8") as handle:
+                with open(tmp, "w", encoding="utf-8", newline="\n") as handle:
                     handle.write(payload + "\n")
                 self._replace_with_retry(tmp)
         except Exception:
@@ -960,7 +960,7 @@ def _record_rung(
             row["detail"] = detail[:500]
         line = json.dumps(row, sort_keys=True) + "\n"
         path.parent.mkdir(parents=True, exist_ok=True)
-        # Review: coordinator:code-reviewer (a4d565927c67359bc) -- hold the lock across the
+        # Hold the lock across the
         # whole stat-check + truncate + append sequence, not just the append, mirroring
         # `DialCounter.persist`'s own reasoning: a truncating open racing an appending open on
         # another thread can lose a row with no error raised on either side.
@@ -973,10 +973,11 @@ def _record_rung(
                         )
                         + "\n",
                         encoding="utf-8",
+                        newline="\n",
                     )
             except OSError:
                 pass
-            with open(path, "a", encoding="utf-8") as handle:
+            with open(path, "a", encoding="utf-8", newline="\n") as handle:
                 handle.write(line)
     except Exception:
         return
@@ -1081,7 +1082,7 @@ def _ladder_response(
     actual `CAUSE_*` token mid-string in `detail` was the defect this signature replaces --
     a site with no token yet stays honest about carrying none, rather than faking one.
     #
-    # Review: coordinator:code-reviewer (a4d565927c67359bc) -- the unreachable call site
+    # The unreachable call site
     # gained a real `CAUSE_*` token in this same diff, so today only the refused-backend call
     # site (no finer-grained token exists there yet) falls back to `reason`. The prior wording
     # both overclaimed ("cause is NEVER prose", contradicted by that same fallback) and was
@@ -1913,7 +1914,7 @@ class _ForwarderHandler(BaseHTTPRequestHandler):
                 )
                 if retried is None:
                     if counter is not None:
-                        # Review: coordinator:code-reviewer — record_cause must accompany every
+                        # record_cause must accompany every
                         # record_denied, or denied_by_cause silently undercounts denied_by_arm
                         # for this arm (record_cause's own docstring states the invariant).
                         counter.record_denied(DENY_ARM_UNREACHABLE)

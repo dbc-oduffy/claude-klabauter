@@ -348,7 +348,7 @@ class _ForeignSessionLookupError(RuntimeError):
     (any scope in `_FOREIGN_STRIPPED_SCOPES`) fails (non-zero rc — see
     `session_attribution.GitLogFailed`, the underlying error this wraps).
 
-    Review: code-reviewer — deliberately NOT swallowed to an empty result.
+    Deliberately NOT swallowed to an empty result.
     An empty result reads to every caller as "no foreign commits found",
     which for a stripped-scope record's `shas - foreign` computation means
     FULL-WIDTH crediting — exactly the over-crediting bug this filter exists
@@ -1081,57 +1081,6 @@ def _parse_handoff_deliverable_id(handoff_path: str) -> Optional[str]:
     return val
 
 
-def _commit_deliverable_id_trailers(shas: List[str], cwd: str) -> Dict[str, str]:
-    """Return {sha: Deliverable-Id trailer value ("" if absent)} for `shas`,
-    via ONE batched `git log --no-walk --format=...` call — mirrors
-    _commit_touched_paths' batched-call shape (:352) rather than one
-    subprocess per commit.
-
-    Its former caller, the leg-(b) legacy-history fallback in
-    `_derive_dag_chain_set`, was removed 2026-08-19 (see state/kill-ledger.md);
-    this helper is currently unreferenced. Retained as a standalone
-    trailer-lookup utility for any future consumer needing a batched
-    sha-to-Deliverable-Id map.
-
-    On git failure (rc != 0), every sha maps to "" (absent) — fail-closed:
-    an unreadable trailer is treated as "no trailer" rather than raising.
-
-    Safe against the trailing-\x1f truncation class flagged in
-    state/bug-backlog/2026-08-08-commit-deliverable-id-trailers-may-carry-
-    34052a90b5ec.yaml: `_run`'s whole-stdout `.strip()` can eat a trailing
-    empty `%(trailers:...)` field on the LAST commit in the batch (\x1f is
-    Unicode whitespace). Unlike C6a's multi-field format, this line carries
-    exactly ONE `\x1f` separator, so a stripped trailing separator just
-    leaves `rest` with no `\x1f` at all — `rest.partition("\x1f")` then
-    falls back to `("<sha>", "", "")`, giving `value == ""`, which is
-    already this function's own "absent" default. There is no second field
-    for the missing separator to shift into, so the truncation is inert
-    here rather than merely unlikely.
-    """
-    if not shas:
-        return {}
-    result: Dict[str, str] = {sha: "" for sha in shas}
-    rc, out, _ = _run(
-        [
-            "git", "log", "--no-walk",
-            f"--format={_COMMIT_HEADER_SENTINEL}%H\x1f%(trailers:key=Deliverable-Id,valueonly)",
-        ]
-        + shas,
-        cwd=cwd,
-    )
-    if rc != 0:
-        return result
-    for line in out.splitlines():
-        if not line.startswith(_COMMIT_HEADER_SENTINEL):
-            continue
-        rest = line[len(_COMMIT_HEADER_SENTINEL):]
-        sha, _, value = rest.partition("\x1f")
-        sha = sha.strip()
-        if sha in result:
-            result[sha] = value.strip()
-    return result
-
-
 def _get_handoff_consumed_by(
     handoff_path: str,
     *,
@@ -1514,7 +1463,7 @@ def _collect_trail_paths(repo_root: str) -> List[str]:
     for a code path nothing exercises; the dead bash-spawn site is deleted
     rather than ported.
 
-    Review: code-reviewer — the retired ``list_records_script`` parameter
+    The retired ``list_records_script`` parameter
     (accept-and-silently-``del`` compatibility shim) is dropped rather than
     kept, per grep confirming zero non-None callers in the tree.
     """

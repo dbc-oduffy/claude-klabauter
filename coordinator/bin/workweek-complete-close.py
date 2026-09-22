@@ -62,7 +62,7 @@ _BIN_DIR = Path(__file__).resolve().parent
 
 
 def _import_rel_id():
-    # Review: code-reviewer Finding 2 — the same coordinator/bin/*.py ->
+    # The same coordinator/bin/*.py ->
     # lib/cc_invoke.py -> coordinator_core bootstrap this diff already pays
     # for in misc-session-and-guards.py; routes this CLI's git-pathspec
     # construction through the single sanctioned wire_paths.rel_id helper
@@ -565,7 +565,7 @@ def _cmd_archive(args: argparse.Namespace) -> int:
     released_date = args.released_date or date.today().isoformat()
 
     if args.move_priorities and not args.week_only:
-        # Review: code-reviewer Finding 2 -- --move-priorities is a no-op
+        # --move-priorities is a no-op
         # without --week-only (fragments already move unconditionally on
         # the default sweep-everything path). Printed note only, never a
         # parser error or behaviour change -- a caller who genuinely wants

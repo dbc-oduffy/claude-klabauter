@@ -1051,7 +1051,7 @@ class TestInReplyToDraft:
 # ===========================================================================
 # 5b. space / supersedes — shared validation with memo.send (2026-07-28)
 #
-# Review: code-reviewer (Finding 2, slice 1) — memo.draft duplicated
+# memo.draft duplicated
 # memo_send's space/supersedes validation with no direct unit test of its
 # own (only exercised incidentally, via happy-path overrides, in
 # test_memo_compose.py::TestCarriedDraftFields). These tests exercise the

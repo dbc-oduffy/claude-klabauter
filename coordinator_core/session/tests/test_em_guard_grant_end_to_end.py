@@ -88,7 +88,7 @@ def _init_repo(tmp_path: Path, name: str) -> Path:
 
 
 def _posix(p) -> str:
-    # Review: coordinator:code-reviewer — the hasattr/PureWindowsPath fallback
+    # The hasattr/PureWindowsPath fallback
     # was dead code at this file's only call site (`repos["foreign"]` is
     # always a `pathlib.Path`, which always has `.as_posix()`). No caller
     # here ever passes a bare string, so the branch is collapsed rather than

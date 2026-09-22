@@ -244,7 +244,7 @@ _DROP_IN_LEG_EXTENSIONS = (".sh", ".py")
 
 _BIN_DST_KNOWN_FORWARDER = "machine-local"
 
-# Review: code-reviewer (Finding 3) -- this used to be a byte-for-byte copy
+# This used to be a byte-for-byte copy
 # of `wrapper_onto_path._on_path()` (same PATH-membership predicate,
 # same docstring). Imported directly instead (see the module import block
 # above) so a future fix to the PATH-comparison logic doesn't need a second,
@@ -391,7 +391,7 @@ def check_door_provenance(plugin_root: str, claude_klabauter_root: str) -> int:
     rc = _report_installed_verdict(
         door_install.verify_installed_provenance(settings_home() / "bin")
     )
-    if _is_windows():  # Review: coordinator-code-reviewer -- reuse the file's existing platform predicate instead of re-deriving sys.platform == "win32"
+    if _is_windows():  # Reuse the file's existing platform predicate instead of re-deriving sys.platform == "win32"
         rc = max(rc, _report_prebuilt_currency())
     return rc
 
@@ -774,7 +774,7 @@ def _run_legs(plugin_root: str, claude_klabauter_root: str, script_path: Optiona
         try:
             rc = entrypoint(plugin_root, claude_klabauter_root)
         except Exception as exc:  # pragma: no cover - defensive parity with the OSError branch above
-            # Review: code-reviewer (Finding 3) — distinct "raised" prefix so
+            # Distinct "raised" prefix so
             # operators can tell a native-leg crash apart from a clean
             # non-zero return (below) without reading code.
             print(f"[install-health] FAIL: {leg_name} raised: {exc}", file=sys.stderr)
@@ -824,7 +824,7 @@ def _run_legs(plugin_root: str, claude_klabauter_root: str, script_path: Optiona
     return 0
 
 
-# Review: code-reviewer (2026-07-17 Finding 3) — every sibling op module in this
+# Every sibling op module in this
 # slice ends with a __main__ guard, making it directly CLI-runnable/testable as a
 # script; this one lacked it, an inconsistency against the slice's own convention.
 if __name__ == "__main__":

@@ -117,7 +117,7 @@ def _run_git(args: Sequence[str]) -> Optional[str]:
             **no_console_creationflags(),
         )  # popup-safe-env-suppressed
     except OSError as exc:
-        # Review: code-reviewer (Finding 1) — replaced a stringified fragment
+        # Replaced a stringified fragment
         # of the try-block's own source with a plain human sentence.
         print(f"skip: git subcommand failed: {exc}", file=sys.stderr)
         return None

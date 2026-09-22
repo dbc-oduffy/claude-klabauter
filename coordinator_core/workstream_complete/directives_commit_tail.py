@@ -22,11 +22,12 @@ fact, don't invent a directive" disposition.
 Callers MUST use `run_close_commit_and_release_claims`, never bare
 `run_close_commit` — the latter releases NEITHER claim mechanism (see its
 own docstring): `run_close_commit_and_release_claims` wraps it and
-releases both the per-path commit-claim (`session/scope.py ::
-release_committed_claims`, hard constraint 4) and the governing-plan
-artifact claim (`ops/ceremony/tail_ops.py :: cs_release_artifact`, AC5)
-unconditionally, on both the success and failure exit of the wrapped
-commit call.
+releases both the FULL per-path commit-claim surface (`session/scope.py ::
+release_all_committed_claims`, hard constraint 4 — not merely this commit's
+own `stage_paths`; see `_release_committed_path_claims`'s own docstring)
+and the governing-plan artifact claim (`ops/ceremony/tail_ops.py ::
+cs_release_artifact`, AC5) unconditionally, on both the success and failure
+exit of the wrapped commit call.
 
 This module is one of seven siblings (directives_lessons_plan.py,
 directives_completion.py, directives_memo_lifecycle.py,
@@ -142,6 +143,7 @@ from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Set, Union
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import liveness as _session_liveness
 from coordinator_core.session import scope as session_scope
+from coordinator_core.session import touch_record as _touch_record
 from coordinator_core.session.claimed_write import replace_text
 from coordinator_core.session.machinery_paths import (
     machinery_root as _machinery_root,
@@ -884,6 +886,42 @@ def _scan_subagent_share_session_dirs(repo_root: Path, this_session_id: str) -> 
     return paths
 
 
+def _peer_touch_claimed_paths(repo_root: Path, live_sids: "list[str]") -> "set[str]":
+    """Third producer for `resolve_known_concurrent_paths`'s exclusion set:
+    every path currently TOUCH-claimed (live, unreleased) in a live peer's
+    own touch-record -- the same signal `session/scope.py::compute_scope`
+    Step 3 already consumes for the analogous staging-set problem
+    (`contested_by_live_peers`'s own docstring there). Closes a race the
+    other two producers cannot see: a peer's untracked, uncommitted file
+    that an Edit/Write-tool call already touch-claimed (via the
+    PostToolUse hook, `hooks.track_touched_files`) but that has landed
+    neither a commit nor a `state/subagent-share/<sid>/` presence yet.
+
+    Issues no git spawn -- `touch_record.project_live_claims` is a plain
+    file read, batched across every live peer's sink in one call. Fails
+    LOUD (raises `PeerAttributionUnavailable`) on a degraded read, matching
+    this module's existing commit-attribution fail-closed posture: a
+    touch-record read that could not confirm a peer's claims must not be
+    reported as a confirmed-empty set (`TouchProjection.degraded`'s own
+    docstring), the exact over-optimistic outcome `resolve_known_
+    concurrent_paths`'s CORRECTNESS BAR forbids.
+    """
+    if not live_sids:
+        return set()
+    sinks = [
+        str(_touch_record.sink_path(_session_core.session_dir(sid, str(repo_root))))
+        for sid in live_sids
+    ]
+    projection = _touch_record.project_live_claims(*sinks, cwd=str(repo_root))
+    if projection.degraded:
+        raise PeerAttributionUnavailable(
+            f"touch_record.project_live_claims degraded while resolving "
+            f"{len(sinks)} live peer touch-record sink(s): "
+            f"{', '.join(projection.degrade_reasons) or 'unknown reason'}"
+        )
+    return set(projection.claims.keys())
+
+
 def resolve_known_concurrent_paths(
     repo_root: Path,
     this_session_id: str,
@@ -910,9 +948,13 @@ def resolve_known_concurrent_paths(
     Covers, at minimum, per live peer session: (1) that peer's own
     `state/subagent-share/<sid>/` surface (both the collapsed-directory and
     expanded-per-file `git status --porcelain` shapes — see
-    `_peer_subagent_share_paths`), and (2) every path touched by a commit
+    `_peer_subagent_share_paths`), (2) every path touched by a commit
     carrying THAT peer's `Session-Id` trailer, landed since that peer's own
-    session start (see `_committed_paths_for_sids`).
+    session start (see `_committed_paths_for_sids`), and (3) every path
+    currently TOUCH-claimed (live, unreleased) in that peer's touch-record
+    — the same signal `session/scope.py::compute_scope` Step 3 already
+    consumes for the analogous staging-set problem (see
+    `_peer_touch_claimed_paths`).
 
     CORRECTNESS BAR (this function's whole point — read before changing):
       - `this_session_id` is NEVER treated as a peer. If it is falsy, this
@@ -1046,6 +1088,7 @@ def resolve_known_concurrent_paths(
     live_sids = [sid for sid in peer_sids if _session_live_conservative(repo_root, sid)]
     for sid in live_sids:
         result.update(_peer_subagent_share_paths(repo_root, sid))
+    result.update(_peer_touch_claimed_paths(repo_root, live_sids))
 
     # Union-window-once: resolve every live peer's own start time (no git
     # spawn scaling concern here — resolve_session_start_time is already
@@ -1108,7 +1151,7 @@ FREE_VALUE_KEYS: tuple[str, ...] = (
     _KEY_PROSE,
     _KEY_STAGE_PATHS,
     _KEY_GOVERNING_PLAN_SLUG,
-    # Review: coordinator:code-reviewer (Finding 1, 2026-08-30) -- widening
+    # Widening
     # the undeclared-key guard past `directives_*.py` to also scan `apply.py`
     # surfaced these two as pre-existing, genuinely undeclared reads in
     # `_resolve_close_commit_kwargs` (apply.py). Both are caller-supplied
@@ -1277,25 +1320,39 @@ def _release_committed_path_claims(
     worktree_root: "Union[Path, str]", session_id: str, stage_paths: "Sequence[str]"
 ) -> None:
     """Hard constraint 4's per-route wiring of `session/scope.py ::
-    release_committed_claims` — the PATH-claim mechanism (`touched.txt` `R`
-    events), never wired automatically by `commit_paths`/`git_native.py`
+    release_all_committed_claims` — the PATH-claim mechanism (`touched.txt`
+    `R` events), never wired automatically by `commit_paths`/`git_native.py`
     (84 hand-wired call sites repo-wide, zero there — hard constraint 4's own
-    count). Mirrors `post_commit_tail.py ::
-    _commit_and_push_origin_stub_close`'s own call shape exactly (same
-    `session_scope.release_committed_claims(sid, paths, cwd=...)` call,
-    wrapped the same best-effort way): a release failure must never surface
-    as this route's own failure — the commit (or its absence) is the durable
-    outcome; a retained stale path-claim is the safe residue, same fail-safe
-    direction that call site's own comment documents. Skips entirely when
-    `session_id` is falsy — releasing under an unknown sid would be a guess
-    at authorship, the one thing this mechanism refuses to do (same posture
-    as the precedent it copies)."""
+    count).
+
+    Releases the session's FULL touch-claim surface, not merely
+    `stage_paths` (bug-backlog `2026-08-19-completed-but-alive-session-
+    holds-touche-27e0ba000d69`). This is the workstream-complete close
+    route's own terminal commit — no later commit from this session is ever
+    coming to release whatever `stage_paths` happened to leave out (an
+    earlier hunk already landed in a prior commit, or a scratch/marker path
+    was touched but never staged at all). Scoping the release to
+    `stage_paths` alone left every such path `T`-claimed for as long as this
+    session's process stayed alive after its ceremony completed, blocking
+    every peer on a file this session will provably never write again.
+    `stage_paths` stays a parameter for call-shape compatibility with this
+    module's other tail helpers and its `apply.py` caller, but is no longer
+    read here — the full-release call below is a strict superset of
+    releasing it alone, never a narrower one.
+
+    Mirrors `post_commit_tail.py ::
+    _commit_and_push_origin_stub_close`'s own call shape (best-effort
+    `session_scope`, wrapped the same way): a release failure must never
+    surface as this route's own failure — the commit (or its absence) is the
+    durable outcome; a retained stale path-claim is the safe residue, same
+    fail-safe direction that call site's own comment documents. Skips
+    entirely when `session_id` is falsy — releasing under an unknown sid
+    would be a guess at authorship, the one thing this mechanism refuses to
+    do (same posture as the precedent it copies)."""
     if not session_id:
         return
     try:
-        session_scope.release_committed_claims(
-            session_id, list(stage_paths), cwd=str(worktree_root)
-        )
+        session_scope.release_all_committed_claims(session_id, cwd=str(worktree_root))
     except Exception:
         pass
 
@@ -1358,8 +1415,11 @@ def run_close_commit_and_release_claims(
 
       (a) hard constraint 4 — the per-PATH commit-claim mechanism
           (`_release_committed_path_claims`, `session/scope.py ::
-          release_committed_claims`), released for `stage_paths` (the same
-          pathspec this call just asked `run_close_commit` to stage/commit).
+          release_all_committed_claims`), released for this session's FULL
+          held claim surface, not merely `stage_paths` (the pathspec this
+          call just asked `run_close_commit` to stage/commit) — this is the
+          session's terminal commit, so no later release is coming for
+          anything `stage_paths` left out.
       (b) AC5 — the governing-plan ARTIFACT claim
           (`_release_governing_plan_claim`, `ops/ceremony/tail_ops.py ::
           cs_release_artifact`), released for `governing_plan_slug` when one

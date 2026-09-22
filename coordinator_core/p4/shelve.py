@@ -222,7 +222,7 @@ _CLIENT_FILE_PREFIX_RE = re.compile(r"^//[^/]+/(.+)$")
 def _key_fstat_records_by_path(
     records: List[Dict[str, str]], paths: List[str]
 ) -> "tuple[Dict[str, Optional[Dict[str, str]]], List[str]]":
-    """Review: code-reviewer F1 (integrator-applied) -- keys ``records`` by
+    """Keys ``records`` by
     the ``clientFile`` each record itself names, NEVER by position against
     ``paths``. ``zip()`` silently truncates to the shorter sequence, and
     worse, mispairs every path after a short row against the wrong path's
@@ -279,7 +279,7 @@ def _restore_read_only(repo_root: str, paths: List[str]) -> int:
 
 
 def _p4ignore_absent(repo_root: str) -> bool:
-    """Review: overengineering-reviewer F3 (integrator-applied) -- reads back
+    """Reads back
     ``p4.<repo_key>.p4ignore_absent``, the row `register.py` writes when a
     registration authored ``.p4ignore`` from scratch (empty of any pattern
     but the ``.git/`` line this floor needs). That row's own message says

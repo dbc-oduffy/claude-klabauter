@@ -158,12 +158,12 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # from projected state stays the caller's job -- this module holds its
     # negative-spec import boundary and does not read the store to find it.
     closure_fidelity = params.get("closure_fidelity", DEFAULT_CLOSURE_FIDELITY)
-    # Review: overengineering-reviewer -- reuse the single enum guard
+    # Reuse the single enum guard
     # (tracker_entities.reject_invalid_closure_fidelity) instead of a second
     # inline membership check; re-raised as ValueError to preserve this op's
     # documented wire contract (see docstring `Raises:`).
     try:
-        # Review: code-reviewer -- the guard's message hardcodes
+        # The guard's message hardcodes
         # "item_closure_fidelity_set" as the payload noun even though this
         # call validates a tracker.assert_code_complete wire param, not an
         # item_closure_fidelity_set construction; accepted as a mild,

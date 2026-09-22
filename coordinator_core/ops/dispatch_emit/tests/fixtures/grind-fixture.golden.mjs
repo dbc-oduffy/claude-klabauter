@@ -78,8 +78,6 @@ function _lockKeysFor(row, rowId) { return row.declaredFiles.concat([`ledger:${r
 
 const WINDOW = 2;
 
-const BATCH_SIZE = 4;
-
 const RESERVE = 23144;
 
 const MAX_AGENT_CALLS = 40;
@@ -168,7 +166,7 @@ async function _verifyCall(row) {
 }
 
 async function _commitCall(row) {
-    const _result = (await agent('You are the committer for row ' + (row.rowId) + '. You are the only stage that stages or commits anything. Stage exactly this touched list: [' + ((row.touchedFiles).join(', ')) + '], plus this row\'s ledger deletion via `backlog-grind-assemble grind-row settle`.' + ' Pass --declared-revert for every one of these removed paths: [' + ((row.removedFiles.concat([_ledgerPathFor(row.rowId)])).join(', ')) + '].' + ' Use commit subject `grind(fixture): ' + (row.rowId) + ' ' + (row.lastOutcome || 'settled') + '` and a commit body naming this row.' + ' Then commit. If the outcome is indeterminate, reconcile it against `git log` and `git status` before doing anything else -- never retry blind.', { label: 'commit', phase: 'Grind', agentType: 'coordinator:git-commit-agent', model: 'sonnet', effort: 'low', schema: {"properties": {"outcome": {"enum": ["committed", "commit-failed"], "type": "string"}, "sha": {"type": "string"}}, "required": ["outcome"], "type": "object"} })) || {};
+    const _result = (await agent('You are the committer for row ' + (row.rowId) + '. You are the only stage that stages or commits anything. Stage exactly this touched list: [' + ((row.touchedFiles).join(', ')) + '], plus this row\'s ledger deletion via `backlog-grind-assemble grind-row settle --profile fixture --row-id ' + (row.rowId) + ' --repo-root .`.' + ' Pass --declared-revert for every one of these removed paths: [' + ((row.removedFiles.concat([_ledgerPathFor(row.rowId)])).join(', ')) + '].' + ' Use commit subject `grind(fixture): ' + (row.rowId) + ' ' + (row.lastOutcome || 'settled') + '` and a commit body naming this row.' + ' Then commit. If the outcome is indeterminate, reconcile it against `git log` and `git status` before doing anything else -- never retry blind.', { label: 'commit', phase: 'Grind', agentType: 'coordinator:git-commit-agent', model: 'sonnet', effort: 'low', schema: {"properties": {"outcome": {"enum": ["committed", "commit-failed"], "type": "string"}, "sha": {"type": "string"}}, "required": ["outcome"], "type": "object"} })) || {};
     _recordCall('commit');
     return _result;
 }
@@ -268,7 +266,7 @@ async function _closeBatch(batchState) {
     if (route.kind === 'handback') {
       const _cresult = await withLock(['@commit'], async () => _commitCall(row));
       if (_cresult.outcome !== 'committed') { _handBack(itemRow, 'commit-failed', "close's archive-move commit did not land"); }
-      else { row.sha = _cresult.sha || ''; _ledgerCommitted.add(itemRow); }
+      else { row.sha = _cresult.sha || ''; _ledgerCommitted.add(itemRow); _settled.push({ row: itemRow, outcome: 'committed', sha: row.sha }); }
     }
   }
   for (const entry of (result.refuted || [])) {
@@ -381,7 +379,7 @@ async function _drainCommit() {
   const unsettledPaths = unsettled.map((r) => _ledgerPathFor(r));
   const lockKeys = ['@commit'].concat(unsettled.map((r) => `ledger:${r}`));
   const result = await withLock(lockKeys, async () => {
-      const _result = (await agent('You are the committer for a ledger-only commit. You are the only stage that stages or commits anything. Stage exactly these unsettled rows\' ledger files: [' + ((unsettledPaths).join(', ')) + '], and nothing else. If any one of those files does not exist, skip it, report which one(s) you skipped in your reason, and commit the rest rather than failing the whole commit.' + ' This is the drain commit: also write and stage state/queue-grind/fixture/runs/' + (RUN_ID) + '.json in this same commit.' + ' Its content is exactly this JSON, byte for byte: ' + (JSON.stringify(_runCostRecord())) + '.' + ' Use commit subject `grind(fixture): drain run ' + (RUN_ID) + '` and a commit body naming these rows.' + ' Then commit. If the outcome is indeterminate, reconcile it against `git log` and `git status` before doing anything else -- never retry blind.', { label: 'commit-ledger:drain', phase: 'Grind', agentType: 'coordinator:git-commit-agent', model: 'sonnet', effort: 'low', schema: {"properties": {"outcome": {"enum": ["committed", "commit-failed"], "type": "string"}, "sha": {"type": "string"}}, "required": ["outcome"], "type": "object"} })) || {};
+      const _result = (await agent('You are the committer for a ledger-only commit. You are the only stage that stages or commits anything. Stage exactly these unsettled rows\' ledger files: [' + ((unsettledPaths).join(', ')) + '], and nothing else. If any one of those files does not exist, skip it, report which one(s) you skipped in your reason, and commit the rest rather than failing the whole commit.' + ' This is the drain commit: also run `backlog-grind-assemble grind-row run-record --profile fixture --run-id ' + (RUN_ID) + ' --repo-root .` to write and stage state/queue-grind/fixture/runs/' + (RUN_ID) + '.json in this same commit.' + ' Pass this JSON on stdin, byte for byte: ' + (JSON.stringify(_runCostRecord())) + '.' + ' Use commit subject `grind(fixture): drain run ' + (RUN_ID) + '` and a commit body naming these rows.' + ' Then commit. If the outcome is indeterminate, reconcile it against `git log` and `git status` before doing anything else -- never retry blind.', { label: 'commit-ledger:drain', phase: 'Grind', agentType: 'coordinator:git-commit-agent', model: 'sonnet', effort: 'low', schema: {"properties": {"outcome": {"enum": ["committed", "commit-failed"], "type": "string"}, "sha": {"type": "string"}}, "required": ["outcome"], "type": "object"} })) || {};
       _recordCall('commit');
       return _result;
   });
@@ -440,7 +438,6 @@ async function runGrind() {
   }
   if (_exhausted) {
     for (const bid of _queue) { for (const r of BATCHES.find((b) => b.id === bid).rows) _handBack(r, 'budget-exhausted', 'admission ceiling reached'); }
-    for (const bid of Object.keys(_admitted)) { for (const r of BATCHES.find((b) => b.id === bid).rows) if (!_rows[r].done) _handBack(r, 'budget-exhausted', 'admission ceiling reached'); }
   }
   await _drainCommit();
 }

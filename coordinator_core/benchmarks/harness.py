@@ -177,7 +177,7 @@ def run(
     declare_benchmark_origin()
     target_ops = ops if ops is not None else _default_target_ops()
 
-    # Review: code-reviewer (Slice B F2, P2) — fail loud on a plausible fat-finger
+    # Fail loud on a plausible fat-finger
     # (`--n 0`) before any subprocess spawn, naming the bad param, instead of an
     # opaque IndexError deep in the sample-collection loop below.
     if n < 1:
@@ -207,7 +207,7 @@ def run(
         op_fixtures.COMPUTE_ONLY_FIXTURES[op]["scope"] == "worktree" for op in target_ops
     )
 
-    # Review: code-reviewer (Slice B F7, P2) — materialize_fixture_repo() moved inside
+    # materialize_fixture_repo() moved inside
     # the try/finally: a mid-materialization failure (e.g. the bare-origin clone step
     # raising after `dest` was already created and seeded) previously propagated before
     # worktree_root was assigned and before the finally block existed, leaking the

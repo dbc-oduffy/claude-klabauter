@@ -49,7 +49,7 @@ _rrp_spec.loader.exec_module(_rrp)  # type: ignore[union-attr]
 
 @pytest.fixture(scope="module", autouse=True)
 def _restore_sys_path():
-    # Review: coordinator:code-reviewer-05a3e212 — module-level sys.path
+    # module-level sys.path
     # mutation above (needed before the exec_module import-time load) would
     # otherwise persist for the rest of the pytest session and could shadow
     # same-named modules in files collected afterward. Undo it once every
@@ -66,7 +66,7 @@ def test_resolve_repo_path_candidates_settings_home_before_mirror(monkeypatch, t
     claude_home = tmp_path / "claude-home"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
-    # Review: coordinator:code-reviewer-05a3e212 — machine_local_impl_resolve
+    # machine_local_impl_resolve
     # .claude_home() consults CLAUDE_CONFIG_DIR before CLAUDE_HOME; leaving it
     # unpinned would let an ambient dev-box/CI value silently override the
     # fixture and resolve against a real path instead of tmp_path.
@@ -210,7 +210,7 @@ def test_coordinator_registry_split_repo_fallback_settings_home_wins_over_mirror
         env = _base_env(empty_home)
         env["COORDINATOR_SETTINGS_HOME"] = settings_home
         env["CLAUDE_HOME"] = claude_home
-        # Review: coordinator:code-reviewer-05a3e212 — no .pop() here: env is
+        # No .pop() here: env is
         # a from-scratch dict built by _base_env(), which never populates
         # DOE_ROOT/REPO_DOE_CLAUDE in the first place (unlike os.environ.copy()).
 
@@ -236,7 +236,7 @@ def test_coordinator_registry_split_repo_fallback_mirror_reachable_when_settings
         env = _base_env(empty_home)
         env["COORDINATOR_SETTINGS_HOME"] = settings_home
         env["CLAUDE_HOME"] = claude_home
-        # Review: coordinator:code-reviewer-05a3e212 — no .pop() here; see
+        # No .pop() here; see
         # the sibling test above for rationale.
 
         result = _run_registry_import_subprocess(env)

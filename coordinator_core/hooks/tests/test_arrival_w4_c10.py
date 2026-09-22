@@ -428,7 +428,7 @@ def test_sessionstart_dispatch_one_leg_failure_does_not_drop_others(monkeypatch)
     assert "blitz" in result["hookSpecificOutput"]["additionalContext"]
 
 
-# Review: coordinator:code-reviewer — the sync-wrapped/bare-session.* legs
+# The sync-wrapped/bare-session.* legs
 # (project_orientation, guard_settings_integrity,
 # guard_hooks_kill_switch_detail) previously went untested by this suite;
 # a mismatched sync/async wrapping on any of them would silently no-op

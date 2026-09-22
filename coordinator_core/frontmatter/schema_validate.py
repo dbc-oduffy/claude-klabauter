@@ -122,7 +122,7 @@ logger = logging.getLogger(__name__)
 # Public error types
 # ---------------------------------------------------------------------------
 
-# Review: code-reviewer — F7: TypedDict enforces {field, error, hint} shape at static-analysis time
+# TypedDict enforces {field, error, hint} shape at static-analysis time
 class ErrorDict(TypedDict):
     field: str
     error: str
@@ -718,7 +718,7 @@ def _validate_json_schema_node(
                 'error': f'invalid date-time format "{value}"',
                 'hint': 'Use ISO 8601 date-time format (YYYY-MM-DDTHH:MM:SSZ)',
             })
-        # Review: code-reviewer — `format: uri` was silently accepted as a
+        # `format: uri` was silently accepted as a
         # no-op keyword (only date/date-time were implemented), the same
         # silent-non-enforcement class as `maximum` before it. RFC 3986
         # generic-syntax scheme check: an absolute URI must open with
@@ -851,7 +851,7 @@ def _validate_json_schema_node(
                         })
 
         # properties — validate each declared property that is present.
-        # Review: code-reviewer — F4: removed `is not None` guard so null values are validated
+        # Removed `is not None` guard so null values are validated
         # by _validate_json_schema_node (which correctly fails type/enum checks on None).
         props = schema.get('properties')
         if isinstance(props, dict):
@@ -2275,7 +2275,7 @@ def _cf_owner_axis_scalar(fm: dict) -> ErrorDict | None:
             return {
                 'field': field,
                 'error': (
-                    # Review: code-reviewer — F4: message must cover both '' and
+                    # Message must cover both '' and
                     # whitespace-only, since the check below (val.strip() == '')
                     # fires on both and the prior wording ("not an empty string")
                     # read as inaccurate for a visually-non-empty whitespace value.
@@ -2641,7 +2641,7 @@ def _cf_gate_evidence_legs_shape(fm: dict) -> ErrorDict | None:
 # char hex SHA. No ranges, comma-lists, or branch names (D2).
 _PLAN_TASKS_CODED_SHA_RE = re.compile(r'^[0-9a-f]{7,40}$')
 
-# Review: code-reviewer (Finding 2) — `_PLAN_TASKS_CLOSED_DISPOSITIONS` was
+# `_PLAN_TASKS_CLOSED_DISPOSITIONS` was
 # deleted here. It had exactly two call sites before this workstream (the
 # pm_approved gate and `check_plan_tasks_grouping_approval`'s row-scan); both
 # moved to `_PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS` below, and D5's
@@ -3972,7 +3972,7 @@ def _memo_cf_grandfather(fm: dict) -> dict | None:
     """
     if not fm.get('created'):
         return None
-    # Review: code-reviewer — F5: str() handles both str and datetime.date (isoformat
+    # str() handles both str and datetime.date (isoformat
     # str() output is YYYY-MM-DD, comparable with '<' on ISO strings). Public-API
     # coercion via _coerce_dates_to_strings is belt-and-suspenders, not a prerequisite.
     if str(fm['created']) < '2026-05-22':
@@ -4650,7 +4650,7 @@ def validate_frontmatter(fm_dict: dict, schema_path: str | Path) -> list[ErrorDi
     shape_errors = _tolerate_handoff_kind_aliases(shape_errors, schema_name, schema, fm_dict)
 
     # Phase 2: cross-field rules.
-    # Review: code-reviewer — F3: `schema_name or ''` is dead — the `if schema_name`
+    # `schema_name or ''` is dead — the `if schema_name`
     # guard already ensures schema_name is truthy in the true-branch.
     # `local_queue_corpus` is consumed only by `_cf_queue_disposition_shape`,
     # which is inert without it (see that rule's docstring for the measured
@@ -4763,7 +4763,7 @@ def check_schema_drift(
             'This is NOT a drift finding — the comparison never ran.'
         )
 
-    # Review: code-reviewer — F4 (Wave B): stdin=DEVNULL + CREATE_NO_WINDOW to match the
+    # stdin=DEVNULL + CREATE_NO_WINDOW to match the
     # _run_git hardening pattern used by this slice's sibling modules.
     #
     # The timeout is bounded but its EXPIRY is a could-not-check, not a tamper
@@ -5043,7 +5043,6 @@ def check_schema_ahead_of_doe(
     # this path on ANY local ref (git log --all), never `HEAD` -- a sibling
     # clone's checked-out branch is incidental and shared-tree branch
     # switches are routine (see check_schema_ahead_of_doe's docstring).
-    # Review: eng-director P2-2.
     dirty = _run_git('status', '--porcelain', '--', doe_schema_ref)
     if dirty.returncode != 0:
         raise SchemaDriftError(
@@ -6082,7 +6081,7 @@ def _parse_scalar(text: str) -> Any:
     if text == 'false':
         return False
     n = _js_number(text)
-    # Review: code-reviewer P1 — mirror the JS oracle's `isFinite(n)` guard in
+    # Mirror the JS oracle's `isFinite(n)` guard in
     # parseScalar (schema.js:386). _js_number("Infinity")/(-Infinity)/(NaN)
     # succeed via Python float() with no ValueError, so without this guard
     # _js_number_str(n) crashes (OverflowError/ValueError on int(inf)/int(nan))
@@ -6519,7 +6518,7 @@ def load_schemas(schemas_dir: str | Path) -> dict[str, Any]:
                 if isinstance(v, str) and v:
                     kind_values.append(v)
                 else:
-                    # Review: code-reviewer P2 — mirror schema.js's stderr warning
+                    # Mirror schema.js's stderr warning
                     # (schema.js:563) for a skipped non-string kinds element; the
                     # Python port previously filtered silently, making a typo'd
                     # kinds: entry invisible instead of diagnosable.
@@ -6529,7 +6528,7 @@ def load_schemas(schemas_dir: str | Path) -> dict[str, Any]:
         if len(set(kind_values)) != len(kind_values):
             raise ValueError(f'schema "{name}" declares a duplicate kind in its own kinds: list')
         if kind_values and not parsed.get('applies_to'):
-            # Review: code-reviewer P2 — mirror schema.js's stderr warning
+            # Mirror schema.js's stderr warning
             # (schema.js:577) for kinds/kind declared with no applies_to (the
             # schema is kind-validated but invisible to query-records enumeration).
             print(f'schema "{name}": declares kinds/kind but has no applies_to — will be kind-validated but not enumerated by query-records', file=sys.stderr)
@@ -6571,7 +6570,7 @@ def load_schemas(schemas_dir: str | Path) -> dict[str, Any]:
                 if isinstance(v, str) and v:
                     json_kind_values.append(v)
                 else:
-                    # Review: code-reviewer P2 — mirror schema.js's stderr warning
+                    # Mirror schema.js's stderr warning
                     # (schema.js:653) for a skipped non-string x-kinds/kinds element.
                     print(f'schema "{name}": skipping non-string x-kinds/kinds element: {json.dumps(v)}', file=sys.stderr)
         elif raw_kind_str is not None:
@@ -6579,7 +6578,7 @@ def load_schemas(schemas_dir: str | Path) -> dict[str, Any]:
         if len(set(json_kind_values)) != len(json_kind_values):
             raise ValueError(f'schema "{name}" declares a duplicate kind in its own x-kinds/kinds list')
         if json_kind_values and not (isinstance(parsed.get('applies_to'), str) and parsed.get('applies_to')):
-            # Review: code-reviewer P2 — mirror schema.js's stderr warning
+            # Mirror schema.js's stderr warning
             # (schema.js:664) for x-kinds/kinds declared with no applies_to.
             print(f'schema "{name}": declares x-kinds/kinds but has no applies_to — will be kind-validated but not enumerated by query-records', file=sys.stderr)
         for kind_value in json_kind_values:
@@ -8231,7 +8230,7 @@ def _run_tree_walk(repo_root: str, as_json: bool, strict_refs: bool) -> int:
         # reason) — reused here rather than re-derived, so nested
         # archive/handoffs/<month>/*.md records are walked instead of silently
         # skipped by the whole-tree collector.
-        # Review: code-reviewer — F1: this loop previously indexed
+        # This loop previously indexed
         # _GLOB_OVERRIDES by `name` (every loaded schema, not just
         # handoff-archived), so a future schema literally named
         # 'cross-repo-memo' would silently pick up the memo-inbox glob here

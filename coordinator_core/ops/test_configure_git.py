@@ -85,7 +85,7 @@ def test_partial_prior_config_only_reports_changed_key(tmp_path, monkeypatch, ca
 
 
 def test_unrecognized_first_arg_behaves_as_per_repo_mode(tmp_path, monkeypatch):
-    # Review: code-reviewer — Finding 2 (2026-07-22 sidecar): the module docstring's
+    # The module docstring's
     # negative-spec claims any first arg other than "--global" is silently treated as
     # "no flag" (per-repo mode), matching the bash oracle's single-value comparison,
     # but no test exercised it — every existing test used [] or ["--global"] only.
@@ -98,7 +98,7 @@ def test_unrecognized_first_arg_behaves_as_per_repo_mode(tmp_path, monkeypatch):
 
 
 def test_config_set_failure_exits_1_with_partial_success(tmp_path, monkeypatch, capsys):
-    # Review: code-reviewer — Finding 3 (2026-07-22 sidecar): the documented
+    # The documented
     # partial-failure exit path (a failure on the second key exits 1 even if the
     # first key already changed) had zero test coverage — every other test exercised
     # only success paths. Forces the second key's write to fail deterministically.

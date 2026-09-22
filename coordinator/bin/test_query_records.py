@@ -12,6 +12,13 @@ Spec backlink: pln-python-ize-claude-klabauter-bin-oracles--218413 § A2
 Converted from a hand-rolled runner (`query-records.test.py`) to a pytest-collectable
 module — the module was already unittest.TestCase-shaped, so this is a rename plus removal
 of the `unittest.main()` harness (pytest collects the TestCase classes directly).
+
+`route_mutation` / `_resolve_repo_root` / `_no_legacy` are not `qr` module
+attributes — `query-records.py`'s `main()` imports them from
+`coordinator/bin/lib/records_query.py` inside the function body (so the bin
+module binds `coordinator_core` before touching it; see that import's own
+comment). Patches below target `records_query_lib` — the module those
+in-function imports actually resolve against — not `qr`.
 """
 from __future__ import annotations
 
@@ -30,6 +37,9 @@ assert _spec.loader is not None
 sys.modules["query_records_cli"] = qr
 _spec.loader.exec_module(qr)
 
+import lib  # noqa: E402,F401 — bootstraps coordinator/bin/lib onto sys.path
+import records_query as records_query_lib  # noqa: E402
+
 
 class WhereOperatorGrammarParityTests(unittest.TestCase):
     """`--where`'s operator characters must reach the op's params dict
@@ -45,15 +55,15 @@ class WhereOperatorGrammarParityTests(unittest.TestCase):
             self._captured_repo_root = repo_root
             return {"records": ""}
 
-        self._orig_route_mutation = qr.route_mutation
-        self._orig_resolve_repo_root = qr._resolve_repo_root
-        qr.route_mutation = _fake_route_mutation
-        qr._resolve_repo_root = lambda: "/fake/repo/root"
+        self._orig_route_mutation = records_query_lib.route_mutation
+        self._orig_resolve_repo_root = records_query_lib._resolve_repo_root
+        records_query_lib.route_mutation = _fake_route_mutation
+        records_query_lib._resolve_repo_root = lambda: "/fake/repo/root"
         self.addCleanup(self._restore)
 
     def _restore(self) -> None:
-        qr.route_mutation = self._orig_route_mutation
-        qr._resolve_repo_root = self._orig_resolve_repo_root
+        records_query_lib.route_mutation = self._orig_route_mutation
+        records_query_lib._resolve_repo_root = self._orig_resolve_repo_root
 
     def _run(self, argv: list[str]) -> int:
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
@@ -154,7 +164,7 @@ class WhereOperatorGrammarParityTests(unittest.TestCase):
         self.assertNotIn("--limit", qr._UNPORTED_FLAGS)
 
     def test_status_value_containing_and_fails_loud(self) -> None:
-        # Review: code-reviewer — Finding 1: a status value that itself
+        # A status value that itself
         # contains " AND " must fail loud, not silently compose into a
         # second where-clause conjunct.
         with self.assertRaises(SystemExit) as ctx:
@@ -164,25 +174,25 @@ class WhereOperatorGrammarParityTests(unittest.TestCase):
 
 
 class OutputSerializationTests(unittest.TestCase):
-    """Review: code-reviewer — Finding 2: `--format json`/markdown-list
+    """`--format json`/markdown-list
     stdout serialization had zero test coverage (every prior test's fake
     `route_mutation` returned `{"records": ""}` unconditionally)."""
 
     def setUp(self) -> None:
-        self._orig_route_mutation = qr.route_mutation
-        self._orig_resolve_repo_root = qr._resolve_repo_root
-        qr._resolve_repo_root = lambda: "/fake/repo/root"
+        self._orig_route_mutation = records_query_lib.route_mutation
+        self._orig_resolve_repo_root = records_query_lib._resolve_repo_root
+        records_query_lib._resolve_repo_root = lambda: "/fake/repo/root"
         self.addCleanup(self._restore)
 
     def _restore(self) -> None:
-        qr.route_mutation = self._orig_route_mutation
-        qr._resolve_repo_root = self._orig_resolve_repo_root
+        records_query_lib.route_mutation = self._orig_route_mutation
+        records_query_lib._resolve_repo_root = self._orig_resolve_repo_root
 
     def _install_fake(self, records) -> None:
         def _fake_route_mutation(op, params, repo_root, legacy_fn):
             return {"records": records}
 
-        qr.route_mutation = _fake_route_mutation
+        records_query_lib.route_mutation = _fake_route_mutation
 
     def _run(self, argv: list[str]) -> tuple[int, str]:
         stdout = io.StringIO()
@@ -213,7 +223,7 @@ class OutputSerializationTests(unittest.TestCase):
 
 
 class ListSchemasTests(unittest.TestCase):
-    """Review: code-reviewer — Finding 3: `--list-schemas` had zero test
+    """`--list-schemas` had zero test
     coverage despite being one of two novel capabilities the module
     docstring calls out."""
 
@@ -346,7 +356,7 @@ class UnportedFlagFailLoudTests(unittest.TestCase):
         self.assertIn("--show-toplevel: not ported — claude-klabauter BIG_PORT", stderr)
 
     def test_fleet_equals_form_fails_loud(self) -> None:
-        # Review: code-reviewer — Finding 4: the docstring claims a bare
+        # The docstring claims a bare
         # `--fleet=1` form (split on first `=`) is caught too, but no test
         # exercised the `--flag=value` shape.
         code, stderr = self._run_capture_stderr(["--type", "debt", "--fleet=1"])

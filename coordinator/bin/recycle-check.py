@@ -219,7 +219,7 @@ def _slot_order(run_dir: Path, rec: Path):
     """`coordinator_core.ops.dispatch_emit.slot_order.slot_order`, imported rather than
     re-derived.
 
-    Review: coordinator:overengineering-reviewer (finding 5) -- this function used to be the
+    This function used to be the
     sole definition, loaded by `emit-wave-fire.py::_slot_order_fn` via a by-path
     `importlib.util` sibling load. It now lives in `coordinator_core` and both files import it
     from there; this wrapper stays so every existing call site in this module keeps working

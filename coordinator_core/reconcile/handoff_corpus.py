@@ -132,7 +132,7 @@ def _walk_archive_md_files(
     """Shared `archive/handoffs/` walker: os.walk(onerror=...) + `.md` filter +
     scan_errors bookkeeping, parameterized by a per-file callback.
 
-    Review: code-reviewer (Finding 3) — factored out of
+    Factored out of
     `_collect_all_handoffs_for_gate_index` and `_collect_all_handoff_paths`
     (the latter stays in `handoff_reconcile.py`), which were near-duplicate
     `os.walk(archive_dir, onerror=...)` implementations differing only in
@@ -189,7 +189,7 @@ def _collect_all_handoffs_for_gate_index(
     basename resolution) may be missing an archived record, which must not be
     indistinguishable from "that record genuinely does not exist".
 
-    Review: code-reviewer — Finding 6 (nit): this function is called by
+    This function is called by
     THREE independent consumers per invocation cycle (gate_eval's blocked_by
     resolution, ownership_index.build_ownership_index, and
     ac27_differential_oracle.py), each re-walking + re-copying the full
@@ -266,7 +266,7 @@ def _frontmatter_head_bytes(path: Path) -> Optional[bytes]:
     `_BLOCKER_INDEX_HEAD_BYTES`'s docstring); the fallback makes the 4096-byte
     constant SELF-CORRECTING rather than silently wrong for an oversized
     frontmatter block — 4 of 1202 live+archived records (measured directly,
-    Review: overengineering-reviewer, Finding 5) do not close their
+    overengineering-reviewer, Finding 5) do not close their
     frontmatter within 4096 bytes and take this fallback TODAY, not zero.
     That is the argument FOR keeping the fallback, not against it: an id
     embedded past the truncation point must still resolve, not silently
@@ -346,7 +346,6 @@ def _build_blocker_index(repo_root: Path) -> "tuple[Dict[str, List[Path]], List[
     read as a silent absence indistinguishable from "the id does not
     exist" — the exact dangling-ref hazard the 2026-08-08 PM ruling
     dissolved (dispatch brief C2, see C3; file-granularity gap closed per
-    Review: code-reviewer — Finding 1).
 
     Root set MIRRORS the act-time resolver's own two roots
     (`handoff_transition.py :: _resolve_blocker_deployment_state`), which is

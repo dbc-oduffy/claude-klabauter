@@ -260,7 +260,7 @@ def _session_id_from_env(env: Optional[Mapping[str, str]]) -> Optional[str]:
 
 
 @contextlib.contextmanager
-# Review: overengineering-reviewer (finding 5) -- `caller_pid`'s `= None`
+# `caller_pid`'s `= None`
 # default was unreachable (one private call site, positional) and
 # inconsistent with its siblings, neither of which defaults.
 def _environ_identity_borrow(

@@ -566,7 +566,7 @@ def _rollback_delivery(
     """Restore `rel_path` (repo-relative, under `worktree`) to `original_text`
     — undoes the `locked_rmw` mutation after a failed `_commit_delivery`.
 
-    Review: code-reviewer — F2: `_commit_delivery` can fail at `write-tree`,
+    `_commit_delivery` can fail at `write-tree`,
     `commit-tree`, or (most plausibly) a concurrent-HEAD CAS failure on
     `update-ref` — every one of those runs AFTER `locked_rmw` has already
     rewritten the file on disk, so a bare error return left the holder's tree
@@ -721,7 +721,7 @@ async def _propagate(
     if not p.is_file():
         return _err(f"{spec.not_found_label} not found on disk: {target_path_raw}")
 
-    # Review: code-reviewer — F3: `slug` gets the SAME three content checks as
+    # `slug` gets the SAME three content checks as
     # `summary`/`note`, plus an explicit no-embedded-newline check. `slug` is
     # interpolated into the delivery commit message as `Delivered-By: {slug}`
     # (see `_commit_delivery`) — an embedded newline there can inject an
@@ -805,7 +805,7 @@ async def _propagate(
     session_id, session_source = _resolve_session_id_with_source()
     block = _build_propagated_block(kind, slug, summary, note, session_id, session_source)
 
-    # Review: code-reviewer — F2: captured so a failed `_commit_delivery` can
+    # Captured so a failed `_commit_delivery` can
     # restore the working-tree file to exactly what `locked_rmw` read, rather
     # than leaving the mutated-but-uncommitted (and possibly staged) content
     # behind — AC12's "never leaves a dirty tree" guarantee applies to a
@@ -846,7 +846,7 @@ async def _propagate(
 
     sha, commit_err = await asyncio.to_thread(_commit_delivery, worktree, rel_path, slug, summary)
     if commit_err is not None:
-        # Review: code-reviewer — F2: roll back the working-tree write on any
+        # Roll back the working-tree write on any
         # commit failure so the holder's tree is never left dirty (AC12).
         assert pre_mutation_text[0] is not None  # _mutate always ran before this point
         rollback_err = await asyncio.to_thread(

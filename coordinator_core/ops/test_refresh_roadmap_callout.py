@@ -57,7 +57,7 @@ STALE PLACEHOLDER TEXT
 
 
 def test_known_roadmap_with_callout_invokes_refresh(tmp_path, capsys, monkeypatch):
-    # Review: code-reviewer -- the prior version of this test asserted
+    # The prior version of this test asserted
     # `rc is not None` (always true for an int-returning function) and
     # `X or True` (always true regardless of X), providing zero real
     # coverage of the "known roadmap with a callout delegates to the

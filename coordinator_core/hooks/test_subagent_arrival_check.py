@@ -289,7 +289,7 @@ class TestTailCap:
 
 
 class TestBoundaryShapes:
-    """Review: coordinator:code-reviewer — Finding 1 (accepted) and Finding 4
+    """And Finding 4
     (accepted). Finding 1: `buf.rstrip(b"\\n")` only stripped a trailing run of
     pure newline bytes, so a trailing blank line carrying any other whitespace
     (e.g. "...}\\n   \\n") left an embedded \\n that falsely signalled a found

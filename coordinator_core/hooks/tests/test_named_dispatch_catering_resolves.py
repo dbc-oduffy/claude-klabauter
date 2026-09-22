@@ -537,7 +537,7 @@ def test_ac9_compose_catering_process_time_before_and_after_c2_delegation(
         f"regex path, not a spawn; both must stay far under the 500ms "
         f"brightline and the leg's own 150ms sibling-plan budget"
     )
-    # Review: coordinator:code-reviewer -- the ceiling above only bounds
+    # The ceiling above only bounds
     # each arm in isolation and would pass silently even if the added
     # regex/delegation path made post-C2 5x-10x more expensive than
     # pre-C2, as long as it stayed under 25ms. Pin the differential

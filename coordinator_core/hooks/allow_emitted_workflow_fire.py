@@ -129,7 +129,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Workflow) op: auto-approve a fire whose script carries a
     verifying emission receipt."""
     try:
-        # Review: coordinator-code-reviewer — normalize the two params
+        # Normalize the two params
         # shapes both engine doors and the cold chain send (see
         # block_worktree_tool).
         reason = _decide(payload_of(params))

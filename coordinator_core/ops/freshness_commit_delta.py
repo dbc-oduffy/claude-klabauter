@@ -23,7 +23,7 @@ its own ONE `git log --name-only` read (same `_SCAN_DEPTH` window, same
 `GIT_CEILING_DIRECTORIES` narrowing) that carries changed paths alongside each commit's
 message in the same pass, and derives all three fields from that one parse.
 
-Review: coordinator:staff-eng — F1 (blocking, correctness): `test_commit_delta` has no
+`test_commit_delta` has no
 commit-message convention to match ("tests were last touched" is not something any
 commit message declares) — the honest signal is a PATH-scoped read. This module answers
 that finding by matching changed file paths against `_TEST_PATH_PATTERN` instead of a

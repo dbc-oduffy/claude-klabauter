@@ -1047,7 +1047,7 @@ class TestSelfResolutionFromClaimLedger:
         lineage = decision["artifact"]["lineage"]
         assert lineage["predecessor_ordering_degraded"] is True
 
-    # Review: coordinatorstaff-eng-f4ecb2da Finding 4 -- three behaviours the
+    # Three behaviours the
     # diff newly introduces were previously unpinned: unknown-stage ranks
     # with `brief`, a tie among non-primary claims only (pinning the
     # set-level `degraded` semantics), and per-claim (not set-wide)
@@ -1900,7 +1900,7 @@ class TestStandaloneHandoffSlugFromTitle:
 # ---------------------------------------------------------------------------
 
 
-# Review: coordinator:code-reviewer (Finding 4) — this class's 5 fixture
+# This class's 5 fixture
 # `handoff_id` sites were remapped from the pre-sweep `HID-{slug}` shape to
 # `hnd-{slug}-<hex>` for consistency with the rest of this file, even though
 # these particular fixtures never reach `validate_frontmatter`.
@@ -3788,7 +3788,7 @@ class TestDispatchHandoffAuthorFork:
     def test_degraded_stamp_is_visible_at_top_level_of_returned_detail(
         self, tmp_path, monkeypatch, capsys
     ):
-        """Review: code-reviewer (P1) -- a degrade still reports `status:
+        """A degrade still reports `status:
         "ok"`, so the RuntimeError branch above never fires for it, and
         prior to this fix `degraded` was nested two levels inside
         `result["result"]` with NO non-test consumer anywhere in the tree
@@ -4024,7 +4024,7 @@ class TestDispatchHandoffSupersedePredecessor:
         successor_abs = _render_real_scaffold(tmp_path / successor_rel)
 
         def _fake_invoke(op_name, params, repo_root):
-            # Review: coordinatorcode-reviewer.a8fe7b538bfc71c00 -- wrap in the
+            # Wrap in the
             # real `transition` envelope so this exercises the superseded:False
             # scenario the test names, not the missing-key fallthrough.
             return {"exit_code": 0, "transition": {"superseded": False, "retained": True}}
@@ -4052,7 +4052,7 @@ class TestDispatchHandoffSupersedePredecessor:
         second failure mode."""
 
         def _fake_invoke(op_name, params, repo_root):
-            # Review: coordinatorcode-reviewer.a8fe7b538bfc71c00 -- wrap in the
+            # Wrap in the
             # real `transition` envelope so this exercises the superseded:False
             # scenario the test names, not the missing-key fallthrough.
             return {"exit_code": 0, "transition": {"superseded": False}}
@@ -4097,7 +4097,7 @@ class TestDispatchHandoffSupersedePredecessor:
     def test_refused_before_transition_ran_names_the_error_and_deletes_successor(
         self, tmp_path, monkeypatch
     ):
-        # Review: coordinatorcode-reviewer.a8fe7b538bfc71c00 Finding 2 -- the
+        # The
         # `exit_code != 0 and not result` refusal branch (reachable from
         # `housekeeping.cycle`'s own `{"exit_code": 1, ..., "transition": None}`
         # shape when the transition leg raises) had no direct test; every
@@ -6146,7 +6146,7 @@ class TestD6CleanupNeverDeletesOperatorContent:
         monkeypatch.setattr(
             ba_apply,
             "_invoke_op_in_process",
-            # Review: coordinatorcode-reviewer.a8fe7b538bfc71c00 -- wrap in the
+            # Wrap in the
             # real `transition` envelope so this exercises the superseded:False
             # scenario the test names, not the missing-key fallthrough.
             lambda *a, **k: {"exit_code": 0, "transition": {"superseded": False}},
@@ -6171,7 +6171,7 @@ class TestD6CleanupNeverDeletesOperatorContent:
         monkeypatch.setattr(
             ba_apply,
             "_invoke_op_in_process",
-            # Review: coordinatorcode-reviewer.a8fe7b538bfc71c00 -- wrap in the
+            # Wrap in the
             # real `transition` envelope so this exercises the superseded:False
             # scenario the test names, not the missing-key fallthrough.
             lambda *a, **k: {"exit_code": 0, "transition": {"superseded": False}},
@@ -6623,7 +6623,7 @@ class TestPlanTierSupersessionTargetResolution:
         is still carried on `lineage` for lineage-carry, and d6 still arms
         against whatever `predecessor` resolved to.
 
-        Review: overengineering-reviewer -- this used to also assert the
+        This used to also assert the
         precedence itself (`lineage["predecessor"] == provenance_handoff`,
         `!= claimed_predecessor`), duplicating
         `test_plan_input_predecessor.py`'s AC1 and AC4 and contradicting this
@@ -6766,7 +6766,7 @@ class TestPlanTierSupersessionTargetResolution:
     def test_ledger_claimed_predecessor_already_archived_is_still_recognized_as_roadmap_baton(
         self, tmp_path, monkeypatch
     ):
-        """Review: coordinatorcode-reviewer-c2d43fc7 Finding 1 regression.
+        """
         The ledger's returned basename may already have moved to
         `archive/handoffs/` (`_resolve_held_handoff_for_session`'s own reason
         for existing) -- that is not exotic, it is the case the ledger is
@@ -6906,7 +6906,7 @@ class TestC9DiscoveryLabelPlanInput:
     def test_claimed_plan_tier_wins_precedence_even_when_artifact_path_is_plan_shaped(
         self, tmp_path, monkeypatch
     ):
-        """Review: coordinator:code-reviewer (Finding 3) -- the relabel
+        """The relabel
         guard is `if is_plan_input and lineage["discovery"] == "artifact"`,
         deliberately checking the DISCOVERY VALUE, not just `is_plan_input`.
         This pins the case that guard clause exists for: `artifact_path`
@@ -7249,7 +7249,7 @@ class TestDispatchHandoffCarryGate:
         )
         rel = str(predecessor.relative_to(tmp_path))
 
-        # Review: coordinatorcode-reviewer-625ab891 finding 2 -- constrain
+        # Constrain
         # the per-item violation REASON, not just the carry_id, so a defect
         # that strips the reason (e.g. `f"carry-1 refused"`) fails this test.
         with pytest.raises(
@@ -7625,7 +7625,7 @@ class TestSuccessorSideFanInDownEdge:
         assert len(d6s) == len(emitted) + 1
 
     def test_three_leg_fan_in_threads_every_additional_predecessor(self, tmp_path, monkeypatch):
-        """Review: coordinator:code-reviewer (0d090196) -- every other test in
+        """Every other test in
         this class exercises exactly one additional predecessor, so the
         per-entry `--additional-predecessor=` loop at d1 is only ever proven
         at N=1; a regression that emitted just the first leg, or that

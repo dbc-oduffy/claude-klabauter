@@ -343,7 +343,6 @@ _CORPUS: Dict[str, Callable[[int], str]] = {
     "command_substitution": lambda n: "echo " + _chain("$(git rev-parse HEAD)", n, " "),
     "backslash_continuations": lambda n: _chain("git status \\\n --short", n, " && \\\n"),
     "pytest_invocation_chain": lambda n: _chain("python3 -m pytest coordinator_core/", n),
-    # Review: coordinator:code-reviewer (Finding 2, 2026-08-05, corrected by
     # EM measurement -- see run notes) -- cause 1 of the 14675ce8e ReDoS
     # fix (the `_WRAPPER_FLAG_GROUP`/`_BYPASS_PREFIX` outer-star overlap
     # between the `env` branch and the bare-assignment branch) has no

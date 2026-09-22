@@ -207,7 +207,7 @@ def test_no_override_env_var_influences_anything(monkeypatch):
 
 
 def test_declared_registry_key_env_override_does_not_influence_verdict(monkeypatch, tmp_path):
-    # Review: code-reviewer (F1, P1) -- `machine_resolver.registry_get` has
+    # `machine_resolver.registry_get` has
     # its own MACHINE_LOCAL_<KEY> env-override rung, checked BEFORE the TOML
     # file, which is a live third override surface for this specific
     # security-sensitive key unless `_declared_host_is_windows` reads the

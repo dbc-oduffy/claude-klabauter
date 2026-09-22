@@ -30,7 +30,7 @@ from coordinator_core.conservatism import (
 
 __all__ = ["assert_safe_direction_holds"]
 
-# Review: code-reviewer Finding 1 -- a bare `except Exception: return` on a
+# A bare `except Exception: return` on a
 # RAISE check cannot distinguish the declared refusal from an unrelated bug
 # triggered incidentally inside `undeterminable()`. `expect_raises` narrows
 # the accepted exception type(s) when the caller supplies it. Left `None` it

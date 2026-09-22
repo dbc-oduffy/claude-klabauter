@@ -152,7 +152,7 @@ def _validate_common(repo_root: Union[str, Path], merge_sha: str, tag: str) -> P
     if not tag:
         raise ValueError("release.cut_tag: `tag_prefix` (resolved tag name) is required")
     if tag.startswith("-"):
-        # Review: code-reviewer (F5, nit) — tag is passed positionally to
+        # Tag is passed positionally to
         # several git subcommands (`tag -a`, `push origin`, `rev-parse`)
         # with no `--` separator; a value beginning with `-` would be
         # misparsed as a git flag rather than a ref/tag name.

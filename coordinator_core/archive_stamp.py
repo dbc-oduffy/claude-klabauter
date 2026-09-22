@@ -822,7 +822,7 @@ def _read_current_shipped_in(handoff_path: str) -> Optional[str]:
     avoid the ops-package import-cycle `stamp_shipped_in`'s own docstring
     documents for `_stamp_handler`)."""
     try:
-        # Review: code-reviewer (nit F4) — UnicodeDecodeError (a ValueError
+        # UnicodeDecodeError (a ValueError
         # subclass, not an OSError) on non-UTF-8 bytes must also degrade to
         # None per this function's "None on unreadable" contract; this sits
         # directly on the AC6/AC7 refusal-vs-noop decision path.
@@ -1485,6 +1485,31 @@ def cs_ship_handoff(
 ) -> int:
     """Terminal ship transition: stamp shipped_in + flip deployment_state -> shipped.
 
+    Thin int-returning wrapper over `_cs_ship_handoff_core` (see that function
+    for the full contract, including the retain-is-never-an-error and
+    claim-release semantics). `archive-stamp-cli.py` uses this return value
+    directly as a process exit code, so its shape (`int`, not the `(rc,
+    retained)` pair the core computes) stays exactly as every existing caller
+    already depends on."""
+    rc, _retained = _cs_ship_handoff_core(handoff_path, archive=archive, sha=sha, force=force)
+    return rc
+
+
+def _cs_ship_handoff_core(
+    handoff_path: str,
+    archive: bool = False,
+    sha: Optional[str] = None,
+    force: bool = False,
+) -> "tuple[int, bool]":
+    """Terminal ship transition: stamp shipped_in + flip deployment_state -> shipped.
+
+    Returns `(exit_code, retained)` — `retained` is `True` when the live-
+    children guard (or an indeterminate/fail-closed read) left the handoff
+    untouched rather than flipping it, so a caller that needs to tell "landed"
+    apart from "deferred, still in_flight" (both `exit_code == 0`, per the
+    Retention paragraph below) can. `cs_ship_handoff` above discards the
+    second element for callers that only ever wanted the process-exit shape.
+
     Composes handoff.archive_transition (NOT the plain handoff.transition op) so
     every caller — standalone (/pickup, /workstream-complete embedded bash blocks
     via DoE's archive-stamp-cli) included — gets the SAME unconditional
@@ -1555,7 +1580,7 @@ def cs_ship_handoff(
             "force must never trigger its own resolution",
             file=sys.stderr,
         )
-        return 1
+        return 1, False
     mode = "stamp_shipped" if archive else "stamp_only"
     params: dict = {"mode": mode}
     if sha:
@@ -1564,6 +1589,7 @@ def cs_ship_handoff(
         params["force"] = True
     result = _call_handoff_archive_transition(handoff_path, params)
     rc = int(result.get("exit_code", 1))
+    retained = bool(result.get("retained"))
     if rc != 0:
         print(f"cs_ship_handoff: {result.get('error', 'unknown error')}", file=sys.stderr)
     else:
@@ -1577,7 +1603,7 @@ def cs_ship_handoff(
             value = result.get(key)
             if value:
                 print(f"cs_ship_handoff: {key}={value}", file=sys.stderr)
-        if not result.get("retained"):
+        if not retained:
             try:
                 from coordinator_core.session.claims import release_artifact
 
@@ -1592,7 +1618,7 @@ def cs_ship_handoff(
                     f"({exc.__class__.__name__}: {exc}) — ship itself succeeded",
                     file=sys.stderr,
                 )
-    return rc
+    return rc, retained
 
 
 def _archive_move_landed(handoff_path: str, worktree: Optional[Path]) -> bool:
@@ -1692,7 +1718,7 @@ def _reread_supersede_frontmatter(current_path: Path) -> tuple[Optional[str], Op
     no frontmatter; that shape reads as a verification failure to the caller, never
     as a silent pass."""
     try:
-        # Review: code-reviewer (nit F4) — UnicodeDecodeError (a ValueError
+        # UnicodeDecodeError (a ValueError
         # subclass, not an OSError) on non-UTF-8 bytes must also fail closed
         # to (None, None) per this function's own contract.
         text = current_path.read_text(encoding="utf-8")
@@ -1783,7 +1809,7 @@ def cs_supersede_archive_handoff(
             file=sys.stderr,
         )
         return 2
-    # Review: code-reviewer (P2) — this previously imported
+    # This previously imported
     # `claimed_or_shipped_at_path` out of a package literally named `tests`
     # (a future `exclude = ["coordinator_core.tests*"]` on `pyproject.toml`'s
     # `include = ["coordinator_core*"]` would have silently broken this at
@@ -1873,7 +1899,7 @@ def _foreign_live_holder_refusal(handoff_path: str, claimant_sid: str) -> "str |
     detects, which the operator can still see in the returned frontmatter.
     """
     try:
-        # Review: code-reviewer (P1 Finding 2) — this read holds TWO properties
+        # This read holds TWO properties
         # together and neither may be dropped: (1) fence-bounded (the hand-rolled
         # split_frontmatter + read_fm_field_unquoted pair, kept over
         # read_frontmatter_field specifically because that shared reader is not
@@ -1997,7 +2023,7 @@ def _record_claimant_identity_best_effort(
     try:
         slug = resolve_operating_person().get("github")
     except Exception:  # noqa: BLE001 — best-effort; see this function's own contract
-        # Review: code-reviewer 2026-08-30 P1. This call sat ahead of every
+        # code-reviewer 2026-08-30 P1. This call sat ahead of every
         # try/except, so a raising resolver propagated out of a function whose
         # docstring promises it never aborts the caller's claim -- and both call
         # sites invoke it as the LAST statement after the transition has already
@@ -2020,7 +2046,7 @@ def _record_claimant_identity_best_effort(
 
             record = harness_registry.lookup(claimant_sid)
         except Exception:  # noqa: BLE001 — best-effort; a registry read is not a claim
-            # Review: code-reviewer (P1 Finding 1) — a raise here means "cannot
+            # A raise here means "cannot
             # tell", NOT "this claimant genuinely has no name". Folding both into
             # `record = None` made the removal arm below indistinguishable from a
             # clean no-name lookup, so a transient registry error deleted a real,

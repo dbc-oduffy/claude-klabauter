@@ -570,7 +570,7 @@ def test_an_older_format_prior_record_without_the_new_scalars_does_not_crash(tmp
 
 
 def test_stamp_accepts_a_writer_that_differs_from_the_holder_by_design(tmp_path):
-    """Review: coordinator:code-reviewer (a2a408f1eb356878e) Finding 3 -- pins
+    """Pins
     a deliberate boundary, not an oversight.
 
     `stamp` validates only that `writer_session_id` is non-empty; it does NOT

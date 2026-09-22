@@ -69,7 +69,7 @@ from coordinator_core.ops.learn_lessons_cutoff import _claude_home
 from coordinator_core.state_root import coordinator_state_root_central
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 
-# Review: code-reviewer — module-level alias (not a re-derived duplicate) so this
+# module-level alias (not a re-derived duplicate) so this
 # module's own tests can keep monkeypatching a local name; the actual
 # implementation now lives once in coordinator_core.state_root, shared with
 # coordinator_core.ops.central_run_due (previously two independently

@@ -314,7 +314,7 @@ def _memo_compose(params: dict, repo_root=None) -> dict:
     if repo_root is None:
         return build_setup_error_result(
             _MODE, dry_run,
-            # Review: coordinator:code-reviewer — error named the retired write root; corrected to canonical.
+            # Error named the retired write root; corrected to canonical.
             "memo.compose: no repo_root supplied — memo.compose reads/writes the "
             "CALLING repo's own .coordinator-local/memo-outbox/ and requires a resolved "
             "worktree (common_dir-keyed op).",
@@ -446,7 +446,7 @@ def _memo_compose(params: dict, repo_root=None) -> dict:
         try:
             with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
                 f.write(new_content)
-            # Review: code-reviewer — mkstemp defaults to 0o600; chmod to 0o644
+            # Mkstemp defaults to 0o600; chmod to 0o644
             # before replace so compose doesn't silently narrow the draft's
             # permissions from memo_draft.py's 0o644 down to owner-only.
             os.chmod(tmp_path, 0o644)

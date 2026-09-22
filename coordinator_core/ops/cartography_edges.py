@@ -127,7 +127,6 @@ def _cartography_edges(params: dict, repo_root: Optional[Path] = None) -> dict:
         uncaught, if any entry in `files` resolves outside `target_root`.
         This is a containment violation, not a per-file data condition.
     """
-    # Review: code-reviewer (P2, 2026-07-12-workflow-review-cartography.md) —
     # bare params[...] raised an uncaught, un-annotated KeyError on a missing
     # param, inconsistent with the descriptive-ValueError contract tree/
     # file_index already use in this same op family.
@@ -138,7 +137,6 @@ def _cartography_edges(params: dict, repo_root: Optional[Path] = None) -> dict:
     if not files:
         raise ValueError("cartography.edges requires param: files")
     path_system_map = params.get("path_system_map")
-    # Review: code-reviewer (P2, Finding 2, 2026-07-12-codereview-slicecartography-
     # substrate-b-wave) — guard target_root at the handler boundary, mirroring
     # cartography.tree/file_index, so a malformed root is rejected up front
     # (descriptive PathEscapeError) rather than surfacing incidentally, deep

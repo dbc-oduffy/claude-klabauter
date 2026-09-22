@@ -314,7 +314,7 @@ class _ComparisonScan(ast.NodeVisitor):
             self._assigns.setdefault(node.targets[0].id, []).append(node.value)
 
     def _operand_tainted(self, node: ast.AST, _seen: frozenset[str] = frozenset()) -> bool:
-        # Review: code-reviewer -- a Name whose RHS is itself a bare Name
+        # A Name whose RHS is itself a bare Name
         # (`norm = Path(p).resolve(); alias = norm`) previously read as
         # untainted, since `ast.walk` over a lone `Name` node finds no
         # normalizing `Call`. Chase the alias chain recursively, tracking
@@ -554,7 +554,7 @@ def test_gate_catches_the_real_pre_fix_file_verbatim():
     )
 
 
-# Review: code-reviewer -- alias-chasing proof. A single extra rename hop
+# alias-chasing proof. A single extra rename hop
 # between the normalizing call and the comparison (no fold anywhere in the
 # chain) must still fire; the reviewer's finding is that this defeated the
 # gate before `_operand_tainted` chased alias chains recursively.

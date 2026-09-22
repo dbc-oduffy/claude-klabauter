@@ -390,7 +390,7 @@ def test_pairing_summary_repo_root_spans_rotated_generations(tmp_path, monkeypat
     assert single_file_summary["paired"] == 0
 
 
-# Review: code-reviewer (Finding 1, P2) — the rest of this module exercises
+# The rest of this module exercises
 # op_latency.py in isolation, which would pass unmodified even if ipc.py's
 # dispatch_message never called record_op_started and never threaded corr_id
 # at all. This test drives dispatch_message itself as the bridge check.

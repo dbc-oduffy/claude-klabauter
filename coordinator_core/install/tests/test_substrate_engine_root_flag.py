@@ -43,7 +43,7 @@ def test_engine_root_flag_sets_env_var_before_run(monkeypatch, tmp_path):
 
 
 def test_engine_root_flag_empty_string_errors_loudly(monkeypatch, capsys):
-    """Review: code-reviewer Finding 1 — `--engine-root ""` must not
+    """`--engine-root ""` must not
     silently degrade to whatever rung would otherwise fire; it is an
     explicit, obviously-wrong value and should fail loudly instead."""
     monkeypatch.setattr(
@@ -57,7 +57,7 @@ def test_engine_root_flag_empty_string_errors_loudly(monkeypatch, capsys):
 
 
 def test_engine_root_flag_nonexistent_path_errors_loudly(monkeypatch, tmp_path, capsys):
-    """Review: code-reviewer Finding 2 — a typo'd/nonexistent path is
+    """A typo'd/nonexistent path is
     rejected at parse time, at the flag that caused it, rather than
     degrading into a less legible failure downstream in run()."""
     monkeypatch.setattr(
@@ -125,7 +125,7 @@ def test_resolution_error_leads_with_bootstrap_remedies(tmp_path):
 
 
 def test_env_var_bootstrap_remedy_actually_resolves(monkeypatch, tmp_path):
-    """Review: code-reviewer Finding 4 — the ordering-only test above never
+    """The ordering-only test above never
     proved the printed remedies actually work. Round-trips through the same
     shim: set COORDINATOR_ENGINE_ROOT per the message's own remedy text,
     then re-call `_resolve_claude_klabauter_root` and confirm it now succeeds instead

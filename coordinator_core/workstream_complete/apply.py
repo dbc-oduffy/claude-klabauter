@@ -1227,7 +1227,6 @@ def _run_close_commit_tail(
             # `empty_consumed_set` flag had no reader; this one is read by
             # `apply()`'s own report, below). `resolve_ship_stamp_candidates`
             # always executes whenever a commit is being attempted at all.
-            # Review: coordinator:code-reviewer (Finding 3, 2026-08-30) --
             # shared constant instead of a second inline construction, so the
             # two sites cannot drift on field values.
             ship_outcome = directives_commit_tail.EMPTY_SHIP_STAMP_OUTCOME
@@ -1304,7 +1303,7 @@ def _run_close_commit_tail(
         # outcome is unknown/failed -- any ship-stamp write already landed on
         # disk (see the block above) rides no commit, so it is reverted
         # rather than left standing for the archival sweep to act on.
-        # Review: overengineering-reviewer -- `ship_outcome` is always a
+        # `ship_outcome` is always a
         # value here (never None): both branches above assign one, and the
         # `kwargs is None` path already returned before this frame is
         # reached. Dropped the dead `is not None` guard.
@@ -1330,7 +1329,7 @@ def _run_close_commit_tail(
         "integrity_breach": result.integrity_breach,
         "diagnostics": list(result.diagnostics),
     }
-    # Review: overengineering-reviewer -- `ship_outcome` is always-a-value
+    # `ship_outcome` is always-a-value
     # here (see the earlier guard's own note); dropped the equivalent dead
     # `is not None` check that used to wrap this block.
     # WRITE-LANDS-THEN-COMMIT-FAILS: the stamp is durable only once this

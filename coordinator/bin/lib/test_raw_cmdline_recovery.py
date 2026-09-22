@@ -221,7 +221,7 @@ def test_windows_unknown_no_switch_token_raises(monkeypatch, tmp_path):
         recover_windows_argv(mangled, _LAUNCHER)
 
 
-# Review: coordinator:code-reviewer (9245562b, P2) -- escaped-quote comspec
+# escaped-quote comspec
 # token: a bare closing-quote scan would stop at the escaped `\"` inside the
 # comspec path, resuming mid-string at an offset unrelated to the real
 # switch token. Constructed shape, no known real-world COMSPEC producing it

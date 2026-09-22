@@ -665,6 +665,12 @@ def main(argv: List[str]) -> int:
             if _fix_file(full_path, src, dest):
                 fixed += 1
         print(f"healed {fixed} dangling backlink citation(s)")
+        if fixed < len(hits):
+            print(
+                f"WARNING: {len(hits) - fixed} of {len(hits)} dangling backlink citation(s) "
+                "could not be healed (see ERROR lines above) — re-run --fix after resolving",
+                file=sys.stderr,
+            )
         # Latent-bug fix (C5-fix, same function): id_failures/
         # path_ungrandfathered were computed on PRE-fix file content. A
         # citation this loop just healed (docs/plans/... -> archive/specs/

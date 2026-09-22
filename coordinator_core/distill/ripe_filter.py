@@ -175,7 +175,7 @@ def scan_spec_dir(spec_dir: Path) -> RipeFilterResult:
         try:
             is_ripe, status, reason = _classify_one(md_path)
         except (OSError, UnicodeDecodeError) as exc:
-            # Review: code-reviewer (Finding 7, 2026-07-12) — was f"unreadable: {exc}",
+            # Was f"unreadable: {exc}",
             # which for OSError often embeds the full absolute path, leaking the
             # invoking machine's directory structure into an otherwise portable JSON
             # output. Use the exception class name only.

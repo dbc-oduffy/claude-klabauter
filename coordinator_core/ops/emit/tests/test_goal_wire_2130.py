@@ -106,7 +106,7 @@ def _emitted_goal(ctx: EmitContext, machine: str, raw_record: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Direct parser unit tests for _parse_goal_ids/_unquote (DR-207 `goals:` array field).
 #
-# Review: code-reviewer (Finding 6, initiativesummary-goals-join) — the join-mechanics
+# The join-mechanics
 # tests below (TestInitiativeGoalsJoin) synthesize `_goal_ids` directly as a Python list
 # literal, bypassing the parser entirely. These tests exercise the parser itself against
 # on-disk-shaped YAML text.
@@ -420,7 +420,7 @@ def test_key_results_status_item_missing_subfield_defaults_to_empty_string(
     producer contract and silently drop real KRs whose only defect is one blank
     sub-field.
 
-    Review: code-reviewer (Finding 1) — replaces a prior version of this test that
+    Replaces a prior version of this test that
     manually `del`d the key post-emission to force an artificial ValidationError,
     masking the real (validates-successfully) behavior."""
     ctx = _make_ctx(tmp_path)

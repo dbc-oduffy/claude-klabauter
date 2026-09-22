@@ -248,7 +248,7 @@ def _check_content_axis(fd_module, claude_klabauter_root: str) -> "tuple[list, b
             "docstring's CITED-VS-UNCITED SPLIT)."
         )
     elif unresolved:
-        # Review: code-reviewer 2026-08-12 (nit): a file that could not be
+        # code-reviewer 2026-08-12 (nit): a file that could not be
         # checked (missing source-of-truth or unreadable) must not be folded
         # into "0 drifted" as if it were cleared — say so explicitly instead
         # of letting the summary line imply full coverage.

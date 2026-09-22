@@ -452,7 +452,7 @@ async def _handler(
         }
     elif _applied[0]:
         _LOG.debug("handoff.stamp: stamped shipped_in: %s into %s", sha, p)
-        # Review: code-reviewer (F6) — include message field for envelope consistency
+        # Include message field for envelope consistency
         # with handoff.transition; callers doing result["message"] must not KeyError.
         return {
             "exit_code": 0,
@@ -467,7 +467,7 @@ async def _handler(
         _LOG.debug(
             "handoff.stamp: shipped_in already present in %s — skipping (idempotent)", p
         )
-        # Review: code-reviewer (F6) — include message field for envelope consistency.
+        # Include message field for envelope consistency.
         return {
             "exit_code": 0,
             "applied": False,
@@ -487,7 +487,7 @@ async def _handler(
 def _err(msg: str, kind: Optional[str] = None) -> dict:
     """Return an exit_code=1 error reply dict.
 
-    Review: code-reviewer (F8) — renamed _error → _err for consistency with sibling
+    Renamed _error → _err for consistency with sibling
     ops (handoff_transition, memo_transition all use _err).
 
     kind: echoed verbatim into the response (DR-096) — the ``_handler`` doc
@@ -787,7 +787,7 @@ _CLOSED_REASONS = frozenset({"cancelled", "displaced", "stale"})
 # remain unconditionally terminal — this set's membership is unchanged, only
 # one caller's use of it gained a same-write bypass for one specific member.
 #
-# Review: coordinator:code-reviewer — this vendored copy had drifted to
+# This vendored copy had drifted to
 # 3 members, silently omitting "abandoned"; now imports
 # lifecycle_constants.HANDOFF_TERMINAL_DEPLOYMENT directly (a leaf module,
 # zero coordinator_core imports/side effects) instead of vendoring.
@@ -891,7 +891,7 @@ _CROSS_REPO_REF_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{2,}:(?!//)")
 def _repair_deployment_state_err(msg: str) -> dict:
     """Error-shape helper shared by both deployment_state repair doors.
 
-    Review: overengineering-reviewer (2026-08-31) — dropped the
+    Dropped the
     ``verb_label`` policy axis that used to distinguish the two doors' log
     prefixes here; it varied a log string only, at the cost of ~19 call-site
     edits. Error paths log a generic prefix (root context is not yet
@@ -1293,7 +1293,6 @@ async def _repair_deployment_state_impl(
         # had not invoked. It is caller-facing `error` text, not a log line — the
         # generic log prefix lives in `_repair_deployment_state_err`, and the two
         # door-distinguishing lines further down carry `root_label` once resolved.
-        # Review: coordinator:code-reviewer (slice B, Finding 1, P1).
         return _repair_deployment_state_err(
             "repair_deployment_state: repo_root is required "
             "(no founding root available)")

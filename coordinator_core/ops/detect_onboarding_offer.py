@@ -89,7 +89,7 @@ def _count_ignored_session_dirs(repo_root: str) -> int:
         with open(gitignore, "r", encoding="utf-8", errors="replace") as fh:
             lines = [line.rstrip("\n").rstrip("\r") for line in fh]
     except OSError as exc:
-        # Review: code-reviewer (Finding 1) — replaced a stringified fragment
+        # Replaced a stringified fragment
         # of the try-block's own source with a plain human sentence.
         print(f"skip: could not read {gitignore}: {exc}", file=sys.stderr)
         return 0
@@ -108,7 +108,7 @@ def _is_distribution_repo(repo_root: str) -> bool:
 
 
 def _is_onboarded(repo_root: str) -> bool:
-    # Review: coordinator:code-reviewer (P1) -- `state/workstreams/` alone is
+    # `state/workstreams/` alone is
     # empirically unsound: it is created lazily by queue_append.py on first
     # workstream event and no install/scaffold path provisions it, so 11 of
     # 12 currently-onboarded sibling repos in the fleet have no

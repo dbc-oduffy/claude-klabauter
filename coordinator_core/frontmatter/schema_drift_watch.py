@@ -92,7 +92,7 @@ from coordinator_core.warm.engine_root import is_engine_root
 # Directory holding claude-klabauter's vendored copies of DoE's canonical schemas.
 VENDORED_SCHEMAS_DIR = Path(__file__).resolve().parent / "schemas"
 
-# Review: overengineering-reviewer — corrected: this is a hand-written parallel
+# corrected: this is a hand-written parallel
 # literal, not a derivation from VENDORED_SCHEMAS_DIR; nothing couples the two,
 # so a package move must update both by hand.
 #
@@ -266,7 +266,7 @@ def vendored_schema_paths(schemas_dir: Optional[Path] = None) -> list[Path]:
     `emit_memo_schema` exists to prevent) must not silently get treated as
     an ordinary vendored-schema drift-watch entry.
     """
-    # Review: overengineering-reviewer — rung 1 of _resolve_scan_schemas_dir
+    # Rung 1 of _resolve_scan_schemas_dir
     # already does the None-check and Path() coercion; pass schemas_dir straight
     # through instead of redoing both here.
     directory = _resolve_scan_schemas_dir(schemas_dir)
@@ -301,7 +301,7 @@ def vendored_source_paths(schemas_dir: Optional[Path] = None) -> list[Path]:
 
     Returns [] (never raises) when the directory is absent or unreadable.
     """
-    # Review: overengineering-reviewer — see vendored_schema_paths, same vestige.
+    # See vendored_schema_paths, same vestige.
     directory = _resolve_scan_schemas_dir(schemas_dir)
     try:
         return sorted(
@@ -730,7 +730,7 @@ def _scan(
         Path(cockpit_repo_path) if cockpit_repo_path is not None else resolve_cockpit_repo_path()
     )
 
-    # Review: code-reviewer (P3) — resolve the schemas dir once and thread it
+    # Resolve the schemas dir once and thread it
     # through both coverage-set calls and the indeterminate-summary below,
     # instead of letting each re-derive it (a second env/registry read on
     # every indeterminate-empty scan). `_resolve_scan_schemas_dir` treats a
@@ -932,7 +932,7 @@ def _scan(
             if indeterminate
             else ""
         )
-        # Review: coordinator:code-reviewer Finding 1 — a single global remediation
+        # A single global remediation
         # keyed off any() dropped the re-vendor instruction whenever the batch also
         # contained a we-ahead file. Emit per-direction remediation instead, so a
         # mixed batch keeps both instructions.

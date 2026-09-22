@@ -673,14 +673,19 @@ def compose_commit_call(
     removed_files: Sequence[str] = (),
     removed_files_js: Optional[str] = None,
     regenerate_op: Optional[str] = None,
+    repo_root: str = ".",
     agent_type_host: Optional[str] = None,
 ) -> str:
     """`commit` (`coordinator:git-commit-agent`, sonnet, low). Stages the
-    worker's touched list plus the row's ledger deletion (`backlog-grind-assemble grind-row
-    settle`), runs the profile's index-regenerate op when one is named,
-    then commits. Passes `--declared-revert` for every removed path
-    (trap 3). An indeterminate outcome is reconciled against `git log` and
-    `git status` before any retry, and never retried blind (trap 4).
+    worker's touched list plus the row's ledger deletion, via the full
+    `backlog-grind-assemble grind-row settle --profile P --row-id R
+    --repo-root <repo_root>` invocation (every flag `grind_rows.cmd_settle`
+    requires -- matching how every other composer in this module renders
+    its CLI invocation, never a bare/underspecified subcommand mention),
+    runs the profile's index-regenerate op when one is named, then commits.
+    Passes `--declared-revert` for every removed path (trap 3). An
+    indeterminate outcome is reconciled against `git log` and `git status`
+    before any retry, and never retried blind (trap 4).
 
     ``touched_files_js``/``removed_files_js``/``row_id_js`` name JS
     expressions (e.g. the fixer's own returned touched-files list, the row
@@ -696,7 +701,11 @@ def compose_commit_call(
         ("lit", ". You are the only stage that stages or commits anything. Stage exactly this touched list: ["),
     ]
     parts.extend(_list_parts(touched_files, touched_files_js))
-    parts.append(("lit", "], plus this row's ledger deletion via `backlog-grind-assemble grind-row settle`."))
+    parts.append(
+        ("lit", f"], plus this row's ledger deletion via `backlog-grind-assemble grind-row settle --profile {profile} --row-id ")
+    )
+    parts.append(row_id_part)
+    parts.append(("lit", f" --repo-root {repo_root}`."))
     if regenerate_op:
         parts.append(("lit", f" Before staging, run the index-regenerate op `{regenerate_op}`."))
     if removed_files or removed_files_js:
@@ -725,12 +734,16 @@ def compose_commit_ledger_only_call(
     run_id_js: Optional[str] = None,
     is_drain: bool = False,
     record_js: Optional[str] = None,
+    repo_root: str = ".",
     agent_type_host: Optional[str] = None,
 ) -> str:
     """`commit` (ledger-only) (`coordinator:git-commit-agent`, sonnet, low).
     At batch end and on drain, commits exactly the unsettled rows' ledger
-    files. On the drain commit only, additionally writes and stages
-    `state/queue-grind/<profile>/runs/<run-id>.json` in the same commit.
+    files. On the drain commit only, additionally runs `backlog-grind-
+    assemble grind-row run-record` to write and stage
+    `state/queue-grind/<profile>/runs/<run-id>.json` in the same commit --
+    the committer has no Write tool, so the run record is written through
+    this verb rather than hand-written (§ Design § Row verbs, `run-record`).
 
     ``unsettled_row_ids_js``/``run_id_js`` name JS expressions to
     interpolate at RUN time instead of the static values -- the real
@@ -756,15 +769,21 @@ def compose_commit_ledger_only_call(
     )
     if is_drain:
         parts.append(
-            ("lit", f" This is the drain commit: also write and stage state/queue-grind/{profile}/runs/")
+            (
+                "lit",
+                f" This is the drain commit: also run `backlog-grind-assemble grind-row "
+                f"run-record --profile {profile} --run-id ",
+            )
         )
+        parts.append(run_id_part)
+        parts.append(("lit", f" --repo-root {repo_root}` to write and stage state/queue-grind/{profile}/runs/"))
         if run_id_js:
             parts.append(("expr", run_id_js))
         else:
             parts.append(("lit", str(run_id)))
         parts.append(("lit", ".json in this same commit."))
         if record_js:
-            parts.append(("lit", " Its content is exactly this JSON, byte for byte: "))
+            parts.append(("lit", " Pass this JSON on stdin, byte for byte: "))
             parts.append(("expr", record_js))
             parts.append(("lit", "."))
     if is_drain:

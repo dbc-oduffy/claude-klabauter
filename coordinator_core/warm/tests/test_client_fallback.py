@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -42,7 +43,7 @@ _REAL_ENGINE_TOKEN = client.engine_token
 def _short_warm_runtime_base(monkeypatch: pytest.MonkeyPatch):
     """Overrides the suite-wide HOME quarantine's `warm-runtime-base`
     (`coordinator_core/conftest.py::_quarantine_real_home`) with a short,
-    real on-disk root under `/tmp`.
+    real on-disk root under `/tmp` on POSIX.
 
     The quarantine's own path (`.../pytest-of-<user>/pytest-N/home-
     quarantineNN/warm-runtime-base`) is already 90+ bytes deep on macOS
@@ -55,10 +56,17 @@ def _short_warm_runtime_base(monkeypatch: pytest.MonkeyPatch):
     Same fix as `test_election_posix.py::short_runtime_base` (committed
     b4e300c8f1); duplicated here rather than lifted into a shared
     `conftest.py` because this dispatch's scope is this file only.
+
+    `/tmp` does not exist as a drive-relative root on Windows, and named
+    pipes have no `sun_path` equivalent to protect against there -- so on
+    `os.name == "nt"` this falls back to the platform default temp root
+    (the quarantine's own `warm-runtime-base` is already short enough),
+    same guard as `conftest.py::_quarantine_real_home` uses for the
+    suite-wide base.
     """
     from coordinator_core.warm import breadcrumb
 
-    base = Path(tempfile.mkdtemp(prefix="wrb-", dir="/tmp"))
+    base = Path(tempfile.mkdtemp(prefix="wrb-", dir=None if os.name == "nt" else "/tmp"))
     try:
         monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(base))
         yield base

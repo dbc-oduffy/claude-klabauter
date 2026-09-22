@@ -718,7 +718,7 @@ def fire_row(row: CorpusRow) -> GuardCapture:
     with tempfile.TemporaryDirectory(prefix="guard-message-corpus-", dir=_neutral_scratch_parent()) as scratch:
         scratch_dir = Path(scratch)
         with pytest.MonkeyPatch.context() as mp:
-            # Review: coordinator:code-reviewer -- guard_inprocess_search's
+            # guard_inprocess_search's
             # _footer() session latch keys off the CLAUDE_CODE_SESSION_ID
             # process env var, never payload["session_id"]; setting it here
             # (matching test_guard_inprocess_search.py's own convention)
@@ -761,11 +761,27 @@ def _rehomed_doctrine_surface_setup(
     per call from `<plugin_root>/governed-authoring-surfaces.json` (C3), never
     a module constant -- so supply a scratch plugin root with a one-entry
     manifest rather than depending on whichever plugin is installed on the
-    host running the suite."""
-    (scratch_dir / "governed-authoring-surfaces.json").write_text(
+    host running the suite.
+
+    Minted under `Path.home()` (this suite's per-test quarantine dir, see
+    `conftest.py`'s `_quarantine_real_home`), never under `scratch_dir`'s
+    `_neutral_scratch_parent()` sibling: `dispatch.resolve_wiki_citation`'s
+    `_render_resolved` collapses a resolved citation to `~/...` only when it
+    sits under `Path.home()`, falling back to an absolute path -- carrying
+    whatever identity happens to sit in that fallback path -- otherwise. A
+    plugin root minted outside `Path.home()` exercises the wrong branch,
+    which is what let this fixture measure a fallback-path artifact as a
+    production leak (state/bug-backlog/2026-08-29-resolving-the-wiki-
+    citation-leaks-the-op-bf008060d2bd.yaml, verified_2026_09_19)."""
+    plugin_root = Path(
+        tempfile.mkdtemp(
+            prefix="guard-message-corpus-doctrine-surface-", dir=str(Path.home())
+        )
+    )
+    (plugin_root / "governed-authoring-surfaces.json").write_text(
         '["docs/wiki/governed-thing.md"]', encoding="utf-8"
     )
-    return {"plugin_root": str(scratch_dir)}
+    return {"plugin_root": str(plugin_root)}
 
 
 def _rehomed_repo_setup_claude_home_setup(
@@ -946,7 +962,7 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         # exact input; the advisory now comes ONLY from the separate
         # `destructive-git-revert-advisory` guard registered in
         # ADVISORY_REWRITE (see that row in `ADVISORY_REWRITE_ROWS` below).
-        # Review: staff-eng, Finding 0 -- an advisory returned from a
+        # An advisory returned from a
         # CONFINEMENT_DENY-registered guard would short-circuit
         # `evaluate_payload_json` and shadow every hard-deny guard
         # registered after it, so the two legs are split.
@@ -1523,7 +1539,7 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         False,
         setup=_git_repo_advisory_setup("git -C %s status"),
     ),
-    # Review: staff-eng Finding 8 -- the stash pair above pinned this
+    # The stash pair above pinned this
     # guard's byte count for one verb only; `reset`/`checkout`/`restore`
     # each carry their own `harm` wording (see `dispatch_checks.py`'s
     # `_check_destructive_git_revert_full`, the "VERB-CONDITIONED" comment)
@@ -3890,7 +3906,7 @@ def _fire_nudge_foreground_agent_dispatch_control() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(_hook_nudge_foreground_agent_dispatch._handler(payload, repo_root=None))
 
 
-# Review: code-reviewer — the fire-reroute fixture above always forwards a `prompt`,
+# The fire-reroute fixture above always forwards a `prompt`,
 # so it only ever exercises the reroute leg (_REROUTE_NOTICE). This fixture forwards
 # no forwardable `prompt` (D8's "absent/empty/missing prompt" trio) on an otherwise
 # identical present-and-false payload, taking the deny fallback branch instead, so

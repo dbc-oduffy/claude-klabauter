@@ -216,7 +216,7 @@ def _compose_precision_deny_reason(
 async def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Agent, Workflow) op: deny a dispatch brief carrying a
     suite-shaped imperative command or a directory-scoped Tier-F/U one."""
-    # Review: coordinator-code-reviewer — normalize the two params shapes
+    # Normalize the two params shapes
     # both engine doors and the cold chain send (see block_worktree_tool).
     params = payload_of(params)
     env = params.get("env")

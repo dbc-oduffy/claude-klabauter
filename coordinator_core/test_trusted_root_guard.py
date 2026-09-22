@@ -82,7 +82,7 @@ def test_doe_root_trailing_slash_normalized(tmp_path):
     "test_windows_separator_and_case_normalization below.",
 )
 def test_doe_root_only_single_trailing_slash_stripped(tmp_path):
-    # Review: code-reviewer -- bash `${_cc_doe%/}` strips exactly ONE
+    # Bash `${_cc_doe%/}` strips exactly ONE
     # trailing slash, unlike `.rstrip("/")` which strips all of them. A
     # pathological hand-edit with `//` leaves one `/` behind on both sides
     # of the port, which means the *same* double-slash-required prefix
@@ -655,7 +655,7 @@ def test_the_mirror_anchor_has_the_same_negative_boundary_as_the_others(tmp_path
 
 
 def test_a_slash_dotdot_poisoned_anchor_value_is_neutralized_by_the_global_reset(tmp_path):
-    """Review: reviewer-S3, Finding 2. A registry anchor VALUE containing a
+    """reviewer-S3, Finding 2. A registry anchor VALUE containing a
     literal "/.." (operator error or attacker-controlled) is never scrubbed at
     resolution -- `_plugin_mirror_root` is purely textual per DR-148. It is
     inert only because any root that would MATCH such a poisoned anchor

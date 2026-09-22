@@ -336,7 +336,7 @@ def test_known_violations_still_violate():
 
 
 def test_known_violations_ratchet_loop_against_a_populated_set(monkeypatch):
-    """Review: code-reviewer (Finding 5) -- `test_known_violations_still_violate`'s
+    """`test_known_violations_still_violate`'s
     loop body never actually runs while KNOWN_VIOLATIONS is empty by
     construction. This exercises the REAL loop path
     (`_known_violations_loop`, the same helper the gate test above calls)
@@ -390,7 +390,7 @@ def _run_all_live_violation_checks_in_fresh_subprocess() -> dict:
     invocation, so each run re-imports every module from disk rather than
     reusing sys.modules-cached bytecode.
 
-    Review: code-reviewer (Finding 3) -- an in-process loop over the same 5
+    An in-process loop over the same 5
     calls can never observe `_alternative_liveness.py`'s own documented
     determinism hazard (a concurrent-edit sibling import minutes apart across
     SEPARATE process launches, not within one already-imported process). A

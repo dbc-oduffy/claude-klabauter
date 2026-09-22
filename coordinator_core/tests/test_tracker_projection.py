@@ -182,7 +182,7 @@ def test_ac3_every_item_reachable_in_the_stream_folds_non_empty(repo_root):
     emit_item_project_added(toggled_to_empty, "proj-alpha", repo_root=repo_root)
     emit_item_project_retracted(toggled_to_empty, "proj-alpha", repo_root=repo_root)
 
-    # Review: code-reviewer (Finding 1) — an item known to the stream ONLY
+    # An item known to the stream ONLY
     # via an item_project_added event, with no item_created at all. This
     # exercises fold_membership's `elif` branch seeding an item on its own,
     # independent of the item_created branch (see module docstring).
@@ -191,7 +191,7 @@ def test_ac3_every_item_reachable_in_the_stream_folds_non_empty(repo_root):
         only_added, "proj-alpha", kind="item_project_added", repo_root=repo_root
     )
 
-    # Review: code-reviewer (Finding 1) — an item known to the stream ONLY
+    # An item known to the stream ONLY
     # via an item_project_retracted event, no prior add and no item_created.
     only_retracted = mint_item_id(
         "OnlyRetracted", "no prior add, no item_created", "2026-08-05T10:00:00.000000Z"
@@ -298,7 +298,7 @@ def test_ac5_one_or_more_real_edges_exclude_unassigned(repo_root):
 
     folded = fold_membership(repo_root=repo_root)
 
-    # Review: code-reviewer (Finding 2) — the mutual-exclusivity assert this
+    # The mutual-exclusivity assert this
     # test used to carry here is vacuous post-DEC-13/DEC-21 (removed; see
     # module negative-spec) and is not re-added.
     assert folded[item_id] == {"proj-alpha", "proj-beta"}
@@ -448,7 +448,7 @@ def test_ac16_reserved_project_id_addressable_with_no_item_folding_to_it(repo_ro
     folded = fold_membership(repo_root=repo_root)
     # No item currently folds to unassigned in this fixture...
     assert all(RESERVED_PROJECT_ID not in projects for projects in folded.values())
-    # Review: code-reviewer (Finding 3) — `assert RESERVED_PROJECT_ID ==
+    # `assert RESERVED_PROJECT_ID ==
     # "unassigned"` was a constant compared to its own literal (tautology,
     # cannot fail) and did not probe AC16's actual claim. On re-check: a
     # `project_created` event for RESERVED_PROJECT_ID can never exist to be
@@ -466,7 +466,7 @@ def test_ac16_reserved_project_id_addressable_when_an_item_does_fold_to_it(repo_
     item_id = _make_item(repo_root)
 
     folded = fold_membership(repo_root=repo_root)
-    # Review: code-reviewer (Finding 3) — dropped the tautological
+    # Dropped the tautological
     # `assert RESERVED_PROJECT_ID == "unassigned"`. Per the sibling test
     # above: a project_created event for RESERVED_PROJECT_ID can never
     # exist (rejected at construction — test_tracker_entities.py AC2), so
@@ -838,7 +838,7 @@ def test_ghost_sentinel_zero_git_aliases(repo_root):
     folded = fold_person_membership(repo_root=repo_root)
 
     assert (person_id, "assignee") in folded[item_id]
-    # Review: coordinator:code-reviewer — scope to this person, not the
+    # Scope to this person, not the
     # whole registry, so an unrelated person's git_author alias could not
     # mask a regression on THIS person acquiring one.
     assert all(

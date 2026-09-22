@@ -68,7 +68,7 @@ def _extract_names(snapshot: dict) -> set[str]:
 
     # name-keyed-dict form: top-level keys are competitor names, but only when the snapshot
     # doesn't use the "competitors" key at all (avoid misreading a malformed list form).
-    # Review: code-reviewer (F4) — additionally require every top-level value be a dict (the
+    # Additionally require every top-level value be a dict (the
     # competitor-object shape) before interpreting keys as names; a metadata-shaped snapshot
     # (e.g. {"schema_version": ..., "generated_at": ...}) would otherwise yield false-positive
     # competitor names. Degrades to an empty set (typed no-signal) when the guard fails.

@@ -39,6 +39,11 @@ Negative-spec:
     - Does NOT continue silently if HAND fences are malformed on an existing file.
     - Does NOT add a cockpit-contract entity or bump CONTRACT_VERSION (anti-scope).
     - Does NOT write to disk when --check is passed.
+    - Does NOT refuse to regenerate a MANAGED section whose existing content
+      looks hand-edited (a MANAGED fence is always fully refreshed, same as
+      any other run) — it only warns to stderr first, so the overwrite is
+      visible rather than a silent loss of narrative nobody had a chance to
+      salvage. See `_validate_managed_shape`.
     - MANAGED-section markdown link targets (e.g. `](archive/foo.md)`, or a
       stray `](../archive/foo.md)` harvested from a nested source) are ALL
       treated as repo-root-relative and rewritten to resolve correctly from
@@ -174,6 +179,62 @@ def _validate_hand_fences(path: str) -> Tuple[bool, List[str]]:
             )
             ok = False
     return ok, errors
+
+
+#: `_derive_progress`/`_derive_identity` extract verbatim prose from source
+#: files, so no generic grammar can distinguish every legitimate body line
+#: from hand-authored narrative. This pattern names the one shape neither
+#: deriver ever emits: a bold *inline* citation trailing a sentence, e.g.
+#: `*(narrative-synthesis.md thread 13)*` — a footnote-style attribution that
+#: only appears in hand-authored prose, never in a verbatim section extract,
+#: a raw git-log line, or the fixed placeholder text.
+_MANAGED_INLINE_CITATION_RE = re.compile(r"\*\([^)\n]*\)\*")
+
+
+def _validate_managed_shape(path: str) -> List[str]:
+    """Warn (non-fatal) when an existing file's MANAGED sections carry
+    content that `_derive_identity`/`_derive_progress` could not have
+    produced — evidence of a hand-edit landed inside a MANAGED fence.
+
+    Returns warning_lines, empty when both sections look generator-producible.
+    Negative-spec: does NOT write any output, modify any file, or block the
+    regen that follows — the correct remedy for a hand-edit inside MANAGED
+    is exactly the overwrite this function's caller is about to perform; this
+    only makes that overwrite visible instead of silent.
+    """
+    warnings: List[str] = []
+    for name in ("identity", "progress"):
+        content = _extract_managed(path, name)
+        if _MANAGED_INLINE_CITATION_RE.search(content):
+            warnings.append(
+                f'WARNING: {path}: MANAGED: {name} content does not match '
+                "generator-producible shape (looks hand-edited) — overwriting with regenerated content\n"
+            )
+    return warnings
+
+
+def _extract_managed(path: str, name: str) -> str:
+    """Extract content between a named MANAGED fence pair, verbatim (excluding fence lines)."""
+    begin = f"<!-- BEGIN MANAGED: {name} -->"
+    end = f"<!-- END MANAGED: {name} -->"
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        lines = []
+
+    in_block = False
+    out: List[str] = []
+    for line in lines:
+        if line == begin:
+            in_block = True
+            continue
+        if line == end:
+            in_block = False
+            continue
+        if in_block:
+            out.append(line)
+    return "\n".join(out)
 
 
 def _extract_hand(path: str, name: str) -> str:
@@ -719,6 +780,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             for err in errors:
                 sys.stderr.write(err)
             return 1
+        for warning in _validate_managed_shape(target):
+            sys.stderr.write(warning)
         hand_special = _extract_hand(target, "special")
         hand_goals = _extract_hand(target, "goals")
     else:

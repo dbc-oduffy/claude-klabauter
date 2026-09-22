@@ -910,7 +910,7 @@ def test_current_prebuilt_reports_nothing(monkeypatch, capsys):
     assert capsys.readouterr() == ("", "")
 
 
-# Review: coordinator-code-reviewer -- pin that check_door_provenance's own
+# Pin that check_door_provenance's own
 # platform gate actually wires _report_prebuilt_currency in on Windows and
 # leaves it out elsewhere, through the real entry point rather than by
 # calling _report_prebuilt_currency() directly (which the two tests above

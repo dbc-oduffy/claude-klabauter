@@ -266,7 +266,7 @@ def test_fd_duplication_greater_and_2_stays_silent():
     assert not _fires('echo err >&2')
 
 
-# Review: coordinator:code-reviewer (49482a06) P3 -- the two tests above only
+# The two tests above only
 # assert indirectly via `_fires()`, which is silent regardless of whether
 # `_extract_redir_candidates` returns `[]` or some benign-but-nonempty
 # candidate -- neither `2>&1` nor `>&2` contains a character `_check_candidate`
@@ -282,7 +282,7 @@ def test_extract_redir_candidates_fd_duplication_greater_2_yields_no_candidate()
     assert m._extract_redir_candidates('echo err >&2') == []
 
 
-# Review: coordinator:code-reviewer (49482a06) P3 -- process-substitution
+# process-substitution
 # bodies (`(`/`)`) were added to `_REDIR_TARGET_STOP` so a construct like
 # `tee >(grep foo) < in` cannot have its `>(...)` treated as a redirect
 # target; this had zero regression coverage.

@@ -566,7 +566,7 @@ def test_emit_x_node_shape(step_id: str) -> None:
     assert len(node["missing_signal"]) > 0
 
 
-# Review: code-reviewer F8 — add direct positive-path test for emit_x via a synthetic
+# Add direct positive-path test for emit_x via a synthetic
 # X_MISSING_SIGNALS injection.  _ALL_X_STEPS is [] (all X-steps reclassified D); the
 # parametrized tests collect 0 cases.  This direct test keeps the happy path covered.
 
@@ -578,7 +578,7 @@ def test_emit_x_direct_with_synthetic_registration(monkeypatch) -> None:
     key, then calls emit_x and asserts the returned node has the correct shape.
     This covers the emit_x → make_x_node happy path that _ALL_X_STEPS=[] leaves dark.
 
-    Review: code-reviewer F8 — emit_x positive-path coverage via synthetic injection.
+    emit_x positive-path coverage via synthetic injection.
     """
     import coordinator_core.ops.ceremony.node_handlers as nh
 
@@ -606,7 +606,7 @@ def test_emit_x_direct_with_synthetic_registration(monkeypatch) -> None:
         STEP_B1,
         STEP_1B,
         "step_unknown",
-        # Review: code-reviewer — STEP_2_6_3, STEP_2_96, and STEP_2_67A reclassified X→D 2026-07-06;
+        # STEP_2_6_3, STEP_2_96, and STEP_2_67A reclassified X→D 2026-07-06;
         # adding them here locks the reclassification: re-adding to X_MISSING_SIGNALS turns red.
         STEP_2_6_3,
         STEP_2_96,

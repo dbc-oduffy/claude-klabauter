@@ -834,7 +834,7 @@ class TestResolvedFilename:
     def test_root_threaded_preview_matches_caller_worktree_not_ambient_cwd(
         self, tmp_path, monkeypatch
     ):
-        """Review: coordinator-code-reviewer Finding 1 — memo.list's
+        """memo.list's
         `repo_root` handler param must be threaded through to the defaulted-
         sender resolution, never left to the engine process's ambient cwd
         under the warm resident engine (DR-315: one process serves several

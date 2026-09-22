@@ -103,7 +103,7 @@ def _isolate_claude_home(tmp_path, monkeypatch):
 
 
 def _make_scratch_clones(cloud_mod, tmp_path: Path) -> dict:
-    # Review: code-reviewer (2026-09-06, Finding 6) -- derived from the real
+    # Derived from the real
     # CLONES dict rather than hand-copied, so a URL change in cloud_setup.py
     # cannot silently drift out of sync with what these tests exercise.
     return {
@@ -203,7 +203,7 @@ def test_every_network_step_failing_is_named_not_silent(monkeypatch, tmp_path, c
         assert steps_by_name[step_name]["detail"]  # non-empty diagnostic
 
 
-# Review: overengineering-reviewer — cut the scratch-HOME arm. `set_engine_env`
+# Cut the scratch-HOME arm. `set_engine_env`
 # is six lines and reads only `CLONES`; it cannot derive a path from `HOME` by
 # construction (no `os.environ["HOME"]` read exists anywhere in the module),
 # so the arm asserted a property the code cannot violate rather than pinning
@@ -244,7 +244,7 @@ def test_run_claude_klabauter_setup_argv_names_coordinator_root(monkeypatch, tmp
     assert argv[idx + 1] == scratch_clones["coordinator-claude"]["dest"]
     assert report.container_optin_requested is True
     assert report.setup_exit_code == 0
-    # Review: code-reviewer (2026-09-06, 15fa79cc) -- stdin=subprocess.DEVNULL
+    # stdin=subprocess.DEVNULL
     # had zero coverage: this test's own _fake_run previously discarded kwargs,
     # so deleting the argument would not have failed anything.
     assert captured_kwargs.get("stdin") is cloud_mod.subprocess.DEVNULL
@@ -280,7 +280,7 @@ def test_run_coordinator_install_trampoline_argv_has_non_interactive(
 
     argv = captured_argv["argv"]
     assert "--non-interactive" in argv
-    # Review: review-integrator (2026-09-06) -- asserted on the real argv passed
+    # Asserted on the real argv passed
     # to subprocess.run, not a re-stub of run_coordinator_install_trampoline
     # itself, per code-reviewer's deferred coverage-gap finding (aabbbb3784):
     # every other trampoline test monkeypatches the function out, so an

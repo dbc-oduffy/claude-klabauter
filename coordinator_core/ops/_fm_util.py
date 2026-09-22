@@ -6,7 +6,7 @@ duplicate definitions in ``handoff_author_fork._extract_frontmatter_scalar`` and
 ``review_trail_write._extract_frontmatter_field``.  Both callers import from here.
 
 Spec backlink: pln-claude-klabauter-fork-provenance-creatio-01c09f § C3
-Review: code-reviewer — promoted from duplicate to shared module (F3); YAML
+Promoted from duplicate to shared module (F3); YAML
         quote-stripping added to prevent silent mismatch on quoted scalar values (F4).
 
 Negative-spec:
@@ -56,7 +56,7 @@ def extract_frontmatter_scalar(text: str, field: str) -> Optional[str]:
             fence_count += 1
             if fence_count >= 2:
                 break
-        # Review: code-reviewer — match line (unstripped) to anchor at column-0 only,
+        # Match line (unstripped) to anchor at column-0 only,
         #   consistent with oracle awk /^{field}:/ anchor.  ``stripped.startswith``
         #   would match indented sub-keys (false positive).
         elif fence_count == 1 and line.startswith(prefix):
@@ -64,7 +64,7 @@ def extract_frontmatter_scalar(text: str, field: str) -> Optional[str]:
             tokens = rest.split()
             if not tokens:
                 return ""
-            # Review: code-reviewer (F4) — strip surrounding YAML quotes so that a
+            # Strip surrounding YAML quotes so that a
             #   manually edited or tool-emitted quoted value (e.g. consumed_by: "sess-abc")
             #   compares equal to the unquoted resolved session id.
             return tokens[0].strip("\"'")

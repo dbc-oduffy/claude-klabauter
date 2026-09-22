@@ -283,7 +283,7 @@ def test_canonical_agent_id_grammar_matches_the_minters() -> None:
         engine._TEAMMATE_CANONICAL_RE.pattern
         == track_dispatched_agents._TEAMMATE_AGENT_RE.pattern
     )
-    # Review: coordinator:code-reviewer (2026-08-23, P3) -- track_touched_files
+    # track_touched_files
     # is named as one of the three writers by this module's docstring and was
     # the one copy this test never referenced, so a drift in ITS charset alone
     # would have gone uncaught and killed the leg again for exactly the
@@ -306,7 +306,7 @@ def test_canonical_agent_id_grammar_matches_the_minters() -> None:
 
 
 def test_older_predicates_reject_trailing_newline() -> None:
-    """Review: coordinator:code-reviewer (2026-08-23, P3). `match` with a `$`
+    """coordinator:code-reviewer (2026-08-23, P3). `match` with a `$`
     anchor also matches immediately before one trailing newline, so the two
     pre-existing legs accepted `"<id>
 "` and keyed a `.agents/<id>
@@ -342,7 +342,6 @@ def test_read_backpointer_subagent_type_missing_chain_empty(git_repo: Path) -> N
     assert resolved == ""
 
 
-# Review: coordinator:code-reviewer (2026-08-14, Divergence 18 deferred
 # finding) -- expected_em_session_id cross-check. The back-pointer chain
 # never verified the em_session_id it read from em-session-id.txt matched
 # the calling payload's own session_id; a stale/cross-session/fabricated

@@ -75,7 +75,7 @@ def write_json_atomic(target: Path, record: dict) -> None:
     handle, tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
     tmp_path = Path(tmp)
     try:
-        with os.fdopen(handle, "w", encoding="utf-8") as fh:
+        with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(record, fh, indent=2)
             fh.write("\n")
         os.replace(tmp, target)
@@ -182,7 +182,7 @@ def holder_lock(
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
     try:
-        # Review: code-reviewer Finding 1 -- msvcrt.locking on Windows requires
+        # msvcrt.locking on Windows requires
         # the locked byte range to lie within the file's actual extent; a
         # freshly O_CREAT'd zero-length file fails to lock on the very first
         # call. Size the file to >=1 byte unconditionally before ever locking.

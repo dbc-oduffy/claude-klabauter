@@ -38,7 +38,7 @@ Exit codes (must match `main()`'s actual returns byte-for-byte — do not drift)
      error / git not available" must not conflate that with "the claude-klabauter link
      is down and nothing ran at all." Matches the dedicated-transport-code
      convention already used by sibling ports.
-     Review: code-reviewer F1 — reusing rc=1 for transport failure violated
+     Reusing rc=1 for transport failure violated
      the porter addendum's A3/A3b exit-code-collision rule.
 
 Sibling-script resolution: this op is claude-klabauter-resident but depends on one

@@ -12,16 +12,19 @@ carried at the frontmatter-key level (no such heading in the plan BODY --
 DoE's own first attempt emitted the stub into the body where no schema
 consumer reads it; see the C3a EM addendum).
 
-AC11's decision, load-bearing: the block is COMMENTED OUT or fully empty --
-never a live stub. A live stub would teach a scaffolded plan's frontmatter
-to parse `prime_exit_criterion` as "declared" the moment C2's arm-2 predicate
-goes live, bricking every freshly-scaffolded plan before a sizing object
-exists to say whether the block is even owed (read-side rule keyed on
-`estimate.tshirt` M/L/XL -- unknowable at scaffold time).
+AC11's decision, load-bearing: `prime_exit_criterion`'s `statement` and
+`derived_from` are owed at every size (mise-prep's PRIME_EXIT bar reads
+them regardless of `estimate.tshirt`), so the scaffolder emits them LIVE
+with `<REPLACE: ...>` placeholders -- a field the author can see and fill,
+distinct from `prime-exit-absent` in `coordinator_core.roadmap.prep_gate`.
+The nested `falsifier` sub-block stays COMMENTED OUT: it is owed only when
+`estimate.tshirt` resolves to M/L/XL, unknowable at scaffold time, so a
+live stub there would declare a falsifier no sizing asked for.
 
-AC11a (regression): a freshly-scaffolded, untouched plan must close out
-exactly as one scaffolded before C3a existed -- i.e. `prime_exit_criterion`
-must not appear as a real (parsed) frontmatter key on an unedited scaffold.
+AC11a (regression): a freshly-scaffolded, untouched plan parses
+`prime_exit_criterion.statement` and `.derived_from` as real frontmatter
+keys carrying the `<REPLACE: ...>` placeholder text, while `falsifier`
+never appears as a parsed key -- it stays commented, not a live stub.
 
 Loaded by file path (`importlib.machinery.SourceFileLoader`) since
 `coordinator-doc-new` is an extensionless polyglot entrypoint, not a `.py`
@@ -59,13 +62,17 @@ _TEMPLATE_PATH = (
 )
 
 _FALSIFIER_COMMENT_LINES = [
-    "#   statement:",
-    "#   derived_from:",
     "#   falsifier:",
     "#     how:",
     "#     baseline_output:",
     "#     baseline_ref:",
     "#     expected_when_true:",
+]
+
+_CRITERION_LIVE_LINES = [
+    "prime_exit_criterion:",
+    "  statement: >-",
+    '  derived_from: "<REPLACE: state/sizings/<file>.yaml | <goal_id>#kr-<kr-id> — a LINK>"',
 ]
 
 
@@ -85,12 +92,13 @@ _cli = _load_cli_module()
 
 
 class ScaffoldPlanEmitsCommentedFalsifierBlockTest(unittest.TestCase):
-    """AC11: `_scaffold_plan` emits the falsifier skeleton fully commented out."""
+    """AC11: `_scaffold_plan` emits the falsifier sub-block fully commented
+    out, nested under a LIVE `prime_exit_criterion` heading."""
 
     def test_falsifier_heading_is_commented(self):
         content = _cli._scaffold_plan(title="t", branch="b", author="test-author")
-        self.assertIn("# prime_exit_criterion:", content)
-        self.assertNotIn("\nprime_exit_criterion:", content)
+        self.assertIn("#   falsifier:", content)
+        self.assertNotIn("\n  falsifier:", content)
 
     def test_all_falsifier_subfields_are_commented(self):
         content = _cli._scaffold_plan(title="t", branch="b", author="test-author")
@@ -105,17 +113,22 @@ class ScaffoldPlanEmitsCommentedFalsifierBlockTest(unittest.TestCase):
 
 
 class ScaffoldPlanFalsifierNeverALiveStubTest(unittest.TestCase):
-    """AC11a: an untouched, freshly-scaffolded plan parses identically to one
-    scaffolded before C3a existed -- `prime_exit_criterion` never appears as
-    a real (parsed) frontmatter key."""
+    """AC11a: an untouched, freshly-scaffolded plan parses
+    `prime_exit_criterion.statement`/`.derived_from` as real frontmatter
+    keys carrying the `<REPLACE: ...>` placeholder, while the nested
+    `falsifier` sub-block never appears as a parsed key -- it stays
+    commented, never a live stub."""
 
-    def test_prime_exit_criterion_absent_from_parsed_frontmatter(self):
+    def test_prime_exit_criterion_present_with_placeholders(self):
         content = _cli._scaffold_plan(title="t", branch="b", author="test-author")
         fm_text = content.split("---", 2)[1]
         fields = yaml.safe_load(fm_text)
-        self.assertNotIn("prime_exit_criterion", fields)
+        criterion = fields["prime_exit_criterion"]
+        self.assertIn("<REPLACE:", criterion["statement"])
+        self.assertIn("<REPLACE:", criterion["derived_from"])
+        self.assertNotIn("falsifier", criterion)
 
-    def test_scaffold_with_sizing_and_problem_set_still_omits_the_key(self):
+    def test_scaffold_with_sizing_and_problem_set_still_carries_placeholders(self):
         content = _cli._scaffold_plan(
             title="t",
             branch="b",
@@ -125,54 +138,62 @@ class ScaffoldPlanFalsifierNeverALiveStubTest(unittest.TestCase):
         )
         fm_text = content.split("---", 2)[1]
         fields = yaml.safe_load(fm_text)
-        self.assertNotIn("prime_exit_criterion", fields)
+        criterion = fields["prime_exit_criterion"]
+        self.assertIn("<REPLACE:", criterion["statement"])
+        self.assertIn("<REPLACE:", criterion["derived_from"])
+        self.assertNotIn("falsifier", criterion)
 
 
 class TemplateMirrorParityTest(unittest.TestCase):
-    """The docgen `plan.json` mirror carries the same commented falsifier
-    lines as the live `_scaffold_plan` producer -- both are in this chunk's
-    `writes:` and both must change, per the C3a EM addendum's correction 1."""
+    """The docgen `plan.json` mirror carries the same live criterion and
+    commented falsifier lines as the live `_scaffold_plan` producer -- both
+    are in this chunk's `writes:` and both must change together."""
 
-    def test_template_json_has_falsifier_literal_lines(self):
+    def test_template_json_has_criterion_and_falsifier_literal_lines(self):
         template = json.loads(_TEMPLATE_PATH.read_text(encoding="utf-8"))
         fm_lines = [
             f["line"]
             for f in template["frontmatter"]["fields"]
             if f.get("kind") == "literal"
         ]
-        self.assertIn("# prime_exit_criterion:              # falsifier block — read-side owed only at", fm_lines)
+        for line in _CRITERION_LIVE_LINES:
+            self.assertIn(line, fm_lines, f"expected live criterion line {line!r} in template")
         for line in _FALSIFIER_COMMENT_LINES:
             matches = [fl for fl in fm_lines if fl.startswith(line)]
             self.assertTrue(matches, f"expected a template literal line starting {line!r}")
 
-    def test_template_falsifier_lines_are_all_commented(self):
+    def test_template_falsifier_subblock_lines_are_all_commented(self):
         template = json.loads(_TEMPLATE_PATH.read_text(encoding="utf-8"))
         fm_lines = [
             f["line"]
             for f in template["frontmatter"]["fields"]
             if f.get("kind") == "literal"
         ]
-        # Token-scoped, NOT substring-scoped on `statement:`. A bare
-        # `statement:` stopped being falsifier-specific when the live
-        # `gated_exit_criteria` rows landed (2026-08-30, plan.schema.json
-        # 2.10.0's block, test_plan_scaffold_brightline_parity.py): those rows
-        # carry an UNcommented `statement: >-` by design, and matching on the
-        # bare token turned this assertion red against a correct template.
-        falsifier_tokens = (
-            "prime_exit_criterion",
-            "falsifier",
-            "derived_from:",
-            "baseline_",
-            "expected_when_true",
-        )
+        # Scoped to the nested `falsifier` sub-block only -- `prime_exit_
+        # criterion`/`statement`/`derived_from` are LIVE by design (AC11),
+        # so a blanket sweep over every falsifier-adjacent token would flag
+        # a correct template. `baseline_`/`expected_when_true`/`falsifier`
+        # tokens and the `how:` line only ever occur inside the commented
+        # sub-block.
+        falsifier_tokens = ("falsifier", "baseline_", "expected_when_true")
         falsifier_block = [
             fl for fl in fm_lines
             if any(tok in fl for tok in falsifier_tokens)
             or fl.strip().startswith("#     how:")
         ]
-        self.assertTrue(falsifier_block, "no falsifier-related literal lines found in template")
+        self.assertTrue(falsifier_block, "no falsifier-subblock literal lines found in template")
         for fl in falsifier_block:
             self.assertTrue(fl.lstrip().startswith("#"), f"template line not commented: {fl!r}")
+
+    def test_template_criterion_lines_are_not_recommented(self):
+        template = json.loads(_TEMPLATE_PATH.read_text(encoding="utf-8"))
+        fm_lines = [
+            f["line"]
+            for f in template["frontmatter"]["fields"]
+            if f.get("kind") == "literal"
+        ]
+        for line in _CRITERION_LIVE_LINES:
+            self.assertNotIn(f"# {line}", fm_lines)
 
     def test_scaffold_and_template_falsifier_blocks_match(self):
         """Byte-for-byte parity between the live scaffolder's falsifier block
