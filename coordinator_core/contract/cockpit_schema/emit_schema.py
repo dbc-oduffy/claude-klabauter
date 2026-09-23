@@ -475,7 +475,24 @@ GENERATES: list = []
 # defect at higher confidence. `test_emit_schema_pin.py` does not gate this
 # bump; it pins `emit_schemas()` against a fixture entity never registered in
 # `ENTITY_SCHEMAS`. Same D39 sequence as every bump above.
-CONTRACT_VERSION = "4.7.0"
+#
+# MINOR bump 4.7.0 -> 4.8.0 (2026-09-22): widens CrossRepoMemoSummary's `kind`
+# enum by one member, `friction` (entities/cross_repo_memo_summary.py). Shape
+# is otherwise untouched — no new field, no nullability change, no
+# `required[]` movement. Closes DoE-claude
+# state/improvement-queue/2026-09-05-memo-kind-has-no-friction-value-and-bug-
+# degrades-silently.yaml: the sender-side vocabulary
+# (`coordinator_core.ops.fleet.memo_kinds.VALID_KINDS`) had no value for a
+# workflow/process friction report, so senders over-filed the shape as `bug`
+# — which this entity's enum didn't recognize either, before this bump.
+#
+# MINOR, not MAJOR, same reasoning as the 4.0.0 -> 4.1.0 `category` widen
+# above: a strict downstream reader closed over today's three-member enum
+# would quarantine a `friction` row per-row rather than crash outright, so
+# this is a real (if narrower) rollout-ordering risk, not a wire-shape break.
+# `proposal`, `bug`, and `notice` remain deliberately absent from this
+# entity's enum — that narrowing predates this bump and is unchanged by it.
+CONTRACT_VERSION = "4.8.0"
 
 # ---------------------------------------------------------------------------
 # ProvenanceEnvelope conditional injection — ported verbatim from

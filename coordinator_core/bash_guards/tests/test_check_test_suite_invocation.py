@@ -2755,3 +2755,15 @@ class TestDynamicPrefilterLeg:
                 f"at line {first_use_line} -- reintroduces the forward-"
                 f"reference ordering bug"
             )
+
+
+@pytest.mark.parametrize("flag", ["--version", "-V", "--help", "-h", "--markers"])
+def test_pytest_info_only_flags_are_not_a_suite_run(flag):
+    """`python -m pytest --version` prints and exits before collection; it
+    was blocked as a full-suite run."""
+    assert guard._classify_python_module(["python", "-m", "pytest", flag], ["tests"], None) is None
+    assert guard._classify_pytest([flag], ["tests"], None, "pytest") is None
+
+
+def test_bare_pytest_is_still_suite_shaped():
+    assert guard._classify_python_module(["python", "-m", "pytest"], ["tests"], None) == "python -m pytest"

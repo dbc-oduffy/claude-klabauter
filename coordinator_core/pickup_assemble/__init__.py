@@ -2361,9 +2361,14 @@ def _claim_holder_live_or_elsewhere(
     primitive is consulted FIRST and unchanged, and only its not-live answer
     reaches the `harness-registry-elsewhere` basis. Gated on that basis string
     rather than any truthy verdict, because `session_live` and
-    `_verdict_for_sdir` disagree in-repo by design (the
-    `COORDINATOR_SESSION_LAYER1_DISABLE` lever) and accepting slot 0 alone would
-    re-answer the in-repo case too.
+    `_verdict_for_sdir` are independent computations at independent call
+    sites, and accepting slot 0 alone would re-answer the in-repo case
+    `claim_holder_live` already decided rather than only adding the
+    cross-repo one. (The two used to also structurally disagree in-repo by
+    design, under the `COORDINATOR_SESSION_LAYER1_DISABLE` rollback lever —
+    that lever was REMOVED, state/debt-backlog/2026-08-14-the-layer-1-
+    rollback-lever-is-asymmetric-3ef3bc90e012.yaml; this basis-string gate
+    does not depend on it having existed.)
 
     A registry record is a CANDIDATE, not proof of reachability. That asymmetry
     is the right way round here: treating a candidate-live holder as live costs
@@ -2837,11 +2842,14 @@ def acquire_brief_claim(
         False               | "stable-pid"          | True          | holder-liveness-unknown
 
     The last row is the structural-disagreement case (F1): `session_verdict`
-    (computed here, label-only) and `session_live` (what the takeover
-    actually acted on) can disagree under
-    `COORDINATOR_SESSION_LAYER1_DISABLE`, so a "stable-pid" basis is proof of
-    death only when its OWN boolean also reads False — never on the basis
-    string alone.
+    (computed here, label-only, strictly AFTER the takeover already
+    committed) and `session_live` (what the takeover actually acted on,
+    moments earlier) are independent reads and can disagree — formerly
+    near-guaranteed under the `COORDINATOR_SESSION_LAYER1_DISABLE` rollback
+    lever, now a residual TOCTOU window since that lever was REMOVED
+    (state/debt-backlog/2026-08-14-the-layer-1-rollback-lever-is-asymmetric-
+    3ef3bc90e012.yaml) — so a "stable-pid" basis is proof of death only when
+    its OWN boolean also reads False — never on the basis string alone.
     """
     claims_dir = repo_root / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
 
@@ -2888,16 +2896,20 @@ def acquire_brief_claim(
             if verdict is not None:
                 # The live boolean (slot 0) must be
                 # consulted, not just the basis string (slot 1). `session_live`
-                # (which `claim_artifact`'s takeover actually acted on) and
-                # `session_verdict` (computed here, for the label only) are
-                # NOT the same computation — `session_live` honours the
-                # `COORDINATOR_SESSION_LAYER1_DISABLE` rollback lever,
-                # `_verdict_for_sdir` deliberately does not (its own
-                # docstring) — so a "stable-pid" basis here can still mean
+                # (what `claim_artifact`'s takeover actually acted on, moments
+                # earlier) and `session_verdict` (computed here, for the label
+                # only, strictly AFTER that takeover already committed) are
+                # two independent reads of process state, not one computation
+                # reused twice — a "stable-pid" basis here can still mean
                 # CONFIRMED ALIVE (`verdict[0] is True`) even though the
-                # takeover already happened on a different, disabled-Layer-1
-                # read. Dropping the boolean rendered that structural
-                # disagreement as a confirmed death.
+                # takeover already happened on an earlier read that resolved
+                # dead. This was near-guaranteed under the now-REMOVED
+                # `COORDINATOR_SESSION_LAYER1_DISABLE` rollback lever
+                # (state/debt-backlog/2026-08-14-the-layer-1-rollback-lever-
+                # is-asymmetric-3ef3bc90e012.yaml); with the lever gone this
+                # narrows to an ordinary TOCTOU window between the two reads
+                # — smaller, not zero. Dropping the boolean would still
+                # render that disagreement as a confirmed death.
                 prior_liveness_live = verdict[0]
                 prior_liveness_basis = verdict[1]
 
@@ -3306,23 +3318,28 @@ def compute_liveness_signal(
         #
         # Caller-side migration, deliberately NOT a widening of
         # `session_live`'s bool: that boolean has live callers on the commit
-        # path which mean the repo-scoped question, and it also honours the
-        # `COORDINATOR_SESSION_LAYER1_DISABLE` rollback lever that
-        # `_verdict_for_sdir` does not. `session_verdict` supplies the third
-        # basis this check actually needs — `harness-registry-elsewhere`,
-        # a registry-confirmed live session working in another repo — while
+        # path which mean the repo-scoped question, and `session_verdict` is
+        # a different computation at a different call site, not a superset
+        # of it. `session_verdict` supplies the third basis this check
+        # actually needs — `harness-registry-elsewhere`, a
+        # registry-confirmed live session working in another repo — while
         # its in-repo arms stay the same derivation as before.
         #
         # STRICTLY ADDITIVE, and the ordering is the whole point.
         # `session_live` stays the authority for the in-repo answer and is
         # consulted FIRST, unchanged. The two functions are NOT the same
-        # computation even in-repo — `session_live` honours the
-        # `COORDINATOR_SESSION_LAYER1_DISABLE` rollback lever and
-        # `_verdict_for_sdir` deliberately does not (its own docstring), so
-        # swapping one for the other silently re-answers the in-repo case.
-        # An earlier revision of this fix did exactly that and inverted two
-        # `unclean_prior_holder` lease outcomes; the suite caught it. The
-        # elsewhere arm is added BELOW the boolean, never in place of it.
+        # computation even in-repo — independent call sites, at independent
+        # times. `session_live` also used to additionally honour the
+        # `COORDINATOR_SESSION_LAYER1_DISABLE` rollback lever that
+        # `_verdict_for_sdir` never did; that lever was REMOVED
+        # (state/debt-backlog/2026-08-14-the-layer-1-rollback-lever-is-
+        # asymmetric-3ef3bc90e012.yaml), but swapping one function for the
+        # other would still silently re-answer the in-repo case — a
+        # different call site at a different point in time, not just the
+        # now-gone lever. An earlier revision of this fix did exactly that
+        # and inverted two `unclean_prior_holder` lease outcomes; the suite
+        # caught it. The elsewhere arm is added BELOW the boolean, never in
+        # place of it.
         try:
             if _liveness.session_live(stamped_sid, str(repo_root)):
                 return True
@@ -5004,6 +5021,12 @@ _MEMO_ACTION_DECISION_MAP: dict[tuple[str, str], str] = {
     # `bug`/`not-a-bug` are deliberately absent (see the class comment
     # above this map).
     ("bug", "fixed"): "accepted",
+    # `friction`/`addressed` is an ACCEPTED outcome, mirroring `bug`/`fixed`
+    # above — the change is the action, and `--decision accepted` is what
+    # makes `realized_by` required. `friction`/`tracked-elsewhere` and
+    # `friction`/`not-actionable` are deliberately absent, same reason as
+    # `bug`'s two absent entries.
+    ("friction", "addressed"): "accepted",
 }
 
 
@@ -6313,6 +6336,76 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
             ),
         },
     ],
+    # `friction` (2026-09-22, closes state/improvement-queue/2026-09-05-memo-
+    # kind-has-no-friction-value-and-bug-degrades-silently.yaml): a workflow/
+    # process pain-point report — not a bug in a specific line, not a
+    # proposal, and `fyi` undersells it. Shape mirrors `bug` deliberately
+    # (a report kind needing a triage verdict), with vocabulary swapped for
+    # friction's own semantics rather than a code defect's.
+    "friction": [
+        {
+            "value": "addressed",
+            "resolves": ["d-action-memo"],
+            "guidance": (
+                "The friction is real and something concrete reduces it now — a fix, "
+                "a doc change, or a process tweak. Same premise-verification and "
+                "live-claim-holder checks as an `ask` accept apply before landing. "
+                "This disposition maps to `--decision accepted`, which requires "
+                "`realized_by` (the SHA of the commit that lands the change) "
+                "alongside `decision_note`; `cs_action_memo` fails loud without it."
+            ),
+        },
+        {
+            "value": "tracked-elsewhere",
+            "resolves": ["d-action-memo"],
+            "guidance": (
+                "The friction is real, but reducing it is already tracked — point "
+                "`actioned_note` at the artifact that already owns it (a "
+                "debt/improvement-backlog entry path, a plan-chunk pointer, or a "
+                "named baton id), not merely assert that it exists. Actioning this "
+                "disposition requires `actioned_note` (the pointer itself): "
+                "`d-action-memo` resolves via the `--actioned-note` path (no "
+                "`--decision`, since already-tracked-elsewhere is not an "
+                "accepted/partial/declined outcome), and `cs_action_memo` fails loud "
+                "if neither `--decision` nor `--actioned-note` is supplied — so state "
+                "the pointer, however brief, rather than leaving `actioned_note` "
+                "empty."
+            ),
+        },
+        {
+            "value": "not-actionable",
+            "resolves": ["d-action-memo"],
+            "guidance": (
+                "After checking the report against current disk/git state, the "
+                "friction described does not warrant a change here — a deliberate "
+                "tradeoff, a one-off, or a workflow the reporter's own repo controls "
+                "— record what was checked and why in `actioned_note`, not just the "
+                "verdict. Actioning this disposition requires `actioned_note` (the "
+                "check performed and its result): `d-action-memo` resolves via the "
+                "`--actioned-note` path (no `--decision`, since not-actionable is not "
+                "an accepted/partial/declined outcome), and `cs_action_memo` fails "
+                "loud if neither `--decision` nor `--actioned-note` is supplied — so "
+                "state what was checked, however brief, rather than leaving "
+                "`actioned_note` empty."
+            ),
+        },
+        {
+            # Work still owed: the report can't be triaged from the memo
+            # alone, so this stays `resolves: []` — halting at
+            # `d-action-memo` is correct, not a defect. Mirrors
+            # `bug`/`needs-info`: a narrow escape hatch, not an equal
+            # fourth option to addressed/tracked-elsewhere/not-actionable.
+            "value": "needs-info",
+            "resolves": [],
+            "guidance": (
+                "The report can't be triaged without one more fact from the "
+                "reporter — ask that single question and stop there; this is a "
+                "narrow escape hatch, not an equal fourth option to "
+                "addressed/tracked-elsewhere/not-actionable. Do not use it to ask "
+                "the reporter to justify why the report was filed."
+            ),
+        },
+    ],
     "fyi": [
         {
             "value": "ack-nil",
@@ -6438,6 +6531,7 @@ _KIND_QUESTIONS: dict[str, str] = {
     "proposal": "proposal: Adopt / Decline?",
     "fyi": "fyi impact: nil / plan-invalidated / surgical-fix / product-decision / ambiguous?",
     "bug": "bug: Fixed / Confirmed-owned / Not-a-bug / Needs-info?",
+    "friction": "friction: Addressed / Tracked-elsewhere / Not-actionable / Needs-info?",
 }
 
 

@@ -22,11 +22,16 @@ test_plan_scaffold_brightline_parity.py assert:
     producer behind `coordinator-doc-new --type plan`;
   - coordinator_core/ops/docgen/templates/plan.json, the docgen MIRROR.
 
-Negative-spec: does NOT assert `prime_exit_criterion` becomes live. There is no
-declared-empty form of a criterion -- the bar wants a non-empty sentence, so the
-only live stub a scaffolder could write is a placeholder that CLEARS PRIME_EXIT
-without meaning anything. That asymmetry is asserted here so a later change that
-"finishes the job" by stubbing the criterion trips a test instead of a review.
+`prime_exit_criterion` IS emitted live (commit 89e7793be0, "Close the producer
+gap the mise-prep bar was failing on"): unlike `census`, there is no
+declared-empty form of a criterion, so the emitted `statement`/`derived_from`
+carry an `<REPLACE: ...>` marker instead -- visible and unanswered rather than
+absent and invisible. `coordinator_core.roadmap.prep_gate.is_placeholder`
+refuses that marker and reports `prime-exit-placeholder`, distinct from
+`prime-exit-absent`, so a scaffolded plan still fails PRIME_EXIT until the
+marker is replaced; the field is just legible while it does. The `falsifier`
+sub-block stays commented -- it is read-side owed only at
+estimate.tshirt M/L/XL, which scaffold time cannot know.
 Does NOT import or invoke the DoE gate: this repo's tests do not resolve into
 the DoE clone, so the predicate is restated in the two terms the gate reads
 (key present; value a list).
@@ -60,6 +65,14 @@ _TEMPLATE_PATH = (
 _CENSUS_LINES = [
     "census: []  # counted premises as question/command/result rows; [] declares none —",
     "            # a claim a reviewer can falsify. Bar: coordinator/bin/mise-prep-gate.py.",
+]
+
+_PRIME_EXIT_LIVE_LINES = [
+    "prime_exit_criterion:",
+    "  statement: >-",
+    "    <REPLACE: one falsifiable sentence naming what is true of the TREE when this plan",
+    "    has delivered — outcome-shaped, never a paraphrase of the task list.>",
+    '  derived_from: "<REPLACE: state/sizings/<file>.yaml | <goal_id>#kr-<kr-id> — a LINK>"',
 ]
 
 
@@ -104,13 +117,30 @@ class ScaffoldEmitsDeclaredEmptyCensusTest(unittest.TestCase):
         self.assertEqual([], fields["census"])
 
 
-class PrimeExitCriterionStaysCommentedTest(unittest.TestCase):
-    """The asymmetry, pinned: `census: []` is complete and true at scaffold
-    time; a `prime_exit_criterion` stub would clear PRIME_EXIT while meaning
-    nothing, so it stays commented. See this module's Negative-spec."""
+class PrimeExitCriterionIsLiveWithPlaceholderTest(unittest.TestCase):
+    """`prime_exit_criterion` is a parsed key carrying `<REPLACE: ...>`
+    markers the prep gate's `is_placeholder` refuses -- present and legible,
+    never absent. See this module's Negative-spec."""
 
-    def test_prime_exit_criterion_is_not_a_parsed_key(self):
-        self.assertNotIn("prime_exit_criterion", _scaffold_frontmatter())
+    def test_prime_exit_criterion_is_a_parsed_key(self):
+        self.assertIn("prime_exit_criterion", _scaffold_frontmatter())
+
+    def test_statement_and_derived_from_carry_a_replace_marker(self):
+        criterion = _scaffold_frontmatter()["prime_exit_criterion"]
+        self.assertIn("<REPLACE:", criterion["statement"])
+        self.assertIn("<REPLACE:", criterion["derived_from"])
+
+    def test_replace_marker_cannot_pass_as_a_real_criterion(self):
+        from coordinator_core.roadmap.prep_gate import is_placeholder
+
+        criterion = _scaffold_frontmatter()["prime_exit_criterion"]
+        self.assertTrue(is_placeholder(criterion["statement"]))
+        self.assertTrue(is_placeholder(criterion["derived_from"]))
+
+    def test_falsifier_subblock_stays_commented(self):
+        # Read-side owed only at estimate.tshirt M/L/XL, unlike the criterion
+        # above -- scaffold time cannot know the size, so it is not a parsed key.
+        self.assertNotIn("falsifier", _scaffold_frontmatter())
 
 
 class TemplateMirrorParityTest(unittest.TestCase):
@@ -150,6 +180,28 @@ class TemplateMirrorParityTest(unittest.TestCase):
         fm_lines = content.split("---", 2)[1].splitlines()
         start = fm_lines.index(_CENSUS_LINES[0])
         self.assertEqual(_CENSUS_LINES, fm_lines[start : start + len(_CENSUS_LINES)])
+
+    def test_mirror_carries_every_emitted_prime_exit_live_line(self):
+        mirror = self._mirror_literal_lines()
+        self.assertIn(
+            _PRIME_EXIT_LIVE_LINES[0],
+            mirror,
+            f"mirror is missing emitted line: {_PRIME_EXIT_LIVE_LINES[0]!r}",
+        )
+        start = mirror.index(_PRIME_EXIT_LIVE_LINES[0])
+        self.assertEqual(
+            _PRIME_EXIT_LIVE_LINES,
+            mirror[start : start + len(_PRIME_EXIT_LIVE_LINES)],
+            "mirror prime_exit_criterion block is not a contiguous, positionally-matching pair",
+        )
+
+    def test_emitted_prime_exit_live_lines_match_the_pinned_text(self):
+        content = _cli._scaffold_plan(title="t", branch="b", author="test-author")
+        fm_lines = content.split("---", 2)[1].splitlines()
+        start = fm_lines.index(_PRIME_EXIT_LIVE_LINES[0])
+        self.assertEqual(
+            _PRIME_EXIT_LIVE_LINES, fm_lines[start : start + len(_PRIME_EXIT_LIVE_LINES)]
+        )
 
 
 if __name__ == "__main__":

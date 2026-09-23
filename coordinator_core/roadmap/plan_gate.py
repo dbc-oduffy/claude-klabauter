@@ -204,6 +204,13 @@ _BATON_FIELDS = frozenset(
         # so it has to be readable through the same scanner everything else is.
         "shipped_in", "shipped_in_kind",
         "governing_plan", "origin_plan_id", "plan_ids",
+        # The replan-supersession lineage. `replan_of` is the engine-stamped
+        # edge (this record's own id, naming the baton it replaces);
+        # `forked_from` is the pre-existing general lineage field every
+        # replan baton already carried (the source baton's PATH) before
+        # `replan_of` existed — read as the fallback link for a pair minted
+        # before this field, so `_w_replanned` can drop the source either way.
+        "replan_of", "forked_from",
         "sizing_object", "sizing_objects",
         # The plan->execute seam. `handoff_phase: execution` means this baton has
         # been dispositioned and is waiting on /execute-plan, not on planning — read
@@ -1646,6 +1653,43 @@ def assemble_plan_gate(
         when the TREE is wrong rather than the record -- see `_resurrected`."""
         return _resurrected(worktree_root, record, archived_by_name)
 
+    # Belt-and-braces for the source half of a replan pair (state/bug-backlog/
+    # 2026-09-22-blitz-land-replan-baton-leaves-its-original-a-live-candidate.yaml).
+    # `roadmap.blitz_land` now stamps `deployment_state: continued` on a replanned
+    # source in the same landing that mints its replan, which already withdraws it
+    # via BATON_CODED_STATES — but that stamp is a second write in the same call
+    # and can fail (lock contention, a validation refusal) after the mint already
+    # landed, and a pair minted BEFORE this fix carries no `continued` stamp at
+    # all. Both shapes leave a live replan naming its source with no corresponding
+    # terminal state on the source, so this rule is read independently of
+    # `deployment_state` rather than assuming the stamp always lands.
+    #
+    # Two links, checked in reliability order: `replan_of` is the engine-stamped
+    # edge (this record's own id) a live replan carries going forward; `forked_from`
+    # is the general lineage field every replan baton ALREADY carried (the source's
+    # PATH) before `replan_of` existed, so it is the only link a pre-fix pair has.
+    # Built once, over every LIVE record naming either field — a record's own
+    # `deployment_state` is not consulted here: an open replan is still evidence its
+    # source is superseded, whether or not the source's own terminal stamp landed.
+    _replanned_ids: Set[str] = set()
+    _replanned_paths: Set[str] = set()
+    for _rec in records:
+        if not _rec["live"]:
+            continue
+        _fm = _rec["_fm"]
+        _rid = str(_fm.get("replan_of") or "").strip()
+        if _rid:
+            _replanned_ids.add(_rid)
+        _rpath = str(_fm.get("forked_from") or "").strip().replace("\\", "/")
+        if _rpath:
+            _replanned_paths.add(_rpath)
+
+    def _w_replanned(record):
+        """Drop a baton a live replan already names as its source — see above."""
+        if record["id"] not in _replanned_ids and record["path"] not in _replanned_paths:
+            return None
+        return {"id": record["id"], "path": record["path"], "title": record["title"]}
+
     def _w_out_of_roadmap(record):
         """`roadmap_id` narrows the CANDIDATE set to one roadmap. Reported
         nowhere: asking about one roadmap is not a finding about the others."""
@@ -1747,6 +1791,7 @@ def assemble_plan_gate(
     _WITHDRAWALS = [
         ("untracked", _w_untracked),
         ("resurrected", _w_resurrected),
+        ("replanned", _w_replanned),
         (None, _w_out_of_roadmap),
         (None, _w_not_targeted),
         ("held", _w_held),
@@ -1770,6 +1815,7 @@ def assemble_plan_gate(
 
     untracked_rows = withdrawn["untracked"]
     resurrected_rows = withdrawn["resurrected"]
+    replanned_rows = withdrawn["replanned"]
     held_rows = withdrawn["held"]
     waiting_on_execution_rows = withdrawn["waiting_on_execution"]
 
@@ -2037,6 +2083,7 @@ def assemble_plan_gate(
         "untracked": untracked_rows,
         "index_unreadable": index_unreadable,
         "resurrected": resurrected_rows,
+        "replanned": replanned_rows,
         "waiting_on_execution": waiting_on_execution_rows,
         "held": held_rows,
         "gated": gated_rows,
@@ -2045,6 +2092,7 @@ def assemble_plan_gate(
             counts,
             untracked=len(untracked_rows),
             resurrected=len(resurrected_rows),
+            replanned=len(replanned_rows),
             shared_wave_slot=len(shared_wave_slot_rows),
         ),
         "scanned": {"batons": len(records), "plans": len(plans.by_path)},

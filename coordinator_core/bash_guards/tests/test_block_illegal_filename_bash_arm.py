@@ -435,3 +435,29 @@ def test_rewrite_context_does_not_ask_agent_to_act():
     ctx = out["hookSpecificOutput"].get("additionalContext", "")
     assert "Use instead" not in ctx
     assert "Auto-corrected" in ctx
+
+
+# --- `-o` belongs to its command: grep's is --only-matching, not an output path ---
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -o 'a.*b' file.txt > out.txt",
+        'grep -rn -o "x*y" src | sort > hits.txt',
+        "cd /tmp && rg -o '[a-z]+?' . > found.log",
+        "git grep -o 'foo*' > matches.txt",
+    ],
+)
+def test_grep_family_dash_o_pattern_is_never_a_candidate_or_rewritten(command):
+    assert m._extract_out_candidates(command) == []
+    assert not _fires(command)
+
+
+def test_sort_dash_o_output_path_still_fires():
+    assert m._extract_out_candidates("sort -o 'bad?name.txt' in.txt > log.txt") == ["'bad?name.txt'"]
+    assert _fires("sort -o 'bad?name.txt' in.txt > log.txt")
+
+
+def test_dash_o_inside_a_word_is_not_a_flag():
+    assert m._extract_out_candidates("echo foo-o bad?x > ok.txt") == []

@@ -60,7 +60,11 @@ def test_all_valid_pathspecs_is_one_subprocess_call(monkeypatch):
     assert result is None
     assert len(calls) == 1
     assert calls[0][:3] == ["git", "ls-files", "--"]
-    assert calls[0][3:] == ["a/b.py", "c/*.py", "d/e.py"]
+    assert calls[0][3:] == [
+        ":(literal)a/b.py",
+        ":(literal)c/*.py",
+        ":(literal)d/e.py",
+    ]
 
 
 def test_one_invalid_pathspec_falls_back_to_per_item_and_names_it(monkeypatch):
@@ -75,7 +79,7 @@ def test_one_invalid_pathspec_falls_back_to_per_item_and_names_it(monkeypatch):
         if len(pathspecs) > 1:
             return types.SimpleNamespace(returncode=1, stdout="", stderr="bad pathspec")
         return types.SimpleNamespace(
-            returncode=0 if pathspecs[0] != "::bad::" else 1, stdout="", stderr=""
+            returncode=0 if pathspecs[0] != ":(literal)::bad::" else 1, stdout="", stderr=""
         )
 
     monkeypatch.setattr(mod.subprocess, "run", _fake_run)

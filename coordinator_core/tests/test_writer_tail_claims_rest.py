@@ -125,6 +125,7 @@ def test_mint_replan_baton_claims_through_the_seam(tmp_path):
             handoff_id="hoff-test",
             source_baton_path="state/handoffs/source.md",
             brief="brief body",
+            replan_of="source",
         )
 
     out_path = worktree_root / result["path"]

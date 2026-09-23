@@ -67,7 +67,7 @@ from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS
 # place, mirroring cockpit_schema.emit_schema.CONTRACT_VERSION's
 # single-literal-source discipline.
 # ---------------------------------------------------------------------------
-MEMO_SCHEMA_VERSION = "1.8.0"
+MEMO_SCHEMA_VERSION = "1.9.0"
 
 #: Generator-provenance declaration: emit_schemas() writes both of these
 #: fixed tracked artifacts to this module's own directory by default.
@@ -125,6 +125,17 @@ GENERATES = [
 # ---------------------------------------------------------------------------
 MEMO_SCHEMA_BUMP_CLASS = "nested-field-additive"
 MEMO_SCHEMA_BUMP_NOTE = (
+    "1.8.0 -> 1.9.0 widens the `kind` field's documented vocabulary by one "
+    "member, `friction` (closes DoE-claude "
+    "state/improvement-queue/2026-09-05-memo-kind-has-no-friction-value-and-"
+    "bug-degrades-silently.yaml). `kind` carries no schema-level `enum` (it is "
+    "validated via the cross-field rule `schema_validate._memo_cf_kind_enum`, "
+    "not this schema — see the field's own description), so this bump changes "
+    "only that description's prose listing of `_VALID_KINDS`, sourced from "
+    "`memo_kinds.VALID_KINDS`; no `type`/`required`/structural change. "
+    "Classified nested-field-additive (the closest fit in the closed "
+    "vocabulary): non-breaking, no existing memo invalidated, no consumer "
+    "code depends on this field's exact description text. "
     "1.7.0 -> 1.8.0 declares the optional `actioned_at` closure timestamp on "
     "cross-repo-memo — WHEN a memo went terminal, not merely that it did. The "
     "vocabulary previously carried a closure stamp only for the grandfathered "

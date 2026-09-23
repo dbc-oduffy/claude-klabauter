@@ -5906,7 +5906,12 @@ class TestMemoTerminalDirectivesC8:
         bug-kind dispositions plan, 2026-09-07) — both `("proposal",
         "fold-into-plan")` and `("fyi", "fold-into-plan")` were
         pre-existing unclassified entries this test closes alongside the
-        rest of this change, not new ones this change introduces."""
+        rest of this change, not new ones this change introduces.
+
+        `friction` added 2026-09-22 (closes
+        state/improvement-queue/2026-09-05-memo-kind-has-no-friction-value-
+        and-bug-degrades-silently.yaml) — shape mirrors `bug`'s four-entry
+        classification exactly (three receiver-done, one work-still-owed)."""
         receiver_done = {
             ("ask", "accept-mechanical-direct"),
             ("ask", "accept-escalate-to-sizing"),
@@ -5922,6 +5927,9 @@ class TestMemoTerminalDirectivesC8:
             ("bug", "fixed"),
             ("bug", "confirmed-owned"),
             ("bug", "not-a-bug"),
+            ("friction", "addressed"),
+            ("friction", "tracked-elsewhere"),
+            ("friction", "not-actionable"),
         }
         work_still_owed = {
             ("ask", "surface-to-PM"),
@@ -5929,6 +5937,7 @@ class TestMemoTerminalDirectivesC8:
             ("fyi", "surface-to-PM"),
             ("fyi", "investigate-further"),
             ("bug", "needs-info"),
+            ("friction", "needs-info"),
         }
 
         all_entries = {
@@ -7243,6 +7252,21 @@ def _append_bookkeeping_line(repo: Path, path: Path) -> None:
     _git(repo, "commit", "-m", "bookkeeping-only body edit")
 
 
+def _append_disposition_lines(repo: Path, path: Path) -> None:
+    """A close_out_and_stamp-style edit: per-chunk plan-tasks spine
+    disposition bookkeeping only, no target/scope/acceptance-criteria
+    change."""
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + "\ndisposition: coded\n"
+        + "disposition_ref: abc1234\n"
+        + 'disposition_detail: "shipped in abc1234"\n',
+        encoding="utf-8",
+    )
+    _git(repo, "add", str(path.relative_to(repo)))
+    _git(repo, "commit", "-m", "disposition-only body edit")
+
+
 class TestStaleBookkeepingPromotesNoRestamp:
     """A bookkeeping-only delta leaves the authorization standing and the
     comparison base where the PM set it. Re-stamping there wrote only more
@@ -7284,6 +7308,28 @@ class TestStaleBookkeepingPromotesNoRestamp:
             f"{do['gates'].get('execution_stamp_match')}"
         )
         assert "d-stamp" not in {d["id"] for d in do["directives"]}
+
+    def test_disposition_bookkeeping_stays_bookkeeping_not_substantive(self, tmp_path):
+        """Regression for state/bug-backlog/2026-08-18-stamp-check-classifies-
+        close-out-s-own-d-f643b1a74883.yaml: close_out_and_stamp's own
+        recovery path (record disposition/disposition_ref/disposition_detail
+        on each shipped chunk row) must classify as bookkeeping, not
+        stale-substantive — it changes no target, scope, or acceptance
+        criteria."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        path, plan_path = _seed_self_stamped_handoff(repo, "h-disposition.md")
+        _append_disposition_lines(repo, plan_path)
+
+        rel = path.relative_to(repo).as_posix()
+        fm = pa._parse_fm_dict(pa.split_frontmatter(path.read_text(encoding="utf-8")).fm_text)
+        hit = pb.compute_execution_stamp_match(repo, fm, rel)
+
+        assert hit is not None
+        gate, _target = hit
+        assert gate["delta_class"] == "bookkeeping"
+        assert gate["verdict"] == "stale-bookkeeping"
+        assert "WITHOUT re-stamping" in gate["next_move"]
 
     def test_unstampable_still_emits_the_restamp_directive(self, tmp_path, monkeypatch):
         """The negative control: `unstampable` is a recorded value that never

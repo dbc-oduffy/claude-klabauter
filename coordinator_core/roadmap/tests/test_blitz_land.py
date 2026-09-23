@@ -723,6 +723,7 @@ def test_a_replan_verdict_mints_a_baton_carrying_the_brief_verbatim(tmp_path):
     text = minted.read_text(encoding="utf-8")
     assert brief in text
     assert "forked_from" in text and "b-1" in text
+    assert 'replan_of: "b-1"' in text
 
 
 def test_the_minted_baton_validates_against_the_real_handoff_schema(tmp_path):
@@ -818,29 +819,41 @@ def test_a_refused_mint_leaves_its_source_in_the_next_wave(tmp_path, monkeypatch
     )
 
 
-def test_the_replanned_source_stays_on_disk_and_stays_a_candidate(tmp_path):
-    """The subtraction is on the REPORT, never on the record.
+def test_the_replanned_source_stays_on_disk_and_is_continued_into_its_replan(tmp_path):
+    """The elegant fix (state/bug-backlog/2026-09-22-blitz-land-replan-baton-
+    leaves-its-original-a-live-candidate.yaml): the engine records the lineage
+    when it mints the replan, so no EM step exists.
 
-    Nothing writes `blocked_by` onto the source (decision-dependency vocabulary, not
-    workflow state, and nothing here would ever clear it) and nothing stamps it
-    terminal (`continued` is a CODED state, so a dependent's EXECUTION gate would open
-    on work that never landed). The source is simply not in the fire this landing hands
-    back; the very next gate read still sees it, which is what keeps succession an open
-    question rather than one this patch answered by accident.
+    Nothing writes `blocked_by` onto the source (decision-dependency vocabulary,
+    not workflow state) and nothing archives it (this module never commits) —
+    but the source IS now stamped `deployment_state: continued` pointing
+    `continued_into` at the replan this same landing minted, in the same call.
+    That is positive succession evidence the engine itself attests to, and it
+    is what stops the source from being offered as `needs_plan` forever.
     """
     root = _repo(tmp_path)
-    baton_path = root / _baton(root, "b-1")
-    before = baton_path.read_text(encoding="utf-8")
-
-    bl.land_wave(root, {"waveIndex": 0, "replan": [{"batonId": "b-1", "replanBrief": "why"}]})
-
-    assert baton_path.read_text(encoding="utf-8") == before, (
-        "the landing mutated the replanned source"
+    baton_path = root / _baton(
+        root,
+        "b-1",
+        summary="fixture baton for the replan-continue test",
+        category="infra",
+        kind="session-handoff",
+        created="2026-09-22",
+        branch="main",
+        predecessor="none",
     )
+
+    out = bl.land_wave(root, {"waveIndex": 0, "replan": [{"batonId": "b-1", "replanBrief": "why"}]})
+
+    minted = out["minted"][0]
+    assert minted["source_continued"] is True, minted
+    text = baton_path.read_text(encoding="utf-8")
+    assert "deployment_state: continued" in text
+    assert minted["handoff_id"] in text  # continued_into names the replan
+
     after = pg.assemble_plan_gate(root)
-    assert "b-1" in {b["id"] for b in after["batons"] if b["candidate"]}, (
-        "the source dropped out of the gate entirely — the filter buried it instead of "
-        "deferring it"
+    assert "b-1" not in {b["id"] for b in after["batons"] if b["candidate"]}, (
+        "a continued source is still offered as a candidate"
     )
 
 

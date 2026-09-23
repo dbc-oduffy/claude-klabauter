@@ -963,3 +963,38 @@ class TestAbsentFalsifierIsSizeGated:
         one -- that reads its own frontmatter back to it."""
         assert "falsifier" in coas._FALSIFIER_ABSENT_NEXT_MOVE
         assert "falsifier_exemption" in coas._FALSIFIER_ABSENT_NEXT_MOVE
+
+    def test_top_level_falsifier_refuses_misnested_not_absent(self, tmp_path):
+        """gh-klabauter#63: a plan that writes `falsifier:` as a sibling of
+        `prime_exit_criterion` instead of nesting it has NOT omitted the
+        field -- the refusal must say so distinctly rather than telling the
+        author to write what is already there two lines away."""
+        text = self._plan(tmp_path, tshirt="M")
+        text = text.replace(
+            "---\n\nbody\n",
+            (
+                "falsifier:\n"
+                "  how: read the fixture surface\n"
+                "  baseline_output: 'wrong'\n"
+                "  baseline_ref: deadbeef\n"
+                "  expected_when_true: 'right'\n"
+                "---\n\nbody\n"
+            ),
+        )
+        gate = coas._evaluate_goal_falsifier_gate(text, tmp_path)
+        assert gate["refused"] is True
+        assert gate["reason"] == coas.GOAL_REFUSAL_FALSIFIER_MISNESTED
+        assert "prime_exit_criterion.falsifier" in gate["detail"]
+
+    def test_blank_top_level_falsifier_key_still_reads_as_absent(self, tmp_path):
+        """A top-level `falsifier:` key with no real content is not evidence
+        of a placement error -- it still routes to the ordinary absent
+        reason, not the misnested one."""
+        text = self._plan(tmp_path, tshirt="M")
+        text = text.replace("---\n\nbody\n", "falsifier: null\n---\n\nbody\n")
+        gate = coas._evaluate_goal_falsifier_gate(text, tmp_path)
+        assert gate["refused"] is True
+        assert gate["reason"] == coas.GOAL_REFUSAL_FALSIFIER_ABSENT
+
+    def test_misnested_next_move_names_the_move_not_a_fresh_authoring(self):
+        assert "prime_exit_criterion.falsifier" in coas._FALSIFIER_MISNESTED_NEXT_MOVE

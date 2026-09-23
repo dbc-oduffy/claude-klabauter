@@ -796,6 +796,25 @@ def test_is_noise_path_lockfiles_pnpm_and_bun_are_noise_package_json_is_not():
     assert _is_noise_path("package-lock.json") is True
 
 
+def test_is_noise_path_emitted_memo_schemas_are_noise_by_exact_basename():
+    """The two schema files `emit_memo_schema.emit_schemas` mechanically
+    regenerates (each declares `x-generated-by` in its own header) are noise
+    — the authored change lives in the `.py` SSOT, already counted as
+    `python` surface. Matched at any directory depth, same as the lockfile
+    basenames above."""
+    assert _is_noise_path("coordinator_core/contract/cross-repo-memo.schema.json") is True
+    assert _is_noise_path("coordinator_core/contract/archived-memo.schema.json") is True
+
+
+def test_is_noise_path_hand_authored_schema_json_files_are_not_excluded():
+    """The exclusion is scoped to the two generated basenames, not to a
+    `.schema.json` suffix or the contract directory: every other schema file
+    is hand-authored and must keep contributing to the LOC tally."""
+    assert _is_noise_path("coordinator_core/frontmatter/schemas/plan.schema.json") is False
+    assert _is_noise_path("coordinator_core/contract/change-signal.schema.json") is False
+    assert _is_noise_path("coordinator_core/contract/schema-decline-record.schema.json") is False
+
+
 # ---------------------------------------------------------------------------
 # _is_prose_bearing_path / chain+session oracle mandate exemption — C1a,
 # 2026-08-12. Spec backlink:

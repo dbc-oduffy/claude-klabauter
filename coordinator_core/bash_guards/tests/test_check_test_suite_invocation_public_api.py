@@ -85,6 +85,40 @@ def test_classify_command_spans_point_at_matched_text(repo):
     assert cmd[start:end] == "pytest"
 
 
+# ---------------------------------------------------------------------------
+# ``_segments_with_spans`` must split only on unquoted ``;``/``&``/``|``:
+# a separator inside a quoted argument is data, and spans stay offsets into
+# the caller's original string.
+# ---------------------------------------------------------------------------
+
+def test_classify_command_quoted_semicolon_not_a_segment_boundary(repo):
+    """A literal ``;`` inside a quoted ``-m`` commit message must not split
+    the command -- the quoted text naming ``pytest`` is data, never a live
+    invocation."""
+    cmd = 'git commit -m "note: never run pytest; pytest is important"'
+    assert guard.classify_command(cmd, cwd=str(repo)) == []
+
+
+def test_classify_command_quoted_pipe_and_ampersand_not_segment_boundaries(repo):
+    """Same defect class, the other two separator characters: a quoted
+    ``|`` or ``&`` must not split the command either."""
+    cmd = 'echo "a | pytest & pytest" && echo done'
+    matches = guard.classify_command(cmd, cwd=str(repo))
+    assert matches == []
+
+
+def test_classify_command_quoted_semicolon_preserves_real_match_span(repo):
+    """A quoted separator earlier in the command must not shift the SPAN
+    reported for a genuine match later in the same command -- spans are
+    offsets into the ORIGINAL string, and a wrong split would desync them
+    from it even where the classification verdict itself stayed correct."""
+    cmd = 'echo "a; b" && pytest'
+    matches = guard.classify_command(cmd, cwd=str(repo))
+    assert len(matches) == 1
+    start, end = matches[0].span
+    assert cmd[start:end] == "pytest"
+
+
 def test_classify_command_tier_f_on_configured_fast_cmd(repo, monkeypatch):
     """A configured fast_test_cmd that is genuinely SCOPED (a real
     descendant of testpaths, not the testpaths root itself) classifies

@@ -208,7 +208,7 @@ Negative-spec:
       `test_workstream_complete_contract.py`'s (C1) synthetic `tmp_path`
       sweep — `archive-stamp-cli`/`coordinator-harvest-deferrals` need a REAL
       `docs/plans/<slug>.md` file on disk (the submodule's own
-      `resolve_governing_plan` deliberately verifies existence rather than
+      `resolve_governing_plan_with_source` deliberately verifies existence rather than
       trusting a bare slug — the module's own "do NOT invent a plan to
       reconcile against" negative-spec); `coordinator-complete-entry.py`/
       `reconcile-completion-commits.py`/`coordinator-fold-execution-record`
@@ -5910,14 +5910,17 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # was unresolvable (`measured_commit_count is None`; see
     # `_measure_session_review_scale_inputs`'s own None-vs-zero contract).
     # A resolved-but-empty list (session owns zero commits) IS emitted —
-    # that is an honest answer, not a failure. `scope_kind="diff"` on
-    # every entry: each slice is a real code sha_range, never a plan/
-    # integration record. The caller fills reviewer/scope/verdict per
-    # entry and passes the list straight through as `decisions["review"]`
-    # (`directives_commit_tail.build_write_trail_directives` consumes this
-    # exact shape; `build_close_tail_args_directive` formerly also did, via
-    # its `--review-slice` list branch, removed in the ceremony.wsc_tail
-    # kill, 2026-08-23).
+    # that is an honest answer, not a failure. `scope_kind` is deliberately
+    # NOT set here: this helper cannot tell a plan-file-only commit from a
+    # code commit, and `build_write_review_trail_directive` already omits
+    # `--scope-kind` from argv when the caller passes it falsy, leaving
+    # `coordinator-write-review-trail` to derive the real value per commit;
+    # a uniform value here would overwrite that classification. The caller
+    # fills reviewer/scope/verdict per entry and passes the list straight through as
+    # `decisions["review"]` (`directives_commit_tail.build_write_trail_
+    # directives` consumes this exact shape; `build_close_tail_args_
+    # directive` formerly also did, via its `--review-slice` list branch,
+    # removed in the ceremony.wsc_tail kill, 2026-08-23).
     review_scale_payload = review_scale_decision._asdict()
     # AN UNRESOLVED SCALE MUST NAME ITS OWN UNLOCK, NOT JUST ITS MISSING INPUTS.
     # `decide_review_scale`'s `reason` names `code_loc`/`commit_count`/
@@ -5942,8 +5945,6 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             "values a caller supplies, and a hand count uses different definitions."
         )
     if measured_commit_count is not None:
-        for _slice in review_scale_commit_slices:
-            _slice["scope_kind"] = "diff"
         review_scale_payload["commit_slices"] = review_scale_commit_slices
         # Uncommitted work has no sha and so can never become a slice — said
         # here rather than silently dropped: the gap between measured

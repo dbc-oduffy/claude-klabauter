@@ -1,0 +1,2 @@
+[console_scripts]
+coordinator-cockpit-emit-schema = coordinator_core.contract.cockpit_schema.emit_schema:main

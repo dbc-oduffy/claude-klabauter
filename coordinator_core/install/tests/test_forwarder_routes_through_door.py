@@ -4,10 +4,9 @@ matches the door emission shape, and a named invocation through it records
 exit code (spec backlink:
 docs/dispatch-briefs/2026-08-26-every-forwarder-that-can-reach-the-door-does/C5.md).
 
-VERIFY ON DISK, NOT BY CENSUS: `coordinator_core.install.substrate ::
-_door_eligible_forwarder_names` is generator-derived from the SAME committed
-allowlist regardless of whether an install ever ran -- it cannot, by itself,
-prove the cutover reached disk. These tests exercise the actual writers
+VERIFY ON DISK, NOT BY CENSUS: the committed allowlist exists whether or
+not an install ever ran, so it cannot prove the cutover reached disk. These
+tests exercise the actual writers
 (`door_install.install_named_forwarder`, `substrate._write_native_door_
 forwarder`, `substrate._write_agent_helper_forwarders`) against a scratch
 `bin_dst` and assert on the files they actually produced.
@@ -60,26 +59,6 @@ def _stamp_engine_root(root: Path, *entrypoints: str) -> None:
 def _skip_if_no_prebuilt() -> None:
     if not door_install._PREBUILT_DOOR_EXE.exists():
         pytest.skip("no committed prebuilt door for this platform in this checkout")
-
-
-# --- Census artifact sanity ---------------------------------------------
-
-
-def test_door_eligible_forwarder_names_reads_the_committed_allowlist():
-    """The generator-side loader must actually read C2's committed census
-    output, not a hardcoded/empty stand-in -- a non-empty result here is
-    what makes every other test in this module exercise a real bucket."""
-    names = substrate._door_eligible_forwarder_names()
-    assert isinstance(names, frozenset)
-    assert names, "warm_entrypoint_allowlist.json's door-eligible bucket read back empty"
-    assert "cross-repo-memo" in names
-
-
-def test_door_eligible_forwarder_names_degrades_to_empty_on_missing_allowlist(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        substrate, "_DOOR_ELIGIBLE_ALLOWLIST_PATH", tmp_path / "does-not-exist.json"
-    )
-    assert substrate._door_eligible_forwarder_names() == frozenset()
 
 
 # --- On-disk emission shape (door_install layer) -------------------------

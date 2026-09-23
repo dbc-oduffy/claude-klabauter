@@ -516,6 +516,25 @@ static int is_valid_engine_root_w(const wchar_t *root_w) {
     return 1;
 }
 
+/* THE PER-INVOCATION ESCAPE HATCH -- see door_core.h's own doc comment on
+ * `door_env_value_is_falsy` for the full contract. Reads the wide env var
+ * once, converts it to UTF-8 (the same `wide_to_utf8` every other env-value
+ * read in this file already uses), and hands it to the shared predicate so
+ * this door cannot recognise a different falsy-token set than door_posix.c
+ * or the Python client. An unset or oversized value is not falsy -- the
+ * escape hatch has no opinion, not a default. */
+static int door_env_warm_is_falsy(void) {
+    wchar_t value[32];
+    DWORD got = GetEnvironmentVariableW(L"COORDINATOR_WARM", value, 32);
+    if (got == 0 || got >= 32) return 0;
+    int len;
+    char *value_u8 = wide_to_utf8(value, &len);
+    if (!value_u8) return 0;
+    int falsy = door_env_value_is_falsy(value_u8);
+    free(value_u8);
+    return falsy;
+}
+
 /* Resolves the engine root this invocation should target: the env-var
  * override (`ENGINE_ROOT_ENV_OVERRIDE`) if set and non-empty, else the
  * sidecar file next to this executable. Validates the result via
@@ -1387,6 +1406,20 @@ int main(void) {
      * `door_entrypoint_basename()`) and the warm request built in step 6
      * below need it available regardless of how far this function gets. */
     resolve_own_basename();
+
+    /* ---- -1. THE PER-INVOCATION ESCAPE HATCH (COORDINATOR_WARM) -- checked
+     * before engine-root resolution and before the pipe dial, matching the
+     * Python client's own precedence (warm/client.py ::
+     * _cli_is_warm_enabled). Hook mode is excluded: that caller's
+     * fall-through is a deny envelope, not a cold spawn, so the escape hatch
+     * must not fire there (see every other `!g_door_hook_mode` gate in this
+     * function for the same reasoning). `NULL` is passed for the engine
+     * root, matching every other pre-resolution fall-through in this file --
+     * this gate fires before `resolve_engine_root` has run, so there is no
+     * resolved root yet to hand it. */
+    if (!g_door_hook_mode && door_env_warm_is_falsy()) {
+        return fall_through_and_free(argc, wargv, NULL);
+    }
 
     /* ---- 0. engine root -- resolved at runtime, never baked. See
      * `resolve_engine_root`'s own docstring for the sidecar/env-var

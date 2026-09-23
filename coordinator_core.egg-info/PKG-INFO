@@ -1,0 +1,29 @@
+Metadata-Version: 2.4
+Name: coordinator_core
+Version: 0.2.0
+Summary: Command-type, spawn-per-call control-plane engine for the coordinator tri-plane (JSON-RPC 2.0 op registry + dispatch).
+Author: Dónal example-operator
+License: Apache-2.0 WITH a Commons Clause rider (source-available, not OSI-approved) -- see the published LICENSE file for the authoritative text.
+Project-URL: Homepage, https://github.com/dbc-oduffy/claude-klabauter
+Project-URL: Repository, https://github.com/dbc-oduffy/claude-klabauter
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3 :: Only
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Operating System :: OS Independent
+Classifier: Intended Audience :: Developers
+Classifier: Development Status :: 4 - Beta
+Requires-Python: >=3.11
+License-File: LICENSE
+License-File: NOTICE.md
+Requires-Dist: pydantic>=2
+Requires-Dist: psutil>=5.9
+Requires-Dist: jsonschema>=4
+Requires-Dist: PyYAML>=6
+Requires-Dist: referencing>=0.30
+Requires-Dist: typing_extensions>=4.14.1
+Requires-Dist: tree-sitter<1,>=0.21
+Requires-Dist: tree-sitter-pwsh<1,>=0.38
+Provides-Extra: test
+Requires-Dist: pytest>=9.1; extra == "test"
+Requires-Dist: pytest-xdist>=3.8; extra == "test"
+Dynamic: license-file

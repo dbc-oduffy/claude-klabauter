@@ -722,7 +722,7 @@ def test_brief_emits_commit_slices_and_uncommitted_code_loc_for_a_real_commit(mo
     assert slices[0]["sha"] == sha
     assert slices[0]["sha_range"] == f"{sha}~1..{sha}"
     assert slices[0]["diff_loc"] == 2
-    assert slices[0]["scope_kind"] == "diff"
+    assert "scope_kind" not in slices[0]
 
     assert review_scale["uncommitted_code_loc"] == 0
 

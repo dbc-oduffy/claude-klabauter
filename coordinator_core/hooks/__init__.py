@@ -213,6 +213,7 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.session_start_announce_job_mode",  # registers "hooks.session_start_announce_job_mode"
     "coordinator_core.hooks.session_start_register_doe_claude_root",  # registers "hooks.session_start_register_doe_claude_root"
     "coordinator_core.hooks.session_start_register_published_engine",  # registers "hooks.session_start_register_published_engine"
+    "coordinator_core.hooks.repin_cloud_engine_root",  # registers "hooks.repin_cloud_engine_root"
     "coordinator_core.hooks.session_start_repair_prepare_commit_msg_hook",  # registers "hooks.session_start_repair_prepare_commit_msg_hook"
     "coordinator_core.hooks.session_start_write_plugin_root_breadcrumb",  # registers "hooks.session_start_write_plugin_root_breadcrumb"
     "coordinator_core.hooks.sessionstart_bin_drift_refresh",  # registers "hooks.sessionstart_bin_drift_refresh"

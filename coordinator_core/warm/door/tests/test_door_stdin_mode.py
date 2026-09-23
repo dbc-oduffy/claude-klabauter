@@ -412,7 +412,10 @@ def test_hook_mode_passes_loudly_when_the_cold_guard_does_not_answer(tmp_path: P
     exits nonzero -- a guard that did not answer -- so the door passes
     loudly, and must not relay the stub's output as if it were a verdict."""
     root = _make_stub_engine_root(tmp_path)
-    payload = b'{"tool_name":"Bash","tool_input":{"command":"echo hi"}}'
+    payload = (
+        b'{"hook_event_name":"PreToolUse","tool_name":"Bash",'
+        b'"tool_input":{"command":"echo hi"}}'
+    )
 
     proc = _run_door(root, timeout=30, hook_mode=True, stdin_payload=payload)
 

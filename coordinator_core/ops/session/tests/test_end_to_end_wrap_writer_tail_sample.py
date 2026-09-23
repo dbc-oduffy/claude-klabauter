@@ -206,6 +206,7 @@ def test_wrap_leaves_none_of_the_migrated_writer_tail_fixtures_dirty_and_refuses
             title="C9 writer tail sample",
             branch="main",
             summary="C9 fixture baton.",
+            replan_of="c9-fixture-source",
         )
     baton_rel = baton_result["path"]
     assert (repo / baton_rel).is_file(), "fixture failure: replan baton was not written"

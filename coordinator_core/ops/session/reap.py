@@ -4,10 +4,32 @@ coordinator_core.ops.session.reap — session.reap op (Class B cadence-gated rea
 Purpose: Reap stale/orphaned session substrate from .git/coordinator-sessions/.
 Three sub-reaps run behind the shared 12h .last-reap cadence gate:
   (i)  Stale sessions (last_activity > 24h inactive) → .archive/<sid>-<YYYY-MM-DD>/
-  (ii) Stale agent dirs (touched.txt mtime > 24h) → .archive/_agents-<aid>-<YYYYMMDD>/
+  (ii) Stale agent dirs (newest-member mtime > 24h, AND no unreadable-legacy /
+       dirty-touched-path refusal — see "Sub-reap (ii) dirty-touched-path
+       refusal" below) → .archive/_agents-<aid>-<YYYYMMDD>/
   (iv) Stale agent-archive prune: .archive/_agents-* entries older than
        _AGENT_ARCHIVE_RETENTION_SECONDS (14d mtime) → rm -rf. Behind the same
        12h gate as (i)/(ii); prunes what (ii) archives but never deletes.
+
+Sub-reap (ii) dirty-touched-path refusal (C6,
+state/bug-backlog/2026-08-27-session-reap-sub-reap-ii-archives-an-age-f0743291e7c9.yaml):
+before archiving, sub-reap (ii) now refuses a dir carrying ONLY the retired
+`touched.txt` record (claims unreadable by the current `touch-record.jsonl`
+seam — same R3a rail `reap_orphaned_agent_dirs._has_unreadable_legacy_record`
+applies) and a dir whose readable touched paths are still dirty in the
+caller's working tree (same R3 rail `reap_orphaned_agent_dirs._dirty_paths` /
+`_touched_path_is_dirty` apply) — both reused directly from that module via a
+deferred import (see `_reap_stale_agents`) rather than re-derived, so the two
+reapers cannot drift on what "still dirty" means. This closes the gap named
+by `reap_orphaned_agent_dirs`'s own R3a scope note: a legacy-only dir holding
+genuinely dirty uncommitted work was refused by that stricter reaper and
+still reachable by this looser one. Liveness (R1/R2) is deliberately NOT
+ported here — unlike `reap_orphaned_agent_dirs`, this sub-reap also reaps
+agent dirs with no `em-session-id.txt` owner at all (by design, see
+sub-reap (ii)'s own history), and an unconditional "unknown ownership fails
+closed" rail would newly make those permanently unreapable, which is a wider
+behavioural change than this row's named risk (dirty uncommitted work)
+requires.
 
 Sub-reap (iii) (orphaned claim dirs, liveness-checked TOCTOU-re-read rm -rf) is
 NOT invoked by this handler at all — see "Boot backstop cull removal" below.
@@ -585,6 +607,7 @@ def _reap_stale_sessions(
 
 def _reap_stale_agents(
     sessions_dir: Path,
+    repo_root: Optional[Path] = None,
 ) -> Tuple[List[str], List[dict], List[dict]]:
     """Sync: move stale agent dirs (newest contained file mtime > 24h) to .archive/.
 
@@ -598,6 +621,20 @@ def _reap_stale_agents(
     No files at all → rmdir the empty agent dir (mirrors shell cs_reap_agents).
     Unreadable mtime → defer (fail-closed-to-keep).
     Archive dest already exists → skip (per-record idempotency).
+
+    repo_root (C6, see module docstring "Sub-reap (ii) dirty-touched-path
+    refusal"): when given, a dir past the age gate is additionally refused
+    (deferred, fail-closed-to-keep) when it carries ONLY the retired
+    `touched.txt` record (R3a — claims unreadable by the current seam), or
+    when a readable touched path is still dirty in `repo_root`'s working
+    tree (R3). Both rails are reused from `reap_orphaned_agent_dirs` via a
+    deferred import (see the loop body) — not re-derived. When `repo_root`
+    is None (a caller that supplies no repo, e.g. a direct unit-test call),
+    this refusal is skipped entirely rather than fail-closed on every
+    candidate: there is no working tree to check dirt against, and treating
+    "nothing to check against" as "assume dirty" would revert this sub-reap
+    to permanently unreapable for every caller that cannot supply a repo
+    root, which is a different failure than the one this row named.
     """
     reaped: List[str] = []
     deferred: List[dict] = []
@@ -606,6 +643,16 @@ def _reap_stale_agents(
     agents_base = sessions_dir / ".agents"
     if not agents_base.is_dir():
         return reaped, deferred, failed
+
+    # Deferred import: `reap_orphaned_agent_dirs` imports `_today_compact`
+    # from THIS module at its own top level, so importing it back at this
+    # module's top level would be a real load-time cycle. Deferring to
+    # first-use here is safe — by the time this function runs, this module
+    # has always finished its own top-level initialization, regardless of
+    # which of the two modules a caller imports first.
+    from coordinator_core.ops import reap_orphaned_agent_dirs as _orphan_reap
+
+    dirty_paths: Optional[set] = None  # computed at most once, lazily, below
 
     now_epoch = _now_utc_epoch()
     archive_root = sessions_dir / ".archive"
@@ -677,6 +724,31 @@ def _reap_stale_agents(
 
         if elapsed <= _AGENT_STALE_SECONDS:
             continue  # agent still active
+
+        # C6 dirty-touched-path refusal (module docstring "Sub-reap (ii)
+        # dirty-touched-path refusal"). R3a first: a legacy-only touch
+        # record reads as empty, not as "touched nothing" — refuse rather
+        # than let R4-shaped age alone carry a pre-migration dir to archive.
+        if _orphan_reap._has_unreadable_legacy_record(adir):
+            deferred.append({
+                "id": aid,
+                "reason": (
+                    "legacy-only touched.txt with no touch-record.jsonl -- "
+                    "claims unreadable by the current seam, fail-closed "
+                    "(ported from reap_orphaned_agent_dirs R3a)"
+                ),
+            })
+            continue
+
+        if repo_root is not None:
+            touched_paths = _orphan_reap._read_touched_paths(adir)
+            if touched_paths:
+                if dirty_paths is None:
+                    dirty_paths = _orphan_reap._dirty_paths(repo_root)
+                dirty_reason = _orphan_reap._touched_path_is_dirty(touched_paths, dirty_paths)
+                if dirty_reason:
+                    deferred.append({"id": aid, "reason": dirty_reason})
+                    continue
 
         # Build archive destination: <sessions_dir>/.archive/_agents-<aid>-<YYYYMMDD>
         archive_dest = archive_root / f"_agents-{aid}-{_today_compact()}"
@@ -1004,7 +1076,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Three sub-reaps run behind a single 12h .last-reap cadence gate:
       (i)  Stale sessions (last_activity > 24h) → .archive/<sid>-YYYY-MM-DD/
-      (ii) Stale agent dirs (touched.txt mtime > 24h) → .archive/_agents-<aid>-YYYYMMDD/
+      (ii) Stale agent dirs (newest-member mtime > 24h, minus a dirty-touched-
+           path refusal — C6, see module docstring) → .archive/_agents-<aid>-YYYYMMDD/
       (iv) Stale agent-archive prune: .archive/_agents-* older than 14d mtime → rm -rf
 
     Sub-reap (iii) (orphaned claim dirs, two liveness checks + TOCTOU re-read →
@@ -1117,9 +1190,11 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     )
 
     # --- Sub-reap (ii): stale agent dirs ---
-    # No liveness call needed — agent staleness is time-only (touched.txt mtime).
+    # No liveness call — agent staleness is time-only (newest-member mtime),
+    # by design (see module docstring). worktree_cwd IS passed (C6): it is
+    # the dirty-touched-path refusal's working tree, not a liveness cwd.
     reaped_agents, deferred_agents, failed_agents = await asyncio.to_thread(
-        _reap_stale_agents, sessions_dir
+        _reap_stale_agents, sessions_dir, Path(worktree_cwd)
     )
 
     # Sub-reap (iii) (orphaned claim dirs) deliberately does NOT run here — see

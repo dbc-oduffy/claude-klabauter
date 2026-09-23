@@ -1100,6 +1100,20 @@ def _falsifier_block(prime_exit_criterion: Any) -> Optional[dict]:
     return falsifier
 
 
+def _falsifier_misnested(fm: dict) -> bool:
+    """Whether a top-level `falsifier:` sibling key -- rather than the
+    nested `prime_exit_criterion.falsifier` `_falsifier_block` reads --
+    explains an otherwise-`None` falsifier block (gh-klabauter#63): a plan
+    author who places `falsifier:` next to `prime_exit_criterion` instead
+    of nesting it under it has NOT omitted the field, so the size-gated
+    arm below must not tell them to author what they already wrote two
+    lines away. Only a genuine non-empty dict counts as that placement
+    error -- a blank or scalar top-level `falsifier:` key is not evidence
+    of misnesting and still reads as plainly absent. Never raises."""
+    top_level = fm.get("falsifier")
+    return isinstance(top_level, dict) and bool(top_level)
+
+
 def _read_status_override(plan_text: str) -> Optional[dict[str, str]]:
     """The sanctioned escape for arms 2-5 (AC19): an existing
     `status_override_by`/`_reason`/`_at` attestation (the same trio
@@ -1186,6 +1200,7 @@ GOAL_REFUSAL_VERDICT_NOT_PASS = "falsifier_verdict_not_pass"
 GOAL_REFUSAL_DERIVED_FROM_UNRESOLVABLE = "derived_from_unresolvable"
 GOAL_REFUSAL_PRIME_ABSENT = "prime_exit_criterion_absent"
 GOAL_REFUSAL_FALSIFIER_ABSENT = "falsifier_absent"
+GOAL_REFUSAL_FALSIFIER_MISNESTED = "falsifier_misnested"
 
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -1328,6 +1343,16 @@ instrument, and telling it to author a statement it already wrote misreads
 its own frontmatter back to it."""
 
 
+_FALSIFIER_MISNESTED_NEXT_MOVE = (
+    "Move the top-level falsifier: block under prime_exit_criterion.falsifier "
+    "(it must nest there, not sit as a sibling key), then re-run the close-out."
+)
+"""The misnested-falsifier arm's own next move (gh-klabauter#63): the field
+is already fully authored, just in the wrong place, so the move -- not a
+fresh authoring instruction like `_FALSIFIER_ABSENT_NEXT_MOVE`'s -- is the
+one useful thing to say."""
+
+
 _GOAL_REFUSAL_NEXT_MOVE = (
     "Run the close-out skill, which re-runs the observation and records a fresh "
     "exit_criterion_met verdict -- this engine only ever reads what a prior run "
@@ -1365,9 +1390,11 @@ def _evaluate_goal_falsifier_gate(
       5. `derived_from` resolution (AC20) -- independent of falsifier
          presence; an unresolvable link refuses (same override exception).
       1(cont). No usable `falsifier` block (`_falsifier_block` -- TOTAL,
-         never-raising detection) -> refuses (`GOAL_REFUSAL_FALSIFIER_ABSENT`)
-         on the SAME two bounds arm 0 uses, M+ and created on or after
-         `GRANDFATHER_DATE`, and only when no well-formed
+         never-raising detection) -> refuses (`GOAL_REFUSAL_FALSIFIER_ABSENT`,
+         or `GOAL_REFUSAL_FALSIFIER_MISNESTED` when a non-empty top-level
+         `falsifier:` sibling key explains the absence -- `_falsifier_
+         misnested`) on the SAME two bounds arm 0 uses, M+ and created on or
+         after `GRANDFATHER_DATE`, and only when no well-formed
          `falsifier_exemption` was taken; otherwise refused stays `False`.
          The size bound is the whole point of this arm: without it the S-lane
          carve-out silently applied to every lane.
@@ -1482,13 +1509,25 @@ def _evaluate_goal_falsifier_gate(
             result["override"] = True
             return result
         result["refused"] = True
-        result["reason"] = GOAL_REFUSAL_FALSIFIER_ABSENT
-        result["detail"] = (
-            "plan declares prime_exit_criterion with no usable falsifier, and "
-            f"is sized M+ with created on or after {GRANDFATHER_DATE} (an M+ "
-            "criterion genuinely un-falsifiable by observation takes a named "
-            "falsifier_exemption instead; S and XS carry no falsifier at all)"
-        )
+        if _falsifier_misnested(fm):
+            # A distinct reason from GOAL_REFUSAL_FALSIFIER_ABSENT (gh-
+            # klabauter#63): the field is present, just nested one level
+            # too shallow, so the refusal must not read as missing work.
+            result["reason"] = GOAL_REFUSAL_FALSIFIER_MISNESTED
+            result["detail"] = (
+                "plan declares a top-level falsifier: key as a sibling of "
+                "prime_exit_criterion instead of nesting it under "
+                "prime_exit_criterion.falsifier, and is sized M+ with created "
+                f"on or after {GRANDFATHER_DATE}"
+            )
+        else:
+            result["reason"] = GOAL_REFUSAL_FALSIFIER_ABSENT
+            result["detail"] = (
+                "plan declares prime_exit_criterion with no usable falsifier, and "
+                f"is sized M+ with created on or after {GRANDFATHER_DATE} (an M+ "
+                "criterion genuinely un-falsifiable by observation takes a named "
+                "falsifier_exemption instead; S and XS carry no falsifier at all)"
+            )
         return result
 
     exit_criterion_met = fm.get("exit_criterion_met")
@@ -3148,6 +3187,8 @@ def close_out_and_stamp(
             _next_move = _PRIME_ABSENT_NEXT_MOVE
         elif goal_gate["reason"] == GOAL_REFUSAL_FALSIFIER_ABSENT:
             _next_move = _FALSIFIER_ABSENT_NEXT_MOVE
+        elif goal_gate["reason"] == GOAL_REFUSAL_FALSIFIER_MISNESTED:
+            _next_move = _FALSIFIER_MISNESTED_NEXT_MOVE
         message = (
             f"{plan_path_rel}: not stamped -- prime exit criterion goal "
             f"observation refused ({goal_gate['reason']}): {goal_gate['detail']}. "

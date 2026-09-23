@@ -252,11 +252,13 @@ def test_pickup_assemble_sweep_covers_every_classification_and_memo_kind(monkeyp
     )
 
     variant_names = {name for name, _ in variants}
-    expected_kind_variants = {f"memo-kind-{kind}" for kind in ("ask", "consult", "proposal", "fyi")}
+    expected_kind_variants = {
+        f"memo-kind-{kind}" for kind in ("ask", "consult", "proposal", "fyi", "bug", "friction")
+    }
     missing_kind_variants = expected_kind_variants - variant_names
     assert not missing_kind_variants, (
         f"pickup_assemble sweep is missing memo-kind variant(s) {sorted(missing_kind_variants)} -- "
-        "expected one swept variant per _KIND_DISPOSITIONS key (ask/consult/proposal/fyi)"
+        "expected one swept variant per _KIND_DISPOSITIONS key (ask/consult/proposal/fyi/bug/friction)"
     )
 
     assert "handoff-live-claim-bail" in variant_names, (

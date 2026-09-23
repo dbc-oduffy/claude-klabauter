@@ -99,8 +99,22 @@ class CrossRepoMemoSummary(BaseModel):
     """
     created: IsoDate
     """ISO calendar date when the memo was created."""
-    kind: Literal["ask", "consult", "fyi"]
-    """The memo kind discriminator (frontmatter `kind:` field)."""
+    kind: Literal["ask", "consult", "fyi", "friction"]
+    """
+    The memo kind discriminator (frontmatter `kind:` field).
+
+    MINOR bump 4.7.0 -> 4.8.0 (2026-09-22, closes DoE-claude
+    state/improvement-queue/2026-09-05-memo-kind-has-no-friction-value-and-
+    bug-degrades-silently.yaml): widens this enum by one member, `friction`
+    — a workflow/process pain-point report, distinct from `fyi` (which
+    undersells it) and `bug` (which overstates it; senders were filing
+    friction reports as `bug` for lack of a better fit). `proposal`,
+    `bug`, and `notice` remain deliberately absent from THIS entity's enum
+    — narrower than the full sender-side vocabulary
+    (`coordinator_core.ops.fleet.memo_kinds.VALID_KINDS`) was already true
+    before this bump and is unchanged by it; this widen only adds the one
+    member the originating row named.
+    """
     related: list[str]
     """
     Related artifact paths cited in the memo (frontmatter `related:` list).

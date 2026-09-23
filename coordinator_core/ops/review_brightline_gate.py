@@ -215,7 +215,17 @@ _SHARED_BRANCH_RE = re.compile(r"^work/")
 # before/after measurement on this repo.
 # Spec backlink: cross-repo/inbox/2026-08-04-example-retrieval-repo-em-brightline-partition-mandatory-does-not-halt.md
 #   § "Two smaller observations" — `chain_oracle` counts ceremony bookkeeping as reviewable LOC.
-_NOISE_BASENAMES = frozenset({"package-lock.json", "poetry.lock", "pnpm-lock.yaml", "bun.lockb"})
+#
+# The two memo schemas are matched by EXACT basename: both are pure output of
+# `emit_memo_schema.emit_schemas` (their headers declare `x-generated-by`), and
+# the authored change lives in the `.py` SSOT, already counted. Every other
+# `*.schema.json` here is hand-authored and must stay reviewable, so no
+# `.schema.json` suffix rule and no fixtures-directory rule: either would
+# silently suppress review of hand-authored content.
+_NOISE_BASENAMES = frozenset({
+    "package-lock.json", "poetry.lock", "pnpm-lock.yaml", "bun.lockb",
+    "cross-repo-memo.schema.json", "archived-memo.schema.json",
+})
 _NOISE_SUFFIXES = (".lock", ".pyc", ".min.js", ".min.css")
 _NOISE_PATH_RE = re.compile(
     r"(^|/)("

@@ -1001,6 +1001,15 @@ _USAGE = (
     "  roadmap-number-stubs <edges-file>      # linearize from edges file\n"
     "  roadmap-number-stubs --check <run-id>  # verify stubs on disk\n"
     "  roadmap-number-stubs --state <run-id>  # print per-stub readiness state\n"
+    "\n"
+    "Edges-file format (line form, one edge per line):\n"
+    "  A <- B                # A blocked_by B (B ships first)\n"
+    "  A <- B@2               # B is author-assigned to sprint 2\n"
+    "  LONER                  # a line with no \"<-\" is an isolated node\n"
+    "  # a leading '#' line is a comment\n"
+    "\"A blocked_by B\" prose is NOT this format -- write \"A <- B\".\n"
+    "A JSON array of {\"from\":A,\"to\":B[,\"fromSprint\":N,\"toSprint\":N]} objects "
+    "is also accepted.\n"
 )
 
 

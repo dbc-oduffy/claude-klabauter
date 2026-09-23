@@ -1838,6 +1838,13 @@ _RATIFICATION_LINE_RE = re.compile(
     r"^[+-]\s*execution_authorized_(?:by|at|sha|note)\s*:", re.IGNORECASE
 )
 _STATUS_LINE_RE = re.compile(r"^[+-]\*\*Status:?\*\*")
+# Per-chunk plan-tasks spine disposition bookkeeping (close_out_and_stamp's
+# recovery path): disposition/disposition_ref/disposition_detail rows record
+# ship status, never scope/target/acceptance-criteria — bookkeeping like the
+# ratification fields above, not a substantive plan edit.
+_DISPOSITION_LINE_RE = re.compile(
+    r"^[+-]\s*disposition(?:_ref|_detail)?\s*:", re.IGNORECASE
+)
 
 
 def _extract_plan_to_execute_pointer(body_text: str) -> Optional[str]:
@@ -1912,16 +1919,20 @@ def _is_bookkeeping_diff_line(line: str) -> bool:
         return True
     if _STATUS_LINE_RE.match(line):
         return True
+    if _DISPOSITION_LINE_RE.match(line):
+        return True
     if not line[1:].strip():
         return True
     return False
 
 
 def _classify_stamp_delta(repo_root: Path, stamp_commit: str, path: str) -> str:
-    """Ported verbatim from HEAD (`pickup_assemble._classify_stamp_delta`):
-    every changed content line in `stamp_commit..HEAD -- path` must be a
-    ratification-line, a `**Status:**` line, or blank to count as
-    `bookkeeping`; anything else defaults to `substantive`."""
+    """Ported from HEAD (`pickup_assemble._classify_stamp_delta`), extended
+    for the plan-tasks spine disposition fields: every changed content line
+    in `stamp_commit..HEAD -- path` must be a ratification-line, a
+    `**Status:**` line, a per-chunk `disposition`/`disposition_ref`/
+    `disposition_detail` line, or blank to count as `bookkeeping`; anything
+    else defaults to `substantive`."""
     from coordinator_core.git.run import run_git
 
     result = run_git(["-C", str(repo_root), "diff", f"{stamp_commit}..HEAD", "--", path])
@@ -2892,6 +2903,77 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
             ),
         },
     ],
+    # `friction` (2026-09-22, closes state/improvement-queue/2026-09-05-memo-
+    # kind-has-no-friction-value-and-bug-degrades-silently.yaml): a workflow/
+    # process pain-point report — not a bug in a specific line, not a
+    # proposal, and `fyi` undersells it. Shape mirrors `bug` deliberately
+    # (a report kind needing a triage verdict), with vocabulary swapped for
+    # friction's own semantics rather than a code defect's. Ported verbatim
+    # from `pickup_assemble.__init__._KIND_DISPOSITIONS`.
+    "friction": [
+        {
+            "value": "addressed",
+            "resolves": ["d-action-memo"],
+            "guidance": (
+                "The friction is real and something concrete reduces it now — a fix, "
+                "a doc change, or a process tweak. Same premise-verification and "
+                "live-claim-holder checks as an `ask` accept apply before landing. "
+                "This disposition maps to `--decision accepted`, which requires "
+                "`realized_by` (the SHA of the commit that lands the change) "
+                "alongside `decision_note`; `cs_action_memo` fails loud without it."
+            ),
+        },
+        {
+            "value": "tracked-elsewhere",
+            "resolves": ["d-action-memo"],
+            "guidance": (
+                "The friction is real, but reducing it is already tracked — point "
+                "`actioned_note` at the artifact that already owns it (a "
+                "debt/improvement-backlog entry path, a plan-chunk pointer, or a "
+                "named baton id), not merely assert that it exists. Actioning this "
+                "disposition requires `actioned_note` (the pointer itself): "
+                "`d-action-memo` resolves via the `--actioned-note` path (no "
+                "`--decision`, since already-tracked-elsewhere is not an "
+                "accepted/partial/declined outcome), and `cs_action_memo` fails loud "
+                "if neither `--decision` nor `--actioned-note` is supplied — so state "
+                "the pointer, however brief, rather than leaving `actioned_note` "
+                "empty."
+            ),
+        },
+        {
+            "value": "not-actionable",
+            "resolves": ["d-action-memo"],
+            "guidance": (
+                "After checking the report against current disk/git state, the "
+                "friction described does not warrant a change here — a deliberate "
+                "tradeoff, a one-off, or a workflow the reporter's own repo controls "
+                "— record what was checked and why in `actioned_note`, not just the "
+                "verdict. Actioning this disposition requires `actioned_note` (the "
+                "check performed and its result): `d-action-memo` resolves via the "
+                "`--actioned-note` path (no `--decision`, since not-actionable is not "
+                "an accepted/partial/declined outcome), and `cs_action_memo` fails "
+                "loud if neither `--decision` nor `--actioned-note` is supplied — so "
+                "state what was checked, however brief, rather than leaving "
+                "`actioned_note` empty."
+            ),
+        },
+        {
+            # Work still owed: the report can't be triaged from the memo
+            # alone, so this stays `resolves: []` — halting at
+            # `d-action-memo` is correct, not a defect. Mirrors
+            # `bug`/`needs-info`: a narrow escape hatch, not an equal
+            # fourth option to addressed/tracked-elsewhere/not-actionable.
+            "value": "needs-info",
+            "resolves": [],
+            "guidance": (
+                "The report can't be triaged without one more fact from the "
+                "reporter — ask that single question and stop there; this is a "
+                "narrow escape hatch, not an equal fourth option to "
+                "addressed/tracked-elsewhere/not-actionable. Do not use it to ask "
+                "the reporter to justify why the report was filed."
+            ),
+        },
+    ],
     "fyi": [
         {
             "value": "ack-nil",
@@ -2983,6 +3065,12 @@ _MEMO_ACTION_DECISION_MAP: dict[tuple[str, str], str] = {
     # `bug`/`not-a-bug` are deliberately absent (see the class comment
     # above this map).
     ("bug", "fixed"): "accepted",
+    # `friction`/`addressed` is an ACCEPTED outcome, mirroring `bug`/`fixed`
+    # above — the change is the action, and `--decision accepted` is what
+    # makes `realized_by` required. `friction`/`tracked-elsewhere` and
+    # `friction`/`not-actionable` are deliberately absent, same reason as
+    # `bug`'s two absent entries.
+    ("friction", "addressed"): "accepted",
 }
 
 #: decision value -> required `--decisions` content keys. Ported verbatim.
@@ -3003,6 +3091,7 @@ _KIND_QUESTIONS: dict[str, str] = {
     "proposal": "proposal: Adopt / Decline?",
     "fyi": "fyi impact: nil / plan-invalidated / surgical-fix / product-decision / ambiguous?",
     "bug": "bug: Fixed / Confirmed-owned / Not-a-bug / Needs-info?",
+    "friction": "friction: Addressed / Tracked-elsewhere / Not-actionable / Needs-info?",
 }
 
 #: The terminal `status` values an archived memo may already carry —

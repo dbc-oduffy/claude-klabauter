@@ -609,11 +609,44 @@ SHIM_DIR = Path("/root/.local/bin")  # abs-path-ok: single-host cloud VM entrypo
 _SHIM_SENTINEL = "# cloud_setup.py: engine-cli-shim (auto-generated, do not hand-edit)"
 
 
+#: The stable symlink pinned as `COORDINATOR_ENGINE_ROOT` and the target every
+#: engine CLI shim execs through. Created ONLY at setup time, pointed at the
+#: frozen `/root/klabauter` clone — never at a `/home/user/...` checkout,
+#: which is not mounted yet when this script runs (module docstring, fact 1).
+#: A SessionStart hook (`coordinator_core.hooks.repin_cloud_engine_root`)
+#: re-points this same link, atomically, onto a fresher per-session checkout
+#: once one is mounted — see that module's docstring for the freshness rule.
+#: claude-klabauter#67 (comments 5785027514, 5785078234).
+ENGINE_CURRENT_LINK = Path("/root/engine-current")  # abs-path-ok: single-host cloud VM entrypoint (module docstring)
+
+
+def _create_engine_current_symlink() -> None:
+    """Create/refresh the stable `/root/engine-current` symlink onto this
+    script's own frozen `/root/klabauter` clone.
+
+    Idempotent: a temp symlink is created beside the target and `os.replace`d
+    onto it, so a re-run always re-creates the link atomically rather than
+    erroring on an existing one.
+    """
+    target = Path(CLONES["klabauter"]["dest"])
+    ENGINE_CURRENT_LINK.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ENGINE_CURRENT_LINK.with_name(ENGINE_CURRENT_LINK.name + ".tmp")
+    if tmp.exists() or tmp.is_symlink():
+        tmp.unlink()
+    tmp.symlink_to(target)
+    tmp.replace(ENGINE_CURRENT_LINK)
+
+
 def set_engine_env(report: Report) -> None:
     """Set COORDINATOR_ENGINE_ROOT and COORDINATOR_SETTINGS_HOME in this process' own
     environment — the env-var block is not readable from the setup script's shell
     (fact 2), so this process must set them itself before invoking setup.py.
+
+    Also (re-)creates `ENGINE_CURRENT_LINK`, since `_engine_env` now pins
+    `COORDINATOR_ENGINE_ROOT` at that stable link rather than at a root chosen
+    at this moment — see `ENGINE_CURRENT_LINK`'s own docstring for why.
     """
+    _create_engine_current_symlink()
     engine_env = _engine_env()
     os.environ.update(engine_env)
     report.engine_root = engine_env["COORDINATOR_ENGINE_ROOT"]
@@ -623,9 +656,15 @@ def set_engine_env(report: Report) -> None:
 def _engine_env() -> dict[str, str]:
     """The engine root and settings home this script installs into, as the env
     vars every engine surface resolves them from. One derivation, read by both
-    this process (`set_engine_env`) and every later session (`register_plugin_settings`)."""
+    this process (`set_engine_env`) and every later session (`register_plugin_settings`).
+
+    `COORDINATOR_ENGINE_ROOT` is pinned at the STABLE `ENGINE_CURRENT_LINK`,
+    never at a root resolved at this moment — see that constant's docstring:
+    the link is what a SessionStart hook can re-point later without this
+    script (or any session env) needing to change.
+    """
     return {
-        "COORDINATOR_ENGINE_ROOT": str(_preferred_engine_root()),
+        "COORDINATOR_ENGINE_ROOT": str(ENGINE_CURRENT_LINK),
         "COORDINATOR_SETTINGS_HOME": str(
             Path(CLONES["coordinator-claude"]["dest"]) / ".coordinator-claude-settings"
         ),
@@ -633,15 +672,16 @@ def _engine_env() -> dict[str, str]:
 
 
 def _preferred_engine_root() -> Path:
-    """The engine root to pin as `COORDINATOR_ENGINE_ROOT`: the platform's
-    fresh per-session checkout if mounted right now, else this script's own
-    `/root/klabauter` clone.
+    """The engine root to enumerate CLI names off (`install_engine_cli_shims`):
+    the platform's fresh per-session checkout if mounted right now, else this
+    script's own `/root/klabauter` clone.
 
     A miss (fresh checkout not yet mounted) is the routine case, since this
     runs before the platform mounts anything under `/home/user` — see
-    `install_engine_cli_shims` for the fresh-vs-frozen rationale and why the
-    shim re-runs this same preference at call time instead of trusting this
-    one-shot pin.
+    `install_engine_cli_shims` for the fresh-vs-frozen rationale. Distinct
+    from `ENGINE_CURRENT_LINK`, which every generated shim execs through
+    instead of re-deriving this preference at call time — see
+    `_shim_source`.
     """
     fresh = locate_existing_checkout(FRESH_ENGINE_CHECKOUT_NAME)
     if fresh is not None:
@@ -649,16 +689,21 @@ def _preferred_engine_root() -> Path:
     return Path(CLONES["klabauter"]["dest"])
 
 
-def _shim_source(name: str, fresh_root: str, fallback_root: str) -> str:
+def _shim_source(name: str, engine_link: str) -> str:
     """The exact text of the bare-name trampoline for CLI *name*.
 
     Self-contained on purpose: this file cannot `import cloud_setup` (it runs
     as `sys.executable <this file>`, standalone, in whatever process later
     types the bare command — the harness never puts this repo on that
     process' `sys.path`), so every value it needs is interpolated as a
-    literal at generation time. Re-derives `os.path.isdir(fresh_root)` on
-    every invocation rather than once at generation time — see
-    `install_engine_cli_shims` for why.
+    literal at generation time.
+
+    Execs through `engine_link` — the stable `ENGINE_CURRENT_LINK` symlink,
+    never a fresh-vs-fallback choice made here. The fresh-vs-frozen decision
+    now lives in one place, `coordinator_core.hooks.repin_cloud_engine_root`
+    (a SessionStart hook, re-pointing the same link atomically), not
+    re-derived per shim invocation — see `install_engine_cli_shims`'s
+    docstring and claude-klabauter#67 (comments 5785027514, 5785078234).
     """
     return (
         "#!/usr/bin/env python3\n"
@@ -666,19 +711,17 @@ def _shim_source(name: str, fresh_root: str, fallback_root: str) -> str:
         f'"""{name} — bare-name trampoline for coordinator/bin/{name}.py,\n'
         "generated by scripts/cloud_setup.py :: install_engine_cli_shims.\n"
         "\n"
-        "Not a fixed forwarder: the engine root is resolved fresh on every\n"
-        "invocation (the fresh checkout if mounted, else the /root clone),\n"
-        "never trusted from a value baked when this file was written.\n"
+        "Execs through the stable engine-current symlink, whose target a\n"
+        "SessionStart hook may re-point onto a fresher per-session checkout\n"
+        "— this shim never re-derives fresh-vs-frozen itself.\n"
         '"""\n'
         "import os\n"
         "import sys\n"
         "\n"
-        f"FRESH_ROOT = {fresh_root!r}\n"
-        f"FALLBACK_ROOT = {fallback_root!r}\n"
+        f"ENGINE_LINK = {engine_link!r}\n"
         "\n"
-        "root = FRESH_ROOT if os.path.isdir(FRESH_ROOT) else FALLBACK_ROOT\n"
-        "os.environ[\"COORDINATOR_ENGINE_ROOT\"] = root\n"
-        f"target = os.path.join(root, \"coordinator\", \"bin\", {name!r} + \".py\")\n"
+        "os.environ[\"COORDINATOR_ENGINE_ROOT\"] = ENGINE_LINK\n"
+        f"target = os.path.join(ENGINE_LINK, \"coordinator\", \"bin\", {name!r} + \".py\")\n"
         "os.execv(sys.executable, [sys.executable, target, *sys.argv[1:]])\n"
     )
 
@@ -717,10 +760,18 @@ def install_engine_cli_shims(report: Report) -> None:
     engine's default branch moves. Both `coordinator_core.engine_root`
     (claude-klabauter's own resolver) and claude-klabauter's `cc_invoke.resolve_engine_root`
     treat `COORDINATOR_ENGINE_ROOT` as their highest-precedence rung, so
-    whichever path a consumer resolves is what it actually runs against — which
-    is why each generated shim re-resolves fresh-vs-frozen at CALL time
-    (`_shim_source`) rather than trusting a value baked once, either at this
-    script's setup time or at shim-generation time.
+    whichever path a consumer resolves is what it actually runs against.
+
+    FOLDED BACK (claude-klabauter#67, comments 5785027514, 5785078234): every
+    generated shim used to re-resolve fresh-vs-frozen itself at CALL time.
+    It now execs through `ENGINE_CURRENT_LINK`, a stable symlink this script
+    pins at the frozen clone (`_create_engine_current_symlink`) and that a
+    SessionStart hook (`coordinator_core.hooks.repin_cloud_engine_root`)
+    atomically re-points onto a fresher per-session checkout once one is
+    mounted and stamped no older than the frozen root's own stamp. One
+    fresh-vs-frozen decision, made where a session actually exists to judge
+    freshness — not re-derived per shim invocation from a same-process
+    `os.path.isdir` check that could never see a stamp.
 
     Idempotent and non-destructive: a target already carrying
     `_SHIM_SENTINEL` is this step's own prior output and is overwritten; any
@@ -736,7 +787,6 @@ def install_engine_cli_shims(report: Report) -> None:
             "enumerates CLIs off is absent or its layout changed"
         )
     SHIM_DIR.mkdir(parents=True, exist_ok=True)
-    fallback_root = str(Path(CLONES["klabauter"]["dest"]))
 
     written: list[str] = []
     skipped_foreign: list[str] = []
@@ -753,7 +803,7 @@ def install_engine_cli_shims(report: Report) -> None:
             if _SHIM_SENTINEL not in existing:
                 skipped_foreign.append(name)
                 continue
-        source = _shim_source(name, FRESH_ENGINE_CHECKOUT_PATH, fallback_root)
+        source = _shim_source(name, str(ENGINE_CURRENT_LINK))
         tmp = target.with_suffix(target.suffix + ".tmp")
         tmp.write_text(source, encoding="utf-8", newline="\n")
         tmp.chmod(0o755)

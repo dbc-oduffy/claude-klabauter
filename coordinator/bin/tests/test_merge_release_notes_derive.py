@@ -30,6 +30,7 @@ from __future__ import annotations
 import importlib.util
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -262,3 +263,99 @@ class TestContainsAllAbbreviatedShas:
 
         monkeypatch.setattr(_mod, "_git", _fake_git)
         assert _mod._contains_all("v9.9.9", ["1389e207"]) is False
+
+
+class TestTagAncestorCache:
+    """Regression guard for `cmd_flip_tags`'s across-entry `_tag_ancestor_shas`
+    memo (see its own comment). Without it, N entries walked against T
+    existing tags spawn up to N*T `git rev-list <tag>` calls instead of at
+    most T -- measured 2026-09-06 at ~2.6s/entry over 64 entries and 7 tags,
+    ~5x the 500ms brightline (state/bug-backlog/2026-09-06-flip-tags-
+    blanket-stamps-instead-of-walk-d0af25af2ce6.yaml, third finding).
+    """
+
+    def test_contains_all_reuses_cached_ancestor_set(self, monkeypatch):
+        calls = []
+
+        def _fake_git(*args):
+            calls.append(args)
+            return subprocess.CompletedProcess(
+                args=list(args),
+                returncode=0,
+                stdout="1389e207ab34cd56ef78901234567890abcdef12\n",
+                stderr="",
+            )
+
+        monkeypatch.setattr(_mod, "_git", _fake_git)
+        cache: dict = {}
+        assert _mod._contains_all("v1.0.0", ["1389e207"], cache) is True
+        assert _mod._contains_all("v1.0.0", ["1389e207"], cache) is True
+        assert len(calls) == 1, "second call should hit the cache, not re-spawn git"
+
+    def test_contains_all_without_cache_still_spawns_every_call(self, monkeypatch):
+        # The `_cache=None` default preserves the pre-fix one-shot-per-call
+        # contract every other direct unit test in this file relies on.
+        calls = []
+
+        def _fake_git(*args):
+            calls.append(args)
+            return subprocess.CompletedProcess(
+                args=list(args),
+                returncode=0,
+                stdout="1389e207ab34cd56ef78901234567890abcdef12\n",
+                stderr="",
+            )
+
+        monkeypatch.setattr(_mod, "_git", _fake_git)
+        assert _mod._contains_all("v1.0.0", ["1389e207"]) is True
+        assert _mod._contains_all("v1.0.0", ["1389e207"]) is True
+        assert len(calls) == 2
+
+    def test_cmd_flip_tags_spawns_one_rev_list_per_tag_not_per_entry(
+        self, repo: Path, monkeypatch
+    ):
+        old_sha = _commit(repo, "a.txt", "a")
+        _tag(repo, "v1.0.0")
+        new_sha = _commit(repo, "b.txt", "b")
+        _tag(repo, "v2.0.0")
+
+        entry_paths = []
+        for i in range(5):
+            entry = repo / f"entry{i}.md"
+            entry.write_text(_entry_text("pending-release", [old_sha]), encoding="utf-8")
+            entry_paths.append(str(entry))
+
+        import os
+
+        cwd = os.getcwd()
+        os.chdir(repo)
+        try:
+            rev_list_tag_calls = []
+            real_git = _mod._git
+
+            def _counting_git(*args):
+                if args and args[0] == "rev-list" and len(args) == 2:
+                    rev_list_tag_calls.append(args[1])
+                return real_git(*args)
+
+            monkeypatch.setattr(_mod, "_git", _counting_git)
+
+            args = types.SimpleNamespace(
+                release_tag_cut="v2.0.0",
+                merge_sha=new_sha,
+                merge_date="2026-07-23",
+                entry_paths=entry_paths,
+            )
+            _mod.cmd_flip_tags(args)
+        finally:
+            os.chdir(cwd)
+
+        # 5 entries x 2 tags would be 10 `rev-list <tag>` spawns without the
+        # cache. All 5 entries carry only `old_sha`, which the walk resolves
+        # at the first tag (v1.0.0, earliest by creatordate) and breaks
+        # before ever reaching v2.0.0 -- so the cached form spawns exactly 1
+        # `rev-list <tag>` call, not merely "at most 2": a regression that
+        # re-spawned per entry (cache miss on entries 2-5) or re-queried
+        # v1.0.0 a second time would still pass a `<= 2` bound as long as
+        # v2.0.0 stayed untouched.
+        assert rev_list_tag_calls == ["v1.0.0"], rev_list_tag_calls

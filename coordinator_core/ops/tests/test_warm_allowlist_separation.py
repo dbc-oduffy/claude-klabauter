@@ -46,7 +46,6 @@ import pytest
 
 import coordinator_core.ops.invoke_from_argv as ifa
 from coordinator_core.ops.invoke_from_argv import _ALLOWLIST_PATH, _invoke_from_argv
-from coordinator_core.install import substrate
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -66,7 +65,7 @@ def test_committed_allowlist_carries_both_keys_as_distinct_lists():
     )
     assert "door_eligible_entrypoints" in data, (
         "'door_eligible_entrypoints' is the new, independently-editable "
-        "door-cutover key substrate.py now reads instead of 'entrypoints'"
+        "door-cutover key, kept apart from 'entrypoints'"
     )
     assert isinstance(data["entrypoints"], list)
     assert all(isinstance(n, str) and n for n in data["entrypoints"])
@@ -115,51 +114,4 @@ def test_warm_load_gate_reads_entrypoints_key_not_door_eligible_key(monkeypatch,
         "the warm-load loader must read 'entrypoints' only -- a name "
         "present solely under 'door_eligible_entrypoints' must not "
         "warm-load"
-    )
-
-
-def test_door_cutover_reads_door_eligible_key_not_entrypoints_key(monkeypatch, tmp_path):
-    """Mirror of the previous test from substrate.py's side: point
-    `_DOOR_ELIGIBLE_ALLOWLIST_PATH` at a fixture where `entrypoints` carries
-    a name but `door_eligible_entrypoints` does not -- the door cutover
-    must NOT pick it up. Proves the split is real in both directions, not
-    just that the door key exists."""
-    fixture = tmp_path / "warm_entrypoint_allowlist.json"
-    fixture.write_text(
-        json.dumps({
-            "entrypoints": ["cross-repo-memo"],
-            "door_eligible_entrypoints": [],
-        }),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(substrate, "_DOOR_ELIGIBLE_ALLOWLIST_PATH", fixture)
-    names = substrate._door_eligible_forwarder_names()
-    assert "cross-repo-memo" not in names, (
-        "the door cutover must read 'door_eligible_entrypoints' only -- a "
-        "name present solely under 'entrypoints' must not be treated as "
-        "door-eligible"
-    )
-
-
-def test_clearing_door_eligible_key_alone_does_not_touch_warm_load_gate(monkeypatch, tmp_path):
-    """The concrete scenario the ledger item names: a dogfooder disables the
-    door cutover by clearing 'door_eligible_entrypoints' alone, and the
-    warm-load gate for an unrelated, working name is unaffected."""
-    fixture = tmp_path / "warm_entrypoint_allowlist.json"
-    fixture.write_text(
-        json.dumps({
-            "entrypoints": ["cross-repo-memo"],
-            "door_eligible_entrypoints": [],
-        }),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(ifa, "_ALLOWLIST_PATH", fixture)
-    monkeypatch.setattr(substrate, "_DOOR_ELIGIBLE_ALLOWLIST_PATH", fixture)
-
-    assert substrate._door_eligible_forwarder_names() == frozenset(), (
-        "door cutover must be disabled when its own key is cleared"
-    )
-    assert "cross-repo-memo" in ifa._load_allowlist(), (
-        "clearing the door key alone must not disable the unrelated, "
-        "working warm-load gate for a name still on 'entrypoints'"
     )

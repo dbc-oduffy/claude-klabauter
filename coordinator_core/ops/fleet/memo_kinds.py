@@ -39,4 +39,14 @@ from __future__ import annotations
 #: `_PREMISE_BEARING_KINDS` in `coordinator/bin/cross-repo-memo.py`). Distinct
 #: from `fyi` in intent only: `fyi` invites optional follow-up, `notice` is a
 #: one-way stamp for the record (e.g. "this landed", "this is now true").
-VALID_KINDS = ("ask", "consult", "fyi", "proposal", "bug", "notice")
+#:
+#: `friction` (2026-09-22, closes
+#: state/improvement-queue/2026-09-05-memo-kind-has-no-friction-value-and-
+#: bug-degrades-silently.yaml): a workflow/process pain-point report — not a
+#: bug in a specific line, not a proposal, and `fyi` undersells it. Category
+#: skills most often ask EMs to surface this shape; there was previously no
+#: value for it, so senders over-filed as `bug`. Has a receiver-side
+#: disposition table entry (unlike `notice`) — a friction report is
+#: premise-bearing: it asserts something the receiver can accept, decline, or
+#: say is already tracked.
+VALID_KINDS = ("ask", "consult", "fyi", "proposal", "bug", "notice", "friction")

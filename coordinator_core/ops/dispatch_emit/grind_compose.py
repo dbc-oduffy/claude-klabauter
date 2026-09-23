@@ -53,7 +53,7 @@ concatenated (via ``+``) with that live expression, never a static
 per-row manifest-path stand-in. This module always supplies the live
 expression: a fix's lock-key/"files you hold" clause reads the row's
 runtime ``declaredFiles``; a commit's "stage exactly this touched list"
-and ``--declared-revert`` clauses read the row's runtime
+and declared-deletion clauses read the row's runtime
 ``touchedFiles``/``removedFiles``; an undo restores the same live
 ``touchedFiles``; the ledger-only commits (batch-end and drain) read the
 live ``unsettled``/``RUN_ID`` in scope at commit time. The mutex lock keys
@@ -525,7 +525,16 @@ def _group_into_batches(manifest: Manifest, knobs: Mapping[str, Any]) -> list[tu
         size = max(1, int(size))
         for i in range(0, len(entries), size):
             chunk = entries[i : i + size]
-            batches.append((f"{key}:b{i // size}", chunk))
+            # `-`, not `:` -- this id is embedded verbatim as a
+            # `records/<batch-id>.json` filename in the composed triage and
+            # verify-op stage prompts (grind_stages.py::compose_triage_call,
+            # compose_verify_op_call). `:` is NTFS-illegal (the write guard's
+            # own `block_illegal_filename` denies it, per
+            # coordinator_core/bash_guards/_helpers.py::_ILLEGAL_CHARS_ORDER)
+            # and is never parsed back out (grind_rows.py::_extract_batch_rows
+            # matches the id by exact string equality), so the separator
+            # carries no meaning worth an NTFS-illegal char.
+            batches.append((f"{key}-b{i // size}", chunk))
     return batches
 
 # ---------------------------------------------------------------------------
@@ -605,7 +614,8 @@ _ROUTING_HELPERS = (
     "  if (route.kind === 'handback') { row.done = true; _handBack(rowId, route.value, reason); }\n"
     "  else { row.node = route.value; }\n"
     "}\n"
-    "function _lockKeysFor(row, rowId) { return row.declaredFiles.concat([`ledger:${rowId}`]); }"
+    "function _lockKeysFor(row, rowId) { return row.declaredFiles.concat([`ledger:${rowId}`]); }\n"
+    "function _commitReason(result) { return result && result.reason ? `: ${result.reason}` : ''; }"
 )
 
 def _manifest_const(manifest: Manifest) -> str:
@@ -727,6 +737,21 @@ def _verify_mode_for_key(profile: Profile, node_id: str, batch_key: str) -> tupl
         return "op", mode.get("op")
     return (mode or "agent"), None
 
+#: Fail-fast check on the fire-time ``args`` before any agent spends a token. A
+#: missing arg, or a ``run_stamp`` without the leading ``YYYYMMDD`` that
+#: ``grind-row close`` dates rows from, otherwise surfaces rows later as one
+#: ``carries no YYYYMMDD date`` refusal per close. The emitter prints the
+#: well-formed call.
+_FIRE_ARGS_CHECK = (
+    "if (!args || !args.run_stamp || !args.script_path || !args.profile_dir"
+    " || !/^\\d{8}/.test(String(args.run_stamp).replace(/-/g, ''))) {"
+    " throw new Error('queue-grind fire args: need {run_stamp, script_path, profile_dir},"
+    " run_stamp starting YYYYMMDD (e.g. 20260922T221000Z); got '"
+    " + JSON.stringify(args ?? null)"
+    " + '. Re-fire with the Workflow call emit-dispatch-workflow printed.'); }"
+)
+
+
 def compose_grind_script(
     manifest: Manifest,
     profile: Profile,
@@ -812,6 +837,7 @@ def compose_grind_script(
     lines.append(f"const SCRIPT_PATH = args.script_path;")
     lines.append(f"const PROFILE_NAME = {_js_string_literal(profile.name)};")
     lines.append("const PROFILE_DIR = args.profile_dir;")
+    lines.append(_FIRE_ARGS_CHECK)
     lines.append(f"const APPETITE_NAME = {_js_string_literal(str(appetite))};")
     lines.append(
         f"const RESOLVED_KNOBS = {json.dumps({k: v for k, v in knobs.items() if k != 'appetite'}, sort_keys=True)};"
@@ -983,7 +1009,7 @@ def compose_grind_script(
         "    _seen.add(recRow);\n"
         "    row.evidence = rec.evidence || '';\n"
         "    row.fixPlan = rec.fix_plan || '';\n"
-        "    if (rec.declared_files && rec.declared_files.length) { row.declaredFiles = rec.declared_files; row.touchedFiles = rec.declared_files; }\n"
+        "    if (rec.declared_files && rec.declared_files.length) { row.declaredFiles = rec.declared_files; }\n"
         "    const tradeoff = rec.has_tradeoff ? (rec.tradeoff || '') : '';\n"
         "    const route = routeAfterTriage(rec.verdict, rec.tshirt_size, tradeoff);\n"
         "    applyRoute(row, recRow, route, `triage verdict ${rec.verdict}`);\n"
@@ -1029,7 +1055,7 @@ def compose_grind_script(
         "    applyRoute(row, itemRow, route, 'refute-close confirmed');\n"
         "    if (route.kind === 'handback') {\n"
         "      const _cresult = await withLock(['@commit'], async () => _commitCall(row));\n"
-        "      if (_cresult.outcome !== 'committed') { _handBack(itemRow, 'commit-failed', \"close's archive-move commit did not land -- settle ledgers with grind-row sweep; never commit them\"); }\n"
+        "      if (_cresult.outcome !== 'committed') { _handBack(itemRow, 'commit-failed', \"close's archive-move commit did not land\" + _commitReason(_cresult) + ' -- settle ledgers with grind-row sweep; never commit them'); }\n"
         "      else { row.sha = _cresult.sha || ''; _ledgerCommitted.add(itemRow); "
         "_settled.push({ row: itemRow, outcome: 'committed', sha: row.sha }); }\n"
         "    }\n"
@@ -1067,6 +1093,7 @@ def compose_grind_script(
         "  const outcome = result.outcome;\n"
         "  row.lastOutcome = outcome;\n"
         "  if (result.touched_files && result.touched_files.length) { row.touchedFiles = result.touched_files; }\n"
+        "  else if (outcome === 'done') { row.touchedFiles = row.declaredFiles; }\n"
         "  row.createdFiles = result.created_files || [];\n"
         "  if (outcome === 'done' && result.close_result) {\n"
         "    row.removedFiles = row.removedFiles.concat([result.close_result.old || row.path]);\n"
@@ -1109,7 +1136,7 @@ def compose_grind_script(
         "async function _commitStage(rowId) {\n"
         "  const row = _rows[rowId];\n"
         "  const result = await withLock(['@commit'], async () => _commitCall(row));\n"
-        "  if (result.outcome !== 'committed') { row.done = true; _handBack(rowId, 'commit-failed', 'commit did not land -- settle ledgers with grind-row sweep; never commit them'); return; }\n"
+        "  if (result.outcome !== 'committed') { row.done = true; _handBack(rowId, 'commit-failed', 'commit did not land' + _commitReason(result) + ' -- settle ledgers with grind-row sweep; never commit them'); return; }\n"
         "  row.done = true; row.sha = result.sha || '';\n"
         "  _settled.push({ row: rowId, outcome: 'committed', sha: row.sha });\n"
         "}"

@@ -379,6 +379,43 @@ verb "stopping spawning" could retire an entry here, and no verb "must keep spaw
 specifically) was found un-listed. Per this doc's closed-list rule, that finding is recorded rather
 than acted on — there is nothing to remove and nothing to flag to the PM.
 
+## Reconciled — dist/mirror-native `PLAIN_SPAWN` git-plumbing sites, no carve-out needed — 2026-09-22
+
+Debt row `2026-08-06-dist-spawn-sites-unowned-after-exclude-remova-6f440fe9878c`: `fb813252f`
+removed `dist` from `spawn_policy.detect.DEFAULT_EXCLUDE` (see that constant's own docstring —
+`dist/` here is claude-klabauter's own git-tracked publish-mirror output, not a vendored tree), which made
+git-plumbing subprocess sites under `dist/mirror-native/claude-klabauter/.github/scripts/` newly
+visible to the census and write-time guard. The commit's message asserted "all plain-argv, so the
+standing gate is unaffected" but recorded that disposition nowhere queueable, leaving the sites
+unowned. This entry is that record.
+
+Re-walked with `spawn_policy.detect.sites_in_source` at reconciliation time: **four** sites remain,
+all `SpawnKind.PLAIN_SPAWN` — confirming the commit's claim. The row's original count of five
+included a fifth site, `run-tests.py`'s `main()`; that file was deleted outright by `312f151dd5`
+("GitHub Actions retired — drop run-tests.py and its pin"), independent of this reconciliation, so
+there is no longer a fifth site to track.
+
+**`PLAIN_SPAWN` sites are out of scope for this doc's classes (a)-(f) and its machine-readable
+register by construction** — both name only shell-shaped spawns (`SHELL_BINARY`/`SHELL_TRUE`). A
+`subprocess.run(["git", …])` call with a literal or resolvable argv is already naked Python, not a
+shell-out, and isn't what CLAUDE.md's "no bash" rule targets.
+`test_no_unsanctioned_shell_spawn.py`'s gate itself scopes to its `_SHELL_SHAPED` set
+(`SHELL_BINARY`/`SHELL_TRUE`) only, so these sites were never at risk of failing it, before or
+after the `DEFAULT_EXCLUDE` change. No class or register entry is added here, for the same reason
+the directive-verb reconciliation above added none: there is nothing shell-shaped to sanction.
+
+Recorded here — the artifact-to-check-against-instead-of-a-commit-message the row asked for:
+
+- `dist/mirror-native/claude-klabauter/.github/scripts/_repo.py` `_git_files()` — argv0 `git`, `PLAIN_SPAWN`
+- `dist/mirror-native/claude-klabauter/.github/scripts/check-exec-bit.py` `staged_entries()` — argv0 `git`, `PLAIN_SPAWN`
+- `dist/mirror-native/claude-klabauter/.github/scripts/check-exec-bit.py` `shebanged_blobs()` — argv0 `git`, `PLAIN_SPAWN`
+- `dist/mirror-native/claude-klabauter/.github/scripts/run-all-checks.py` `main()` — argv0 `<dynamic>` (forwarded argv), `PLAIN_SPAWN`
+
+These four are publish-mirror content (`dist/mirror-native/claude-klabauter/`), owned by the
+`claude-klabauter` percolate target, not authored here — this record closes the tracking gap
+without editing mirror content. Any conversion or site-specific gate entry these sites might someday
+need is that repo's own call, made there.
+
 ## Related, not a carve-out
 
 The polyglot trampoline blessing ("~1-line polyglot trampoline inside an otherwise-Python CLI")

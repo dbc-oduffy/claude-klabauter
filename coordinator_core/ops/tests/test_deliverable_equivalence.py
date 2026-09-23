@@ -111,7 +111,6 @@ def _well_formed_row(**overrides) -> dict:
         "governing_plan": "docs/plans/2026-08-01-example.md",
         "closure_evidence": {
             "realizing_commits": ["abc123"],
-            "join_provenance": "joined",
         },
         "superseded_by": None,
         "adjudicator": "sedge-06 test fixture",
@@ -219,22 +218,6 @@ def test_validate_deliverable_ledger_rows_raises_on_missing_closed_at_for_non_op
         DeliverableLedgerValidationError, match="closed_at.*required|required.*closed_at"
     ):
         validate_deliverable_ledger_rows([_well_formed_row(status="shipped", closed_at=None)])
-
-
-def test_validate_deliverable_ledger_rows_raises_on_bad_join_provenance():
-    with pytest.raises(
-        DeliverableLedgerValidationError, match="join_provenance.*invalid|invalid.*join_provenance"
-    ):
-        validate_deliverable_ledger_rows(
-            [
-                _well_formed_row(
-                    closure_evidence={
-                        "realizing_commits": ["abc123"],
-                        "join_provenance": "not-a-real-value",
-                    }
-                )
-            ]
-        )
 
 
 def test_validate_deliverable_ledger_rows_does_not_merely_warn(caplog):

@@ -37,10 +37,21 @@ closed on any ambiguity — unknown ownership is NOT candidate):
 
 Negative-spec:
   - Does NOT touch the existing session.reap sub-reap (ii) (_reap_stale_agents
-    in coordinator_core/ops/session/reap.py) — that mechanism ARCHIVES
-    (mv to .archive/) purely on touched.txt mtime>24h, with no liveness or
-    dirty-file check; it is a different (looser) safety contract and stays
-    unchanged. This module archives the stricter, liveness-gated subset,
+    in coordinator_core/ops/session/reap.py) as a call site — this module
+    still archives its own, stricter, liveness-gated subset independently.
+    C6 (state/bug-backlog/2026-08-27-session-reap-sub-reap-ii-archives-an-
+    age-f0743291e7c9.yaml) DID reach into sub-reap (ii): it now reuses this
+    module's R3/R3a rails (``_dirty_paths``/``_touched_path_is_dirty``/
+    ``_has_unreadable_legacy_record``, via a deferred import) before
+    archiving on mtime alone, closing the "genuinely dirty uncommitted work"
+    gap the R3a scope note below used to name as still-reachable there.
+    Sub-reap (ii) remains the LOOSER contract on liveness (R1/R2) — it still
+    archives agent dirs with no live-owner check at all, and still reaps a
+    dir carrying no ``em-session-id.txt`` owner, which this module never
+    would (R1 fails closed on unknown ownership) — that liveness gap is
+    unchanged and deliberately out of C6's scope (see reap.py's module
+    docstring "Sub-reap (ii) dirty-touched-path refusal" for why). This
+    module archives the stricter, liveness-gated subset,
     reusing the exact same ``.archive/_agents-<agent_id>-<YYYYMMDD>/`` shape
     (and its 14-day ``_prune_stale_agent_archive`` sweep) — EM decision
     2026-08-14: an archive-then-later-prune shape lowers the cost of a wrong
@@ -318,13 +329,18 @@ def _classify(
     # checkout, a restored backup, or an un-migrated peer is refused rather than
     # silently reaped. Fail-closed, because this module archives and deletes.
     #
-    # SCOPE, stated because the rail reads stronger than it is: this refusal
-    # binds THIS module only. `ops/session/reap.py` sub-reap (ii) archives a
-    # stale agent dir on `touched.txt` mtime alone -- no liveness check, no
-    # dirty check -- and sub-reap (iv) deletes what (ii) archived after 14 days.
-    # A legacy-only dir with genuinely dirty work is refused here and still
-    # reachable there. Pre-existing and out of this module's scope, filed rather
-    # than left implied. Review: code-reviewer Finding 3 (informational).
+    # SCOPE, updated by C6 (state/bug-backlog/2026-08-27-session-reap-sub-
+    # reap-ii-archives-an-age-f0743291e7c9.yaml): this refusal used to bind
+    # THIS module only, with `ops/session/reap.py` sub-reap (ii) reaching the
+    # SAME dirs on `touched.txt` mtime alone -- no dirty check at all -- and
+    # sub-reap (iv) deleting what (ii) archived after 14 days, so a
+    # legacy-only dir with genuinely dirty work was refused here and still
+    # reachable there. C6 closed that gap by porting this exact rail (and R3)
+    # into sub-reap (ii) via a deferred import -- see reap.py's module
+    # docstring "Sub-reap (ii) dirty-touched-path refusal". Sub-reap (ii)
+    # still does NOT check liveness (R1/R2) -- that gap is unchanged and
+    # deliberately out of C6's scope, not this one. Original finding: code-
+    # reviewer Finding 3 (informational).
     if _has_unreadable_legacy_record(agent_dir):
         return Verdict(
             agent_dir,

@@ -153,7 +153,10 @@ _REDIR_PRECEDING_OK = set(" \t\n0123456789&")
 _REDIR_TARGET_STOP = set(" \t\n\r>|;&()")
 
 #: --out/-o flag-value scan (reference hook lines 463-465).
-_OUT_RE = re.compile(r"(?:--out|-o)[ \t]+(\"[^\"]*\"|'[^']*'|[^ \t]+)", re.MULTILINE)
+_OUT_RE = re.compile(r"(?<![^ \t])(?:--out|-o)[ \t]+(\"[^\"]*\"|'[^']*'|[^ \t]+)", re.MULTILINE)
+
+#: Commands whose ``-o`` is not an output path (``--only-matching``).
+_O_IS_NOT_OUTPUT = frozenset({"grep", "egrep", "fgrep", "zgrep", "rg", "ag", "git"})
 
 #: Glued-on heredoc/process-sub opener strip (reference hook lines 374-392).
 _HEREDOC_GLUE_RE = re.compile(r"<<.*$")
@@ -418,14 +421,42 @@ def _extract_redir_candidates(cmd: str) -> List[str]:
     return redir
 
 
+def _segment_command_word(line: str, pos: int) -> str:
+    """Basename (no ``.exe``) of the command word owning ``line[pos]`` — the
+    first non-assignment word after the last UNQUOTED ``|;&(`` before ``pos``."""
+    start = 0
+    quote = ""
+    for i, ch in enumerate(line[:pos]):
+        if quote:
+            if ch == quote:
+                quote = ""
+        elif ch in "'\"":
+            quote = ch
+        elif ch in "|;&(":
+            start = i + 1
+    for word in line[start:pos].split():
+        if "=" in word.split("/")[0] and not word.startswith("-"):
+            continue
+        base = re.split(r"[\\/]", word)[-1].lower()
+        return base[:-4] if base.endswith(".exe") else base
+    return ""
+
+
 def _extract_out_candidates(cmd: str) -> List[str]:
     """Port of the reference hook's ``--out``/``-o`` grep+sed pipeline
     (lines 463-465). Scans ``cmd`` (heredoc-stripped, quote-INTACT) — a
     deliberate asymmetry vs. the other two extractors, which scan
-    ``cmd_for_scan`` (quote-stripped)."""
+    ``cmd_for_scan`` (quote-stripped).
+
+    NEGATIVE SPEC — ``-o`` is only an output path for some tools. For the grep
+    family it is ``--only-matching`` and the next word is the PATTERN; taking
+    it as a filename rewrote ``grep -o 'a.*b'`` to a different regex and the
+    command silently returned wrong results."""
     out: List[str] = []
     for line in cmd.split("\n"):
         for m in _OUT_RE.finditer(line):
+            if m.group(0).startswith("-o") and _segment_command_word(line, m.start()) in _O_IS_NOT_OUTPUT:
+                continue
             out.append(m.group(1))
     return out
 

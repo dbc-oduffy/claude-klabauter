@@ -37,11 +37,6 @@ Responsibilities:
       naming the interpreter(s) probed. Non-fatal; does not arm the guard (see C2 of
       docs/plans/2026-08-17-machine-first-install-surface.md).
   5. Post-install health probe (bin/claude-klabauter-doctor-probe.py --step-zero) as best-effort.
-  6. Install claude-klabauter's OWN `.git/hooks/pre-commit` gate chain — PERMANENTLY
-     A NO-OP as of 2026-08-25 ("the staged rollback gate dies without blocking a
-     commit"): the staged-rollback detector and its installer op are both deleted,
-     and claude-klabauter ends with no pre-commit hook by design. This step's function is
-     kept for a clean ADVISORY skip rather than removed; see its own docstring.
   (There is no `coordinator_whoami` provisioning step. The package is RETIRED —
      this chain used to pip-install it editable under the operator's
      `coordinator.python` general pin, and that step is deliberately absent, not
@@ -208,6 +203,14 @@ EXIT_REPO_IDENTITY_UNRESOLVED = 95
 # here so C2 uses this value rather than minting a second one, and so DoE can
 # write their post-condition against a literal today.
 EXIT_INTERPRETER_UNSUPPORTED = 96
+
+# A shared interpreter's global `coordinator_core` is editable-installed from a
+# claude-klabauter dev tree. PM ruling, repeatedly restated: the box-wide engine
+# is the published claude-klabauter one, never the dev tree. A claude-klabauter run never
+# editable-installs itself (`provision_deps` `installs_engine`), so finding
+# this state means some earlier writer put it there; refused, not repaired,
+# because the correct target is a checkout this run does not own.
+EXIT_ENGINE_AT_DEV_TREE = 97
 
 # Windows-only: suppresses the console-popup a subprocess spawn otherwise
 # triggers when this installer is invoked from a headless/GUI parent
@@ -905,40 +908,68 @@ def _offer_homebrew_removal(
     return True
 
 
-def _engine_installed(interpreter: str, import_names: list[str]) -> bool:
-    """True iff BOTH the declared deps AND the claude-klabauter package itself
-    (`coordinator_core`, pip-installed as a distribution — not merely
-    importable via a sys.path insert elsewhere) are present under
-    `interpreter`.
+def _installed_engine_root(interpreter: str) -> Path | None:
+    """The checkout `interpreter`'s `coordinator_core` distribution was
+    editable-installed from, read off its `direct_url.json`; None when the
+    distribution is absent, non-editable, or unreadable."""
+    from urllib.parse import unquote, urlparse
+    from urllib.request import url2pathname
 
-    Supersedes a bare `deps_importable` fast path. After this chunk removes
-    the healthy-venv prior-consent branch, "deps importable, package not
-    pip-installed" is the COMMON upgrade state on every EXISTING box — the
-    machine interpreter already has the dependency set provisioned from a
-    prior `provision_deps` run, but no prior run ever `pip install -e .`'d
-    the claude-klabauter package itself. A fast path keyed on import alone would
-    report PASS and skip the install that materializes `[project.scripts]`
+    program = (
+        "import importlib.metadata as m, sys\n"
+        "try:\n"
+        "    text = m.distribution('coordinator_core').read_text('direct_url.json')\n"
+        "except m.PackageNotFoundError:\n"
+        "    raise SystemExit(1)\n"
+        "sys.stdout.write(text or '')\n"
+    )
+    # -I: a checkout root carries a legacy `coordinator_core.egg-info` from an
+    # old `pip install -e`, and a cwd-first sys.path answers from it instead.
+    try:
+        proc = subprocess.run(
+            [interpreter, "-I", "-c", program],
+            timeout=10.0,
+            capture_output=True,
+            text=True,
+            **_NO_CONSOLE,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        record = json.loads(proc.stdout)
+    except ValueError:
+        return None
+    url = record.get("url", "")
+    if not record.get("dir_info", {}).get("editable") or not url.startswith("file://"):
+        return None
+    try:
+        return Path(url2pathname(unquote(urlparse(url).path))).resolve()
+    except (OSError, ValueError):
+        return None
+
+
+def _engine_installed(interpreter: str, import_names: list[str], engine_root: Path) -> bool:
+    """True iff BOTH the declared deps AND the engine package itself
+    (`coordinator_core`, editable-installed FROM `engine_root` — not merely
+    importable, and not installed from some other checkout) are present
+    under `interpreter`.
+
+    Keyed on the recorded root, not on the distribution existing: a box whose
+    global engine was editable-installed from a claude-klabauter dev tree has
+    `coordinator_core` "installed", and a presence check would no-op past it
+    and leave the dev tree serving every bare `import coordinator_core`.
+    Mismatch reads as not-installed, so the claude-klabauter run reinstalls
+    over it — the repair, not a skip.
+
+    Supersedes a bare `deps_importable` fast path: "deps importable, package
+    not pip-installed" is the common upgrade state, and a fast path keyed on
+    import alone would skip the install that materializes `[project.scripts]`
     console entrypoints (C3's dependency), on an exit-0 install."""
     if not deps_importable(interpreter, import_names):
         return False
-    program = (
-        "import importlib.metadata as m\n"
-        "try:\n"
-        "    m.version('coordinator_core')\n"
-        "except m.PackageNotFoundError:\n"
-        "    raise SystemExit(1)\n"
-    )
-    try:
-        proc = subprocess.run(
-            [interpreter, "-c", program],
-            timeout=10.0,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            **_NO_CONSOLE,
-        )
-        return proc.returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return False
+    return _installed_engine_root(interpreter) == engine_root.resolve()
 
 
 # The site-packages artifact naming pip/setuptools emits for a PEP 660
@@ -1137,7 +1168,12 @@ def _fallback_to_venv(
 
 
 def provision_deps(
-    claude_klabauter_root: Path, py: str, allow_venv_fallback: bool, *, container_optin: bool = False
+    claude_klabauter_root: Path,
+    py: str,
+    allow_venv_fallback: bool,
+    *,
+    container_optin: bool = False,
+    installs_engine: bool = True,
 ) -> tuple[str, list[str]]:
     """Machine-first dependency provisioning (PM ruling 2026-08-17,
     superseding DR-307's healthy-venv prior-consent branch and retiring
@@ -1166,6 +1202,14 @@ def provision_deps(
     claude-klabauter package itself (`-e <claude_klabauter_root>`, so `[project.scripts]`
     console entrypoints materialise — C3's dependency) into EACH candidate
     -> verify (`_engine_installed`). No override flag is ever passed.
+
+    NEGATIVE SPEC — `installs_engine` is False for a claude-klabauter dev tree:
+    deps only, never `-e`. These candidates are the box's shared interpreters,
+    and an editable install there makes the dev tree the engine for every
+    bare `import coordinator_core` on the machine — a PM-rejected state,
+    regressed more than once. Only the published claude-klabauter checkout
+    installs itself. A dev-tree run that finds the engine already pointed at
+    itself exits `EXIT_ENGINE_AT_DEV_TREE` rather than passing over it.
 
     A guarded (PEP-668) candidate is a DESIGNED REFUSAL: exits
     `EXIT_INTERPRETER_UNSUPPORTED` (96) naming the interpreter and the
@@ -1325,16 +1369,24 @@ def provision_deps(
             )
         sys.exit(EXIT_INTERPRETER_UNSUPPORTED)
 
+    def _satisfied(interpreter: str) -> bool:
+        if installs_engine:
+            return _engine_installed(interpreter, import_names, claude_klabauter_root)
+        return deps_importable(interpreter, import_names)
+
     engine_py: str | None = None
     for index, candidate in enumerate(candidates):
-        if _engine_installed(candidate.path, import_names):
+        if _satisfied(candidate.path):
+            what = "and coordinator_core " if installs_engine else ""
             print(
-                f"PASS [deps] {' '.join(import_names)} and coordinator_core already installed "
+                f"PASS [deps] {' '.join(import_names)} {what}already installed "
                 f"under {candidate.label} ({candidate.path}) — no-op."
             )
             resolved = candidate.path
         else:
-            pip_argv = [candidate.path, "-m", "pip", "install", *dep_specs, "-e", str(claude_klabauter_root)]
+            pip_argv = [candidate.path, "-m", "pip", "install", *dep_specs]
+            if installs_engine:
+                pip_argv += ["-e", str(claude_klabauter_root)]
             if container_optin_honoured:
                 # DR-411's sole mechanism. Appended to the pip ARGV only — never
                 # via env (`_run_pip`'s `env = dict(os.environ)` would inherit a
@@ -1367,7 +1419,7 @@ def provision_deps(
                 )
                 sys.exit(EXIT_INTERPRETER_UNSUPPORTED)
 
-            if pip_proc.returncode != 0 or not _engine_installed(candidate.path, import_names):
+            if pip_proc.returncode != 0 or not _satisfied(candidate.path):
                 if not allow_venv_fallback:
                     print(
                         f"FAIL [deps] machine-level install failed under {candidate.path} — "
@@ -1392,13 +1444,25 @@ def provision_deps(
                 print(f"PASS [deps] {candidate.label} ({candidate.path}) provisioned and verified.")
                 resolved = candidate.path
 
-        if resolved == candidate.path:
-            # Plan C8: claude-klabauter's own editable-install finder -> plain-path
+        if resolved == candidate.path and installs_engine:
+            # Plan C8: the engine's editable-install finder -> plain-path
             # .pth conversion. Skipped for the venv-fallback branch above
             # (`resolved != candidate.path` there) — that path never runs
             # `-e .`, so there is no finder to convert.
             conv_result = convert_editable_finder_to_plain_path(candidate.path, claude_klabauter_root)
             print(f"  [editable-finder] {conv_result}")
+        elif not installs_engine and _installed_engine_root(candidate.path) == claude_klabauter_root.resolve():
+            print(
+                f"FAIL [deps] {candidate.label} ({candidate.path}) imports coordinator_core from "
+                f"this dev tree ({claude_klabauter_root}) — the global engine must be the published one.",
+                file=sys.stderr,
+            )
+            print(
+                f"  Remediation: {candidate.path} -m pip install --no-deps -e <claude-klabauter "
+                "checkout>, or run that checkout's scripts/setup.py.",
+                file=sys.stderr,
+            )
+            sys.exit(EXIT_ENGINE_AT_DEV_TREE)
 
         if index == 0:
             engine_py = resolved
@@ -1811,7 +1875,7 @@ def _coordinator_root_from_doe_root_pointer() -> "Path | None":
     justified as "setup.py runs before a registry is necessarily populated on
     a fresh box," but nothing in THIS installer ever writes the
     `.doe-root` sentinel either (checked every install-chain step:
-    `install_bin_forwarders`, `install_precommit_hook`,
+    `install_bin_forwarders`,
     `install_percolate_identity`, `install_machine_identity` — none write
     `.doe-root`), so that justification buys nothing on the fresh-box path it
     names. The real justification: a pointer written by coordinator-claude's
@@ -2787,8 +2851,8 @@ def offer_warm_opt_in(repo_root: Path, args: Args) -> None:
     DEFAULT ON (PM ruling 2026-08-15, overriding this chunk's first draft,
     which had it off). `--i-am-agent` and every other non-interactive path
     through this installer take the ON branch WITHOUT prompting — the same
-    `args.agent_mode` signal `run_health_probe`/`install_precommit_hook`
-    already gate their own prompts on — because a non-interactive install
+    `args.agent_mode` signal `run_health_probe`
+    already gates their own prompts on — because a non-interactive install
     must never block on a question. An interactive run prompts, framed in
     the operator's terms (heavy agentic engineering vs. occasional use),
     never in milliseconds, and defaults to ON on bare Enter/EOF.
@@ -3355,44 +3419,6 @@ def register_live_plugin_root(repo_root: Path, claude_klabauter_root_resolved: P
         print(line)
 
 
-def install_precommit_hook(repo_root: Path, engine_py: str, agent_mode: bool) -> None:
-    """Best-effort install-chain step: PERMANENTLY A NO-OP as of 2026-08-25
-    ("the staged rollback gate dies without blocking a commit"). Used to wire
-    claude-klabauter's own `.git/hooks/pre-commit` gate chain via the
-    `coordinator_core.ops.install_claude_klabauter_precommit_hook` op (through its
-    `coordinator/bin/install-claude-klabauter-precommit-hook.py` CLI trampoline) — both
-    are deleted, and claude-klabauter ends with no pre-commit hook installed by this
-    repo, by design, not by omission. Kept as a step (rather than removed
-    from the install chain) purely so a re-run of an older setup script
-    invocation, or a caller still referencing this function name, degrades
-    to a clean ADVISORY skip below instead of an AttributeError -- never
-    fatal, mirroring `run_health_probe`'s ADVISORY shape.
-    """
-    print()
-    print("--- Install: pre-commit gate chain ---")
-
-    cli = repo_root / "coordinator" / "bin" / "install-claude-klabauter-precommit-hook.py"
-    if not cli.is_file():
-        print("[ADVISORY] coordinator/bin/install-claude-klabauter-precommit-hook.py not found (gate deleted 2026-08-25) — skipping pre-commit gate install.")
-        return
-
-    proc = subprocess.run(
-        [engine_py, str(cli), str(repo_root)],
-        capture_output=True, text=True,
-        **_NO_CONSOLE,
-    )
-    output = (proc.stdout + proc.stderr).strip()
-    if not agent_mode and output:
-        print(output)
-    if proc.returncode != 0:
-        print(
-            "[ADVISORY] pre-commit gate install reported a non-zero exit — hook may not be installed.",
-            file=sys.stderr,
-        )
-        print(f"  Re-run manually: {engine_py} {cli} {repo_root}", file=sys.stderr)
-        # Non-fatal: setup must still complete even if this step failed.
-
-
 def install_lfs_pre_push_gate(repo_root: Path, args: Args) -> None:
     """Best-effort install-chain step: lands the coordinator LFS pre-push gate
     at `.git/hooks/pre-push`, so the ~267ms / ~20-spawn stock git-lfs shim
@@ -3405,11 +3431,8 @@ def install_lfs_pre_push_gate(repo_root: Path, args: Args) -> None:
     surfaces.md`, discharging AC7's "the disposition survives re-clone"
     clause; decision record DR-223's `pre-push` row.
 
-    ADVISORY, non-fatal, mirroring `install_precommit_hook`/`run_health_probe`
-    — a setup run must never abort over a push-path optimisation. Note the
-    shape is borrowed, not the call: `install_precommit_hook`'s own CLI
-    trampoline was deleted 2026-08-25 and that function is now a pure
-    advisory skip.
+    ADVISORY, non-fatal, mirroring `run_health_probe` — a setup run must
+    never abort over a push-path optimisation.
 
     In-process, not a subprocess: the installer is a plain import off the
     engine this script has already verified importable, so this step costs no
@@ -3750,7 +3773,7 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
     scope (see module docstring's Negative-spec on `--with-test-deps` for the
     same "engine, not the dev loop" boundary).
 
-    Best-effort/advisory, mirroring `install_precommit_hook`'s shape: a
+    Best-effort/advisory, mirroring `run_health_probe`'s shape: a
     substrate failure here must not abort the rest of setup (the same
     reasoning as that function's own docstring), and this whole step is
     skipped under `--register-only` (no coordinator-claude/plugin-root
@@ -3786,7 +3809,7 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
     env["COORDINATOR_ENGINE_ROOT"] = str(claude_klabauter_root_resolved)
 
     # Mirror
-    # install_precommit_hook's try/except-around-subprocess.run shape so a
+    # run_health_probe's try/except-around-subprocess.run shape so a
     # child-spawn failure (transient engine_py unavailability, OSError/
     # PermissionError, a locked/broken interpreter path on Windows)
     # downgrades to an ADVISORY like every other failure branch in this
@@ -3849,62 +3872,6 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
               f"(CLAUDE_PLUGIN_ROOT={plugin_root})", file=sys.stderr)
 
 
-def migrate_whoami_pin_off_venv(repo_root: Path, args: Args) -> None:
-    """Advisory install-chain step: fires the one-time `coordinator.whoami_python`
-    repoint leg on boxes whose pin still names the retired `.coordinator-venv`.
-
-    NAMED MECHANISM (AC1 of docs/plans/2026-08-18-retire-coordinator-venv.md):
-    `coordinator_core.install.migrations.whoami_pin_migration` is written to be
-    idempotent and refusal-safe, but a migration no call site invokes never runs
-    anywhere — it repoints exactly the box its author happened to run it on, by
-    hand, which is the "no hand-edit instruction to operators" clause AC1 rules
-    out. This is that call site.
-
-    Ordering: this used to be invoked AFTER `provision_whoami_under_general_pin`,
-    because the migration REFUSES to repoint onto an interpreter that cannot
-    import `coordinator_whoami` (never repoint blind). That provisioning step is
-    gone with the package.
-
-    CONSEQUENCE, STATED SO IT IS NOT REDISCOVERED AS A BUG: with
-    `coordinator_whoami` retired, that importability precondition can no longer
-    be satisfied on any box, so this migration now refuses UNIVERSALLY and is
-    inert. It is advisory and never fatal, so nothing breaks — but it is dead
-    plumbing, and its subject (`coordinator.whoami_python`) is a retired key.
-    Removing it belongs to claude-klabauter's own venv-retirement campaign, which owns
-    this pin's whole lifecycle; it is deliberately left standing here rather
-    than half-removed by an outside change that was only chartered to disarm
-    the reinstall trigger.
-
-    Advisory and never fatal, matching the step it sits beside: a box that cannot
-    be migrated keeps its old pin and says so, rather than failing the install.
-    """
-    if args.register_only:
-        return
-    try:
-        from coordinator_core.install._shared import resolve_machine_local_cli
-        from coordinator_core.install.migrations.whoami_pin_migration import (
-            migrate_whoami_pin,
-        )
-
-        coord_path, coord_source = _resolve_coordinator_claude_root(repo_root, args)
-        if coord_source.is_publish_mirror_rejected:
-            print(
-                "[ADVISORY] coordinator-claude root resolved to a publish mirror — "
-                "skipping the coordinator.whoami_python migration.",
-                file=sys.stderr,
-            )
-            return
-        plugin_root = _resolve_plugin_root_for_machine_local(coord_path)
-        ml_cli = resolve_machine_local_cli(str(plugin_root) if plugin_root else None)
-        migrate_whoami_pin(ml_cli)
-    except Exception as exc:  # noqa: BLE001 — advisory surface, never fatal
-        print(
-            "[ADVISORY] the coordinator.whoami_python migration failed unexpectedly "
-            f"({type(exc).__name__}: {exc}); the pin is left as it was.",
-            file=sys.stderr,
-        )
-
-
 #: Dependency-ordered claude-doe launcher chain: (label, CLI relpath under
 #: coordinator/bin/, extra argv). Order matters -- the root pointer must
 #: exist before anything that resolves through it at RUNTIME (the wrapper's
@@ -3933,8 +3900,8 @@ def install_claude_doe_launcher_chain(repo_root: Path, engine_py: str, claude_kl
     absen-bb685e): `scripts/setup.py`/the manifest never called any of these
     four generators, so a fresh clean install left claude-klabauter installed and
     coordinator SILENTLY absent from every session -- no doctrine, no hooks,
-    no skills, no error. Mirrors `install_bin_forwarders`/
-    `install_precommit_hook`'s ADVISORY shape: a launcher-chain failure must
+    no skills, no error. Mirrors `install_bin_forwarders`'s
+    ADVISORY shape: a launcher-chain failure must
     never abort the rest of setup, but per this fix's own point (the prior
     failure mode was SILENT), each step's outcome is printed loudly --
     PASS/ADVISORY, never swallowed -- rather than folded into a single
@@ -4253,7 +4220,7 @@ def install_percolate_identity(repo_root: Path, claude_klabauter_root_resolved: 
     `.percolate-identity` publish-audit config on a fresh machine, where it
     would otherwise be absent entirely (DR-046) — a clean install cannot run
     `publish.sh` without it. Non-fatal by design, mirroring
-    `run_health_probe`/`install_precommit_hook`'s ADVISORY shape.
+    `run_health_probe`'s ADVISORY shape.
     """
     print()
     print("--- Install: .percolate-identity (publish audit config) ---")
@@ -4290,7 +4257,7 @@ def install_machine_identity(repo_root: Path, claude_klabauter_root_resolved: Pa
     user.email` subprocess spawn on the session-start / daily-branch /
     commit-ceremony hot path.
 
-    ADVISORY, non-fatal (mirrors `install_precommit_hook`/
+    ADVISORY, non-fatal (mirrors
     `install_percolate_identity`'s shape) — a missing machine-local CLI, or a
     value that cannot be resolved live yet (no git identity configured),
     must fall through to `machine_resolver`'s own live-resolution fallback at
@@ -4355,7 +4322,7 @@ def install_host_sampler_task(repo_root: Path, claude_klabauter_root_resolved: P
     """Install-chain step: register the Windows Task Scheduler entry that
     fires ``coordinator_core.telemetry.host_sampler`` on a fixed cadence.
 
-    ADVISORY, non-fatal (mirrors `install_precommit_hook`/
+    ADVISORY, non-fatal (mirrors
     `install_percolate_identity`/`install_machine_identity`'s shape) — a
     non-Windows host, an unavailable `schtasks.exe`, or a registration
     failure must fall through to a printed [ADVISORY], never fail the
@@ -4447,8 +4414,8 @@ def install_fleet_shared_environment(repo_root: Path, claude_klabauter_root_reso
     fix-up. Runs before `ensure_fleet_env()` unconditionally — seeding is a
     fast registry read/write, never gated behind the provisioning outcome.
 
-    ADVISORY, non-fatal (mirrors `install_host_sampler_task`/
-    `install_precommit_hook`'s shape) — the environment is multi-GB and this
+    ADVISORY, non-fatal (mirrors
+    `install_host_sampler_task`'s shape) — the environment is multi-GB and this
     step can hit no network, no disk, or a read-only install location; a
     provisioning failure must fall through to a printed [ADVISORY], never
     fail the rest of setup. Re-run remediation names a runnable script
@@ -4660,7 +4627,11 @@ def main(argv: list[str]) -> int:
         print("[SKIP] dependency provisioning bypassed (--register-only).")
     else:
         engine_py, import_names = provision_deps(
-            claude_klabauter_root_resolved, py, args.allow_venv_fallback, container_optin=args.container_optin
+            claude_klabauter_root_resolved,
+            py,
+            args.allow_venv_fallback,
+            container_optin=args.container_optin,
+            installs_engine=resolve_repo_identity(claude_klabauter_root_resolved) == "claude-klabauter",
         )
 
     if not args.register_only:
@@ -4694,10 +4665,8 @@ def main(argv: list[str]) -> int:
         # coordinator_core/install/tests/test_door_bare_name_ordering.py.
         install_bin_forwarders(repo_root, engine_py, claude_klabauter_root_resolved, args)
         install_warm_door(repo_root, claude_klabauter_root_resolved, args)
-        migrate_whoami_pin_off_venv(repo_root, args)
         install_claude_doe_launcher_chain(repo_root, engine_py, claude_klabauter_root_resolved, args)
         register_live_plugin_root(repo_root, claude_klabauter_root_resolved, args)
-        install_precommit_hook(repo_root, engine_py, args.agent_mode)
         install_lfs_pre_push_gate(repo_root, args)
         install_percolate_identity(repo_root, claude_klabauter_root_resolved)
         install_precompiled_bytecode(claude_klabauter_root_resolved, args)

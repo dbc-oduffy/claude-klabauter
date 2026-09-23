@@ -251,6 +251,15 @@ def test_main_no_args_exits_2(capsys):
     assert "Usage:" in err
 
 
+def test_main_help_names_the_edges_file_format(capsys):
+    rc = main(["--help"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "A <- B" in out
+    assert "blocked_by" in out
+    assert "isolated node" in out
+
+
 def test_main_unreadable_edges_file_exits_2(tmp_path, capsys):
     with pytest.raises(SystemExit) as excinfo:
         main([str(tmp_path / "does-not-exist.txt")])

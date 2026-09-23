@@ -39,14 +39,31 @@ error, and the only symptom a slow unrelated caller.
 from __future__ import annotations
 
 import os
+import subprocess
 import time
 from pathlib import Path
 
 import pytest
 
 from coordinator_core.ops.session import reap
+from coordinator_core.session import touch_record
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 pytestmark = [pytest.mark.cadence]
+
+
+def _make_repo(repo: Path) -> Path:
+    """Real throwaway git repo (mirrors test_reap.py::_make_repo) — the C6
+    dirty-touched-path rail spawns a real `git status --porcelain`."""
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(
+        ["git", "config", "user.email", "t@example.com"], cwd=repo, check=True,
+        **no_console_passthrough_kwargs(),
+    )
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    return repo
+
 
 _STALE = reap._AGENT_STALE_SECONDS + 3600
 _FRESH = 60
@@ -118,15 +135,112 @@ def test_rotated_only_record_is_reaped_when_stale(tmp_path):
     assert reaped == ["agent-rotated"], (reaped, failed)
 
 
-def test_legacy_touched_txt_still_reaped(tmp_path):
-    """The pre-C7 name keeps working. ~500 such dirs survive on this box, so
-    the fix must widen the predicate, never swap one filename for another."""
+def test_legacy_only_touched_txt_is_now_deferred_not_reaped(tmp_path):
+    """C6 (state/bug-backlog/2026-08-27-session-reap-sub-reap-ii-archives-an-
+    age-f0743291e7c9.yaml) flips this from the pre-C6 behaviour: a dir
+    carrying ONLY the retired ``touched.txt`` (no ``touch-record.jsonl``)
+    reads as empty through the current seam, not as "touched nothing" --
+    R3a (ported from ``reap_orphaned_agent_dirs``) now refuses it rather than
+    let mtime-only staleness carry a pre-migration dir with genuinely dirty
+    uncommitted work to archive. This is deliberate and matches
+    ``reap_orphaned_agent_dirs``'s own R3a posture for the identical shape —
+    the two reapers no longer disagree on this one dir."""
     sessions = tmp_path / "coordinator-sessions"
-    _agent_dir(sessions, "agent-legacy", {"touched.txt": "a.py\n"}, _STALE)
+    adir = _agent_dir(sessions, "agent-legacy", {"touched.txt": "a.py\n"}, _STALE)
 
-    reaped, _deferred, failed = reap._reap_stale_agents(sessions)
+    reaped, deferred, failed = reap._reap_stale_agents(sessions)
 
-    assert reaped == ["agent-legacy"], (reaped, failed)
+    assert reaped == [], (reaped, failed)
+    assert adir.exists()
+    assert len(deferred) == 1 and deferred[0]["id"] == "agent-legacy"
+    assert "unreadable by the current seam" in deferred[0]["reason"]
+
+
+def test_legacy_only_touched_txt_deferred_even_without_repo_root(tmp_path):
+    """R3a fires regardless of whether a repo_root is supplied — unlike the
+    R3 dirty-path check (which needs a working tree to compare against), R3a
+    is a pure filename/readability fact about the agent dir itself."""
+    sessions = tmp_path / "coordinator-sessions"
+    adir = _agent_dir(sessions, "agent-legacy-noroot", {"touched.txt": "a.py\n"}, _STALE)
+
+    reaped, deferred, failed = reap._reap_stale_agents(sessions, None)
+
+    assert reaped == [], (reaped, failed)
+    assert adir.exists()
+    assert len(deferred) == 1
+
+
+@pytest.mark.spawns_process
+def test_dirty_touched_path_defers_reap(tmp_path):
+    """THE NAMED RISK (C6): a jsonl-recorded touched path that is still
+    dirty in the caller's working tree must not be archived out from under
+    it, even though the agent dir itself is stale by mtime."""
+    repo = _make_repo(tmp_path / "repo")
+    dirty_file = repo / "src" / "foo.py"
+    dirty_file.parent.mkdir(parents=True)
+    dirty_file.write_text("clean\n", encoding="utf-8")
+    subprocess.run(["git", "add", "src/foo.py"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "init"], cwd=repo, check=True, **no_console_passthrough_kwargs()
+    )
+    # Uncommitted edit to an already-tracked file — "M src/foo.py" in
+    # porcelain, the realistic shape of "genuinely dirty uncommitted work"
+    # (an untracked scratch dir reports as a collapsed "?? src/" instead,
+    # which is a different, directory-shaped match already covered by
+    # test_r3_dirty_touched_directory_prefix_match on the reused matcher).
+    dirty_file.write_text("dirty\n", encoding="utf-8")
+
+    sessions = repo / "coordinator-sessions"
+    adir = sessions / ".agents" / "agent-dirty"
+    adir.mkdir(parents=True)
+    (adir / "em-session-id.txt").write_text("sid-dead\n", encoding="utf-8")
+    touch_record.append_event(
+        adir / "touch-record.jsonl",
+        session_id="sid-dead",
+        agent_id=None,
+        verb=touch_record.VERB_TOUCH,
+        path="src/foo.py",
+    )
+    when = time.time() - _STALE
+    for member in adir.iterdir():
+        os.utime(member, (when, when))
+    os.utime(adir, (when, when))
+
+    reaped, deferred, failed = reap._reap_stale_agents(sessions, repo)
+
+    assert reaped == [], (reaped, failed)
+    assert adir.exists()
+    assert len(deferred) == 1 and deferred[0]["id"] == "agent-dirty"
+    assert "still dirty" in deferred[0]["reason"]
+
+
+@pytest.mark.spawns_process
+def test_clean_touched_path_is_still_reaped(tmp_path):
+    """The dirty-path refusal must not become a blanket new refusal: a
+    jsonl-recorded touched path that is NOT dirty in the working tree (git
+    status clean) is reaped exactly as before C6."""
+    repo = _make_repo(tmp_path / "repo")
+
+    sessions = repo / "coordinator-sessions"
+    adir = sessions / ".agents" / "agent-clean"
+    adir.mkdir(parents=True)
+    (adir / "em-session-id.txt").write_text("sid-dead\n", encoding="utf-8")
+    touch_record.append_event(
+        adir / "touch-record.jsonl",
+        session_id="sid-dead",
+        agent_id=None,
+        verb=touch_record.VERB_TOUCH,
+        path="src/foo.py",
+    )
+    when = time.time() - _STALE
+    for member in adir.iterdir():
+        os.utime(member, (when, when))
+    os.utime(adir, (when, when))
+
+    reaped, deferred, failed = reap._reap_stale_agents(sessions, repo)
+
+    assert reaped == ["agent-clean"], (reaped, deferred, failed)
+    assert not adir.exists()
 
 
 def test_fresh_agent_dir_is_kept(tmp_path):

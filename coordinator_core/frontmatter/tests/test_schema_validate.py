@@ -6098,6 +6098,31 @@ class TestParseYamlLegacyDialect:
         text = 'scope:\n  - a\n  - b\ntitle: y\n'
         assert parse_yaml(text) == {'scope': ['a', 'b'], 'title': 'y'}
 
+    def test_flow_mapping_value_reads_as_the_mapping_pyyaml_reads(self):
+        text = 'divergence: {"diverged": false}\nroutes: { CLOSE: 3, ESCALATE: 13 }\ntitle: y\n'
+        assert parse_yaml(text) == yaml.safe_load(text)
+
+    def test_flow_mapping_pyyaml_rejects_stays_the_scalar_string(self):
+        text = 'verdicts: {a: b: c}\ntitle: y\n'
+        assert parse_yaml(text) == {'verdicts': '{a: b: c}', 'title': 'y'}
+
+    def test_flow_mapping_nested_date_keeps_string_leniency(self):
+        assert parse_yaml('when: {at: 2026-08-14}\n') == {'when': {'at': '2026-08-14'}}
+
+    def test_run_report_flow_mapping_divergence_is_not_a_type_error(self):
+        schema = {
+            'type': 'object',
+            'properties': {
+                'divergence': {
+                    'type': 'object',
+                    'properties': {'diverged': {'type': 'boolean'}},
+                },
+            },
+        }
+        fm = parse_frontmatter('---\ndivergence: {"diverged": false}\n---\n\nbody\n')['frontmatter']
+        assert fm == {'divergence': {'diverged': False}}
+        assert _validate_json_schema_node(fm, schema, schema) == []
+
     def test_nested_mapping_with_unindented_sequence_value(self):
         text = 'outer:\n  inner_seq:\n  - a\n  - b\ntitle: y\n'
         assert parse_yaml(text) == {'outer': {'inner_seq': ['a', 'b']}, 'title': 'y'}

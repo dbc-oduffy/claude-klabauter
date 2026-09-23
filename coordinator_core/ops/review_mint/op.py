@@ -102,6 +102,7 @@ import secrets
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from coordinator_core.cartography._guard import PathEscapeError
 from coordinator_core.doe_root_pointer import read_doe_root_pointer
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
@@ -122,10 +123,6 @@ _REVIEW_ROSTER_FRAGMENT_RELPATH = "coordinator/contract/review-roster-fragment.j
 # inherits the other's prompt).
 _REVIEW_PROMPT = "Review this plan before any task in it executes."
 _REVIEW_PHASE_TITLE = "Review"
-
-
-class PathEscapeError(ValueError):
-    """Raised when ``output_path`` resolves outside ``target_root``."""
 
 
 class ReviewTierUndeterminedError(ValueError):

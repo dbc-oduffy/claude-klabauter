@@ -138,6 +138,25 @@ int parse_response_envelope(
 #define DOOR_STDIN_MODE_ENV_NAME "COORDINATOR_DOOR_STDIN_MODE"
 #define DOOR_STDIN_MODE_HOOK_VALUE "hook"
 
+/* =========================================================================
+ * The per-invocation escape hatch -- COORDINATOR_WARM. `warm/settings.py`'s
+ * own docstring names this rung 1 of `is_warm_enabled`'s precedence, "the
+ * per-invocation escape hatch": a falsy value ALWAYS wins, letting ONE
+ * caller opt ONE invocation out of warmth. `warm/client.py ::
+ * _cli_is_warm_enabled` honours it on the Python fast path; each door reads
+ * its own platform environment primitive (wide on Windows, narrow on
+ * POSIX) and hands the decoded value to this ONE predicate, so the two
+ * doors cannot recognise a different falsy-token set than the Python
+ * client does. Case-insensitive, mirroring `warm/settings.py::_FALSY` and
+ * `warm/client.py::CLI_FALSY` byte-for-byte.
+ * ========================================================================= */
+
+/* True iff `value` (a NUL-terminated, already-decoded env value) is one of
+ * "0"/"false"/"no"/"off", compared case-insensitively. NULL or any other
+ * value is NOT falsy -- unset or unrecognised means "no opinion", the same
+ * as every other rung `is_warm_enabled` climbs past. */
+int door_env_value_is_falsy(const char *value);
+
 /* Total payload ceiling. NOT derived from any measurement taken on this
  * box -- the spike's cost figures (flat ~0.1ms p50 from 1KB to 256KB) do
  * not gate this number at all, they only established that cost is not the

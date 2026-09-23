@@ -448,21 +448,6 @@ def _is_complete_delivery_proof(proof: Optional[dict]) -> bool:
     decision:
 
       - ``deliverable_id`` is a non-empty string (the plan carries one).
-      - ``join_provenance == "joined"`` — a PINNED LITERAL `close_out_and_
-        stamp`'s delivery-proof build sets deliberately, not the outcome of
-        a trailer join: the `Deliverable-Id`-trailer join mechanism this
-        field once reported on was deleted (2026-08-21 close-ceremony C3,
-        `_sibling_committed_chunk_ids` and its whole cross-repo trailer-join
-        machinery). The value now asserts that the evidence backing this
-        proof is attributed BY CONSTRUCTION — the close reads the session's
-        own commit ledger directly, so there is no separate join step whose
-        success or failure this field could vary on. This gate's own logic
-        (`if proof.get("join_provenance") != "joined": return False`) is
-        UNCHANGED — it still requires the literal, which is now always true
-        for a proof `close_out_and_stamp` builds. The field's full
-        retirement (replacing this vestigial check rather than reading a
-        constant) is tracked in `state/debt-backlog/2026-08-21-retire-join-
-        provenance-the-proof-gate-th-d9fdf92c3ded.yaml`.
       - ``missing_chunk_ids == []`` — every commit-required chunk id has
         covering evidence under the same oracle that gated this run's
         `implemented` stamp (empty, not merely absent/falsy — an absent key
@@ -471,9 +456,8 @@ def _is_complete_delivery_proof(proof: Optional[dict]) -> bool:
         individually committed AND trailered: `missing` is computed against
         a `committed` set unioned from Session-Id-scoped fallback,
         `disposition_ref` evidence, and sibling-repo scans, so one
-        trailered commit can satisfy `matched_commit_count > 0` (hence
-        `"joined"`) while other chunk ids are covered by non-trailer
-        evidence.
+        trailered commit can satisfy `matched_commit_count > 0` while other
+        chunk ids are covered by non-trailer evidence.
       - ``status == "implemented"`` — the plan was stamped `status:
         implemented` this run (`close_out_and_stamp`'s own
         `status_target == "implemented"` gate).
@@ -495,8 +479,6 @@ def _is_complete_delivery_proof(proof: Optional[dict]) -> bool:
         return False
     deliverable_id = proof.get("deliverable_id")
     if not isinstance(deliverable_id, str) or not deliverable_id.strip():
-        return False
-    if proof.get("join_provenance") != "joined":
         return False
     missing_chunk_ids = proof.get("missing_chunk_ids")
     if missing_chunk_ids != []:
@@ -1096,19 +1078,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                      arrive). A proof is COMPLETE (see
                      `_is_complete_delivery_proof`) iff ALL of:
                        - `deliverable_id` is a non-empty string.
-                       - `join_provenance == "joined"` — a pinned literal
-                         `close_out_and_stamp`'s delivery-proof build sets
-                         deliberately, not the outcome of a trailer join
-                         (that join mechanism was deleted 2026-08-21
-                         close-ceremony C3); it asserts the evidence is
-                         attributed by construction, since the close now
-                         reads the session's own commit ledger directly.
-                         See `_is_complete_delivery_proof`'s own docstring
-                         for the degenerate zero-commit-required branch this
-                         alone does not rule out, and `state/debt-backlog/
-                         2026-08-21-retire-join-provenance-the-proof-gate-
-                         th-d9fdf92c3ded.yaml` for this field's tracked
-                         retirement.
                        - `missing_chunk_ids == []` — every commit-required
                          chunk id has covering evidence under the same
                          oracle that gated this run's `implemented` stamp

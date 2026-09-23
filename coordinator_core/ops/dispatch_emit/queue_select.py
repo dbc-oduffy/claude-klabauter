@@ -15,6 +15,27 @@ parser `records_query`/`queue_family` use — never `yaml.safe_load`. The
 `coordinator_core.contract.grind_vocab` — this module owns no closed-set
 literal of its own for any of them.
 
+Pre-dispatch liveness (bug-backlog row 2026-07-27-move-bug-blitz-s-liveness-
+check-left-of-62059b3973f8): for `profile == "bug"` only, a row whose
+`surface` field is already a bare single repo-relative path (the
+unambiguous subset `readers_blitz.bare_cited_surface` accepts — never a
+guessed-at substring of compound/prose text) is EXCLUDED into
+`Manifest.declined` when that path no longer exists on disk
+(`readers_blitz.is_item_live`), before it ever enters a manifest a script
+gets composed from — this is the actual pre-dispatch point bug-blitz's
+emitted grind (`emit-dispatch-workflow.py --queue state/bug-backlog
+--profile bug`, a pure pass-through to `queue_emit.emit_queue_script` ->
+here) fires an executor from; `readers_blitz._read_backlog_readiness`'s own
+use of the same predicate only annotates the commit-readiness judgment
+point's evidence, which resolves AFTER dispatch and cannot disqualify
+anything. Scoped to the one profile this predicate's row names, by a
+literal `profile` check (`_LIVENESS_GATED_PROFILES`), rather than a
+profile-declared capability — the honest home for that is a schema-level
+knob in `grind_profile.py`/the profile's own YAML (DoE-owned data this
+module does not author), out of reach of this fix's scope; every other
+profile's rows (`fixture` among them, whose own tests default `surface` to
+a path no fixture ever creates on disk) are completely unaffected.
+
 Negative-spec:
   - Does NOT glob or walk — one `os.listdir` per named queue directory,
     sorted, no recursion.
@@ -24,8 +45,13 @@ Negative-spec:
     is accounted for; a parse failure is a named `ValueError`, never a
     silent drop the way `records_query`'s `_load_record` skips a bad file.
   - Does NOT re-read a live row after freezing the manifest — staleness
-    detection is `grind-row check`'s job (C4), not this module's.
-  - Does NOT spawn a subprocess anywhere in its read/where/batch/ledger path.
+    detection (of a row's OWN digest, post-freeze) is `grind-row check`'s
+    job (C4), not this module's; the liveness check above is a different
+    thing — a disk-existence predicate over the row's cited `surface`,
+    evaluated once, before the manifest freezes, never re-evaluated after.
+  - Does NOT spawn a subprocess anywhere in its read/where/batch/ledger path
+    — `is_item_live` is itself spawn-free (path-exists plus an in-process
+    read, per its own docstring).
 
 Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md § Design
 § Selector, Tasks § C2.
@@ -39,6 +65,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
+from coordinator_core.backlog_grind_assemble.readers_blitz import (
+    bare_cited_surface,
+    is_item_live,
+)
 from coordinator_core.contract import grind_vocab
 from coordinator_core.frontmatter import schema_validate
 
@@ -93,6 +123,15 @@ class DuplicateRowIdError(ValueError):
 
 
 _SENTINEL_ABSENT = object()
+
+#: Profiles the pre-dispatch liveness decline (module docstring) applies
+#: to. One member: the row that asked for this predicate names
+#: `state/bug-backlog/` specifically, and every other profile's fixtures
+#: (starting with `fixture` itself) set `surface` to values with no
+#: corresponding on-disk claim -- widening this set is a schema-level
+#: decision for `grind_profile.py`/the profile's own YAML, not a literal
+#: to grow here.
+_LIVENESS_GATED_PROFILES = frozenset({"bug"})
 
 
 @dataclass(frozen=True)
@@ -673,6 +712,20 @@ def select_rows(
                 )
             )
             continue
+        if profile in _LIVENESS_GATED_PROFILES:
+            bare_surface = bare_cited_surface(normalised.get("surface"))
+            if bare_surface is not None and not is_item_live(repo_root, bare_surface):
+                declined.append(
+                    DeclinedEntry(
+                        row_id=row_id,
+                        path=rel_path,
+                        reason=(
+                            f"pre-dispatch liveness: cited surface {bare_surface!r} "
+                            "no longer exists on disk"
+                        ),
+                    )
+                )
+                continue
         skip_stages, declined_reason = _fold_in_ledger(row_id, digest, ledger_by_row)
         if declined_reason is not None:
             declined.append(DeclinedEntry(row_id=row_id, path=rel_path, reason=declined_reason))

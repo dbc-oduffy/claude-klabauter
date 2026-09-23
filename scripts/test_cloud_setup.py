@@ -55,6 +55,16 @@ def cloud_mod():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_host_paths(cloud_mod, tmp_path, monkeypatch):
+    """Keep the engine CLI shims and the `/root/engine-current` link under
+    `tmp_path`. Unisolated, any arm that runs `main()` rewrites the operator's
+    live shims and re-points the live engine link at a pytest temp dir, which
+    breaks every engine CLI on the box."""
+    monkeypatch.setattr(cloud_mod, "SHIM_DIR", tmp_path / "host-shims")
+    monkeypatch.setattr(cloud_mod, "ENGINE_CURRENT_LINK", tmp_path / "host-engine-current")
+
+
+@pytest.fixture(autouse=True)
 def _restore_process_env():
     """Undo `cloud_setup.set_engine_env`'s writes to the REAL process environment.
 

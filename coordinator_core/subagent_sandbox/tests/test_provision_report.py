@@ -2052,6 +2052,56 @@ def test_other_plan_derivable_lenses_still_resolve_payload_type(
     assert "## Plan Coverage Verification" not in text
 
 
+@pytest.mark.parametrize(
+    "agent_type",
+    sorted(t for t in _PLAN_DERIVABLE_LENS if t != "coordinator:plan-coverage-checker"),
+)
+def test_unregistered_lens_falls_back_to_report_type_map_when_payload_has_no_type(
+    git_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+    agent_type: str,
+) -> None:
+    """state/improvement-queue/2026-07-26-sidecar-provisioning-resolves-the-
+    wrong-cc6c87e34c8d.yaml: the `else` leg of the plan-derivable branch used
+    to stop at `payload.get("type") or None`, never falling back to
+    `policy.report_type_map` the way the session-keyed leg already does (the
+    C6 fix above). The ordinary SubagentStart hook path never sets
+    `payload["type"]`, so a plan-scoped dispatch of one of the four
+    unregistered lenses landed on the legacy run-report shape instead of its
+    mapped template -- observed live 2026-07-26 on
+    `coordinator:prior-art-checker`. This pins the fixed resolution order
+    (explicit type > report_type_map hit > no type key) for that leg too."""
+    assert _PLAN_DERIVABLE_LENS[agent_type] not in _TEMPLATE_REGISTRY
+    policy_path = tmp_path / "subagent-sandbox-policy.yaml"
+    policy_path.write_text(
+        yaml.safe_dump(
+            {
+                "report_sidecar": [agent_type],
+                "report_type_map": {agent_type: "assessment"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    payload = _payload(
+        agent_id=BARE_HEX_AGENT_ID,
+        agent_type=agent_type,
+        session_id="sess-plan-derivable-type-map-fallback",
+        plan_path="docs/plans/2026-09-22-plan-derivable-type-map-fallback.md",
+    )
+    assert "type" not in payload
+
+    report_sidecar = _provision(payload, str(policy_path), str(git_repo))
+    assert report_sidecar is not None
+    assert report_sidecar.startswith(".coordinator-local/plan-sidecars/")
+
+    text = (git_repo / report_sidecar).read_text(encoding="utf-8")
+    assert "## Questions" in text  # assessment template, from report_type_map
+    assert "## Run notes" not in text  # not the legacy run-report shape
+    assert "## Plan Coverage Verification" not in text
+
+
 def test_plan_coverage_check_idempotent_reopen_never_clobbers_filled_body(
     git_repo: Path,
     plan_derivable_policy_path: Path,

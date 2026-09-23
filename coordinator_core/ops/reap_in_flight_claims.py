@@ -119,13 +119,22 @@ class HandoffRecord:
 @dataclass
 class Disposition:
     """One candidate's verdict — the shape both callers consume: orientation
-    folds these into the two counts, the CLI prints them per-candidate."""
+    folds these into the two counts, the CLI prints them per-candidate.
+
+    `liveness_basis` is set ONLY on a `_VERDICT_RELEASE` row — the deciding
+    liveness arm `_release_liveness_basis` computed for it (see that
+    function's docstring for the 2026-08-22 backlog it closes).
+    `apply_dispositions` threads it into `cs_unclaim_handoff`'s `note=` so it
+    lands in the handoff's own `park_note:` frontmatter, not just this
+    process's stdout — `.detail` alone (the CLI's `_print_report` line) does
+    not survive the reaping process exiting."""
 
     path: str
     holder: str
     verdict: str
     detail: str
     sha: Optional[str] = None
+    liveness_basis: Optional[str] = None
 
 
 @dataclass
@@ -369,7 +378,10 @@ def _best_shipped_sha(candidates: List[str], sha_ct: Dict[str, int]) -> str:
 
 
 def _release_liveness_basis(holder: str, repo_root: Path) -> str:
-    """The deciding arm behind a RELEASE verdict, for the disposition detail.
+    """The deciding arm behind a RELEASE verdict — feeds both the disposition
+    detail (CLI stdout) AND `Disposition.liveness_basis`, which
+    `apply_dispositions` stamps into the released handoff's own `park_note:`
+    frontmatter (the durable copy).
 
     2026-08-22 backlog (`the-crash-orphan-reaper-released-a-live-holder-s-
     baton`): a live holder's claim was released with only a bare `park_note`
@@ -383,7 +395,8 @@ def _release_liveness_basis(holder: str, repo_root: Path) -> str:
     liveness computation, only a second (already-O(1)) call for the
     candidates this module is about to mutate. Never used for the dead/live
     SPLIT itself (`session_live` still decides that, unchanged) — this is
-    read-only instrumentation on an already-dead candidate.
+    read-only instrumentation on an already-dead candidate. Only the
+    *source* of the verdict is written to disk, never the verdict itself.
 
     Falls back to `"unknown"` when `session_verdict` returns `None` (no
     session dir, no registry record — the boundary case `session_live`
@@ -542,13 +555,15 @@ def survey(repo_root: Path, *, handoffs_dir: Optional[Path] = None) -> SurveyRes
             )
         else:
             would_release += 1
+            basis = _release_liveness_basis(r.holder, repo_root)
             dispositions.append(
                 Disposition(
                     str(r.path),
                     r.holder,
                     _VERDICT_RELEASE,
                     f"holder {r.holder} is dead with no resolvable shipped commit "
-                    f"(deciding arm: {_release_liveness_basis(r.holder, repo_root)})",
+                    f"(deciding arm: {basis})",
+                    liveness_basis=basis,
                 )
             )
 
@@ -566,6 +581,12 @@ def apply_dispositions(
     """Perform every mutating disposition by calling `coordinator_core.archive_stamp`'s
     tested verbs IN-PROCESS — `release` -> `cs_unclaim_handoff`, `reclaim_shipped` ->
     `_cs_ship_handoff_core` ALONE. A skip verdict performs no write.
+
+    The `release` call also threads `d.liveness_basis` into `cs_unclaim_handoff`'s
+    `note=`, so the deciding liveness arm lands in the released handoff's own
+    `park_note:` frontmatter (2026-08-22 backlog fix) — not only this process's
+    stdout via the CLI's `_print_report`, which is gone the moment the reaping
+    process exits.
 
     Negative-spec: does NOT call `stamp_shipped_in` before `_cs_ship_handoff_core` on
     the reclaim arm. `_cs_ship_handoff_core` composes `handoff.archive_transition`
@@ -604,8 +625,24 @@ def apply_dispositions(
     failed: List[str] = []
     for d in dispositions:
         if d.verdict == _VERDICT_RELEASE:
+            # `note=`: stamps the deciding liveness arm into the released
+            # handoff's own `park_note:` frontmatter — the durable half of
+            # the 2026-08-22 fix (`Disposition.liveness_basis`'s docstring).
+            # Passed ONLY when set — never as an explicit `note=None` — so a
+            # RELEASE `Disposition` built by hand without going through
+            # `survey()` (test doubles predating this field) reaches
+            # `cs_unclaim_handoff` with the exact same two-argument call
+            # shape it always has; a real release always carries it, since
+            # `survey()` always sets it there.
             try:
-                rc = cs_unclaim_handoff(d.path, reaped_from=d.holder)
+                if d.liveness_basis:
+                    note = (
+                        f"claim released by crash-orphan reaper — holder {d.holder} "
+                        f"dead (liveness arm: {d.liveness_basis})"
+                    )
+                    rc = cs_unclaim_handoff(d.path, reaped_from=d.holder, note=note)
+                else:
+                    rc = cs_unclaim_handoff(d.path, reaped_from=d.holder)
             except Exception as exc:  # noqa: BLE001 - one bad row must not abort the reap
                 failed.append(f"{d.path}: unclaim-handoff raised: {exc}")
                 continue

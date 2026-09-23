@@ -31,9 +31,6 @@ Consumes manifest (orchestrates, reimplements none):
         -> d-claim-plan-execution-lock
     coordinator/bin/archive-stamp-cli.py stamp-plan-implemented
         -> d-stamp-plan-implemented
-    coordinator/bin/archive-stamp-cli.py stamp-review-verified
-        -> d-attest-review-verified (C8, only when decisions["review"] is
-           truthy this pass -- see `build_review_verified_directive`)
     coordinator/bin/coordinator-harvest-deferrals.py
         -> d-harvest-deferrals-<n> (one per governing plan in scope)
 
@@ -66,7 +63,7 @@ Negative-spec:
     - Step 2's "session context (opened docs)" search leg is not disk-
       computable from a bare `repo_root` — no filesystem fact records
       which docs the EM's own conversation has open. `resolve_governing_
-      plan` therefore takes an explicit caller-supplied slug/path
+      plan_with_source` therefore takes an explicit caller-supplied slug/path
       (`decisions["governing_plan_slug"]` / `["governing_plan_path"]`,
       the same key `build_directives` in `__init__.py` already consumes
       for `d-claim-plan`) as the primary signal, falling back only to the
@@ -167,21 +164,6 @@ def _normalize_handoff_governing_plan_field(raw: Optional[Any]) -> Optional[str]
     if value.lower() in ("", "null", "none"):
         return None
     return value
-
-
-def resolve_governing_plan(
-    repo_root: Path,
-    decisions: dict[str, Any],
-    handoff_governing_plan_field: Optional[Any] = None,
-    consumed_handoff_deliverable_id: Optional[Any] = None,
-    session_id: Optional[str] = None,
-) -> Optional[GoverningPlan]:
-    """Step 2 — locate the governing plan doc (`d-locate-governing-plan`).
-    Thin wrapper over `resolve_governing_plan_with_source` for callers that
-    only need the resolved plan, not which source resolved it."""
-    return resolve_governing_plan_with_source(
-        repo_root, decisions, handoff_governing_plan_field, consumed_handoff_deliverable_id, session_id
-    )[0]
 
 
 def resolve_governing_plan_with_source(
@@ -374,64 +356,6 @@ def build_plan_claim_and_stamp_directives(governing_plan: Optional[GoverningPlan
     ]
 
 
-def build_review_verified_directive(
-    governing_plan: Optional[GoverningPlan], decisions: dict[str, Any]
-) -> list[dict[str, Any]]:
-    """Step 2.4's sibling attest write (`d-attest-review-verified`, C8,
-    AC17 -- docs/plans/2026-08-20-the-rungs-get-writers.md). Emitted
-    alongside `d-stamp-plan-implemented` off the SAME `governing_plan_
-    predicate` gate, with the SAME `depends_on="d-claim-plan-execution-
-    lock"` edge (inert by itself, matching `build_plan_claim_and_stamp_
-    directives`'s own -- see that function's docstring for why the real
-    ordering enforcement lives in the trailing arg token, not this field)
-    and the SAME two `jp-open-spine-rows-block-stamp` / `jp-landed-
-    reconciliation-block-stamp` block conditions `__init__.py`'s assembly
-    layer wires onto `d-stamp-plan-implemented` by directive id -- this
-    module only emits the directive itself; the block-condition `depends_
-    on` edges are appended by that caller, matching every other judgment
-    point in this family's own division of labour (module computes/
-    emits, `__init__.py` decides which facts gate a directive).
-
-    Fires only when `decisions["review"]` is truthy -- the session's work
-    went through a code review this pass. Mirrors `__init__.py`'s
-    `build_write_trail_directives`'s own non-empty-`review` gate, but
-    does NOT re-derive that function's five-required-fields shape check:
-    a review that is present but shape-incomplete still attests here
-    (`d-write-trail` itself may simply not fire for it), because this
-    attest is a courtesy record of "a review happened", never a
-    completeness judgment of its own.
-
-    Writes `coordinator_core.ops.plan_status_transition.
-    _stamp_review_verified`'s three attest fields (C6a) via the SAME
-    already-admitted `archive-stamp-cli` CLI `d-stamp-plan-implemented`
-    uses, plan path positional first -- identical argv shape to that
-    sibling directive.
-
-    `--findings` carries the REVIEW-TRAIL PATH (C6a's own docstring: "a
-    count drifts from the record already on disk... and cannot
-    distinguish a P1 from a nitpick"), which is only known once
-    `d-write-trail` actually lands THIS pass -- so, exactly like
-    `d-stamp-plan-implemented`'s own `{d-claim-plan-execution-lock.
-    landed}` token, this threads a `{d-write-trail.entry_path}` inter-
-    directive token (`apply.py::_resolve_arg_tokens`) rather than
-    guessing the path at build time.
-    """
-    if not governing_plan_predicate(governing_plan):
-        return []
-    if not decisions.get("review"):
-        return []
-    assert governing_plan is not None  # narrows for the type checker; predicate already proved it
-    plan_rel = governing_plan.rel
-    return [
-        _directive(
-            "d-attest-review-verified",
-            "archive-stamp-cli",
-            ["stamp-review-verified", plan_rel, "--findings", "{d-write-trail.entry_path}"],
-            depends_on="d-claim-plan-execution-lock",
-        ),
-    ]
-
-
 def build_deferral_harvest_directives(governing_plans: list[GoverningPlan]) -> list[dict[str, Any]]:
     """Step 2.4b's belt-and-suspenders deferral harvest sweep, run once
     per governing plan in scope (ordinarily one; a chain-terminal session
@@ -470,45 +394,6 @@ def build_deferral_harvest_directives(governing_plans: list[GoverningPlan]) -> l
                 ["--plan", plan.rel],
             )
         )
-    return directives
-
-
-def build_governing_plan_directives(
-    repo_root: Path,
-    decisions: dict[str, Any],
-    handoff_governing_plan_field: Optional[Any] = None,
-    consumed_handoff_deliverable_id: Optional[Any] = None,
-    session_id: Optional[str] = None,
-) -> list[dict[str, Any]]:
-    """Composes Step 2.4's claim+stamp pair with Step 2.4b's harvest sweep
-    off one resolved governing-plan gate — the single entry point C3
-    imports for this half of the module. A chain-terminal session with
-    more than one predecessor plan supplies
-    `decisions["additional_governing_plan_slugs"]` (each checked the same
-    way `resolve_governing_plan` checks the primary slug) to extend the
-    harvest sweep beyond the single claim+stamp target — Step 2.4's
-    claim/stamp guard is deliberately single-plan (`docs/plans/2026-06-26-
-    cs-claim-plan-execution-lock.md` § C4 names one lock per session), so
-    only Step 2.4b's harvest fans out. `handoff_governing_plan_field`,
-    `consumed_handoff_deliverable_id`, and `session_id` forward unchanged
-    to `resolve_governing_plan` — see that function's docstring for the
-    precedence they slot into (C6, AC4: `session_id` feeds the new leg-2.5
-    commit-trailer join, above legs 3 and 3.5).
-    """
-    governing_plan = resolve_governing_plan(
-        repo_root, decisions, handoff_governing_plan_field, consumed_handoff_deliverable_id, session_id
-    )
-    directives = build_plan_claim_and_stamp_directives(governing_plan)
-    directives += build_review_verified_directive(governing_plan, decisions)
-
-    harvest_targets: list[GoverningPlan] = [governing_plan] if governing_plan else []
-    for slug in decisions.get(_KEY_ADDITIONAL_GOVERNING_PLAN_SLUGS, []) or []:
-        for dirname in _GOVERNING_PLAN_GLOB_DIRS:
-            candidate = repo_root / dirname / f"{slug}.md"
-            if candidate.is_file():
-                harvest_targets.append(GoverningPlan(slug=slug, path=candidate, rel=_rel_to_repo(candidate, repo_root)))
-                break
-    directives += build_deferral_harvest_directives(harvest_targets)
     return directives
 
 

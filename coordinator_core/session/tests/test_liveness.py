@@ -317,16 +317,20 @@ class TestSessionLive:
         assert liveness.session_live("s-layer1-boom-breadcrumb", cwd=str(repo)) is True
         assert liveness.layer1_unknown_count == before + 1
 
-    def test_layer1_rollback_lever_env_flag_skips_layer1(self, tmp_path, monkeypatch):
-        # C4a deliverable (1): COORDINATOR_SESSION_LAYER1_DISABLE, when
-        # truthy, must skip Layer 1 entirely and fall through to Layer 2 --
-        # a stable_pid that would resolve DEAD in Layer 1 must not gate the
-        # verdict when the lever is set; fresh last_activity makes Layer 2
-        # read live instead.
+    def test_layer1_engages_unconditionally(self, tmp_path):
+        # The rollback lever (COORDINATOR_SESSION_LAYER1_DISABLE) was REMOVED
+        # (state/debt-backlog/2026-08-14-the-layer-1-rollback-lever-is-
+        # asymmetric-3ef3bc90e012.yaml) -- it gated session_live's Layer 1 arm
+        # only, while _verdict_for_sdir kept engaging Layer 1 regardless,
+        # which could manufacture a wrongful claim takeover of a genuinely
+        # live, quiet session. Layer 1 now engages unconditionally whenever
+        # stable_pid is present: this fixture's fresh last_activity would
+        # read live under a Layer-2 fallback, but the recycled/mismatched
+        # stable_pid must still authoritatively read DEAD.
         repo = _make_repo(tmp_path)
         _write_session(
             repo,
-            "s-layer1-disabled",
+            "s-layer1-unconditional",
             {
                 "pid": "999",
                 "stable_pid": str(2**31 - 1),
@@ -335,28 +339,7 @@ class TestSessionLive:
                 "last_activity": core.now_iso(),
             },
         )
-        monkeypatch.setenv("COORDINATOR_SESSION_LAYER1_DISABLE", "1")
-        assert liveness.session_live("s-layer1-disabled", cwd=str(repo)) is True
-
-    def test_layer1_rollback_lever_unset_leaves_layer1_engaged(self, tmp_path, monkeypatch):
-        # Companion negative case: with the lever unset (default), the same
-        # fixture as above reads DEAD via Layer 1 unchanged -- proves the
-        # lever is the only thing that changed behavior above, not the
-        # fixture.
-        repo = _make_repo(tmp_path)
-        _write_session(
-            repo,
-            "s-layer1-enabled",
-            {
-                "pid": "999",
-                "stable_pid": str(2**31 - 1),
-                "stable_pid_lstart": "Sat Jan  1 00:00:00 2000",
-                "stable_pid_start_epoch": "946684800",
-                "last_activity": core.now_iso(),
-            },
-        )
-        monkeypatch.delenv("COORDINATOR_SESSION_LAYER1_DISABLE", raising=False)
-        assert liveness.session_live("s-layer1-enabled", cwd=str(repo)) is False
+        assert liveness.session_live("s-layer1-unconditional", cwd=str(repo)) is False
 
     def test_layer1_epoch_only_witness_no_lstart_reaches_layer1_live(self, tmp_path, monkeypatch):
         """dca0e3e80 regression pin: POSIX init() stopped writing
@@ -2611,21 +2594,6 @@ class TestSessionAbandoned:
         (sdir / "touched.txt").write_text("x", encoding="utf-8")
         _touch(sdir / "touched.txt", _STALE_EPOCH)
         assert liveness.session_abandoned("s-corrupt-ts", cwd=str(repo)) is False
-
-    def test_live1_disabled_lever_has_no_effect(self, tmp_path, monkeypatch):
-        # session_abandoned never reads the rollback lever -- toggling it
-        # must not change a verdict this function already committed to.
-        repo = _make_repo(tmp_path)
-        sdir = _write_session(
-            repo, "s-lever", {"pid": "1", "last_activity": _STALE}
-        )
-        _touch(sdir / "meta.json", _STALE_EPOCH)
-        (sdir / "touched.txt").write_text("x", encoding="utf-8")
-        _touch(sdir / "touched.txt", _STALE_EPOCH)
-        before = liveness.session_abandoned("s-lever", cwd=str(repo))
-        monkeypatch.setenv("COORDINATOR_SESSION_LAYER1_DISABLE", "1")
-        after = liveness.session_abandoned("s-lever", cwd=str(repo))
-        assert before is after is True
 
 
 class TestAbandonmentBasis:

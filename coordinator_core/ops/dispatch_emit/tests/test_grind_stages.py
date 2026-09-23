@@ -8,8 +8,9 @@ docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md, Tasks § C5) over
   1. Only the commit composers (`compose_commit_call`,
      `compose_commit_ledger_only_call`) mention `grind-row settle` or
      staging -- every other composer's call text stays clear of both.
-  2. The commit prompt (`compose_commit_call`) names `--declared-revert`
-     for every removed path it is handed.
+  2. The commit prompt (`compose_commit_call`) names every removed path it
+     is handed as a declared deletion (`deleted_paths`), never as a
+     `settle` flag.
   3. The op-runner verify composer's `agentType` equals
      `grind_vocab.OP_RUNNER_AGENT_TYPE`.
 
@@ -104,7 +105,7 @@ def test_commit_prompt_names_declared_revert_per_removed_path():
         touched_files=["a.py"],
         removed_files=["old1.py", "old2.py"],
     )
-    assert "--declared-revert" in call_text
+    assert "`deleted_paths`" in call_text
     assert "old1.py" in call_text
     assert "old2.py" in call_text
 
@@ -117,7 +118,7 @@ def test_commit_prompt_omits_declared_revert_clause_with_no_removed_paths():
         touched_files=["a.py"],
         removed_files=[],
     )
-    assert "--declared-revert" not in call_text
+    assert "`deleted_paths`" not in call_text
 
 
 def test_op_runner_agent_type_equals_vocab_constant():
@@ -215,7 +216,7 @@ def test_commit_prompt_interpolates_touched_and_removed_js_expressions():
     )
     assert "(fixResult.touched_files).join(', ')" in call_text
     assert "(closedPaths).join(', ')" in call_text
-    assert "--declared-revert" in call_text
+    assert "`deleted_paths`" in call_text
 
 
 def test_commit_prompt_gives_full_settle_invocation():
@@ -234,8 +235,31 @@ def test_commit_prompt_gives_full_settle_invocation():
         repo_root="/tmp/repo",
     )
     assert "backlog-grind-assemble grind-row settle --profile p1 --row-id " in call_text
-    assert " --repo-root /tmp/repo`." in call_text
+    assert " --repo-root /tmp/repo` (it takes only those three flags" in call_text
     assert "'row1'" in call_text
+
+
+def test_commit_prompt_never_attaches_a_flag_to_settle():
+    # `settle` rejects any flag beyond --profile/--row-id/--repo-root; a
+    # removed-path clause glued to the settle command sent committers to
+    # pass it there and stop on the usage error.
+    call_text = grind_stages.compose_commit_call(
+        label="commit:row1",
+        phase_title="Commit",
+        profile="p1",
+        row_id="row1",
+        touched_files=["a.py"],
+        removed_files=["old1.py"],
+    )
+    assert "--declared-revert" not in call_text
+
+
+def test_commit_schema_carries_a_failure_reason():
+    call_text = grind_stages.compose_commit_call(
+        label="commit:row1", phase_title="Commit", row_id="row1", touched_files=["a.py"]
+    )
+    assert '"reason": {"type": "string"}' in call_text
+    assert "verbatim refusal or the divergence you found in `reason`" in call_text
 
 
 def test_undo_prompt_interpolates_touched_and_created_js_expressions():

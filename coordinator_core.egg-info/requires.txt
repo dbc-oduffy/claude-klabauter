@@ -1,0 +1,12 @@
+pydantic>=2
+psutil>=5.9
+jsonschema>=4
+PyYAML>=6
+referencing>=0.30
+typing_extensions>=4.14.1
+tree-sitter<1,>=0.21
+tree-sitter-pwsh<1,>=0.38
+
+[test]
+pytest>=9.1
+pytest-xdist>=3.8

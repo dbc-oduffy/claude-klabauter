@@ -565,6 +565,47 @@ class TestDR276DeclaredWrites:
         assert exit_code == grind_rows.EXIT_OK
         assert "state/queue-grind/bug/row-1.jsonl" in _touched_paths(repo, "sid-append")
 
+    def test_append_records_a_touch_claim_when_process_cwd_diverges_from_repo_root(
+        self, tmp_path, monkeypatch
+    ):
+        """state/bug-backlog/2026-09-22-ledger-only-grind-commits-deny-on-
+        path-scope-for-run-scratch-files.yaml: `cmd_append` used to call bare
+        `declare_write(ledger_path)`, which records under the OUTER
+        `recording_declared_writes()` scope `entry_point_shim._backlog_
+        grind_assemble_entry` opens with no `cwd=` (defaulting to
+        `os.getcwd()`) -- never under the verb's own explicit `--repo-root`.
+        A dispatched agent's process cwd is routinely NOT `--repo-root` (its
+        own workspace dir, here a non-repo `elsewhere/`), so the claim landed
+        against the WRONG (or no) `caller_repo_root` and was silently
+        skipped -- the ledger-only committer then denied on path scope,
+        reading `orphan -- no session holds a claim on it`. This pins the
+        fix: the claim must land under `--repo-root` regardless of process
+        cwd."""
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        repo = _make_repo(repo_dir)
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        self._set_session(monkeypatch, "sid-append-cwd")
+
+        exit_code = _run_grind_row_recording(
+            [
+                "append",
+                "--profile", "bug",
+                "--row-id", "row-1",
+                "--digest", "d" * 64,
+                "--stage", "triage",
+                "--verdict", "confirmed-bug",
+                "--outcome", "confirmed-bug",
+                "--evidence-file", "evidence.txt",
+                "--run-stamp", "2026-09-22T00:00:00Z",
+                "--repo-root", str(repo),
+            ],
+            cwd=elsewhere,
+        )
+        assert exit_code == grind_rows.EXIT_OK
+        assert "state/queue-grind/bug/row-1.jsonl" in _touched_paths(repo, "sid-append-cwd")
+
     def test_close_records_touch_claims_for_both_new_and_removed_paths(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         (tmp_path / ".git").mkdir()

@@ -1,14 +1,14 @@
 {
-  "built_at": "2026-09-12T17:20:38+00:00",
+  "built_at": "2026-09-23T11:30:38+00:00",
   "compiler": "clang",
   "compiler_version": "clang version 22.1.2 (https://github.com/llvm/llvm-project 1ab49a973e210e97d61e5db6557180dcb92c3e98)",
-  "door_c_sha256": "de0da294c61f8c645d6af27b82c3a92ecf93919dd7db134e462676a040355b77",
+  "door_c_sha256": "698a6489a0c5eab1f4e6bb5494678b05858f7860988f2a82c53e9a2dec580397",
   "engine_root": "X:\\claude-klabauter",
-  "image_sha256": "6c2667d30b1cd180362a183a411453e1bdb9abc35af1c357c21e07f600990a40",
+  "image_sha256": "230fa37017302d7f87a6c7f7555c7ef71c0f570ab9c6e7e6e4d447507cb26a6b",
   "sources": {
-    "door.c": "de0da294c61f8c645d6af27b82c3a92ecf93919dd7db134e462676a040355b77",
-    "door_core.c": "c7f3b4d6d914d1e230fca1f1b4fdcd01c77fb61969eb9d97b750a46982d42a95",
-    "door_core.h": "580efe00df2b1b9168751236fd2f3104e70af39555286a8aab0bd84fc927ddc8",
-    "door_env_set.h": "68d55ceb29174dc6d5fcc869266d58f356809229d6da075a9a82c7fa12ab9b86"
+    "door.c": "698a6489a0c5eab1f4e6bb5494678b05858f7860988f2a82c53e9a2dec580397",
+    "door_core.c": "702cdbacce05c93045a975195b9fdf2e15fad46a71a71ad5e74fd0c8c64bca0f",
+    "door_core.h": "36275a56c75ca814e1a14d35d690abf9cb2b322c8656a5378afa0e5dfc058667",
+    "door_env_set.h": "648c07d2bacdc25e7d711f1ce1bd22c4f1c245997e363a970e0019522509b5aa"
   }
 }

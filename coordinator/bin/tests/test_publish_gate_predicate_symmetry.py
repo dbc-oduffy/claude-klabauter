@@ -30,17 +30,32 @@ Covers:
   * the install-doc payload check is handed an explicit doc set that drops the
     changelog class and keeps everything else the tree ships
     (`TestInstallDocSet`).
+  * `publish.py::_compute_always_swept_entrypoints` (the entrypoint gate's
+    always-swept floor, § state/debt-backlog/2026-08-10-publish-py-reaches-
+    into-engine-py-s-priv-e4309cadc0da) delegates to engine.py's own PUBLIC
+    `derive_always_swept_entrypoints` seam rather than reaching through
+    private closure-walk helpers, and the floor it computes agrees with
+    calling that seam directly (`TestAlwaysSweptEntrypointFloor`).
+  * `publish.py::dispatch_end_of_run_entrypoint_gate`'s own `--changed-only`
+    dispatch-site logic (the row's noted gap: nothing called it with
+    `changed_only=True` before) -- the `subset = selected | always_swept`
+    union, the unmodeled-suffix full-sweep widen, and the no-changed-set
+    fallback, exercised directly against the dispatcher rather than only
+    against the helper/engine seam it calls
+    (`TestEndOfRunEntrypointGateDispatchLogic`).
 
 Run: python -m pytest coordinator/bin/tests/test_publish_gate_predicate_symmetry.py -q
 """
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+from coordinator_core.percolate import engine as pct_engine
 from coordinator_core.percolate import guards as pct_guards
 from coordinator_core.percolate import surface as pct_surface
 
@@ -236,3 +251,207 @@ class TestInstallDocSet:
         assert not module.check_tree(
             tmp_path, doc_paths=publish._install_doc_paths_for_repo_root(module, tmp_path)
         )
+
+
+class TestAlwaysSweptEntrypointFloor:
+    """Regression coverage for state/debt-backlog/2026-08-10-publish-py-
+    reaches-into-engine-py-s-priv-e4309cadc0da: `_compute_always_swept_
+    entrypoints` used to reach three of engine.py's private closure-walk
+    helpers via `engine_claude_klabauter.percolate_engine_module` (unguarded attribute
+    access, `noqa: SLF001`). engine.py now exports `derive_always_swept_
+    entrypoints` as a public seam, and the driver wrapper is a thin
+    delegator over it."""
+
+    def _linked_tree(self, root: Path) -> Path:
+        bin_dir = root / "bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        (bin_dir / "helper.py").write_text("VALUE = 1\n", encoding="utf-8")
+        # Reaches `bin/helper.py` through a first-party import -- some
+        # changed-set (one that names helper.py) could put this at risk, so
+        # it must NOT be in the always-swept floor.
+        (bin_dir / "entry_linked.py").write_text("from bin import helper\n\nUSE = helper.VALUE\n", encoding="utf-8")
+        # No first-party imports at all -- no changed-set that omits this
+        # file's own path could ever put it at risk, so it MUST be in the
+        # always-swept floor.
+        (bin_dir / "entry_isolated.py").write_text("VALUE = 2\n", encoding="utf-8")
+        return root
+
+    def test_engine_seam_floor_excludes_linked_includes_isolated(self, tmp_path):
+        tree = self._linked_tree(tmp_path)
+        entrypoints = ("bin/entry_linked.py", "bin/entry_isolated.py")
+
+        floor = pct_engine.derive_always_swept_entrypoints(tree, entrypoints)
+
+        assert floor == ("bin/entry_isolated.py",), floor
+
+    def test_driver_wrapper_delegates_to_the_engine_seam_only(self, tmp_path):
+        """The wrapper needs nothing but the resolved callable -- no
+        `percolate_engine_module` attribute, and no reach into any
+        underscore-prefixed engine name."""
+        tree = self._linked_tree(tmp_path)
+        entrypoints = ("bin/entry_linked.py", "bin/entry_isolated.py")
+        calls: list = []
+
+        def _recording_derive(repo_root, entrypoints_arg):
+            calls.append((repo_root, tuple(entrypoints_arg)))
+            return pct_engine.derive_always_swept_entrypoints(repo_root, entrypoints_arg)
+
+        stub_claude_klabauter = SimpleNamespace(derive_always_swept_entrypoints=_recording_derive)
+        assert not hasattr(stub_claude_klabauter, "percolate_engine_module")
+
+        floor = publish._compute_always_swept_entrypoints(stub_claude_klabauter, tree, entrypoints)
+
+        assert floor == ("bin/entry_isolated.py",), floor
+        assert calls == [(tree, entrypoints)]
+
+
+class TestEndOfRunEntrypointGateDispatchLogic:
+    """Direct coverage of `dispatch_end_of_run_entrypoint_gate` itself (§
+    state/debt-backlog/2026-08-10-publish-py-reaches-into-engine-py-s-priv-
+    e4309cadc0da `proposed_action`'s "related gap": no test called this
+    function with `changed_only=True`, so the branch at its own call site --
+    deriving `selected` via `derive_changed_entrypoints`, unioning it with
+    `_compute_always_swept_entrypoints`'s floor, and widening to a full
+    sweep on an unmodeled-suffix hit or an undeterminable changed-set --
+    was exercised by nothing; `TestAlwaysSweptEntrypointFloor` above only
+    ever calls the helper/engine seam directly).
+
+    `engine_claude_klabauter` is a `SimpleNamespace` stub for every field this
+    dispatcher reads -- `enumerate_gate_entrypoints`, `derive_worker_cap`,
+    `derive_changed_entrypoints`, `derive_always_swept_entrypoints`,
+    `mktcache_gate_env`, `run_entrypoint_gate` -- so the subject under test
+    is which `subset` this function COMPUTES and hands to `run_entrypoint_
+    gate`, never whether a real CLI starts (that orthogonal question is
+    `test_function_gate_wiring.py`'s REAL-subprocess concern for the
+    sibling function gate)."""
+
+    _ENTRYPOINTS = ("bin/entry_linked", "bin/entry_isolated", "bin/entry_other")
+
+    @classmethod
+    def _stub_claude_klabauter(cls, *, derive_changed, derive_always_swept, run_entrypoint_gate):
+        @contextlib.contextmanager
+        def _mktcache_gate_env(*, overrides):
+            yield {"HOME": "/synthetic"}
+
+        return SimpleNamespace(
+            enumerate_gate_entrypoints=lambda repo_root: cls._ENTRYPOINTS,
+            derive_worker_cap=lambda: 1,
+            derive_changed_entrypoints=derive_changed,
+            derive_always_swept_entrypoints=derive_always_swept,
+            mktcache_gate_env=_mktcache_gate_env,
+            run_entrypoint_gate=run_entrypoint_gate,
+        )
+
+    def test_changed_only_unions_selected_with_always_swept_floor(self, tmp_path):
+        """`derive_changed_entrypoints` selects one entrypoint, the always-
+        swept floor names a different one -- `run_entrypoint_gate` must
+        receive their sorted union as `subset`, and both derivers must see
+        the repo-relative changed path plus the full entrypoint population."""
+        repo_root = tmp_path
+        (repo_root / "changed.py").write_text("", encoding="utf-8")
+
+        changed_calls: list = []
+        always_swept_calls: list = []
+        run_calls: list = []
+
+        def _derive_changed(changed_paths, root, *, entrypoints):
+            changed_calls.append((tuple(changed_paths), root, tuple(entrypoints)))
+            return ("bin/entry_linked",)
+
+        def _derive_always_swept(root, entrypoints):
+            always_swept_calls.append((root, tuple(entrypoints)))
+            return ("bin/entry_isolated",)
+
+        def _run_entrypoint_gate(root, entrypoints, *, env, timeout, max_workers, aggregate_budget, subset):
+            run_calls.append(subset)
+            return pct_engine.EntrypointGateResult(ok=True, scanned=len(subset or entrypoints), home_shape="mktcache")
+
+        stub = self._stub_claude_klabauter(
+            derive_changed=_derive_changed,
+            derive_always_swept=_derive_always_swept,
+            run_entrypoint_gate=_run_entrypoint_gate,
+        )
+        engine_ctx = publish.PercolateEngineContext(engine_claude_klabauter=stub, store={})
+
+        ok = publish.dispatch_end_of_run_entrypoint_gate(
+            engine_ctx,
+            [repo_root],
+            target_filtered=False,
+            changed_files_by_repo_root={repo_root: {repo_root / "changed.py"}},
+            changed_only=True,
+        )
+
+        assert ok
+        assert run_calls == [("bin/entry_isolated", "bin/entry_linked")]
+        assert changed_calls == [(("changed.py",), repo_root, self._ENTRYPOINTS)]
+        assert always_swept_calls == [(repo_root, self._ENTRYPOINTS)]
+
+    def test_changed_only_widens_to_full_sweep_on_unmodeled_suffix(self, tmp_path):
+        """A changed path carrying an unmodeled suffix (`.md`, §
+        `_CHANGED_ONLY_UNMODELED_SUFFIXES`) must widen `subset` back to
+        `None` (full sweep) at THIS dispatch site -- never narrow on a
+        change the closure graph cannot model. Neither deriver may even be
+        called once that widen fires."""
+        repo_root = tmp_path
+        (repo_root / "notes.md").write_text("", encoding="utf-8")
+
+        run_calls: list = []
+
+        def _must_not_be_called(*_args, **_kwargs):
+            raise AssertionError("must not be called once an unmodeled suffix widens to full sweep")
+
+        def _run_entrypoint_gate(root, entrypoints, *, env, timeout, max_workers, aggregate_budget, subset):
+            run_calls.append(subset)
+            return pct_engine.EntrypointGateResult(ok=True, scanned=len(entrypoints), home_shape="mktcache")
+
+        stub = self._stub_claude_klabauter(
+            derive_changed=_must_not_be_called,
+            derive_always_swept=_must_not_be_called,
+            run_entrypoint_gate=_run_entrypoint_gate,
+        )
+        engine_ctx = publish.PercolateEngineContext(engine_claude_klabauter=stub, store={})
+
+        ok = publish.dispatch_end_of_run_entrypoint_gate(
+            engine_ctx,
+            [repo_root],
+            target_filtered=False,
+            changed_files_by_repo_root={repo_root: {repo_root / "notes.md"}},
+            changed_only=True,
+        )
+
+        assert ok
+        assert run_calls == [None]
+
+    def test_changed_only_with_no_changed_set_falls_back_to_full_sweep(self, tmp_path):
+        """`changed_files_by_repo_root=None` with `changed_only=True` --
+        nothing to derive a subset from, so `subset=None` reaches `run_
+        entrypoint_gate` unchanged, same as a pre-`changed_only` full sweep.
+        Neither deriver may be called."""
+        repo_root = tmp_path
+
+        run_calls: list = []
+
+        def _must_not_be_called(*_args, **_kwargs):
+            raise AssertionError("must not be called with nothing to derive a subset from")
+
+        def _run_entrypoint_gate(root, entrypoints, *, env, timeout, max_workers, aggregate_budget, subset):
+            run_calls.append(subset)
+            return pct_engine.EntrypointGateResult(ok=True, scanned=len(entrypoints), home_shape="mktcache")
+
+        stub = self._stub_claude_klabauter(
+            derive_changed=_must_not_be_called,
+            derive_always_swept=_must_not_be_called,
+            run_entrypoint_gate=_run_entrypoint_gate,
+        )
+        engine_ctx = publish.PercolateEngineContext(engine_claude_klabauter=stub, store={})
+
+        ok = publish.dispatch_end_of_run_entrypoint_gate(
+            engine_ctx,
+            [repo_root],
+            target_filtered=False,
+            changed_files_by_repo_root=None,
+            changed_only=True,
+        )
+
+        assert ok
+        assert run_calls == [None]

@@ -1238,64 +1238,6 @@ def _union_native_forwarder_manifest(dst_dir: Path, written_names: "set[str]") -
     _write_native_forwarder_manifest(dst_dir, current | written_names)
 
 
-# DOOR-ELIGIBLE BUCKET CUTOVER (C5, docs/plans/2026-08-26-every-forwarder-
-# that-can-reach-the-door-does.md). `warm_entrypoint_allowlist.json` is the
-# committed artifact C2's census populates from its `door-eligible` bucket
-# (both the op-equivalent and warm-loadable axes pass) -- this module reads
-# it back as installed-forwarder NAMES, never re-derives eligibility itself.
-#
-# KEY SPLIT (C13, docs/dispatch-briefs/2026-09-01-the-dogfooded-install-
-# stops-lying-about/C13.md): this module used to read the SAME `entrypoints`
-# key `invoke_from_argv.py`'s warm-load allowlist reads, which meant
-# disabling this door cutover (by emptying that key) also disabled the
-# unrelated, working warm-load gate -- the two have opposite failure
-# semantics (this bucket degrades harmlessly to "no cutover" on absence;
-# the warm-load gate fails closed). This module now reads its OWN
-# `door_eligible_entrypoints` key, independently editable/clearable without
-# touching `entrypoints`. `invoke_from_argv.py` is untouched by this split
-# and keeps reading `entrypoints` exactly as before.
-# A name in this set gets a native `.exe`-direct forwarder that REPLACES its
-# `.py`/`.cmd` pair on Windows -- the pair is never written, and any pair left
-# by an earlier install is removed on a successful cutover. See
-# `_cut_over_to_native_door`, "THE KILL (PM ruling 2026-08-27)", for why: the
-# retained `.cmd` is wrong-if-reached, not merely outranked.
-# This comment described the SUPERSEDED additive shape until 2026-08-30 --
-# "alongside its existing .py/.cmd pair (never a replacement of them on
-# Windows)" -- which was true of C5 as first written and false from the
-# 2026-08-27 ruling onward. It is corrected here rather than deleted because
-# a reader who has to reconcile it against `_cut_over_to_native_door` 30 lines
-# below is the exact reader this file's density is meant to serve, and one of
-# the two had to stop lying. CONSEQUENCE WORTH KNOWING, not a defect in this
-# module: a cut-over name has NO `.cmd` sibling, so any doctrine still
-# instructing a PowerShell caller to invoke `<name>.cmd` through the call
-# operator is stale for every door-eligible name.
-# On POSIX the native image lands at the SAME bare-name path the Python
-# forwarder already occupies, an intentional overwrite, not a collision.
-_DOOR_ELIGIBLE_ALLOWLIST_PATH = (
-    Path(__file__).resolve().parents[1] / "ops" / "warm_entrypoint_allowlist.json"
-)
-
-
-def _door_eligible_forwarder_names() -> "frozenset[str]":
-    """The door-eligible bucket, as installed forwarder names, read from the
-    committed allowlist's OWN `door_eligible_entrypoints` key (C13 split --
-    NOT `entrypoints`, which is `invoke_from_argv.py`'s separately-gated
-    warm-load allowlist; see the KEY SPLIT comment above this function).
-    Best-effort: an absent or malformed allowlist, or an absent/malformed
-    `door_eligible_entrypoints` key, degrades to the empty set (nothing cut
-    over this run) rather than failing the install -- matches this module's
-    other best-effort side-file reads (`_read_native_forwarder_manifest`)."""
-    try:
-        raw = _DOOR_ELIGIBLE_ALLOWLIST_PATH.read_text(encoding="utf-8")
-        data = json.loads(raw)
-    except (OSError, ValueError):
-        return frozenset()
-    names = data.get("door_eligible_entrypoints") if isinstance(data, dict) else None
-    if not isinstance(names, list):
-        return frozenset()
-    return frozenset(n for n in names if isinstance(n, str))
-
-
 class _StaticFamilyAlreadyServed:
     """Return marker from `_cut_over_to_native_door`: a static bin family
     (e.g. `ch_family`'s `claude-home`) already owns this name's file(s), so
@@ -4150,12 +4092,6 @@ def _install_bin_resolvers(
         resolution_journal.record_resolution(_WRITER_ID, _CLAUSE_ML_FAMILY, ml_family_resolved)
         resolution_journal.record_resolution(_WRITER_ID, _CLAUSE_ML_EXPLICIT, ml_explicit_resolved)
 
-    # C5 (docs/plans/2026-08-26-every-forwarder-that-can-reach-the-door-
-    # does.md): imported once, here, for every call site below that needs
-    # `door_install.named_forwarder_path` (the sweep guard and Step 3e's
-    # orphan-prune union) -- local import: avoid import cost on --help.
-    from coordinator_core.install import door_install
-
     # --- Step 3b: agent/skill bare-name helper forwarders ---
     # `.cmd` twins are sourced from claude-klabauter's OWN coordinator/bin/, resolved
     # here (in-process, importable) rather than in the emitted forwarder body
@@ -4168,17 +4104,6 @@ def _install_bin_resolvers(
     agent_helper_target_map = _derive_agent_helper_target_map(agent_bin)
     agent_cmd_dest_map = _resolve_agent_cmd_dest_collisions(agent_helper_target_map)
 
-    # C5 (docs/plans/2026-08-26-every-forwarder-that-can-reach-the-door-
-    # does.md): the door-eligible bucket, restricted to names this run
-    # actually derived a CLI for. NO LONGER GATES FORWARDER WRITING -- every
-    # name gets the native door image now (PM ruling 2026-08-29; see
-    # `_write_agent_helper_forwarders`). Retained solely to derive each
-    # native forwarder's own filename for `_sweep_orphaned_agent_helpers`'s
-    # `extra_protected_names` below -- the `.ps1`-skip call this comment
-    # used to also describe is deleted (C12: DR-365 condemns the `.ps1`
-    # leg outright, see `_write_agent_ps1_forwarder`'s gravestone above).
-    door_eligible_names = _door_eligible_forwarder_names() & set(agent_helper_target_map)
-
     rm_family(bin_dst, "resolve-claude-klabauter")
     agent_helper_resolved = _write_agent_helper_forwarders(
         agent_helper_target_map, bin_dst, check_only,
@@ -4189,6 +4114,15 @@ def _install_bin_resolvers(
         resolution_journal.record_resolution(
             _WRITER_ID, _CLAUSE_AGENT_HELPER_FORWARDERS, agent_helper_resolved,
         )
+
+    # THE FILENAMES THIS RUN ACTUALLY WROTE, read off the writer's own return
+    # value. Every name gets a native image now (PM ruling 2026-08-29), and on
+    # Windows that image's filename (`<name>.exe`) is in neither target map, so
+    # the sweep and the Step 3e prune below must be told about it. They used to
+    # be told only about the warm-load allowlist's subset -- every image outside
+    # it was written, recorded in the native manifest, then swept as an orphan
+    # by the same run (34 names, measured 2026-09-23).
+    written_filenames = frozenset(Path(e.path).name for e in agent_helper_resolved)
 
     # LIVE-SOURCE-TREE PROTECTION. `agent_helper_target_map` above is derived
     # from `claude_klabauter_root_resolved`, which on a published-engine install run is
@@ -4230,9 +4164,7 @@ def _install_bin_resolvers(
 
     _sweep_orphaned_agent_helpers(
         bin_dst, agent_helper_target_map, agent_cmd_dest_map, check_only,
-        extra_protected_names=frozenset(
-            door_install.named_forwarder_path(bin_dst, name).name for name in door_eligible_names
-        ) | live_tree_protected,
+        extra_protected_names=written_filenames | live_tree_protected,
     )
 
     # --- Step 3c: platform-localize hook ---
@@ -4278,19 +4210,10 @@ def _install_bin_resolvers(
     # `_prune_orphaned_static_bin_names` only considers names dropped from
     # THIS union across runs, so an unregistered name is never a prune
     # candidate in the first place.
-    # C5: the native forwarder filenames (`.exe` on Windows, bare on POSIX --
-    # see `door_install.named_forwarder_path`) also join this run's complete
-    # name set, so a cut-over name is never pruned here as an unregistered
-    # orphan. On POSIX this filename is identical to its own entry in
-    # `agent_helper_target_map` already, a no-op addition to the union.
-    native_forwarder_filenames = {
-        door_install.named_forwarder_path(bin_dst, name).name for name in door_eligible_names
-    }
-
     all_current_names = (
         _static_bin_family_names(claude_klabauter_root_resolved)
         | set(agent_helper_target_map) | set(agent_cmd_dest_map.values())
-        | native_forwarder_filenames
+        | written_filenames
         | {SITEPACKAGES_POINTER_NAME}
         | live_tree_protected
     )

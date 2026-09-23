@@ -7920,7 +7920,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/percolate/tests/test_rewrite.py:177` | - | `result = rewrite_stems(text, {"claude-klabauter": "claude_klabauter"})` |
 | `coordinator_core/percolate/tests/test_rewrite.py:186` | - | `result = rewrite_stems(text, {"claude-klabauter": "claude_klabauter"})` |
 | `coordinator_core/percolate/tests/test_rewrite.py:190` | - | `result = rewrite_stems("const claude_klabauterConfig = load();", {"claude-klabauter": "claude_klabauter"})` |
-| `coordinator_core/percolate/tests/test_rewrite.py:234` | - | `result = rewrite_stems("%~dp0Claude-klabauter-doctor-probe.py", {"claude-klabauter": "claude-klabauter"})` |
+| `coordinator_core/percolate/tests/test_rewrite.py:234` | - | `result = rewrite_stems("%~dp0Claude-Klabauter-doctor-probe.py", {"claude-klabauter": "claude-klabauter"})` |
 | `coordinator_core/percolate/tests/test_rewrite.py:242` | - | `"REM bin/claude-klabauter-doctor-probe.cmd -- Windows entrypoint.\n"` |
 | `coordinator_core/percolate/tests/test_rewrite.py:245` | - | `substitute_entries = [{"key": "claude-klabauter", "value": "claude-klabauter"}]` |
 | `coordinator_core/percolate/tests/test_rewrite.py:247` | - | `substitute(text, substitute_entries), {"claude-klabauter": "claude_klabauter"}` |
@@ -9454,7 +9454,7 @@ Every row below passed the sibling-consumer check (source spelling against DoE-c
 | `coordinator_core/percolate/tests/test_codename_provenance_seed.py:350` | - | `def test_claude_klabauter_case_collision_resolved_via_case_variant_collapse():` |
 | `coordinator_core/percolate/tests/test_codename_provenance_seed.py:568` | - | `def test_claude_klabauter_hyphenated_title_shaped_glue_scrubbed_via_real_engine(tmp_path):` |
 | `coordinator_core/percolate/tests/test_codename_provenance_seed.py:569` | - | `"""TRANSFORM-class proof that `test_claude_klabauter_stem_key_present_and_underscore_form`` |
-| `coordinator_core/percolate/tests/test_codename_provenance_seed.py:587` | - | `fixture = 'python "%~dp0Claude-klabauter-doctor-probe.py" %*\n'` |
+| `coordinator_core/percolate/tests/test_codename_provenance_seed.py:587` | - | `fixture = 'python "%~dp0Claude-Klabauter-doctor-probe.py" %*\n'` |
 | `coordinator_core/percolate/tests/test_codename_provenance_seed.py:669` | - | `def _claude_klabauter_percolate_store_path() -> Path:` |
 | `coordinator_core/percolate/tests/test_codename_provenance_seed.py:704` | - | `store_path = _claude_klabauter_percolate_store_path()` |
 | `coordinator_core/percolate/tests/test_glued_compound_codename_leak.py:98` | - | `def test_glued_compound_doe_claude_klabauter_scrubs_claude_klabauter_and_preserves_doe_claude(` |

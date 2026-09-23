@@ -472,6 +472,10 @@ def test_survey_release_disposition_records_deciding_liveness_arm(tmp_path, monk
     release = [d for d in result.dispositions if d.verdict == mod._VERDICT_RELEASE]
     assert len(release) == 1
     assert "recency-window" in release[0].detail
+    # Disk-persisted half of the fix: liveness_basis is what apply_dispositions
+    # threads into cs_unclaim_handoff's note= (-> park_note frontmatter) --
+    # .detail alone never survives the reaping process exiting.
+    assert release[0].liveness_basis == "recency-window"
 
 
 def test_survey_batches_across_multiple_orphans_in_one_git_log_call(tmp_path, monkeypatch):
@@ -556,8 +560,10 @@ class _Outcome:
 
 def test_apply_release_calls_unclaim_handoff(monkeypatch):
     calls = []
-    monkeypatch.setattr(mod, "cs_unclaim_handoff",
-                        lambda path, reaped_from=None: (calls.append((path, reaped_from)), 0)[1])
+    monkeypatch.setattr(
+        mod, "cs_unclaim_handoff",
+        lambda path, reaped_from=None, note=None: (calls.append((path, reaped_from, note)), 0)[1],
+    )
 
     dispositions = [mod.Disposition("state/handoffs/a.md", "dead1", mod._VERDICT_RELEASE, "detail")]
     applied, retained, failed = mod.apply_dispositions(dispositions)
@@ -565,7 +571,40 @@ def test_apply_release_calls_unclaim_handoff(monkeypatch):
     assert applied == ["state/handoffs/a.md"]
     assert retained == []
     assert failed == []
-    assert calls == [("state/handoffs/a.md", "dead1")]
+    # No liveness_basis on this hand-built Disposition (never happens via a
+    # real survey() release) -- note stays None rather than stamping a
+    # sentence with no basis in it.
+    assert calls == [("state/handoffs/a.md", "dead1", None)]
+
+
+def test_apply_release_stamps_deciding_liveness_arm_into_note(monkeypatch):
+    """2026-08-22 backlog, second attempt: the deciding arm must reach disk
+    via `cs_unclaim_handoff`'s `note=` (-> park_note frontmatter), not just
+    `.detail`'s ephemeral CLI stdout line -- `.detail` alone reproduces the
+    original gap once the reaping process exits."""
+    calls = []
+    monkeypatch.setattr(
+        mod, "cs_unclaim_handoff",
+        lambda path, reaped_from=None, note=None: (calls.append((path, reaped_from, note)), 0)[1],
+    )
+
+    dispositions = [
+        mod.Disposition(
+            "state/handoffs/a.md", "dead1", mod._VERDICT_RELEASE, "detail",
+            liveness_basis="recency-window",
+        )
+    ]
+    applied, retained, failed = mod.apply_dispositions(dispositions)
+
+    assert applied == ["state/handoffs/a.md"]
+    assert failed == []
+    assert len(calls) == 1
+    path, reaped_from, note = calls[0]
+    assert path == "state/handoffs/a.md"
+    assert reaped_from == "dead1"
+    assert note is not None
+    assert "recency-window" in note
+    assert "dead1" in note
 
 
 def test_apply_reclaim_shipped_calls_ship_handoff_exactly_once(monkeypatch):
@@ -628,7 +667,7 @@ def test_apply_never_spawns_a_subprocess(monkeypatch):
     N dispositions must create ZERO processes on the write path. This is what a
     per-disposition archive-stamp-cli shell-out cost (N-2N interpreter starts)."""
     import subprocess as _sp
-    monkeypatch.setattr(mod, "cs_unclaim_handoff", lambda path, reaped_from=None: 0)
+    monkeypatch.setattr(mod, "cs_unclaim_handoff", lambda path, reaped_from=None, note=None: 0)
     monkeypatch.setattr(_sp, "run", lambda *a, **k: (_ for _ in ()).throw(
         AssertionError("apply_dispositions must not create a process")))
     monkeypatch.setattr(_sp, "Popen", lambda *a, **k: (_ for _ in ()).throw(
@@ -662,7 +701,7 @@ def test_apply_skip_verdicts_perform_no_write(monkeypatch):
 
 
 def test_apply_reports_failure_without_raising(monkeypatch):
-    monkeypatch.setattr(mod, "cs_unclaim_handoff", lambda path, reaped_from=None: 3)
+    monkeypatch.setattr(mod, "cs_unclaim_handoff", lambda path, reaped_from=None, note=None: 3)
 
     dispositions = [mod.Disposition("state/handoffs/a.md", "dead1", mod._VERDICT_RELEASE, "detail")]
     applied, retained, failed = mod.apply_dispositions(dispositions)
@@ -674,7 +713,7 @@ def test_apply_reports_failure_without_raising(monkeypatch):
 
 def test_apply_reports_a_raising_verb_without_aborting_the_reap(monkeypatch):
     """One bad row must not strand the remaining dispositions."""
-    def _raise_on_first(path, reaped_from=None):
+    def _raise_on_first(path, reaped_from=None, note=None):
         if path.endswith("a.md"):
             raise RuntimeError("boom")
         return 0

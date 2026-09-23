@@ -1404,8 +1404,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--rationale-stdin",
         action="store_true",
         help=(
-            "Read the block's prose ### Rationale section from stdin. PREFER THIS over "
-            "--rationale-file: it needs no path, so no concurrent session can clobber it."
+            "Read the block's prose ### Rationale section from stdin. For an interactive "
+            "caller only: a dispatched agent runs without stdin and uses --rationale-file."
         ),
     )
     parser.add_argument(
@@ -1413,8 +1413,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Path to a file whose content becomes the block's prose ### Rationale section, "
-            "or \"-\" to read stdin (same as --rationale-stdin). Prefer stdin — a "
-            "caller-chosen path is shared state, and a concurrent session that reuses it "
+            "or \"-\" to read stdin (same as --rationale-stdin). A dispatched caller "
+            "writes it beside --sidecar, named after it (<sidecar stem>.rationale.txt): "
+            "that directory is session-keyed, so no concurrent session reuses the path. "
+            "A path anywhere else is shared state, and a concurrent session that reuses it "
             "replaces this rationale with its own, silently and with a correct exit code."
         ),
     )
@@ -1459,7 +1461,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         if sys.stdin is None:
             print(
                 "append-integrator-dispositions: no stdin to read; a dispatched agent "
-                "runs without one. Pass --rationale-file <path>.",
+                "runs without one. Pass --rationale-file <sidecar stem>.rationale.txt "
+                "written beside --sidecar.",
                 file=sys.stderr,
             )
             return 2

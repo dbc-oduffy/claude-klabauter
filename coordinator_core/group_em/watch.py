@@ -1287,6 +1287,18 @@ def main(
 
     snapshot_ms, agents = _measure_snapshot_ms(repo_root)
     peer_count = len(agents)
+    # SAME EXCLUSION AS `_current_agents`, applied to the enumeration already in
+    # hand -- no second registry read. This is the number the heartbeat's
+    # `subscribed_peers` reports a few lines down (`stamp(subscribed_peers=
+    # len(cur_parked))`); printing it here too means a reader comparing the two
+    # never has to re-derive the caller-inclusion rule to explain an
+    # apparent off-by-one between them.
+    excluding_caller = read_pass.enumerate_repo_peers(agents, caller_session_id)
+    if group_em_session_id is not None and group_em_session_id != caller_session_id:
+        excluding_caller = read_pass.enumerate_repo_peers(
+            excluding_caller, group_em_session_id
+        )
+    peer_count_excluding_caller = len(excluding_caller)
     holder_name = _holder_name(agents, group_em_session_id)
     interval = _poll_interval_seconds(snapshot_ms)
     # The ARMED line is
@@ -1328,7 +1340,9 @@ def main(
     emit(
         f"ARMED peer_count={peer_count} {watched_repo} peers at {resolved_root}, "
         f"snapshot={snapshot_ms:.1f}ms, interval={interval:.1f}s, "
-        f"roster=(peers seen including this caller), as_of={armed_struck_at}"
+        f"roster=(peers seen including this caller), "
+        f"peer_count_excluding_caller={peer_count_excluding_caller} "
+        f"(matches subscribed_peers below), as_of={armed_struck_at}"
     )
 
     prev_parked: dict[str, bool] = {}

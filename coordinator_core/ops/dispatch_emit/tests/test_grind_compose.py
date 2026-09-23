@@ -238,6 +238,26 @@ def test_agent_call_site_count_independent_of_row_count():
     assert large_bytes < 150 * 1024
 
 
+def test_triage_declared_files_never_overwrites_touched_files():
+    """A triage record's `declared_files` (files the triage merely CITED as
+    evidence, never edited) sets the row's lock scope (`declaredFiles`)
+    only. Overwriting `touchedFiles` too hands the committer paths with no
+    actual diff vs HEAD, which `block-subagent-commit`'s path-scope check
+    then legitimately refuses (denied-on-path-scope, "orphan" -- no session
+    holds a claim because nothing was ever written there). `touchedFiles`
+    starts at the row's own manifest path and is overwritten only by an
+    actual write (a fix's own reported `touched_files`, or a close's
+    `{old,new}` move) -- never by triage's citation list."""
+    script = _compose()
+    assert "row.declaredFiles = rec.declared_files; row.touchedFiles = rec.declared_files;" not in script
+    m = re.search(
+        r"if \(rec\.declared_files && rec\.declared_files\.length\) \{ ([^}]*) \}",
+        script,
+    )
+    assert m is not None
+    assert m.group(1).strip() == "row.declaredFiles = rec.declared_files;"
+
+
 def test_real_bounded_concurrency_not_serial_pipeline():
     script = _compose()
     assert "runGrind" in script

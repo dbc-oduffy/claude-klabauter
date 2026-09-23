@@ -146,6 +146,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.session_start_announce_job_mode":  "coordinator_core.hooks",
     "hooks.session_start_register_doe_claude_root": "coordinator_core.hooks",
     "hooks.session_start_register_published_engine": "coordinator_core.hooks",
+    "hooks.repin_cloud_engine_root":          "coordinator_core.hooks",
     "hooks.session_start_repair_prepare_commit_msg_hook": "coordinator_core.hooks",
     "hooks.session_start_write_plugin_root_breadcrumb": "coordinator_core.hooks",
     "hooks.sessionstart_bin_drift_refresh":   "coordinator_core.hooks",

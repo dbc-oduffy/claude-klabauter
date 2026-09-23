@@ -652,7 +652,13 @@ class TestAppendDaySmoke:
     """
 
     def test_compose_block_format(self):
-        """compose_block() produces the expected field structure."""
+        """compose_block() produces the expected field structure.
+
+        `reviewed_lines`/`has_non_trivial` are still accepted (signature kept
+        for `append_day` caller compatibility) but no longer rendered: the
+        exit-gate's **Reviewed:** compose retired per queue
+        2026-09-06-unreviewed-commits-check-gates-on-ephemeral-review-trail.
+        """
         block = _compose_block(
             date="2026-01-15",
             machine="myhost",
@@ -682,7 +688,10 @@ class TestAppendDaySmoke:
         assert "**Decisions:** DR-216\n" in block
         assert "**Blockers:** none\n" in block
         assert "**Validation:** validate=0 plugin-suite=0\n" in block
-        assert "**Reviewed:** code: the Staff Engineer found 1 finding (P2, applied)." in block
+        assert "**Reviewed:**" not in block, (
+            "exit-gate compose must never render **Reviewed:**, even when "
+            "reviewed_lines/has_non_trivial are supplied"
+        )
         assert '**Links:** archive/daily-summaries/2026-01-15-myhost.md' in block
         assert 'archive/completed/2026-01/' in block
         # Block must NOT end with trailing newline (caller adds it on write)
@@ -756,7 +765,18 @@ class TestAppendDaySmoke:
         assert "**Scope:** Real scope summary.\n" in block
 
     def test_compose_block_has_nontrivial_no_reviewed_lines(self):
-        """has_non_trivial=True, reviewed_lines=[] → '**Reviewed:** none — flag for /workweek-complete Step 7'."""
+        """has_non_trivial=True, reviewed_lines=[] → no **Reviewed:** line.
+
+        This was the false-"none" fallback the exit gate rendered every
+        non-trivial day, because its `reviewed_lines` read (`compute_day_fields`
+        -> `_reviewed_lines_for_date`) was gated on ephemeral state: the writer
+        lands in the gitignored `.coordinator-local/review-trail/`, never
+        `state/review-trail/` / `archive/review-trail/`, so the read was always
+        empty. Retired per queue
+        2026-09-06-unreviewed-commits-check-gates-on-ephemeral-review-trail;
+        `changelog.upsert_reviewed` (Step 7/18) still renders the real line via
+        `_reviewed_block_lines` on its own surgical path.
+        """
         block = _compose_block(
             date="2000-01-01",
             machine="m",
@@ -773,7 +793,7 @@ class TestAppendDaySmoke:
             reviewed_lines=[],
             has_non_trivial=True,
         )
-        assert "**Reviewed:** none — flag for /workweek-complete Step 7" in block
+        assert "**Reviewed:**" not in block
 
     def test_append_day_creates_file(self, tmp_path):
         """append_day creates state/week-changelog/{date}.md.

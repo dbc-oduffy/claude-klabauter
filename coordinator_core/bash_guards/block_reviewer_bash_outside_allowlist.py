@@ -1041,7 +1041,8 @@ def _pipeline_segment_deny_reason(segment: str) -> str:
         "allowlist -- an unquoted `|` shell-chaining metacharacter pipe is "
         "only allowed when EVERY segment is independently allowlisted (a "
         "read-only git subcommand -- show/diff/log/status/blame/ls-files/"
-        "rev-parse/describe -- or a read-only filesystem binary -- ls/cat/"
+        "rev-parse/describe/check-ignore/check-attr/ls-tree/cat-file -- or a "
+        "read-only filesystem binary -- ls/cat/"
         "head/tail/wc/find/file/stat/grep); this segment is not"
     )
 
@@ -1092,8 +1093,26 @@ _ALLOWED_BINARY_SUFFIX = "coordinator-doc-new"
 #: worktree, notes, update-ref, gc, filter-branch, submodule, bisect,
 #: switch, sparse-checkout, ...) denies. This is a subcommand ALLOWLIST,
 #: never a bare ``git *`` prefix match.
+#:
+#: ``check-ignore``, ``check-attr``, ``ls-tree`` and ``cat-file`` are
+#: strictly read-only (they evaluate paths against ignore/attribute rules or
+#: read committed objects) and let a reviewer execute gitignore/attribute or
+#: tree/blob semantics instead of reasoning about them.
 _GIT_READONLY_SUBCOMMANDS = frozenset(
-    {"show", "diff", "log", "status", "blame", "ls-files", "rev-parse", "describe"}
+    {
+        "show",
+        "diff",
+        "log",
+        "status",
+        "blame",
+        "ls-files",
+        "rev-parse",
+        "describe",
+        "check-ignore",
+        "check-attr",
+        "ls-tree",
+        "cat-file",
+    }
 )
 
 #: Tier A (2026-07-25): read-only filesystem enumeration/inspection/search
@@ -3236,7 +3255,7 @@ _DENY_MESSAGE_STANZA_OVERRIDES: Dict[str, Dict[str, Any]] = {
 #: costs cap budget.
 _TIER_A_ENUM_BLOCK = (
     "  `git show`",
-    "  git show / diff / log / status / blame / ls-files / rev-parse / describe",
+    "  git show / diff / log / status / blame / ls-files / rev-parse / describe / check-ignore / check-attr / ls-tree / cat-file",
     "  ls / cat / head / tail / wc / find / file / stat / grep",
     "  Denied: find with a write/execute flag such as -delete or -exec",
     "  Denied: unquoted shell-chaining metacharacter (; && || ` $( < & or newline)",

@@ -122,12 +122,15 @@ END_SENTINEL = "<!-- END subagent-sandbox-preamble -->"
 # (per brief): Opus personas (staff-eng, staff-data-sci, senior-front-end, staff-ux,
 # eng-director, vp-product, code-architect), executor, review-integrator, enricher,
 # docs-checker, and the Agent-Teams sweep/synthesizer roles (research-sweep,
-# research-synthesizer, structured-synthesizer, parallel-review-synthesizer). This is a
-# citizenship boundary, not a scratch-access boundary: excluded roles already have their
-# own protocol-defined typed homes (sidecar, flight-recorder, escalation report) wired
-# in by their own agent prompts, so the per-role provisioned-home-or-scratch-fallback
-# offer in the canonical snippet body would be redundant noise for them, not a missing
-# grant.
+# research-synthesizer, structured-synthesizer, parallel-review-synthesizer). Also
+# excluded: test-runner — its report_type_map: entry is run-report, the same
+# artifact shape (status/agent_type/divergence/commits) that puts executor/
+# review-integrator/enricher outside this module's VARIANT_TYPES, and it has no
+# VARIANT:run-report body to sync against. This is a citizenship boundary, not a
+# scratch-access boundary: excluded roles already have their own protocol-defined
+# typed homes (sidecar, flight-recorder, escalation report) wired in by their own
+# agent prompts, so the per-role provisioned-home-or-scratch-fallback offer in the
+# canonical snippet body would be redundant noise for them, not a missing grant.
 #
 # VALUE is the variant/template type each path is synced against (matches
 # subagent-sandbox-policy.yaml's report_type_map: for that subagent_type) — NOT a
@@ -147,6 +150,7 @@ _CONSUMER_ROLE_MAP: "OrderedDict[str, str]" = OrderedDict(
         ("agents/prior-art-checker.md", "assessment"),
         ("agents/plan-coverage-checker.md", "review-findings"),
         ("agents/external-pattern-checker.md", "assessment"),
+        ("agents/atlas-clarity-reviewer.md", "assessment"),
         ("agents/research-scout.md", "assessment"),
         ("agents/research-specialist.md", "assessment"),
         ("agents/research-worker.md", "assessment"),

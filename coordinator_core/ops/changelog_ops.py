@@ -162,12 +162,14 @@ def _get_hostname() -> str:
 
 
 def _reviewed_block_lines(reviewed_lines: List[str], has_non_trivial: bool) -> List[str]:
-    """Render the **Reviewed:** line-block exactly as the oracle's compose_block does.
+    """Render the **Reviewed:** line-block for a surgical single-field upsert.
 
-    Single source of truth for "what does a correct Reviewed: block look
-    like" — shared by `_compose_block` (whole-section recompose) and
-    `upsert_reviewed` (surgical single-field replace), so the two write paths
-    can never drift out of lockstep on this one rendering rule.
+    Used only by `changelog.upsert_reviewed` (Step 7/18 consumers), which
+    re-derives `reviewed_lines` itself from the review trail on demand.
+    `_compose_block` (the day/week exit gate's whole-section recompose) no
+    longer calls this — queue:
+    2026-09-06-unreviewed-commits-check-gates-on-ephemeral-review-trail
+    retired that read as gated on ephemeral state.
 
     Rule: present (one line per record) when reviewed_lines is non-empty;
     the "none — flag..." sentinel when empty but has_non_trivial; omitted
@@ -231,11 +233,14 @@ def _compose_block(
         f"**Blockers:** {blockers}",
         f"**Validation:** validate={rc_validate} plugin-suite={rc_plugin_suite}",
     ]
-    # Reviewed field: present only when reviewed_lines or HAS_NON_TRIVIAL.
-    # Rendering rule lives in _reviewed_block_lines() (shared with
-    # changelog.upsert_reviewed so both stay in lockstep — single source of
-    # truth for what a "correct" Reviewed: block looks like).
-    lines += _reviewed_block_lines(reviewed_lines, has_non_trivial)
+    # No **Reviewed:** line in this exit-gate compose: its input read state/review-trail/ + archive/review-trail/, but the
+    # writer lands in the gitignored .coordinator-local/review-trail/, so the
+    # read was always empty and rendered a false "none" fallback. Tripwires
+    # A-GATE-MAY-NOT-DEPEND-ON-EPHEMERAL-STATE /
+    # AN-EMPTY-READ-RENDERS-UNKNOWN-NEVER-NONE. `_reviewed_block_lines` stays
+    # live for `changelog.upsert_reviewed` (Step 7/18 consumers), which
+    # re-derives from the same trail on a surgical single-field path this
+    # exit gate no longer takes.
     # Backfilled provenance line — omit-by-default (only rendered when True).
     if is_backfill:
         lines.append("**Backfilled:** yes")
@@ -2440,7 +2445,12 @@ def compute_day_fields(
     handoffs_list, handoff_paths = _handoffs_for_date(worktree, date)
     decisions = extract_field_from_handoffs("Decisions", handoff_paths)
     blockers = extract_field_from_handoffs("Blockers", handoff_paths)
-    reviewed_lines = _reviewed_lines_for_date(worktree, date)
+    # The exit gate does not read the review trail:
+    # `_reviewed_lines_for_date` stays live for `changelog.upsert_reviewed`
+    # (Step 7/18 consumers); this compose path no longer renders the field
+    # (see `_compose_block`), so the read is dropped rather than performed
+    # and discarded. Key kept in the return bundle for caller compatibility.
+    reviewed_lines: List[str] = []
     staleness = _header_staleness(worktree, resolved_local_today)
 
     return {

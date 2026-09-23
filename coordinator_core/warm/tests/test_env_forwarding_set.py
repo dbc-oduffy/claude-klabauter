@@ -39,7 +39,9 @@ _HEADER_PATH = (
 
 def test_committed_header_matches_generated_bytes():
     generated = generate_header().encode("utf-8")
-    committed = _HEADER_PATH.read_bytes()
+    # CRLF-normalised: an autocrlf Windows checkout writes the working copy
+    # with CRLF, which is not drift -- the committed blob is LF either way.
+    committed = _HEADER_PATH.read_bytes().replace(b"\r\n", b"\n")
     assert committed == generated, (
         "door_env_set.h has drifted from env_forwarding.FORWARDING_SET -- "
         "regenerate it from generate_header() rather than hand-editing. "

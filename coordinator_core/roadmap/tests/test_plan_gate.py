@@ -806,6 +806,56 @@ def test_the_archive_is_not_scanned_when_nothing_needs_it(tmp_path):
     assert report["scanned"]["batons"] == 1, "archive was walked with no edge asking for it"
 
 
+# ---------------------------------------------------------------------------
+# A baton a live replan already names as its source is not a candidate
+# (state/bug-backlog/2026-09-22-blitz-land-replan-baton-leaves-its-original-a-
+# live-candidate.yaml)
+# ---------------------------------------------------------------------------
+
+
+def test_a_replanned_pair_yields_exactly_one_candidate(tmp_path):
+    """The defect: before either link is read, both halves of a replan pair
+    are candidates, doubling every wave's cost on the pair. Post-fix
+    `blitz_land` stamps `deployment_state: continued` on the source too — this
+    pins the belt-and-braces reading of `replan_of` on its own, independent of
+    that stamp landing."""
+    _baton(tmp_path, "b-1")
+    _baton(
+        tmp_path,
+        "hnd-replan-b-1-abc123",
+        kind="spinoff",
+        replan_of="b-1",
+        forked_from="state/handoffs/b-1.md",
+    )
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    candidates = {b["id"] for b in report["batons"] if b["candidate"]}
+    assert candidates == {"hnd-replan-b-1-abc123"}, candidates
+    assert report["replanned"] == [
+        {"id": "b-1", "path": "state/handoffs/b-1.md", "title": "b-1"}
+    ]
+    assert report["counts"]["replanned"] == 1
+
+
+def test_a_pre_fix_pair_with_no_replan_of_is_still_deduped_by_forked_from(tmp_path):
+    """A replan minted before `replan_of` existed carries only `forked_from`
+    (the source's PATH, not its id) — the fallback link, checked so a pair
+    already on disk is not stuck double-firing forever."""
+    _baton(tmp_path, "b-2")
+    _baton(
+        tmp_path,
+        "hnd-replan-b-2-def456",
+        kind="spinoff",
+        forked_from="state/handoffs/b-2.md",
+    )
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    candidates = {b["id"] for b in report["batons"] if b["candidate"]}
+    assert candidates == {"hnd-replan-b-2-def456"}, candidates
+
+
 def test_kind_plan_is_admitted_because_the_template_emits_it():
     """`kind: plan` is a PLAN, not a sidecar — the template emits it.
 

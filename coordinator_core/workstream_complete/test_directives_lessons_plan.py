@@ -31,7 +31,7 @@ from pathlib import Path
 
 from coordinator_core.workstream_complete.directives_lessons_plan import (
     GoverningPlan,
-    build_governing_plan_directives,
+    build_deferral_harvest_directives,
     build_plan_claim_and_stamp_directives,
     resolve_governing_plan_with_source,
 )
@@ -270,62 +270,6 @@ def test_stamp_directive_does_not_execute_when_claim_is_denied():
     assert "d-stamp-plan-implemented" in failed_ids
 
 
-# ---------------------------------------------------------------------------
-# C8/AC17 -- d-attest-review-verified, emitted alongside d-stamp-plan-
-# implemented off the same governing_plan_predicate gate, additionally
-# conditioned on decisions["review"] being truthy this pass.
-# ---------------------------------------------------------------------------
-
-
-def test_review_verified_directive_emitted_alongside_stamp_when_review_present():
-    from coordinator_core.workstream_complete.directives_lessons_plan import (
-        build_review_verified_directive,
-    )
-
-    plan = GoverningPlan(slug="some-plan", path=Path("docs/plans/some-plan.md"), rel="docs/plans/some-plan.md")
-    stamp_directives = build_plan_claim_and_stamp_directives(plan)
-    attest_directives = build_review_verified_directive(
-        plan, {"review": {"sha_range": "a..b", "reviewer": "code-reviewer", "scope": "chain"}}
-    )
-
-    stamp_ids = {d["id"] for d in stamp_directives}
-    assert {"d-claim-plan-execution-lock", "d-stamp-plan-implemented"} <= stamp_ids
-    assert {d["id"] for d in attest_directives} == {"d-attest-review-verified"}
-
-
-def test_review_verified_directive_depends_on_the_claim_landing():
-    from coordinator_core.workstream_complete.directives_lessons_plan import (
-        build_review_verified_directive,
-    )
-
-    plan = GoverningPlan(slug="some-plan", path=Path("docs/plans/some-plan.md"), rel="docs/plans/some-plan.md")
-    directives = build_review_verified_directive(plan, {"review": {"sha_range": "a..b"}})
-    by_id = {d["id"]: d for d in directives}
-    assert by_id["d-attest-review-verified"]["depends_on"] == "d-claim-plan-execution-lock"
-    assert by_id["d-attest-review-verified"]["args"][0] == "stamp-review-verified"
-    assert by_id["d-attest-review-verified"]["args"][1] == "docs/plans/some-plan.md"
-    assert by_id["d-attest-review-verified"]["cli"] == "archive-stamp-cli"
-
-
-def test_review_verified_directive_absent_when_no_review_happened():
-    from coordinator_core.workstream_complete.directives_lessons_plan import (
-        build_review_verified_directive,
-    )
-
-    plan = GoverningPlan(slug="some-plan", path=Path("docs/plans/some-plan.md"), rel="docs/plans/some-plan.md")
-    assert build_review_verified_directive(plan, {}) == []
-    assert build_review_verified_directive(plan, {"review": None}) == []
-    assert build_review_verified_directive(plan, {"review": {}}) == []
-
-
-def test_review_verified_directive_absent_without_a_governing_plan():
-    from coordinator_core.workstream_complete.directives_lessons_plan import (
-        build_review_verified_directive,
-    )
-
-    assert build_review_verified_directive(None, {"review": {"sha_range": "a..b"}}) == []
-
-
 def test_directives_carry_the_resolved_path_not_a_docs_plans_guess(tmp_path):
     """A plan resolved OUTSIDE `docs/plans/` reaches every directive at the
     path the resolver actually returned.
@@ -350,15 +294,13 @@ def test_directives_carry_the_resolved_path_not_a_docs_plans_guess(tmp_path):
     assert source == "handoff_frontmatter"
     assert resolved is not None and resolved.rel == rel
 
-    directives = build_governing_plan_directives(
-        tmp_path,
-        decisions={"review": {"sha_range": "a..b"}},
-        handoff_governing_plan_field=rel,
-    )
+    # `resolved` is threaded through exactly as `__init__.py`'s `build_directives`
+    # (the sole surviving assembler) threads it to each plan-gated builder --
+    # never re-resolved per builder.
+    directives = build_plan_claim_and_stamp_directives(resolved) + build_deferral_harvest_directives([resolved])
     by_id = {d["id"]: d for d in directives}
 
     assert by_id["d-stamp-plan-implemented"]["args"][1] == rel
-    assert by_id["d-attest-review-verified"]["args"][1] == rel
     assert by_id["d-harvest-deferrals-1"]["args"] == ["--plan", rel]
 
     # The claim lock still keys on the SLUG -- it names the plan, it does not
@@ -369,26 +311,6 @@ def test_directives_carry_the_resolved_path_not_a_docs_plans_guess(tmp_path):
     assert not any(
         f"docs/plans/{slug}.md" in a for d in directives for a in d["args"] if isinstance(a, str)
     )
-
-
-def test_build_governing_plan_directives_composes_the_attest_directive(tmp_path):
-    slug = "composed-plan"
-    _write_plan(tmp_path, slug)
-
-    directives = build_governing_plan_directives(
-        tmp_path,
-        decisions={"governing_plan_slug": slug, "review": {"sha_range": "a..b"}},
-    )
-    ids = {d["id"] for d in directives}
-    assert {"d-claim-plan-execution-lock", "d-stamp-plan-implemented", "d-attest-review-verified"} <= ids
-
-    # No review this pass -- the claim/stamp pair still fires, the attest does not.
-    directives_no_review = build_governing_plan_directives(
-        tmp_path, decisions={"governing_plan_slug": slug}
-    )
-    ids_no_review = {d["id"] for d in directives_no_review}
-    assert "d-attest-review-verified" not in ids_no_review
-    assert "d-stamp-plan-implemented" in ids_no_review
 
 
 # ---------------------------------------------------------------------------

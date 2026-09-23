@@ -133,17 +133,6 @@ def _artifact_cache_key(worktree_root: Path) -> _EquivalenceCacheKey:
 #: Closed enum for a ledger row's `status` column.
 LEDGER_STATUS_VALUES = frozenset({"open", "shipped", "superseded", "abandoned"})
 
-#: Closed enum for `closure_evidence.join_provenance`, mirroring
-#: `close_out_and_stamp.DeliverableJoinStats`'s four-valued `join_provenance`
-#: (`JOIN_PROVENANCE_JOINED`, `JOIN_PROVENANCE_NO_JOIN_KEY`,
-#: `JOIN_PROVENANCE_NO_JOIN_CANDIDATES`, `JOIN_PROVENANCE_KEY_MISMATCH` — read directly
-#: from coordinator_core/execute_plan_assemble/close_out_and_stamp.py before shipping
-#: this enum, not guessed at).
-LEDGER_JOIN_PROVENANCE_VALUES = frozenset(
-    {"joined", "no_join_key", "no_join_candidates", "key_mismatch"}
-)
-
-
 class DeliverableLedgerValidationError(ValueError):
     """Raised by `validate_deliverable_ledger_rows` on any malformed ledger row.
 
@@ -277,8 +266,7 @@ def validate_deliverable_ledger_rows(rows: List[Dict[str, Any]]) -> None:
         `winner` is; a wrong `superseded_by` value must never collapse two distinct
         deliverables the way a wrong `winner` entry could (research corpus Constraint 3).
       - `closure_evidence`, if present and non-null, is a mapping whose
-        `join_provenance` (if present) is one of `LEDGER_JOIN_PROVENANCE_VALUES`, and
-        whose `realizing_commits` (if present) is a list of strings.
+        `realizing_commits` (if present) is a list of strings.
 
     Raises `DeliverableLedgerValidationError` naming the offending row's
     `deliverable_id` (or its index, when the key itself is what's missing/invalid) and
@@ -367,16 +355,6 @@ def validate_deliverable_ledger_rows(rows: List[Dict[str, Any]]) -> None:
                 raise DeliverableLedgerValidationError(
                     f"deliverable ledger row {row_ref} has a 'closure_evidence' that "
                     f"is not a mapping: {closure_evidence!r}"
-                )
-            join_provenance = closure_evidence.get("join_provenance")
-            if (
-                join_provenance is not None
-                and join_provenance not in LEDGER_JOIN_PROVENANCE_VALUES
-            ):
-                raise DeliverableLedgerValidationError(
-                    f"deliverable ledger row {row_ref} has invalid "
-                    f"'closure_evidence.join_provenance' {join_provenance!r}; must be "
-                    f"one of {sorted(LEDGER_JOIN_PROVENANCE_VALUES)}"
                 )
             realizing_commits = closure_evidence.get("realizing_commits")
             if realizing_commits is not None:

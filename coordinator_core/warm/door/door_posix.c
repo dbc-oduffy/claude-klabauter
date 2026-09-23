@@ -449,6 +449,16 @@ static int is_valid_engine_root(const char *root) {
     return S_ISREG(st.st_mode) && st.st_size > 0;
 }
 
+/* THE PER-INVOCATION ESCAPE HATCH -- see door_core.h's own doc comment on
+ * `door_env_value_is_falsy` for the full contract. `getenv` mirrors this
+ * file's other narrow env-var reads (e.g. `ENGINE_ROOT_ENV_OVERRIDE`); the
+ * value is handed to the shared predicate unchanged so this door cannot
+ * recognise a different falsy-token set than door.c or the Python client. */
+static int door_env_warm_is_falsy(void) {
+    const char *value = getenv("COORDINATOR_WARM");
+    return value != NULL && door_env_value_is_falsy(value);
+}
+
 /* Resolves the engine root this invocation should target: the env-var
  * override if set and non-empty, else the sidecar next to this executable.
  * Validates the result -- a sidecar pointing at a non-engine directory is
@@ -1273,6 +1283,18 @@ int main(int argc, char **argv) {
      * regardless of which branch below is the one that ultimately falls
      * through. */
     resolve_own_basename();
+
+    /* ---- -1. THE PER-INVOCATION ESCAPE HATCH (COORDINATOR_WARM) -- checked
+     * before engine-root resolution and before the socket dial, matching the
+     * Python client's own precedence (warm/client.py ::
+     * _cli_is_warm_enabled) and door.c's twin gate. Hook mode is excluded:
+     * that caller's fall-through is a deny envelope, not a cold spawn. NULL
+     * is passed for the engine root, matching every other pre-resolution
+     * fall-through in this file -- this gate fires before
+     * `resolve_engine_root` has run. */
+    if (!g_door_hook_mode && door_env_warm_is_falsy()) {
+        return fall_through(argc, argv, NULL);
+    }
 
     /* ---- 0. engine root -- resolved at runtime, never baked for socket
      * derivation. On failure `engine_root` stays NULL, which `fall_through`

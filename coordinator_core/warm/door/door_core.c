@@ -138,6 +138,24 @@ size_t trim_sidecar_trailing(char *buf, size_t len) {
 }
 
 /* =========================================================================
+ * The per-invocation escape hatch -- see door_core.h for the full contract.
+ * ========================================================================= */
+
+int door_env_value_is_falsy(const char *value) {
+    if (!value) return 0;
+    size_t len = strlen(value);
+    if (len == 0 || len >= 8) return 0;
+    char lower[8];
+    for (size_t i = 0; i < len; i++) {
+        char c = value[i];
+        lower[i] = (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+    }
+    lower[len] = '\0';
+    return strcmp(lower, "0") == 0 || strcmp(lower, "false") == 0 ||
+           strcmp(lower, "no") == 0 || strcmp(lower, "off") == 0;
+}
+
+/* =========================================================================
  * Growable byte buffer
  * ========================================================================= */
 

@@ -1553,11 +1553,16 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
             # only a lens name that is actually a _TEMPLATE_REGISTRY key
             # takes this branch, so today only "plan-coverage-check" is
             # affected -- the other four lenses keep resolving whatever
-            # type the payload supplies, exactly as before.
+            # type the payload/policy supplies.
+            #
+            # The ordinary SubagentStart path never sets `payload["type"]`, so
+            # the `else` leg consults `policy.report_type_map` in the same order
+            # as the session-keyed leg (explicit type > report_type_map hit > no
+            # type key); a registered lens still overrides both.
             if lens in _TEMPLATE_REGISTRY:
                 doc_type = lens
             else:
-                doc_type = payload.get("type") or None
+                doc_type = payload.get("type") or policy.report_type_map.get(effective_label) or None
             # A refusal from the stem-agreement guard is NOT a dropped
             # sidecar: it falls through to the session-keyed path below,
             # the same fail-open direction an unsanitizable plan_path takes.

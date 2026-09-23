@@ -550,6 +550,7 @@ def mint_replan_baton(
     title: str,
     branch: str,
     summary: str,
+    replan_of: str,
 ) -> Dict[str, Any]:
     """Write one replan baton carrying the gate's brief verbatim.
 
@@ -557,6 +558,14 @@ def mint_replan_baton(
     session that will not have this context, and a landing that summarised it would
     be compressing the one artifact whose whole purpose is to survive the context
     boundary.
+
+    `replan_of` stamps the source baton's own id (the wave verdict's `batonId`) —
+    the machine link `land_wave` was missing (state/bug-backlog/2026-09-22-blitz-
+    land-replan-baton-leaves-its-original-a-live-candidate.yaml): without it the
+    source stayed a live `ready_to_fire` candidate forever, and `close-handoff
+    --reason displaced` was the only EM recourse, which throws the lineage away.
+    `land_wave` reads this same value back to stamp the source's own
+    `continued_into` in the same landing — see its call site.
     """
     stem = id_slug(re.sub(r"[^a-z0-9]+", "-", title.lower()), 60)
     if not stem.startswith("replan-"):
@@ -581,6 +590,7 @@ def mint_replan_baton(
         f'handoff_id: "{handoff_id}"\n'
         "initiative: null\n"
         f'forked_from: "{source_baton_path}"\n'
+        f'replan_of: "{replan_of}"\n'
         "---\n\n"
         f"# {title}\n\n"
         "Minted by a plan-blitz readiness gate. The brief below is the gate's own, verbatim.\n\n"
@@ -590,6 +600,47 @@ def mint_replan_baton(
     out.parent.mkdir(parents=True, exist_ok=True)
     create_exclusive(out, body)
     return {"path": out.relative_to(worktree_root).as_posix(), "handoff_id": handoff_id}
+
+
+def _continue_replanned_source(
+    worktree_root: Path, source_path: str, continued_into: str
+) -> Dict[str, Any]:
+    """Stamp the replanned SOURCE `deployment_state: continued`, pointing at
+    the replan this same landing just minted.
+
+    Reuses `handoff_archive_transition._supersede_continued` — the same
+    status->claimed / deployment_state->continued / continued_into primitive
+    `handoff.transition`'s own `supersede` verb and `supersede-archive-handoff
+    --continued-into` both write (see that module's docstring § Supersede-verb
+    split) — rather than re-deriving the field set a second time. Deliberately
+    NOT `handoff_transition._supersede` or the `handoff.archive_transition`
+    op's own mode="supersede": both also archive (git-mv + commit) once the
+    flip lands, which this module's own negative-spec forbids ("Does NOT
+    commit" — see the module docstring). `_supersede_continued` is the pure
+    write half with no archival discharge, so the source stays resident in
+    state/handoffs/ exactly as `mint_replan_baton`'s own sibling left it,
+    picked up by an ordinary archival sweep like any other terminal baton.
+
+    The ENGINE minted the successor THIS call, so the edge is attested by
+    construction — no `attested_succession` plumbing is needed here (that
+    machinery guards `handoff.archive_transition`'s own generic dispatch
+    surface, reachable from other processes; this is a direct in-process call
+    from the one function that just wrote the successor to disk).
+
+    Never raises: a failure here (lock contention, a validation refusal) is
+    reported on the minted row rather than failing the whole `replan` verdict
+    — the mint already landed and is real work done, and
+    `roadmap.plan_gate`'s own `replanned` withdrawal rule (keyed on `forked_from`/
+    `replan_of`, not on the source's `deployment_state`) still drops the source
+    from the next wave even when this stamp did not reach disk.
+    """
+    from coordinator_core.ops.handoff_archive_transition import _supersede_continued
+
+    source_abs = worktree_root / source_path
+    try:
+        return _supersede_continued(source_abs, continued_into, worktree_root)
+    except Exception as exc:  # noqa: BLE001 - reported, never raised past the mint
+        return {"exit_code": 1, "error": f"{type(exc).__name__}: {exc}"}
 
 
 def _today() -> str:
@@ -895,7 +946,17 @@ def land_wave(
                 title=f"Replan — {entry['batonId']}",
                 branch=branch,
                 summary="Replan minted by a plan-blitz readiness gate; brief carries the reviewers' rationale.",
+                replan_of=entry["batonId"],
             )
+            # Same landing, same call: stamp the source `continued` pointing at
+            # the replan just minted, so no EM step exists between "replan
+            # minted" and "original superseded" — see `_continue_replanned_source`.
+            continuation = _continue_replanned_source(
+                worktree_root, source_path, entry_minted["handoff_id"]
+            )
+            entry_minted["source_continued"] = continuation.get("exit_code") == 0
+            if continuation.get("exit_code") != 0:
+                entry_minted["source_continue_error"] = continuation.get("error")
             minted.append(entry_minted)
             replanned_sources.add(source_path)
         except (LandingRefused, OSError, KeyError) as exc:

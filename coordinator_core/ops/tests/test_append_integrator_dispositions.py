@@ -1106,6 +1106,32 @@ class TestCliEntrypoint:
         assert "mutually exclusive" in capsys.readouterr().err
         assert "## Integrator Dispositions" not in sidecar.read_text(encoding="utf-8")
 
+    def test_help_steers_a_dispatched_caller_to_a_file_beside_the_sidecar(self):
+        """Every caller of this CLI is a dispatched integrator with no stdin, so
+        help that prefers stdin steers it away from the one channel that works."""
+        text = mod._build_arg_parser().format_help()
+        flat = " ".join(text.split())
+        assert "prefer" not in flat.lower()
+        assert "<sidecar stem>.rationale.txt" in flat
+        assert "dispatched agent runs without stdin" in flat
+
+    def test_cli_rationale_file_beside_the_sidecar_lands_in_the_block(self, tmp_path):
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "codereview-sliceA.md",
+            agent_type="coordinator:code-reviewer", body=_FINDINGS_BODY,
+        )
+        rationale = sidecar.with_name(sidecar.stem + ".rationale.txt")
+        rationale.write_text("written beside the sidecar.", encoding="utf-8")
+        rc = mod.main([
+            "--sidecar", str(sidecar),
+            "--applied", "F1",
+            "--rationale-file", str(rationale),
+            "--root", str(tmp_path),
+        ])
+        assert rc == 0
+        text = sidecar.read_text(encoding="utf-8")
+        assert "written beside the sidecar" in text.split("### Rationale", 1)[1]
+
     def test_cli_misuse_exits_one(self, tmp_path):
         sidecar = _write_sidecar(
             tmp_path, "sess-abc", "codereview-sliceA.md",
@@ -1353,7 +1379,7 @@ def test_stamp_lands_at_column_zero_and_the_stop_guard_can_read_it(tmp_path):
     own `_kira_stem` spells it. A stamp the guard cannot match is
     indistinguishable from no stamp at all."""
     from coordinator_core.ops import append_integrator_dispositions as mod
-    from coordinator_core.hooks import stop_dispatch as sd
+    from coordinator_core.hooks import guard_kira_verdict_routed as sd
 
     share = _share(tmp_path)
     reviewer = _reviewer(share)
@@ -1498,7 +1524,7 @@ def test_stem_spelling_matches_the_guards_own(tmp_path):
     `_kira_stem`; a divergence writes a stamp the guard cannot see, which is
     the same outcome as writing none."""
     from coordinator_core.ops.append_integrator_dispositions import _kira_stem_for_sidecar
-    from coordinator_core.hooks.stop_dispatch import _kira_stem
+    from coordinator_core.hooks.guard_kira_verdict_routed import _kira_stem
 
     for name in ("a.md", "coordinatorstaff-eng.a1b2.md", "noext"):
         assert _kira_stem_for_sidecar(tmp_path / name) == _kira_stem(name)

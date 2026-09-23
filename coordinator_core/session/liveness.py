@@ -126,21 +126,6 @@ from coordinator_core.session import harness_registry
 
 logger = logging.getLogger(__name__)
 
-#: Rollback lever for Layer 1 (docs/reference/layer1-liveness-activation.md):
-#: when set to a truthy value, ``session_live`` skips the Layer 1
-#: PPID-authoritative check entirely and falls straight through to Layer 2,
-#: the same recency-window path every session took before C3. C3
-#: (``73b21f35b``) has landed -- Layer 1 now gates a LIVE code path, and
-#: sessions on this box already carry a non-empty ``stable_pid``
-#: (docs/reference/layer1-liveness-activation.md § 4). Comment authored
-#: pre-C3, when the harness-process name check rejected every session and
-#: reading this lever changed nothing; that history is preserved for
-#: context only -- do not read it as describing current behavior. Truthy
-#: values: "1", "true", "yes" (case-insensitive); anything else (including
-#: unset) is falsy.
-_LAYER1_DISABLE_ENV = "COORDINATOR_SESSION_LAYER1_DISABLE"
-_LAYER1_DISABLE_TRUTHY = frozenset({"1", "true", "yes"})
-
 #: Review: staff-eng F5 -- ``session_live``'s Source-0 registry consult
 #: (below) now runs on EVERY missing-sdir sid, including inside the reaper's
 #: and memo-sweep's per-claim-dir loops (``harness_registry``'s own module
@@ -236,16 +221,6 @@ layer1_unknown_count = 0
 #: the verdict/pickup surface that's seeing psutil pressure".
 verdict_layer1_unknown_count = 0
 
-
-def _layer1_disabled() -> bool:
-    """Read the Layer 1 rollback lever (see ``_LAYER1_DISABLE_ENV`` above).
-
-    A fresh ``os.environ.get`` read per call, matching every other env-toggle
-    seam in this package (e.g. ``shape._CS_SHAPE_LOCK_STALE_SEC``) -- no
-    caching, so a fleet-wide flip via env is visible to the next call, not
-    just the next process.
-    """
-    return os.environ.get(_LAYER1_DISABLE_ENV, "").strip().lower() in _LAYER1_DISABLE_TRUTHY
 
 #: Thirty minutes in seconds — the recency liveness boundary (Layer 2).
 _THIRTY_MIN = 30 * 60
@@ -617,12 +592,20 @@ def session_live(sid: str, cwd: Optional[str] = None) -> bool:
         return False
 
     # Layer 1: PPID-authoritative process check (when stable_pid captured at init).
-    # Rollback lever (docs/reference/layer1-liveness-activation.md): when set,
-    # skip Layer 1 entirely and fall through to Layer 2. C3 (73b21f35b) has
-    # landed, so this now gates a live code path -- Layer 1 actually engages
-    # for sessions carrying a non-empty stable_pid (was inert pre-C3, when
-    # stable_pid was empty fleet-wide).
-    stable_pid = "" if _layer1_disabled() else core.read_meta_field(sdir, "stable_pid")
+    # C3 (73b21f35b) has landed, so this gates a live code path -- Layer 1
+    # actually engages for sessions carrying a non-empty stable_pid (was
+    # inert pre-C3, when stable_pid was empty fleet-wide). The rollback
+    # lever that used to gate this read (docs/reference/
+    # layer1-liveness-activation.md § 1) was REMOVED (state/debt-backlog/
+    # 2026-08-14-the-layer-1-rollback-lever-is-asymmetric-3ef3bc90e012.yaml):
+    # it disabled Layer 1 on this claim-layer arm only, while
+    # `_verdict_for_sdir` (the pickup-brief verdict surface) kept engaging
+    # Layer 1 regardless -- so a genuinely-alive, quiet session could read
+    # DEAD here and LIVE there, manufacturing the wrongful-takeover failure
+    # the module's own fail-open bias exists to avoid. `git revert
+    # 73b21f35b` is the rollback path now -- it restores pre-C3 behaviour on
+    # BOTH surfaces, with no asymmetry.
+    stable_pid = core.read_meta_field(sdir, "stable_pid")
     if stable_pid:
         stable_pid_lstart = core.read_meta_field(sdir, "stable_pid_lstart")
         stable_pid_start_epoch = core.read_meta_field(sdir, "stable_pid_start_epoch")
@@ -1040,15 +1023,13 @@ def _verdict_for_sdir(
     registry I/O itself. See ``live_session_verdicts``'s own docstring for the
     full per-arm derivation this reproduces exactly.
 
-    Rollback-lever scope (C4a-2, docs/reference/layer1-liveness-activation.md
-    § Scope): ``_layer1_disabled()`` is deliberately NOT consulted here.
-    ``COORDINATOR_SESSION_LAYER1_DISABLE`` gates ``session_live``'s Layer 1
-    arm ONLY -- setting it truthy does not skip this function's equivalent
-    stable-pid check. Wiring both would need a second-order decision this
-    chunk did not take on (whether the two seams sharing one lever value is
-    even the right shape, given they already keep separate fail-open
-    counters -- see ``verdict_layer1_unknown_count`` above); left for a
-    follow-up if the counters show this arm firing at fleet scale."""
+    No rollback lever to consult here, nor in ``session_live`` any more
+    (docs/reference/layer1-liveness-activation.md § 1): the lever that used
+    to gate only ``session_live``'s Layer 1 arm was REMOVED
+    (state/debt-backlog/2026-08-14-the-layer-1-rollback-lever-is-asymmetric-
+    3ef3bc90e012.yaml) because that asymmetry let the claim layer and this
+    verdict surface disagree in the wrongful-takeover direction. This
+    function's stable-pid check was never gated by it and is unchanged."""
     if record is not None:
         try:
             if core.stable_pid_alive(
@@ -1556,10 +1537,10 @@ def session_abandoned(sid: str, cwd: Optional[str] = None) -> bool:
     for a follow-up rather than added speculatively against a predicate this
     row must keep minimal and auditable.
 
-    ``_layer1_disabled()`` (the Layer 1 rollback lever) is untouched by this
-    function -- it gates ``session_live``'s Layer 1 arm only and has no
-    reachable effect here, matching ``_verdict_for_sdir``'s own documented
-    rollback-lever scope.
+    The Layer 1 rollback lever this function's docstring used to disclaim is
+    gone (docs/reference/layer1-liveness-activation.md § 1; state/debt-backlog/
+    2026-08-14-the-layer-1-rollback-lever-is-asymmetric-3ef3bc90e012.yaml) --
+    there is nothing left to have no reachable effect here.
     """
     if not sid:
         return False

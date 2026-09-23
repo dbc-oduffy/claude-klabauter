@@ -1259,10 +1259,16 @@ def _classify_pytest(args: Sequence[str], testpaths: Sequence[str],
     positional) changed. See the dated docstring entry below for the
     incident and spec backlink.
     """
+    if any(a.split("=", 1)[0] in _PYTEST_INFO_ONLY_FLAGS for a in args):
+        return None
     scoped, positionals = _walk_pytest_args(args)
     if positionals:
         return None if any(_is_real_scope(a, testpaths, cwd) for a in positionals) else label
     return None if scoped else label
+
+
+#: pytest flags that print and exit before collection -- no suite at any breadth.
+_PYTEST_INFO_ONLY_FLAGS = frozenset({"--version", "-V", "--help", "-h", "--markers"})
 
 
 def _classify_unittest(args: Sequence[str]) -> Optional[str]:
@@ -3489,7 +3495,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if configured is None:
         configured = _configured_test_cmds(repo_root)
     # `_matched_tiers` -> `_classify_command_core` re-tokenizes `cmd` itself
-    # via its own quote-blind `_segments_with_spans`/`_tokens` walk (that
+    # via its own `_segments_with_spans`/`_tokens` walk, independently of the
+    # dialect-resolved `segments_argv` this function already computed (that
     # core is ALSO the public, payload/tool_name-free `classify_command`/
     # `classify_text` API -- see that function's own negative spec -- so it
     # cannot be widened to accept a `dialect` parameter without changing a
@@ -3882,8 +3889,64 @@ def _segments_with_spans(cmd: str) -> List[Tuple[str, int, int]]:
     ``;``/``&``/``|`` runs, preserving each segment's original offsets into
     ``cmd``. Sibling of ``_segments`` (used by ``check()``) but offset-
     preserving, since the public API must report a ``span`` -- ``check()``
-    has no such requirement and is left untouched."""
-    return [(m.group(0), m.start(), m.end()) for m in re.finditer(r"[^;&|]+", cmd)]
+    has no such requirement and is left untouched.
+
+    Quote-aware: splits only on ``;``/``&``/``|`` runs seen outside single
+    or double quotes (honouring unquoted and double-quoted backslash
+    escapes), so a quoted argument containing a separator -- a commit
+    message naming ``pytest`` -- is never cut into a live-looking segment.
+    Trap: the shared tokenizer (``tokenize_full_command``) cannot be used
+    here because it shlex-processes tokens and loses their offsets into
+    ``cmd``. An unterminated quote swallows the rest of the string into the
+    current segment (fewer segments, never a fabricated split). Only
+    non-empty segments are returned, matching the ``[^;&|]+`` shape callers
+    rely on for quote-free commands.
+    """
+    segments: List[Tuple[str, int, int]] = []
+    n = len(cmd)
+    seg_start = 0
+    i = 0
+    in_single = False
+    in_double = False
+    while i < n:
+        c = cmd[i]
+        if in_single:
+            if c == "'":
+                in_single = False
+            i += 1
+            continue
+        if in_double:
+            if c == "\\" and i + 1 < n:
+                i += 2
+                continue
+            if c == '"':
+                in_double = False
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if c == "'":
+            in_single = True
+            i += 1
+            continue
+        if c == '"':
+            in_double = True
+            i += 1
+            continue
+        if c in ";&|":
+            if i > seg_start:
+                segments.append((cmd[seg_start:i], seg_start, i))
+            j = i + 1
+            while j < n and cmd[j] in ";&|":
+                j += 1
+            seg_start = j
+            i = j
+            continue
+        i += 1
+    if n > seg_start:
+        segments.append((cmd[seg_start:n], seg_start, n))
+    return segments
 
 
 def _classify_command_core(

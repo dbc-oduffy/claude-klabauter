@@ -32,7 +32,16 @@ Four things live in this module, not one:
    fixed executor dispatch-prompt template (item #43 below). This runs
    before any wave dispatch, so it never invents fix-target paths — it
    only asks "is there open bug-backlog work, and if this run commits
-   anything, has the EM judged it ready?"
+   anything, has the EM judged it ready?" The pre-dispatch liveness check
+   (`is_item_live` / `bare_cited_surface`) that disqualifies a stale-cited
+   row lives entirely at manifest-build time, in
+   `coordinator_core.ops.dispatch_emit.queue_select.select_rows`, which
+   imports both from this module (see their docstrings) and declines a
+   row on the unambiguous-subset test (a `surface` that is already a bare
+   single path — never a guessed-at substring of compound/prose text)
+   before it ever reaches the emitted script an executor is dispatched
+   from. This module owns the predicate's definition; `select_rows` is
+   its one caller.
 2. `build_commit_per_item` / `build_commit_per_wave` — the two granularity
    builders a live run's own commit machinery (the rebuilt
    `coordinator/commands/bug-blitz.md`, C7, or `apply.py`'s dispatch
@@ -231,6 +240,66 @@ def _repo_root() -> Optional[str]:
     return show_toplevel()
 
 
+def is_item_live(repo_root: Path, path: str) -> bool:
+    """Cheap pre-dispatch liveness predicate for one bug-backlog item's
+    cited surface (the row this predicate discharges: "Add a cheap
+    pre-dispatch liveness predicate to the reader (cited path exists) so
+    stale entries are disqualified before an executor is paid for" —
+    bug-blitz item, `state/bug-backlog/` lifecycle). Path-exists only —
+    never a `git`/subprocess spawn (DR-344's per-op budget).
+
+    `path` is repo-relative, exactly as a record's `surface` field cites
+    it. A file OR directory that exists counts as live. Any I/O failure
+    (permission, decode) counts as NOT live — a predicate that cannot
+    confirm liveness does not vouch for it.
+
+    Public (no leading underscore) so the live per-item dispatch caller
+    (bug-blitz.md Phase 3 step 1, or any future in-process caller with an
+    already-resolved single path) can reuse the exact same check
+    `queue_select.select_rows` uses for its own dispatch-time decline —
+    one predicate, not two independently-drifting implementations.
+    """
+    try:
+        return (repo_root / path).exists()
+    except OSError:
+        return False
+
+
+def bare_cited_surface(surface: Optional[str]) -> Optional[str]:
+    """Returns `surface` unchanged when it is ALREADY nothing but a single
+    repo-relative path, and `None` otherwise.
+
+    Deliberately does NOT parse or extract a path out of freeform prose
+    (`"shared-worktree commit discipline; state/ index hygiene"`,
+    `"x.py::func, other.py"`, `"docs/architecture/*.md; the atlas page
+    writer (unidentified)"`) — `collect()`'s own negative-spec forbids
+    inventing fix-target paths, and guessing at a substring of a compound
+    `surface` field is exactly that invention. Mirrors `readers_debt.py`'s
+    `_cross_reference_overlap` precedent: "an exact-surface match is the
+    unambiguous subset that IS a disk predicate" — here, a `surface`
+    field that IS already nothing but a path is the unambiguous subset
+    this reader may safely evaluate for liveness; every other shape is
+    left alone (never disqualified) rather than guessed at.
+
+    Public (no leading underscore), same reason as `is_item_live`: the
+    dispatch-time selector (`coordinator_core.ops.dispatch_emit.queue_select
+    .select_rows`) reaches across the module boundary to apply this same
+    unambiguous-subset test to a queue row's own `surface` field, BEFORE
+    that row ever reaches a dispatched executor — the row's own ask
+    ("disqualifying stale entries before a Sonnet spawn is paid for").
+    """
+    if not surface:
+        return None
+    stripped = surface.strip()
+    if not stripped or "/" not in stripped:
+        return None
+    if any(ch in stripped for ch in (",", ";", " ", "(", ")", "*", "\n")):
+        return None
+    if "::" in stripped:
+        return None
+    return stripped
+
+
 def _read_backlog_readiness() -> ReaderResult:
     """Bug-backlog presence/count (via `load_family_records`, AC6) folded
     into the standing commit-readiness judgment point's evidence.
@@ -248,8 +317,9 @@ def _read_backlog_readiness() -> ReaderResult:
     if repo_root_str is None:
         backlog_note = "state/bug-backlog/: repo root unresolved (not a git checkout?)"
     else:
+        repo_root = Path(repo_root_str)
         records = load_family_records(
-            "bug-backlog", Path(repo_root_str), where="status=open"
+            "bug-backlog", repo_root, where="status=open"
         )
         backlog_note = f"state/bug-backlog/ open-item count={len(records)}"
 

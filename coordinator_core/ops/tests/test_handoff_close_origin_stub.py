@@ -22,9 +22,9 @@ Coverage:
       "guard".
   (d) A proof for a MISMATCHED `deliverable_id` never closes on the proof --
       falls back to the guard.
-  (e) An incomplete proof (non-"joined" `join_provenance`, or non-empty
-      `missing_chunk_ids`) never closes on the proof -- falls back to the
-      guard.
+  (e) An incomplete proof (non-empty `missing_chunk_ids`, or a
+      non-positive `commit_required_chunk_count`) never closes on the
+      proof -- falls back to the guard.
 
 Spec backlink: this chunk's dispatch brief (reporting-fidelity fix for
 `_try_close`'s guard-decline collapse, 2026-08-13; delivery-proof origin-stub
@@ -94,7 +94,6 @@ def _seed_stub(worktree: Path, deliverable_id: str | None = None) -> Path:
 def _complete_proof(deliverable_id: str = "dlv-d1") -> dict:
     return {
         "deliverable_id": deliverable_id,
-        "join_provenance": "joined",
         "missing_chunk_ids": [],
         "status": "implemented",
         # Finding 0 (staff-eng review 2026-08-13): a proof is only complete
@@ -155,10 +154,6 @@ def test_is_complete_delivery_proof_accepts_only_the_full_condition_set():
     assert m._is_complete_delivery_proof(_complete_proof()) is True
     assert m._is_complete_delivery_proof(None) is False
     assert m._is_complete_delivery_proof({}) is False
-    assert (
-        m._is_complete_delivery_proof({**_complete_proof(), "join_provenance": "key_mismatch"})
-        is False
-    )
     assert (
         m._is_complete_delivery_proof({**_complete_proof(), "missing_chunk_ids": ["c1"]})
         is False
@@ -293,7 +288,7 @@ def test_try_close_incomplete_proof_falls_back_to_guard(tmp_path, monkeypatch):
 
     monkeypatch.setattr(m, "_live_children_guard", _fake_guard)
 
-    incomplete = {**_complete_proof("d1"), "join_provenance": "key_mismatch"}
+    incomplete = {**_complete_proof("d1"), "commit_required_chunk_count": 0}
     closed, skipped = _run(
         m._try_close(
             stub_path, worktree, worktree, "r1", "s1", "direct", "", [], incomplete

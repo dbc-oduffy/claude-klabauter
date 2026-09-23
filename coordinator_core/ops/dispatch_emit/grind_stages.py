@@ -16,8 +16,8 @@ This module owns the trap text every stage-kind prompt must carry:
 - trap 2: only the committer stages -- every non-commit composer states the
   positive rule ("you do not stage; only the committer does") and never
   names the forbidden git verbs;
-- trap 3: the commit composer's prompt names ``--declared-revert`` for every
-  removed path;
+- trap 3: the commit composer's prompt names every removed path as a
+  declared deletion (``deleted_paths``), never as a ``settle`` flag;
 - trap 4: the commit composer's prompt reconciles an indeterminate outcome
   against ``git log``/``git status`` before any retry, never retrying blind;
 - trap 5: the fix composer's prompt pre-checks its locked files for peer
@@ -630,6 +630,7 @@ _COMMIT_SCHEMA = {
     "properties": {
         "outcome": {"type": "string", "enum": ["committed", "commit-failed"]},
         "sha": {"type": "string"},
+        "reason": {"type": "string"},
     },
 }
 
@@ -640,6 +641,7 @@ _COMMIT_SCHEMA = {
 _COMMIT_TAIL_LIT = (
     " Then commit. If the outcome is indeterminate, reconcile it against "
     "`git log` and `git status` before doing anything else -- never retry blind."
+    " On commit-failed, put the verbatim refusal or the divergence you found in `reason`."
 )
 
 
@@ -683,7 +685,12 @@ def compose_commit_call(
     requires -- matching how every other composer in this module renders
     its CLI invocation, never a bare/underspecified subcommand mention),
     runs the profile's index-regenerate op when one is named, then commits.
-    Passes `--declared-revert` for every removed path (trap 3). An
+    Names every removed path as a declared deletion in the committer's own
+    shapes (`deleted_paths` on `ceremony.commit_v2`, or the scoped-commit
+    pathspec) -- never as a `settle` flag, which takes only `--profile`,
+    `--row-id` and `--repo-root` (trap 3). On `commit-failed` the committer
+    returns the verbatim refusal or divergence in `reason`, so a hand-back
+    carries its cause. An
     indeterminate outcome is reconciled against `git log` and `git status`
     before any retry, and never retried blind (trap 4).
 
@@ -705,11 +712,11 @@ def compose_commit_call(
         ("lit", f"], plus this row's ledger deletion via `backlog-grind-assemble grind-row settle --profile {profile} --row-id ")
     )
     parts.append(row_id_part)
-    parts.append(("lit", f" --repo-root {repo_root}`."))
+    parts.append(("lit", f" --repo-root {repo_root}` (it takes only those three flags; running it is part of staging this dispatch)."))
     if regenerate_op:
         parts.append(("lit", f" Before staging, run the index-regenerate op `{regenerate_op}`."))
     if removed_files or removed_files_js:
-        parts.append(("lit", " Pass --declared-revert for every one of these removed paths: ["))
+        parts.append(("lit", " Record every one of these removed paths as a declared deletion (`deleted_paths` on `ceremony.commit_v2`; in a scoped `git commit --`, name them in the pathspec): ["))
         parts.extend(_list_parts(removed_files, removed_files_js))
         parts.append(("lit", "]."))
     parts.append(("lit", f" Use commit subject `grind({profile}): "))

@@ -122,7 +122,7 @@ _EXPECTED_REVIEWER_DENY_MESSAGE = (
     "\n"
     "Use instead:\n"
     "  `git show`\n"
-    "  git show / diff / log / status / blame / ls-files / rev-parse / describe\n"
+    "  git show / diff / log / status / blame / ls-files / rev-parse / describe / check-ignore / check-attr / ls-tree / cat-file\n"
     "  ls / cat / head / tail / wc / find / file / stat / grep\n"
     "  Denied: find with a write/execute flag such as -delete or -exec\n"
     "  Denied: unquoted shell-chaining metacharacter (; && || ` $( < & or newline)\n"

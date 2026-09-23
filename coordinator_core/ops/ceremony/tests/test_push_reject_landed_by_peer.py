@@ -89,8 +89,6 @@ def _reject_then_never_again(monkeypatch, push_calls: list) -> None:
         return GitResult(returncode=1, stdout="", stderr=_NON_FAST_FORWARD_STDERR)
 
     monkeypatch.setattr(git_native, "push", _fake_push)
-    # A configured upstream is pushed by explicit refspec, not bare `push`.
-    monkeypatch.setattr(git_native, "push_refspec", _fake_push)
     monkeypatch.setattr(
         git_native, "fetch", lambda *a, **kw: GitResult(returncode=0, stdout="", stderr="")
     )

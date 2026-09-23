@@ -516,9 +516,21 @@ def pickup_assemble_variants(monkeypatch: Any, tmp_path: Path) -> list[tuple[str
     variants.append(("handoff-live-claim-bail", pb.brief("state/handoffs/h-live-claim.md", repo_root=repo)))
     monkeypatch.undo()
 
-    # -- memo branch (classification == "memo"), all four `kind` values --
+    # -- memo branch (classification == "memo"), one variant per
+    # `_KIND_DISPOSITIONS` key -- `bug` added 2026-09-22: the disposition
+    # table gained a `bug` entry (pickup_assemble/__init__.py) without this
+    # sweep following, so the `confirmed-owned` disposition's dynamically
+    # composed judgment points/directives went unswept for phantom resolves
+    # ids. `friction` added 2026-09-22 (same day, closes
+    # state/improvement-queue/2026-09-05-memo-kind-has-no-friction-value-and-
+    # bug-degrades-silently.yaml): `_KIND_DISPOSITIONS` gained a `friction`
+    # entry alongside `bug`'s -- swept here from the start rather than
+    # repeating the same gap a second time. `notice` carries no
+    # `_KIND_DISPOSITIONS` entry (mirrors `fyi`'s non-premise-bearing
+    # exclusion) and stays unswept by the same one-per-key rule this loop
+    # follows.
 
-    for kind in ("ask", "consult", "proposal", "fyi"):
+    for kind in ("ask", "consult", "proposal", "fyi", "bug", "friction"):
         name = f"m-{kind}.md"
         _seed_memo(repo, name, kind=kind)
         variants.append((f"memo-kind-{kind}", pb.brief(f"cross-repo/inbox/{name}", repo_root=repo)))

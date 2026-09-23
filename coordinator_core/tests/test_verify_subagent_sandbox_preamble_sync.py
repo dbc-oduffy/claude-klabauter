@@ -68,7 +68,7 @@ def test_list_mode_prints_all_consumers_exit_0(env):
     rc, out, err = run(str(plugin_root), str(script_dir), "--list")
     assert rc == 0
     assert err == []
-    assert len(out) == 16
+    assert len(out) == 17
     assert out[0] == str(plugin_root / "agents" / "code-reviewer.md")
     assert out[-1] == str(plugin_root / "agents" / "notebooklm-research-scout.md")
 
@@ -90,15 +90,15 @@ def test_unknown_mode_exits_2(env):
 
 def test_missing_consumer_file_reported_on_stderr_exit_1_regardless_of_mode(env):
     plugin_root, script_dir = env
-    # None of the 16 consumer files exist in this fixture -> every one is MISSING_FILE.
+    # None of the 17 consumer files exist in this fixture -> every one is MISSING_FILE.
     rc, out, err = run(str(plugin_root), str(script_dir), "--check")
     assert rc == 1
-    assert len(err) == 16
+    assert len(err) == 17
     assert all(line.startswith("MISSING_FILE ") for line in err)
 
     rc_fix, _out_fix, err_fix = run(str(plugin_root), str(script_dir), "--fix")
     assert rc_fix == 1
-    assert len(err_fix) == 16
+    assert len(err_fix) == 17
 
 
 def test_check_mode_reports_missing_when_no_begin_sentinel(env):
@@ -114,8 +114,8 @@ def test_fix_mode_inserts_block_at_end_of_file_when_no_anchor(env):
     plugin_root, script_dir = env
     consumer = _consumer_path(plugin_root)
     consumer.write_text("# Some agent prompt\n\nBody text.\n")
-    # Fixture only materializes this one of the 16 CONSUMERS entries, so the other
-    # 15 remain MISSING_FILE and keep the aggregate exit code nonzero regardless of
+    # Fixture only materializes this one of the 17 CONSUMERS entries, so the other
+    # 16 remain MISSING_FILE and keep the aggregate exit code nonzero regardless of
     # mode — assert on this consumer's own row and content, not the aggregate rc.
     _rc, out, _err = run(str(plugin_root), str(script_dir), "--fix")
     assert f"INSERTED     {consumer}" in out
@@ -223,9 +223,9 @@ def test_main_forwards_argv_and_defaults_mode_to_check(env, capsys):
     rc = main([str(plugin_root), str(script_dir)])
     err = capsys.readouterr().err
     # Default mode (argv[2] absent) behaves as --check (verify-only): nonzero on
-    # drift; none of the 16 fixture consumers exist, so every one is MISSING_FILE.
+    # drift; none of the 17 fixture consumers exist, so every one is MISSING_FILE.
     assert rc == 1
-    assert err.count("MISSING_FILE") == 16
+    assert err.count("MISSING_FILE") == 17
 
 
 def test_main_missing_required_args_returns_2(capsys):

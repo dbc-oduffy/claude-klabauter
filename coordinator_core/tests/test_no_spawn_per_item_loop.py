@@ -70,14 +70,24 @@ failure this plan's anti-scope forbids:
     in the sense this gate cares about (it runs once per distinct memo key, not once
     per iteration), and re-flagging it would make the D6 fix shape itself the thing
     that re-trips the gate it exists to satisfy.
-  - "Bound by the loop's target" collects every `Name` id appearing anywhere in the
-    `For`/comprehension target (handles tuple/list unpacking) but does NOT trace
-    one-hop-assigned locals the way `spawn_policy`'s own `_single_static_bindings`
-    does for argv0 resolution. A call whose argv is a variable assigned FROM the loop
-    variable one statement earlier (`item_str = str(item); spawn([item_str])`) is
-    invisible to this check and will be treated as invariant -- a genuine per-item
-    spawn could be missed as a false negative in that shape. Accepted per the
-    false-negative-over-false-positive preference above.
+  - "Bound by the loop's target" collected only the raw `Name` ids in the
+    `For`/comprehension target until debt row
+    `2026-08-17-test-no-spawn-per-item-loop-s-invariance-423bb1651ce1`: a call whose
+    argv was a variable assigned FROM the loop variable one statement earlier
+    (`item_str = str(item); spawn([item_str])`) was invisible to that raw-name check
+    and read as invariant -- flagging a genuine per-item spawn AC5 forbids flagging,
+    the false-POSITIVE direction this gate's own preference (above) says to avoid.
+    Closed by porting `_tainted_names_for_loop` (bounded one-hop-per-round taint,
+    seeded from the loop's own target and grown over `ast.Assign`/`ast.AnnAssign`
+    hops in the loop body) unmodified from `test_no_unbatched_per_item_git_spawn.py`,
+    where it was built for the amplification gate's C1 chunk and already closes this
+    exact shape. Local copy, not a cross-module import -- same precedent this file
+    already set for `_loop_target_names`. Residual, inherited from the source
+    function's own documented limit: the pass is flow-INSENSITIVE (`ast.walk` over
+    the loop subtree, no statement ordering), so a name assigned from the loop target
+    and later REBOUND to something invariant stays tainted for a call sitting between
+    the two -- same over-suppression direction, narrower trigger, accepted for the
+    same reason.
   - Only the recognized-spawn LINE NUMBERS from `sites_in_source` are trusted as "this
     is a real spawn call"; the loop-context AST pass is a SEPARATE walk over the same
     parse matching by `(lineno, col_offset)` of `ast.Call` nodes. Two distinct
@@ -143,27 +153,92 @@ def _relpath(path: Path, root: Path) -> str:
         return path.resolve().relative_to(root.resolve()).as_posix()
 
 
+def _names_in(node: ast.AST) -> set[str]:
+    """Every `ast.Name` identifier referenced anywhere inside `node`."""
+    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+
+
 def _loop_target_names(target: ast.expr) -> set[str]:
-    names: set[str] = set()
-    for node in ast.walk(target):
-        if isinstance(node, ast.Name):
-            names.add(node.id)
-    return names
+    return _names_in(target)
 
 
 def _names_in_call_args(call: ast.Call) -> set[str]:
     names: set[str] = set()
     for arg in call.args:
-        for node in ast.walk(arg):
-            if isinstance(node, ast.Name):
-                names.add(node.id)
+        names |= _names_in(arg)
     for kw in call.keywords:
         if kw.value is None:
             continue
-        for node in ast.walk(kw.value):
-            if isinstance(node, ast.Name):
-                names.add(node.id)
+        names |= _names_in(kw.value)
     return names
+
+
+def _paired_assign_elements(
+    target: ast.expr, value: ast.expr
+) -> list[tuple[ast.expr, ast.expr]] | None:
+    """Element-wise `(target, value)` pairs for a same-length, star-free `Tuple`/`List`
+    unpacking; `None` for every other shape, the signal to fall back to the coarse
+    whole-RHS rule. Ported unmodified from `_paired_assign_elements` in
+    `test_no_unbatched_per_item_git_spawn.py` (see `_tainted_names_for_loop` below).
+    Exists so the taint pass does not taint `b` in `a, b = item, "always-git"` -- without
+    it, over-tainting is the dangerous direction (see `_tainted_names_for_loop`)."""
+    if not (
+        isinstance(target, (ast.Tuple, ast.List)) and isinstance(value, (ast.Tuple, ast.List))
+    ):
+        return None
+    if len(target.elts) != len(value.elts):
+        return None
+    if any(isinstance(e, ast.Starred) for e in (*target.elts, *value.elts)):
+        return None
+    return list(zip(target.elts, value.elts))
+
+
+def _tainted_names_for_loop(loop: ast.AST, seed: set[str]) -> frozenset[str]:
+    """Bounded fixed-point taint set over `loop`'s subtree: starts at `seed` (the loop
+    target's own names) and grows by one `ast.Assign`/`ast.AnnAssign` hop per round -- a
+    local becomes tainted when its RHS mentions anything already tainted. Bounded at 10
+    rounds. Ported unmodified from `_tainted_names_for_loop` in
+    `test_no_unbatched_per_item_git_spawn.py` (local copy, not a cross-module import --
+    same precedent this file already sets for `_loop_target_names`), where it was built
+    for the amplification gate's C1 chunk and closes exactly the blind spot this file's
+    own docstring names: an argv reached through a local assigned from the loop target one
+    statement earlier used to read as invariant.
+
+    BROADER IS THE UNSAFE DIRECTION HERE: this set only ever widens what counts as
+    "references the loop item," so an over-broad taint set would silence a genuinely
+    invariant, hoistable argv -- the false-negative direction this gate already prefers,
+    but not further than the source function measured. `_paired_assign_elements` bounds
+    that: see its docstring."""
+    tainted = set(seed)
+    for _ in range(10):
+        grew = False
+        for node in ast.walk(loop):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            value = node.value
+            if value is None:
+                continue
+            if not (_names_in(value) & tainted):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for t in targets:
+                pairs = _paired_assign_elements(t, value)
+                if pairs is None:
+                    newly = _names_in(t)
+                else:
+                    newly = {
+                        name
+                        for sub_target, sub_value in pairs
+                        if _names_in(sub_value) & tainted
+                        for name in _names_in(sub_target)
+                    }
+                for name in newly:
+                    if name not in tainted:
+                        tainted.add(name)
+                        grew = True
+        if not grew:
+            break
+    return frozenset(tainted)
 
 
 class _LoopContextVisitor(ast.NodeVisitor):
@@ -173,14 +248,14 @@ class _LoopContextVisitor(ast.NodeVisitor):
     """
 
     def __init__(self) -> None:
-        self._loop_target_stack: list[set[str]] = []
+        self._loop_taint_stack: list[frozenset[str]] = []
         self.calls: dict[tuple[int, int], bool] = {}
 
     def _visit_scope_boundary(self, node: ast.AST) -> None:
-        saved = self._loop_target_stack
-        self._loop_target_stack = []
+        saved = self._loop_taint_stack
+        self._loop_taint_stack = []
         self.generic_visit(node)
-        self._loop_target_stack = saved
+        self._loop_taint_stack = saved
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self._visit_scope_boundary(node)
@@ -195,9 +270,9 @@ class _LoopContextVisitor(ast.NodeVisitor):
         self._visit_scope_boundary(node)
 
     def _visit_loop(self, node: ast.For | ast.AsyncFor) -> None:
-        self._loop_target_stack.append(_loop_target_names(node.target))
+        self._loop_taint_stack.append(_tainted_names_for_loop(node, _loop_target_names(node.target)))
         self.generic_visit(node)
-        self._loop_target_stack.pop()
+        self._loop_taint_stack.pop()
 
     def visit_For(self, node: ast.For) -> None:
         self._visit_loop(node)
@@ -210,11 +285,14 @@ class _LoopContextVisitor(ast.NodeVisitor):
     ) -> None:
         pushed = 0
         for generator in node.generators:
-            self._loop_target_stack.append(_loop_target_names(generator.target))
+            # No taint growth here: a comprehension's generators/elt/ifs are expressions,
+            # never `ast.Assign`/`ast.AnnAssign` statements, so there is nothing for
+            # `_tainted_names_for_loop` to walk beyond the raw target names already give it.
+            self._loop_taint_stack.append(frozenset(_loop_target_names(generator.target)))
             pushed += 1
         self.generic_visit(node)
         for _ in range(pushed):
-            self._loop_target_stack.pop()
+            self._loop_taint_stack.pop()
 
     def visit_ListComp(self, node: ast.ListComp) -> None:
         self._visit_comprehension_container(node)
@@ -229,10 +307,10 @@ class _LoopContextVisitor(ast.NodeVisitor):
         self._visit_comprehension_container(node)
 
     def visit_Call(self, node: ast.Call) -> None:
-        if self._loop_target_stack:
-            nearest_targets = self._loop_target_stack[-1]
+        if self._loop_taint_stack:
+            nearest_taint = self._loop_taint_stack[-1]
             referenced = _names_in_call_args(node)
-            invariant = referenced.isdisjoint(nearest_targets)
+            invariant = referenced.isdisjoint(nearest_taint)
             self.calls[(node.lineno, node.col_offset)] = invariant
         self.generic_visit(node)
 
@@ -433,6 +511,54 @@ def test_gate_hoisted_memo_closure_shape_is_not_flagged(tmp_path):
     violations = find_invariant_loop_spawns((tmp_path,))
 
     assert violations == []
+
+
+def test_gate_ignores_a_per_item_spawn_reached_through_one_assignment_hop(tmp_path):
+    """Regression for debt row
+    `2026-08-17-test-no-spawn-per-item-loop-s-invariance-423bb1651ce1`: a per-item argv
+    reached through one local assignment hop from the loop target
+    (`item_str = str(item); spawn([item_str])`) must NEVER fire, same AC5 discrimination
+    as `test_gate_ignores_a_per_item_spawn_using_the_loop_variable` above, just one hop
+    further from the loop target than that test's direct-reference shape."""
+    fixture = tmp_path / "planted_one_hop_per_item_loop_spawn.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def check_destructive_rm(targets):\n"
+        "    for target in targets:\n"
+        "        target_str = str(target)\n"
+        "        subprocess.run(['git', 'rev-parse', '--show-toplevel', target_str], cwd=target_str)\n",
+        encoding="utf-8",
+    )
+
+    violations = find_invariant_loop_spawns((tmp_path,))
+
+    assert violations == []
+
+
+def test_gate_detects_an_invariant_argv_spawn_reached_through_one_assignment_hop(tmp_path):
+    """Companion to the regression above, proving the taint pass does not over-suppress:
+    a local assigned from something OTHER than the loop target (still invariant argv) must
+    still fire, even though it sits one assignment hop from the call the same as the
+    per-item case does."""
+    fixture = tmp_path / "planted_one_hop_invariant_loop_spawn.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def check_segments(segments):\n"
+        "    for seg in segments:\n"
+        "        fixed_cwd = '/repo'\n"
+        "        subprocess.run(['git', 'status', '--porcelain'], cwd=fixed_cwd)\n"
+        "        print(seg)\n",
+        encoding="utf-8",
+    )
+
+    violations = find_invariant_loop_spawns((tmp_path,))
+
+    assert len(violations) == 1
+    assert violations[0].path.endswith("planted_one_hop_invariant_loop_spawn.py")
+    assert violations[0].lineno == 6
+    assert violations[0].invariant is True
 
 
 if __name__ == "__main__":

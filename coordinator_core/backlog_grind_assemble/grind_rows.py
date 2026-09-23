@@ -149,24 +149,32 @@ def _sha256_file(path: Path) -> str | None:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _declare_before_unlink(path: Path, repo_root: Path) -> None:
-    """Record `path`'s touch-claim NOW, immediately, while it still exists
-    on disk -- then the caller may safely delete it.
+def _declare_under_repo_root(path: Path, repo_root: Path) -> None:
+    """Record `path`'s touch-claim now, anchored on the verb's `--repo-root`.
 
-    `declare_write` alone is not enough for a path about to be deleted: it
-    only appends to the open collection, and recording (the check that
-    `ipc._resolve_declared_touch_root_and_path` gates on "is this currently
-    an existing regular file") happens on the OUTER `recording_declared_
-    writes()` context's `__exit__` -- which, for every `grind-row` verb, is
-    after this whole `main()` call returns, i.e. strictly after the delete
-    already happened. A nested `recording_declared_writes()` scope records
-    on ITS OWN `__exit__`, immediately, before this function returns --
-    nesting is a documented, supported shape of `session.declared_writes.
-    collecting` (see that module's own docstring), not a second recorder."""
+    The outer `recording_declared_writes()` scope opened by the CLI entry
+    anchors on `os.getcwd()`; a dispatched agent's cwd is rarely the repo it
+    operates on, and `ipc._resolve_declared_touch_root_and_path` silently
+    skips a path outside that anchor, leaving it unclaimed so a later
+    same-session committer denies it as an orphan. A nested scope records on
+    its own `__exit__`, before this returns -- which is also why a path about
+    to be unlinked must be declared through here first: the outer scope
+    records after `main()` returns, when the file is already gone.
+
+    Negative spec: never call bare `declare_write` from a grind-row verb."""
     from coordinator_core.cli_entry import recording_declared_writes
 
     with recording_declared_writes(cwd=str(repo_root)):
         declare_write(path)
+
+
+def _declare_before_unlink(path: Path, repo_root: Path) -> None:
+    """Record `path`'s touch-claim NOW, immediately, while it still exists
+    on disk -- then the caller may safely delete it. See
+    `_declare_under_repo_root`'s docstring for why this must anchor on the
+    verb's own `--repo-root` rather than the outer scope's ambient cwd, and
+    for the timing half of the same fix."""
+    _declare_under_repo_root(path, repo_root)
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +360,7 @@ def cmd_append(rest: list[str]) -> int:
 
     with open(ledger_path, "a", encoding="utf-8", newline="\n") as fh:
         fh.write(line + "\n")
-    declare_write(ledger_path)
+    _declare_under_repo_root(ledger_path, repo_root)
     return EXIT_OK
 
 
@@ -516,7 +524,7 @@ def cmd_close(rest: list[str]) -> int:
         if new_path.read_bytes() == new_text.encode("utf-8"):
             _declare_before_unlink(row_path, repo_root)
             row_path.unlink()
-            declare_write(new_path)
+            _declare_under_repo_root(new_path, repo_root)
             print(json.dumps({"old": str(row_path), "new": str(new_path)}, sort_keys=True))
             return EXIT_OK
         print(f"grind-row close: destination already exists: {new_path}", file=sys.stderr)
@@ -534,7 +542,7 @@ def cmd_close(rest: list[str]) -> int:
     os.replace(tmp_path, new_path)
     _declare_before_unlink(row_path, repo_root)
     row_path.unlink()
-    declare_write(new_path)
+    _declare_under_repo_root(new_path, repo_root)
 
     print(json.dumps({"old": str(row_path), "new": str(new_path)}, sort_keys=True))
     return EXIT_OK
@@ -686,7 +694,7 @@ def cmd_run_record(rest: list[str]) -> int:
     tmp_path = target.parent / f".{target.name}.tmp-{os.getpid()}"
     tmp_path.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
     os.replace(tmp_path, target)
-    declare_write(target)
+    _declare_under_repo_root(target, repo_root)
 
     print(json.dumps({"path": str(target)}, sort_keys=True))
     return EXIT_OK

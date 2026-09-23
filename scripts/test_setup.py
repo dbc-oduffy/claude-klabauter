@@ -239,7 +239,7 @@ def test_provision_deps_machine_first_installs_editable_package(setup_mod, monke
     monkeypatch.setattr(setup_mod, "_is_externally_managed", lambda interpreter: False)
 
     state = {"installed": False}
-    monkeypatch.setattr(setup_mod, "_engine_installed", lambda interpreter, import_names: state["installed"])
+    monkeypatch.setattr(setup_mod, "_engine_installed", lambda interpreter, import_names, engine_root: state["installed"])
 
     calls = []
 
@@ -268,7 +268,7 @@ def test_provision_deps_idempotent_noop_when_already_installed(setup_mod, monkey
     _stub_settings_home(setup_mod, monkeypatch, tmp_path)
     _stub_candidates(setup_mod, monkeypatch, sys.executable)
     monkeypatch.setattr(setup_mod, "_is_externally_managed", lambda interpreter: False)
-    monkeypatch.setattr(setup_mod, "_engine_installed", lambda interpreter, import_names: True)
+    monkeypatch.setattr(setup_mod, "_engine_installed", lambda interpreter, import_names, engine_root: True)
 
     calls = []
     monkeypatch.setattr(setup_mod, "_run_pip", lambda argv: calls.append(argv))
@@ -278,6 +278,112 @@ def test_provision_deps_idempotent_noop_when_already_installed(setup_mod, monkey
 
     assert engine_py == sys.executable
     assert calls == []
+
+
+def _provision_fixture(setup_mod, monkeypatch, tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    _fixture_pyproject(root)
+    _stub_settings_home(setup_mod, monkeypatch, tmp_path)
+    _stub_candidates(setup_mod, monkeypatch, sys.executable)
+    monkeypatch.setattr(setup_mod, "_is_externally_managed", lambda interpreter: False)
+    calls = []
+
+    def _fake_run_pip(argv):
+        calls.append(argv)
+        return setup_mod.subprocess.CompletedProcess(argv, 0, stdout="Successfully installed")
+
+    monkeypatch.setattr(setup_mod, "_run_pip", _fake_run_pip)
+    conversions = _stub_editable_finder_conversion(setup_mod, monkeypatch)
+    return root, calls, conversions
+
+
+def test_provision_deps_dev_tree_never_editable_installs_itself(setup_mod, monkeypatch, tmp_path):
+    """PM ruling, regressed repeatedly: a claude-klabauter dev-tree run
+    provisions deps into the box's shared interpreters and NEVER `-e`s itself
+    there — that would make the dev tree every bare `import coordinator_core`
+    on the machine."""
+    root, calls, conversions = _provision_fixture(setup_mod, monkeypatch, tmp_path)
+    state = {"deps": False}
+    monkeypatch.setattr(setup_mod, "deps_importable", lambda interpreter, import_names: state["deps"])
+    monkeypatch.setattr(setup_mod, "_installed_engine_root", lambda interpreter: None)
+
+    def _fake_run_pip(argv):
+        calls.append(argv)
+        state["deps"] = True
+        return setup_mod.subprocess.CompletedProcess(argv, 0, stdout="Successfully installed")
+
+    monkeypatch.setattr(setup_mod, "_run_pip", _fake_run_pip)
+
+    engine_py, _ = setup_mod.provision_deps(root, sys.executable, False, installs_engine=False)
+
+    assert engine_py == sys.executable
+    assert len(calls) == 1
+    assert "-e" not in calls[0]
+    assert str(root) not in calls[0]
+    assert conversions == []
+
+
+def test_provision_deps_dev_tree_refuses_engine_pointed_at_itself(setup_mod, monkeypatch, tmp_path, capsys):
+    """Finding the shared engine already editable-installed from this dev tree
+    is a loud refusal naming the repair, never a pass."""
+    root, calls, _ = _provision_fixture(setup_mod, monkeypatch, tmp_path)
+    monkeypatch.setattr(setup_mod, "deps_importable", lambda interpreter, import_names: True)
+    monkeypatch.setattr(setup_mod, "_installed_engine_root", lambda interpreter: root.resolve())
+
+    with pytest.raises(SystemExit) as exc:
+        setup_mod.provision_deps(root, sys.executable, False, installs_engine=False)
+
+    assert exc.value.code == setup_mod.EXIT_ENGINE_AT_DEV_TREE
+    assert calls == []
+    assert "claude-klabauter" in capsys.readouterr().err
+
+
+def test_provision_deps_published_checkout_repairs_engine_pointed_elsewhere(setup_mod, monkeypatch, tmp_path):
+    """The claude-klabauter run finding `coordinator_core` editable-installed
+    from another checkout (the dev tree) reinstalls over it — repair, not the
+    old presence-keyed no-op that left the dev tree serving."""
+    root, calls, conversions = _provision_fixture(setup_mod, monkeypatch, tmp_path)
+    dev_tree = tmp_path / "claude-klabauter"
+    state = {"root": dev_tree.resolve()}
+    monkeypatch.setattr(setup_mod, "deps_importable", lambda interpreter, import_names: True)
+    monkeypatch.setattr(setup_mod, "_installed_engine_root", lambda interpreter: state["root"])
+
+    def _fake_run_pip(argv):
+        calls.append(argv)
+        state["root"] = root.resolve()
+        return setup_mod.subprocess.CompletedProcess(argv, 0, stdout="Successfully installed")
+
+    monkeypatch.setattr(setup_mod, "_run_pip", _fake_run_pip)
+
+    setup_mod.provision_deps(root, sys.executable, False, installs_engine=True)
+
+    assert len(calls) == 1
+    assert calls[0][-2:] == ["-e", str(root)]
+    assert conversions == [(sys.executable, root)]
+
+
+@pytest.mark.parametrize(
+    ("record", "returncode", "found"),
+    [
+        ({"url": "{uri}", "dir_info": {"editable": True}}, 0, True),
+        ({"url": "{uri}", "dir_info": {}}, 0, False),
+        ({"url": "https://example.invalid/x.whl", "dir_info": {"editable": True}}, 0, False),
+        ("not json", 0, False),
+        ("", 1, False),
+    ],
+)
+def test_installed_engine_root_reads_only_an_editable_file_url(
+    setup_mod, monkeypatch, tmp_path, record, returncode, found
+):
+    target = tmp_path / "claude-klabauter"
+    stdout = record if isinstance(record, str) else json.dumps(record).replace("{uri}", target.as_uri())
+    monkeypatch.setattr(
+        setup_mod.subprocess,
+        "run",
+        lambda *a, **k: setup_mod.subprocess.CompletedProcess(a[0], returncode, stdout=stdout),
+    )
+    assert setup_mod._installed_engine_root("py") == (target.resolve() if found else None)
 
 
 def test_provision_deps_guarded_interpreter_exits_96_no_fallback_no_override(setup_mod, monkeypatch, tmp_path, capsys):
@@ -370,7 +476,7 @@ def test_provision_deps_container_optin_honoured_appends_break_system_packages_o
     _stub_editable_finder_conversion(setup_mod, monkeypatch)
 
     state = {"installed": False}
-    monkeypatch.setattr(setup_mod, "_engine_installed", lambda interpreter, import_names: state["installed"])
+    monkeypatch.setattr(setup_mod, "_engine_installed", lambda interpreter, import_names, engine_root: state["installed"])
 
     captured = {}
 
@@ -453,7 +559,7 @@ def test_provision_deps_nonpep668_failure_no_flag_exits_1(setup_mod, monkeypatch
     _stub_settings_home(setup_mod, monkeypatch, tmp_path)
     _stub_candidates(setup_mod, monkeypatch, sys.executable)
     monkeypatch.setattr(setup_mod, "_is_externally_managed", lambda interpreter: False)
-    monkeypatch.setattr(setup_mod, "_engine_installed", lambda interpreter, import_names: False)
+    monkeypatch.setattr(setup_mod, "_engine_installed", lambda interpreter, import_names, engine_root: False)
     monkeypatch.setattr(
         setup_mod, "_run_pip",
         lambda argv: setup_mod.subprocess.CompletedProcess(argv, 1, stdout="permission denied"),
@@ -478,7 +584,7 @@ def test_provision_deps_nonpep668_failure_flag_falls_back_to_venv_deps_only(setu
     settings_home_dir, venv_dir, venv_py = _stub_settings_home(setup_mod, monkeypatch, tmp_path)
     _stub_candidates(setup_mod, monkeypatch, sys.executable)
     monkeypatch.setattr(setup_mod, "_is_externally_managed", lambda interpreter: False)
-    monkeypatch.setattr(setup_mod, "_engine_installed", lambda interpreter, import_names: False)
+    monkeypatch.setattr(setup_mod, "_engine_installed", lambda interpreter, import_names, engine_root: False)
 
     calls = []
 
@@ -517,7 +623,7 @@ def test_provision_deps_mid_install_pep668_refusal_exits_96(setup_mod, monkeypat
     _stub_settings_home(setup_mod, monkeypatch, tmp_path)
     _stub_candidates(setup_mod, monkeypatch, sys.executable)
     monkeypatch.setattr(setup_mod, "_is_externally_managed", lambda interpreter: False)
-    monkeypatch.setattr(setup_mod, "_engine_installed", lambda interpreter, import_names: False)
+    monkeypatch.setattr(setup_mod, "_engine_installed", lambda interpreter, import_names, engine_root: False)
     monkeypatch.setattr(
         setup_mod, "_run_pip",
         lambda argv: setup_mod.subprocess.CompletedProcess(argv, 1, stdout="error: externally-managed-environment"),
@@ -882,6 +988,35 @@ def test_main_without_register_only_still_provisions(setup_mod, monkeypatch):
         "provision_deps",
         lambda *a, **k: (calls.append("provision_deps"), (sys.executable, ["dep"]))[1],
     )
+    _stub_main_beyond_provisioning(setup_mod, monkeypatch)
+
+    assert setup_mod.main(["--i-am-agent"]) == 0
+    assert calls == ["provision_deps"]
+
+
+@pytest.mark.parametrize(
+    ("identity", "expected"),
+    [("claude-klabauter", False), ("claude-klabauter", True), (None, False)],
+)
+def test_main_only_the_published_checkout_installs_the_engine(setup_mod, monkeypatch, identity, expected):
+    """PM ruling, regressed repeatedly: a dev-tree run must never editable-
+    install itself into the box's shared interpreters. Pins the identity ->
+    `installs_engine` wiring at the one call site that decides it."""
+    seen = {}
+
+    def _capture(*a, **k):
+        seen["installs_engine"] = k.get("installs_engine")
+        return sys.executable, ["dep"]
+
+    monkeypatch.setattr(setup_mod, "provision_deps", _capture)
+    monkeypatch.setattr(setup_mod, "resolve_repo_identity", lambda root: identity)
+    _stub_main_beyond_provisioning(setup_mod, monkeypatch)
+
+    assert setup_mod.main(["--i-am-agent"]) == 0
+    assert seen["installs_engine"] is expected
+
+
+def _stub_main_beyond_provisioning(setup_mod, monkeypatch):
     # The ordinary path spawns `<py> --version` for real; a POSIX-only literal
     # here fails on Windows before provisioning is ever reached.
     monkeypatch.setattr(setup_mod, "resolve_python", lambda: sys.executable)
@@ -899,16 +1034,13 @@ def test_main_without_register_only_still_provisions(setup_mod, monkeypatch):
     monkeypatch.setattr(setup_mod, "check_dialect_guard_armed", lambda *a, **k: None)
     monkeypatch.setattr(setup_mod, "run_health_probe", lambda *a, **k: False)
     for name in (
-        "install_bin_forwarders", "install_warm_door", "migrate_whoami_pin_off_venv",
+        "install_bin_forwarders", "install_warm_door",
         "install_claude_doe_launcher_chain", "register_live_plugin_root",
-        "install_precommit_hook", "install_lfs_pre_push_gate", "install_percolate_identity",
+        "install_lfs_pre_push_gate", "install_percolate_identity",
         "install_machine_identity", "install_host_sampler_task",
         "install_fleet_shared_environment", "install_verify_settings_home",
     ):
         monkeypatch.setattr(setup_mod, name, lambda *a, **k: None)
-
-    assert setup_mod.main(["--i-am-agent"]) == 0
-    assert calls == ["provision_deps"]
 
 
 def test_main_preflight_flag_short_circuits_before_flag_pair_gate(setup_mod, monkeypatch):

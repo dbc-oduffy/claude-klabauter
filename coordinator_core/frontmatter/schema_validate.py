@@ -70,17 +70,25 @@ Legacy-YAML data-layer port (T4d-g1a, DoE-claude
     load_schemas(schemas_dir) -> dict          # {name: parsed, "_byGlob": [...], "_byKind": {...}}
     match_schema(repo_rel_path, frontmatter, schemas) -> dict | None
     match_schema_for_path(repo_rel_path, schemas) -> dict | None
-    parse_frontmatter(content) -> dict          # {"frontmatter": dict | None, "body": str}
+    parse_frontmatter(content) -> dict          # {"frontmatter": dict | None, "body": str,
+                                                 #  "duplicate_keys": list[str]}
   Negative-spec (ported verbatim from schema.js, not reinterpreted):
     - parse_yaml is a restricted YAML subset (scalar key: value, list items, one level
-      of nested mapping, block scalars `|`/`>`) — no anchors, no flow mappings beyond
-      inline `[a, b]` lists, no multi-document streams.
+      of nested mapping, block scalars `|`/`>`, a single-line `{k: v}` flow mapping
+      as a key's value) — no anchors, no multi-line flow collections, no
+      multi-document streams.
     - globToRegex bracket-class passthrough scans for the FIRST `]` after `[` — a class
       with an embedded literal `]` as its first char (`[]]`) mis-terminates; unsupported
       by design (schema.js code-review F7 note, reproduced here).
     - Wildcards (`*`, `**`, `?`) at a path-segment start do not match a leading dot.
     - parse_frontmatter returns {"frontmatter": None, "body": content} (no-frontmatter)
       when the parsed YAML block is empty ({}) — an empty object is never a valid record.
+  Post-port addition (2026-08-07-lint-frontmatter-passes-duplicate-yaml-keys, NOT in the
+    schema.js oracle — schema.js has the identical last-key-wins blind spot):
+    - parse_yaml/_parse_yaml_lines take an optional dup_keys collector; parse_frontmatter
+      uses it to report duplicate TOP-LEVEL frontmatter keys (parse_yaml's own last-key-wins
+      construction is otherwise unchanged — the second occurrence still wins the value).
+      Nested-mapping and list-item-mapping duplicates are a known non-goal of this pass.
 """
 from __future__ import annotations
 
@@ -6226,8 +6234,22 @@ def _parse_inline_list(text: str) -> list:
     return items
 
 
-def _parse_yaml_lines(lines: list[str], start: int, base_indent: int) -> tuple[Any, int]:
-    """Port of schema.js parseYamlLines (lines 100-190). Returns (value, next_line)."""
+def _parse_yaml_lines(
+    lines: list[str], start: int, base_indent: int, *, dup_keys: list[str] | None = None
+) -> tuple[Any, int]:
+    """Port of schema.js parseYamlLines (lines 100-190). Returns (value, next_line).
+
+    `dup_keys`, when a list is passed, is appended to (not reset) whenever a key
+    already present in this call's own `result` is seen again — i.e. it tracks
+    duplicates only at the SCOPE this particular call is building, not scopes a
+    recursive call builds for a nested value. Callers that want document-top-level
+    duplicates pass it only to the outermost call (see `parse_yaml`); the
+    recursive calls below and in `_parse_list` intentionally omit it, so a
+    nested mapping's own repeated key is not conflated with a top-level one.
+    Default `None` is a no-op, so every pre-existing call site behaves exactly
+    as before — this is additive, not a change to parse_yaml's last-key-wins
+    construction of `result` itself (see module docstring's post-port note).
+    """
     result: dict[str, Any] = {}
     i = start
     n = len(lines)
@@ -6257,6 +6279,8 @@ def _parse_yaml_lines(lines: list[str], start: int, base_indent: int) -> tuple[A
             continue
 
         key = trimmed[:colon_idx].strip()
+        if dup_keys is not None and key in result:
+            dup_keys.append(key)
         rest = trimmed[colon_idx + 1:].strip()
 
         if rest == '' or rest.startswith('#'):
@@ -6288,11 +6312,34 @@ def _parse_yaml_lines(lines: list[str], start: int, base_indent: int) -> tuple[A
             stripped = _strip_inline_comment(rest)
             if stripped.startswith('[') and stripped.endswith(']'):
                 result[key] = _parse_inline_list(stripped)
+            elif stripped.startswith('{') and stripped.endswith('}'):
+                result[key] = _parse_flow_mapping(stripped)
             else:
                 result[key] = _parse_scalar(stripped)
         i += 1
 
     return result, i
+
+
+def _parse_flow_mapping(text: str) -> Any:
+    """A `{...}` value as the mapping PyYAML reads, else the scalar string.
+
+    Every fleet reader loads these records with `yaml.safe_load`, so a valid
+    flow mapping read here as a string makes an object-typed field report
+    `expected object, got str` on a record that is correct on disk.
+
+    Negative-spec: text PyYAML rejects, or reads as anything but a mapping,
+    falls back to `_parse_scalar` — the pre-existing string reading — rather
+    than failing the record. Nested dates are coerced to strings, keeping the
+    same date leniency every other value here has.
+    """
+    try:
+        loaded = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return _parse_scalar(text)
+    if not isinstance(loaded, dict):
+        return _parse_scalar(text)
+    return _coerce_dates_to_strings(loaded)
 
 
 def _parse_list(lines: list[str], start: int, base_indent: int) -> list:
@@ -6380,17 +6427,21 @@ def _skip_past(lines: list[str], start: int, base_indent: int) -> int:
     return i
 
 
-def parse_yaml(text: str) -> Any:
+def parse_yaml(text: str, *, dup_keys: list[str] | None = None) -> Any:
     """Parse a restricted-YAML string into a plain Python object.
 
     Port of schema.js parseYaml (lines 33-36). Restricted to the subset used
     in coordinator schemas and frontmatter — scalar `key: value`, list items,
-    one level of nested mapping, block scalars (`|`/`>`). Does NOT handle
-    anchors, multi-line flow strings, or flow mappings beyond inline `[a, b]`
-    lists.
+    one level of nested mapping, block scalars (`|`/`>`), and a single-line
+    `{k: v}` flow mapping as a key's value. Does NOT handle anchors or
+    multi-line flow collections.
+
+    `dup_keys`, when passed, collects any top-level key seen more than once
+    (last-key-wins still applies to the returned value — this only reports the
+    fact). Post-port addition, default None; see module docstring.
     """
     lines = text.split('\n')
-    value, _ = _parse_yaml_lines(lines, 0, 0)
+    value, _ = _parse_yaml_lines(lines, 0, 0, dup_keys=dup_keys)
     return value
 
 
@@ -6839,7 +6890,14 @@ def parse_frontmatter(content: str) -> dict[str, Any]:
     Port of schema.js parseFrontmatter. Expects optional "---\\n...\\n---\\n"
     delimiters at the start, optionally preceded by one or more HTML comment
     blocks (<!-- ... -->) and surrounding whitespace. Returns
-    {"frontmatter": dict | None, "body": str}.
+    {"frontmatter": dict | None, "body": str, "duplicate_keys": list[str]}.
+    "duplicate_keys" is only present when frontmatter parsed successfully; it
+    lists (in first-repeat order, deduplicated) any top-level frontmatter key
+    that appeared more than once in the source block. parse_yaml's own
+    last-key-wins behavior is unchanged — the returned "frontmatter" dict still
+    carries whichever occurrence came last — this field only makes that silent
+    overwrite detectable to a caller (2026-08-07-lint-frontmatter-passes-
+    duplicate-yaml-keys; post-port addition, not in the schema.js oracle).
 
     When frontmatter is present, body is the content AFTER the closing ---
     delimiter; a leading HTML comment (if any) is excluded from body.
@@ -6885,10 +6943,15 @@ def parse_frontmatter(content: str) -> dict[str, Any]:
     yaml_block = rest[: close_match.start()]
     body = re.sub(r'^---\s*\n?', '', rest[close_match.start():])
     try:
-        fm = parse_yaml(yaml_block)
+        dup_keys: list[str] = []
+        fm = parse_yaml(yaml_block, dup_keys=dup_keys)
         if fm is None or not isinstance(fm, dict) or len(fm) == 0:
             return {'frontmatter': None, 'body': content}
-        return {'frontmatter': fm, 'body': body}
+        return {
+            'frontmatter': fm,
+            'body': body,
+            'duplicate_keys': list(dict.fromkeys(dup_keys)),
+        }
     except Exception as exc:
         # Broad by design: any parse_yaml failure on the delimited block is
         # treated identically to "no frontmatter" — mirrors the JS oracle's
@@ -8062,6 +8125,54 @@ def _lint_parse_args(argv: list[str]) -> dict | None:
     return args
 
 
+def _dup_key_errors(parsed: dict[str, Any]) -> list[ErrorDict]:
+    """One `ErrorDict` per duplicate top-level frontmatter key in `parsed`
+    (the `parse_frontmatter` result) — YAML last-key-wins silently
+    discards the earlier value, so this is a defect independent of
+    whether any schema matches the file. Shared by `_run_single_file_check`
+    and `_run_tree_walk`; both fed the same `parsed['duplicate_keys']`
+    list through an identical comprehension before this was factored out.
+    """
+    return [
+        {
+            'field': 'frontmatter',
+            'error': (
+                f"duplicate top-level key '{k}' — YAML last-key-wins silently "
+                "discards the earlier value"
+            ),
+            'hint': 'remove or merge the duplicate key before trusting either value',
+        }
+        for k in (parsed.get('duplicate_keys') or [])
+    ]
+
+
+def _print_single_file_violation(
+    repo_rel: str, schema_label: str, errors: list[ErrorDict], as_json: bool,
+    warnings: list[ErrorDict] | None = None,
+) -> None:
+    """Render the one-violation report `_run_single_file_check` prints in
+    both its no-schema-but-dup-keys short-circuit and its normal
+    combined-errors path — same JSON/text shape either way, factored out
+    so the two call sites can't drift.
+    """
+    violation = {'file': repo_rel, 'schema': schema_label, 'errors': errors}
+    if as_json:
+        print(json.dumps(
+            {'ok': False, 'violations': [violation], 'warnings': warnings or []}, indent=2,
+        ))
+    else:
+        print('lint-frontmatter --file: 1 violation(s)\n', file=sys.stderr)
+        print(f"  {violation['file']}  [{violation['schema']}]", file=sys.stderr)
+        for e in violation['errors']:
+            print(f"    - {e['field']}: {e['error']}", file=sys.stderr)
+            if e.get('hint'):
+                print(f"      hint: {e['hint']}", file=sys.stderr)
+        for w in warnings or []:
+            print(f"    warning: {w['field']}: {w['error']}", file=sys.stderr)
+            if w.get('hint'):
+                print(f"      hint: {w['hint']}", file=sys.stderr)
+
+
 def _run_single_file_check(repo_root: str, file_path: str, as_json: bool) -> int:
     """Port of lint-frontmatter.js runSingleFileCheck. Returns the process exit code."""
     if not file_path:
@@ -8105,9 +8216,16 @@ def _run_single_file_check(repo_root: str, file_path: str, as_json: bool) -> int
     content = Path(resolved).read_text(encoding='utf-8')
     parsed = parse_frontmatter(content)
     frontmatter = parsed['frontmatter']
+    dup_errors = _dup_key_errors(parsed)
 
     resolved_schema = match_schema(repo_rel, frontmatter, schemas)
     if resolved_schema is None:
+        if dup_errors:
+            # A duplicate key is a defect independent of whether any schema
+            # matches this path — report it rather than falling through to
+            # "nothing to validate" (that fallthrough is exactly this row's bug).
+            _print_single_file_violation(repo_rel, '(frontmatter)', dup_errors, as_json)
+            return 1
         if as_json:
             print(json.dumps({'ok': True, 'violations': [], 'note': 'no schema matches this path'}, indent=2))
         else:
@@ -8146,7 +8264,9 @@ def _run_single_file_check(repo_root: str, file_path: str, as_json: bool) -> int
         ref_errors, ref_warnings = _check_handoff_refs(
             frontmatter, repo_root, resolved, repo_rel, None, handoff_id_index, False,
         )
-    combined_errors = (list(result.get('errors') or []) if not result.get('ok') else []) + ref_errors
+    combined_errors = dup_errors + (
+        (list(result.get('errors') or []) if not result.get('ok') else []) + ref_errors
+    )
 
     if not combined_errors:
         # 'warnings' (not 'refWarnings') here is intentional, not an
@@ -8165,20 +8285,7 @@ def _run_single_file_check(repo_root: str, file_path: str, as_json: bool) -> int
                     print(f"    hint: {w['hint']}")
         return 0
 
-    violation = {'file': repo_rel, 'schema': schema_name, 'errors': combined_errors}
-    if as_json:
-        print(json.dumps({'ok': False, 'violations': [violation], 'warnings': ref_warnings}, indent=2))
-    else:
-        print('lint-frontmatter --file: 1 violation(s)\n', file=sys.stderr)
-        print(f"  {violation['file']}  [{violation['schema']}]", file=sys.stderr)
-        for e in violation['errors']:
-            print(f"    - {e['field']}: {e['error']}", file=sys.stderr)
-            if e.get('hint'):
-                print(f"      hint: {e['hint']}", file=sys.stderr)
-        for w in ref_warnings:
-            print(f"    warning: {w['field']}: {w['error']}", file=sys.stderr)
-            if w.get('hint'):
-                print(f"      hint: {w['hint']}", file=sys.stderr)
+    _print_single_file_violation(repo_rel, schema_name, combined_errors, as_json, ref_warnings)
     return 1
 
 
@@ -8264,6 +8371,7 @@ def _run_tree_walk(repo_root: str, as_json: bool, strict_refs: bool) -> int:
 
             parsed = parse_frontmatter(content)
             frontmatter = parsed['frontmatter']
+            dup_errors = _dup_key_errors(parsed)
 
             declares_unregistered_kind = (
                 frontmatter is not None
@@ -8308,7 +8416,7 @@ def _run_tree_walk(repo_root: str, as_json: bool, strict_refs: bool) -> int:
             # otherwise; never-silently-disagree divergences always land in
             # errors) — the caller just combines and reports, it does not
             # re-derive the split.
-            combined_errors = list(base_errors) + ref_errors
+            combined_errors = dup_errors + list(base_errors) + ref_errors
             for e in ref_field_warnings:
                 ref_warnings.append({'file': repo_rel, 'schema': effective_name, 'warning': e})
 

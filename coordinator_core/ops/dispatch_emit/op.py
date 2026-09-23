@@ -162,6 +162,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.cartography._guard import PathEscapeError
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops._workflow_contract import Severity, run_checks
@@ -175,10 +176,6 @@ from coordinator_core.ops._param_alias import aliased_param, spellings
 # Generator-provenance: writes the emitted script to a caller-supplied,
 # path-guarded output_path -- no fixed target, purely caller-named.
 GENERATES = []
-
-
-class PathEscapeError(ValueError):
-    """Raised when ``output_path`` resolves outside ``target_root``."""
 
 
 class InventoryPathConflictError(ValueError):
