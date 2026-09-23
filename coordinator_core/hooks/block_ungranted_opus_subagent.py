@@ -354,8 +354,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return rewrite_input(
             "PreToolUse",
             {**tool_input, "model": _INHERITED_REWRITE_MODEL},
-            f"subagent_type={subagent_type!r} resolved to {_INHERITED_REWRITE_MODEL} "
-            f"(was inheriting {resolved_model!r}).",
+            f"MODEL SWITCHED: {subagent_type!r} runs as {_INHERITED_REWRITE_MODEL}, not "
+            f"the inherited {resolved_model!r} -- {_INHERITED_REWRITE_MODEL} fits most "
+            f"agent work. For Opus-grade judgment, dispatch a named persona.",
         )
 
     return deny("PreToolUse", _deny_reason(subagent_type, resolved_model, note))

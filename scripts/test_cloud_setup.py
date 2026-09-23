@@ -110,6 +110,37 @@ def _isolate_claude_home(tmp_path, monkeypatch):
     as standing instruction.
     """
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "claude-home"))
+    # Belt and braces: `_claude_home()` falls back to `Path.home()` (USERPROFILE on
+    # Windows, HOME on POSIX) when CLAUDE_HOME is unset, so point those at tmp too.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+
+
+#: The operator's real `.claude` settings, resolved at import -- before any fixture
+#: redirects the home -- so the tripwire below watches the file sessions actually load.
+_REAL_CLAUDE_SETTINGS = Path.home() / ".claude" / "settings.json"
+
+
+def _real_settings_fingerprint():
+    try:
+        return _REAL_CLAUDE_SETTINGS.read_bytes()
+    except OSError:
+        return None
+
+
+@pytest.fixture(autouse=True)
+def _real_claude_home_tripwire():
+    """Fail the arm that changes the operator's real `~/.claude/settings.json`.
+
+    Measured 2026-09-23 on machine-a: that file carried a marketplace source under a
+    pytest tmp dir (`...\\test_every_network_step_failin0\\coordinator-claude`)
+    plus `enabledPlugins["coordinator@coordinator-claude"]` -- a plugin
+    registration the PM forbids on a working box, written by this module's arms."""
+    before = _real_settings_fingerprint()
+    yield
+    assert _real_settings_fingerprint() == before, (
+        f"this test wrote the operator's real {_REAL_CLAUDE_SETTINGS}"
+    )
 
 
 def _make_scratch_clones(cloud_mod, tmp_path: Path) -> dict:
@@ -213,11 +244,10 @@ def test_every_network_step_failing_is_named_not_silent(monkeypatch, tmp_path, c
         assert steps_by_name[step_name]["detail"]  # non-empty diagnostic
 
 
-# Cut the scratch-HOME arm. `set_engine_env`
-# is six lines and reads only `CLONES`; it cannot derive a path from `HOME` by
-# construction (no `os.environ["HOME"]` read exists anywhere in the module),
-# so the arm asserted a property the code cannot violate rather than pinning
-# real behaviour.
+# No scratch-HOME arm for `set_engine_env`: it reads only `CLONES`. Every OTHER
+# `main()` step that writes the `.claude` directory resolves it through
+# `_claude_home()`, which DOES fall back to the real home -- the autouse
+# `_isolate_claude_home` and `_real_claude_home_tripwire` fixtures cover that.
 
 
 # ---------------------------------------------------------------------------

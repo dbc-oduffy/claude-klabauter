@@ -192,8 +192,12 @@ def read_door_route(
     since = time.time()
     argv: List[str] = [str(door_path), op, *(args or [])]
     try:
+        # cwd IS the sink selector: the served row lands in the sink of the
+        # repo the door runs in, so an inherited cwd (setup.py launched from
+        # any other checkout) writes where this function never reads.
         subprocess.run(
             argv,
+            cwd=str(repo_root),
             capture_output=True,
             timeout=timeout,
             check=False,

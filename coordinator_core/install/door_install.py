@@ -132,9 +132,11 @@ from __future__ import annotations
 
 import argparse
 import filecmp
+import functools
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -1295,16 +1297,44 @@ def is_native_image(path: Path) -> bool:
 #: the mechanism, and it is deliberately tiny.
 _EXEC_SHAPED_NAMES = frozenset({"claude-doe"})
 
+#: INSTALL-CLASS CLIs declare themselves: a module-level `INSTALL_CLASS = True`
+#: line in `coordinator/bin/<name>.py`. PM ruling 2026-09-23: "install shouldn't
+#: route via the warm engine, because it installs." An entrypoint that installs,
+#: re-registers or removes the engine, or re-lands forwarders, served warm runs
+#: inside the server it is replacing. The PM's reasoning, verbatim: "install
+#: can't rely on the warm engine because it precedes it, and a re-install
+#: replaces the warm engine. it's one of the things that makes no sense being
+#: served warm." Measured on machine-a the same day:
+#: `coordinator-install` came back JSON-RPC -32004 "warm dispatch indeterminate".
+#: A DECLARATION, not a roster or a name pattern: "does this CLI write install
+#: state" is only answerable by its author, and
+#: `coordinator_core/install/tests/test_install_class_runs_cold.py` makes every
+#: CLI that reaches `coordinator_core.install` (or is named like an installer)
+#: declare True or False explicitly, so a new one cannot land unclassified.
+_INSTALL_CLASS_RE = re.compile(rb"^INSTALL_CLASS = (True|False)\b", re.M)
+
+
+@functools.lru_cache(maxsize=None)
+def declared_install_class(name: str) -> Optional[bool]:
+    """`INSTALL_CLASS` as declared by `coordinator/bin/<name>.py`; None when the
+    file is absent or declares nothing."""
+    try:
+        source = (_GENERATOR_BIN_DIR / f"{name}.py").read_bytes()
+    except OSError:
+        return None
+    match = _INSTALL_CLASS_RE.search(source)
+    return None if match is None else match.group(1) == b"True"
+
 
 def name_is_warm_servable(name: str) -> bool:
-    """False for a name in `_EXEC_SHAPED_NAMES` -- see that roster for why a
-    process-replacing entrypoint must never be reached through the door.
+    """False for a name in `_EXEC_SHAPED_NAMES` or one whose CLI declares
+    `INSTALL_CLASS = True` -- see both for why neither may reach the door.
 
     NOT the same answer as `launcher_is_installable`, and the callers must
     not collapse them: an unservable name still WANTS its Python forwarder
     pair (it is a live PATH tool, just not a warm-servable one), whereas a
     publish-excluded name wants no launcher at all."""
-    return name not in _EXEC_SHAPED_NAMES
+    return name not in _EXEC_SHAPED_NAMES and declared_install_class(name) is not True
 
 
 def launcher_is_installable(engine_root: Path, name: str) -> bool:

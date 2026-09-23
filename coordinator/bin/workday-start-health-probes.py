@@ -230,6 +230,8 @@ git history for the removed engine module.
 
 from __future__ import annotations
 
+INSTALL_CLASS = True  # re-installs git hooks fleet-wide and writes registry keys; see door_install.declared_install_class
+
 import importlib.util
 import os
 import re

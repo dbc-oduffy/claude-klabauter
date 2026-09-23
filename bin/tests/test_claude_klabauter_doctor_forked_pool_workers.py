@@ -186,3 +186,32 @@ def test_a_process_with_no_readable_ppid_is_kept(probe_mod):
     )
 
     assert _pids(servers) == [700, 800]
+
+
+class _NamedProc:
+    """A process reporting only its snapshot name; reading anything else fails
+    the test, because that read is the cost the name filter exists to skip."""
+
+    def __init__(self, pid: int, name: str, cmdline: list) -> None:
+        self.info = {"pid": pid, "name": name}
+        self._cmdline = cmdline
+
+    def as_dict(self, attrs):
+        if self.info["name"] and not self.info["name"].lower().startswith("python"):
+            raise AssertionError(f"read {attrs} for non-Python {self.info['name']}")
+        return {"ppid": 1, "create_time": 1.0, "cmdline": self._cmdline}
+
+
+def test_only_python_processes_have_their_cmdline_read(probe_mod):
+    """Reading every process's cmdline cost 9.2s per scan on Windows; the
+    name from the snapshot is free and only Python can match the signature."""
+    procs = [
+        _NamedProc(900, "node.exe", ["node", _SERVER_SCRIPT]),
+        _NamedProc(901, "python.exe", ["python", _SERVER_SCRIPT]),
+        _NamedProc(902, "", ["python3", _SERVER_SCRIPT]),
+    ]
+    fake = SimpleNamespace(process_iter=lambda _attrs: iter(procs))
+
+    servers = probe_mod._enumerate_resident_warm_servers(fake)
+
+    assert _pids(servers) == [901, 902]

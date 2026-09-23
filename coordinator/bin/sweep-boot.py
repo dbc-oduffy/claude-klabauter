@@ -64,6 +64,8 @@ Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md § Pinned pat
 """
 from __future__ import annotations
 
+INSTALL_CLASS = True  # re-lands bare-name forwarders (forwarder_self_heal); see door_install.declared_install_class
+
 import os
 import sys
 

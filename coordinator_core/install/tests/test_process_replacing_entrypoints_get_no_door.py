@@ -67,7 +67,8 @@ def test_a_stale_image_from_an_earlier_install_is_taken_back(tmp_path):
     the name's only file, so leaving it is leaving the break in place."""
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
-    stale = bin_dst / "claude-doe"
+    # The platform's image name (`claude-doe.exe` on Windows), not a POSIX literal.
+    stale = door_install.named_forwarder_path(bin_dst, "claude-doe")
     stale.write_bytes(b"\xcf\xfa\xed\xfe a door image hardlinked over the trampoline")
 
     substrate._write_native_door_forwarder(

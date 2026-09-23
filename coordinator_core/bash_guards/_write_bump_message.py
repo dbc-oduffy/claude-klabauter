@@ -625,7 +625,8 @@ def render_publish_em_message(
         )
     return (
         f"Coordinator guard — instead: {_target_phrase(target_repo, raw_target)} is publish mirror "
-        f"(`{destination_owner}`) — durable fix belongs in source; see "
+        f"(`{destination_owner}`) — durable fix belongs in source; the next publish "
+        "overwrites the mirror, so it never needs hand-cleaning. See "
         f"`{_PUBLISH_DOCTRINE_CITATION}` § `{_PUBLISH_DOCTRINE_SECTION}`."
     )
 
@@ -664,7 +665,8 @@ def render_publish_subagent_message(
         )
     return (
         f"Coordinator guard — instead: {_target_phrase(target_repo, raw_target)} is publish mirror "
-        f"(`{destination_owner}`) — durable fix belongs in source; see "
+        f"(`{destination_owner}`) — durable fix belongs in source; the next publish "
+        "overwrites the mirror, so it never needs hand-cleaning. See "
         f"`{_PUBLISH_DOCTRINE_CITATION}` § `{_PUBLISH_DOCTRINE_SECTION}`. "
         "Report to your EM."
     )

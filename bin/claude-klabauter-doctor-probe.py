@@ -1323,27 +1323,31 @@ def _run_probe_worktree_bloat(claude_klabauter_root: Path | None) -> _ProbeResul
 
         large_files: list[dict[str, Any]] = []
 
-        for dirpath, dirnames, filenames in os.walk(claude_klabauter_root, followlinks=False):
-            # Prune .git/ — do not descend into it.
-            dirnames[:] = [d for d in dirnames if d != ".git"]
-
-            for filename in filenames:
-                file_path = Path(dirpath) / filename
+        # scandir, not os.walk + per-file lstat: on Windows a DirEntry carries
+        # its size and link bit from the directory listing itself, so the scan
+        # costs one syscall per directory instead of two per file.
+        root_str = str(claude_klabauter_root)
+        pending = [root_str]
+        while pending:
+            try:
+                entries = list(os.scandir(pending.pop()))
+            except OSError:
+                # Permission denied or directory vanished mid-walk — skip, don't abort.
+                continue
+            for entry in entries:
                 try:
-                    if file_path.is_symlink():
+                    if entry.is_symlink():
                         continue
-                    st = os.lstat(file_path)
-                    if st.st_size >= threshold_bytes:
-                        try:
-                            rel_path = str(file_path.relative_to(claude_klabauter_root))
-                        except ValueError:
-                            rel_path = str(file_path)
-                        large_files.append(
-                            {"path": rel_path, "size_bytes": st.st_size}
-                        )
+                    if entry.is_dir(follow_symlinks=False):
+                        if entry.name != ".git":
+                            pending.append(entry.path)
+                        continue
+                    size = entry.stat(follow_symlinks=False).st_size
                 except OSError:
-                    # Permission denied or file vanished mid-walk — skip, don't abort.
                     continue
+                if size >= threshold_bytes:
+                    rel_path = os.path.relpath(entry.path, root_str)
+                    large_files.append({"path": rel_path, "size_bytes": size})
 
         threshold_human = _format_bytes_human(threshold_bytes)
 
@@ -3865,7 +3869,7 @@ def _run_probe_orphaned_execnet_gateways() -> _ProbeResult:
         # the normal case under this box's process churn. Advancing the
         # iterator by hand lets a per-process failure skip that process and
         # continue enumerating, instead of aborting the whole probe.
-        proc_iter = psutil.process_iter(["pid", "ppid", "cmdline"])
+        proc_iter = _iter_python_processes(psutil, ["pid", "ppid", "cmdline"])
         while True:
             try:
                 proc = next(proc_iter)
@@ -4070,6 +4074,44 @@ def _warm_check_socket_reachable(socket_path: Any, election_module: Any) -> str:
     return _REACH_CANNOT_TELL
 
 
+def _iter_python_processes(psutil_module: Any, attrs: list[str]):
+    """`process_iter(attrs)` narrowed to Python interpreters, reading the
+    expensive attrs only for those.
+
+    Reading `cmdline` for every process on the box cost 9.2s per scan on
+    Windows (448 processes, 2026-09-23); the name comes from the process
+    snapshot for free, and only a Python process can carry either signature
+    the scans look for (0.01s). A process whose name is unreadable is kept,
+    not dropped -- an unknown name is not evidence it isn't Python.
+
+    Yields processes with `info` populated for `attrs`; per-process failures,
+    including the iterator's own mid-snapshot NoSuchProcess, skip that process.
+    """
+    proc_iter = psutil_module.process_iter(["pid", "name"])
+    while True:
+        try:
+            proc = next(proc_iter)
+        except StopIteration:
+            return
+        except Exception:
+            continue
+        try:
+            name = (proc.info.get("name") or "").lower()
+        except Exception:
+            continue
+        if name and not name.startswith("python"):
+            continue
+        missing = [a for a in attrs if a not in proc.info]
+        if missing:
+            # A failed read (the process exited, access denied) leaves those
+            # keys absent; callers already read `info` with `.get`.
+            try:
+                proc.info.update(proc.as_dict(attrs=missing))
+            except Exception:
+                pass
+        yield proc
+
+
 def _enumerate_resident_warm_servers(psutil_module: Any) -> list[dict[str, Any]]:
     """Shared psutil.process_iter walk matching resident warm server processes
     against `_WARM_SERVER_CMDLINE_SIGNATURE` (`coordinator_core/warm/server.py`).
@@ -4100,7 +4142,7 @@ def _enumerate_resident_warm_servers(psutil_module: Any) -> list[dict[str, Any]]
     """
     servers: list[dict[str, Any]] = []
 
-    proc_iter = psutil_module.process_iter(["pid", "ppid", "create_time", "cmdline"])
+    proc_iter = _iter_python_processes(psutil_module, ["pid", "ppid", "create_time", "cmdline"])
     while True:
         try:
             proc = next(proc_iter)

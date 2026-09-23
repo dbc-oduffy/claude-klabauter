@@ -71,6 +71,28 @@ def test_read_door_route_classifies_warm_server_row(monkeypatch, tmp_path):
     assert result.entry is not None
 
 
+def test_read_door_route_runs_the_door_in_the_repo_whose_sink_it_reads(monkeypatch, tmp_path):
+    """The served row lands in the sink of the door's cwd. An inherited cwd
+    (setup.py launched from another checkout) wrote the row elsewhere, and
+    the check reported UNRESOLVED -- or matched an unrelated row -- on a
+    healthy warm install (measured 2026-09-23)."""
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen["cwd"] = kwargs.get("cwd")
+
+        class _Result:
+            returncode = 0
+
+        return _Result()
+
+    _patch_repo(monkeypatch, tmp_path)
+    monkeypatch.setattr(door_route_signal.subprocess, "run", fake_run)
+
+    door_route_signal.read_door_route(Path("/fake/door"), "ping", repo_root=tmp_path)
+    assert seen["cwd"] == str(tmp_path)
+
+
 def test_read_door_route_classifies_forced_fall_through_as_in_process(monkeypatch, tmp_path):
     """AC5: a forced fall-through must be readable as a FAIL by the caller --
     proven here by asserting it is distinct from WARM_SERVER, never folded

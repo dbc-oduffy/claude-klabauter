@@ -1413,6 +1413,16 @@ def _git_subcommand_and_target_cwd(
     return None, cwd_for_git, []
 
 
+def _is_expansion_valued(target: str) -> bool:
+    """A path whose value only the shell knows (`$S/x.log`, `` `pwd`/x ``).
+
+    NEGATIVE SPEC -- never composed onto a cwd: `$S/install2.log` after
+    `cd <mirror>` joined to `<mirror>/$S/install2.log` and bumped a write that
+    actually lands in `$S`. Unknowable means no verdict (FAIL OPEN); the bare
+    `$D` unset-variable shape is `bump_outside_repo_write`'s, not this guard's."""
+    return "$" in target or "`" in target
+
+
 def _iter_write_sink_candidates(
     cmd: str, cwd: Optional[str]
 ) -> Iterator[Tuple[str, str, Optional[str]]]:
@@ -1496,6 +1506,7 @@ def _iter_write_sink_candidates(
 
     effective_cwd = cwd or os.getcwd()
     payload_base_cwd = effective_cwd
+    cwd_unresolved = False
     for rc in resolved_segments:
         if rc.depth != 0:
             continue
@@ -1506,12 +1517,20 @@ def _iter_write_sink_candidates(
         if head_base == "cd":
             positional = [t for t in rc.tokens[1:] if not t.startswith("-")]
             if len(positional) == 1:
+                if _is_expansion_valued(positional[0]):
+                    # Same rule as the PowerShell leg's Set-Location: the
+                    # base is unknown, so later relative writes are unjudgeable.
+                    cwd_unresolved = True
+                    continue
                 # `None` means untranslatable -- a `cd` we cannot resolve
                 # must not poison every subsequent candidate in this
                 # segment, so leave `effective_cwd` at its previous value.
                 resolved = _resolve_relative(effective_cwd, positional[0])
                 if resolved is not None:
                     effective_cwd = resolved
+            continue
+
+        if cwd_unresolved:
             continue
 
         if head_base == "git":
@@ -1523,6 +1542,8 @@ def _iter_write_sink_candidates(
             continue
 
         for raw_target in extract_write_sink_targets_for_segment(rc.tokens, head_base):
+            if _is_expansion_valued(raw_target):
+                continue
             resolved_target = _resolve_relative(effective_cwd, raw_target)
             if resolved_target is None:
                 continue
@@ -2226,6 +2247,8 @@ def _check_bump_foreign_repo_write_powershell(
             continue
 
         for raw_target in raw_targets:
+            if _is_expansion_valued(raw_target):
+                continue
             target_dir = _resolve_relative(effective_cwd, raw_target)
             if target_dir is None:
                 # Untranslatable -- fail open, no verdict for this

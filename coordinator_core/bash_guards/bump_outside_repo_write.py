@@ -757,10 +757,23 @@ def _no_git_repo_target_label(
 #: the shape a caller left un-set/un-exported, not the SET of characters a
 #: legal path could also contain -- so `$D/out.txt` (a variable used as a
 #: path PREFIX, still plausibly a real path once expanded) does not match.
-_UNEXPANDED_VAR_TARGET_RE = re.compile(r"^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$")
+_UNEXPANDED_VAR_TARGET_RE = re.compile(r"^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$")
+
+#: A name the command itself assigns before use: `D=...`, `export D=...`,
+#: `local`/`declare`/`readonly D=...`, `for D in`, `read [-flags] D`.
+_ASSIGNED_NAME_RE = re.compile(
+    r"(?:^|[\s;&|(])(?:(?:export|local|declare|readonly|typeset)\s+(?:-\w+\s+)*)?"
+    r"([A-Za-z_][A-Za-z0-9_]*)\+?="
+    r"|\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\b"
+    r"|\bread\s+(?:-\w+\s+)*([A-Za-z_][A-Za-z0-9_]*)"
+)
 
 
-def _is_unexpanded_variable_target(raw_target: str) -> bool:
+def _names_assigned_in(cmd: str) -> frozenset:
+    return frozenset(n for m in _ASSIGNED_NAME_RE.finditer(cmd) for n in m.groups() if n)
+
+
+def _is_unexpanded_variable_target(raw_target: str, assigned: frozenset = frozenset()) -> bool:
     """True when `raw_target` is NOTHING but a bare, never-expanded shell
     variable reference (`$D`, `${D}`) -- the shape a redirect/mv/cp target
     takes when the caller meant to interpolate a variable that was never
@@ -789,11 +802,15 @@ def _is_unexpanded_variable_target(raw_target: str) -> bool:
         variable.
       - Does NOT resolve, evaluate, or look up the named variable's actual
         value anywhere in this module.
+      - Does NOT fire on a name in `assigned` -- one the same command sets
+        (`D=/x/t; mkdir -p $D`). Its value is known to exist; only whether
+        it is outside the repo is unknown, and that is not this shape.
     """
     stripped = raw_target.strip()
     if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in ('"', "'"):
         stripped = stripped[1:-1]
-    return bool(_UNEXPANDED_VAR_TARGET_RE.match(stripped))
+    m = _UNEXPANDED_VAR_TARGET_RE.match(stripped)
+    return bool(m) and m.group(1) not in assigned
 
 
 def check_bump_outside_repo_write(
@@ -882,8 +899,9 @@ def check_bump_outside_repo_write(
     anchor_git_root_str = str(anchor_gitdir.parent) if anchor_gitdir.name == ".git" else str(anchor_gitdir)
     effective_sid = effective_session_id(session_id, anchor_git_root_str, agent_id)
 
+    assigned = _names_assigned_in(cmd)
     for candidate_index, (target_dir, _label, raw_target) in enumerate(candidates):
-        if _is_unexpanded_variable_target(raw_target):
+        if _is_unexpanded_variable_target(raw_target, assigned):
             # Own branch, BEFORE git-root resolution: `_resolve_relative`
             # already resolved `$D` LITERALLY against `effective_cwd`, so
             # from a repo root it lands at `<repo>/$D` -- which the

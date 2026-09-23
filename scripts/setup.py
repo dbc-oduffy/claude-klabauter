@@ -3843,6 +3843,11 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
             "some coordinator/bin/ CLIs may be unreachable at their documented settings-home path.",
             file=sys.stderr,
         )
+        # Agent mode hides the child's ~500-line log, which also hid the only
+        # statement of WHY it failed; the tail of stderr carries the error.
+        if args.agent_mode:
+            for line in proc.stderr.strip().splitlines()[-15:]:
+                print(f"  | {line}", file=sys.stderr)
         print(f"  Re-run manually: {engine_py} -m coordinator_core.install.substrate --setup-only "
               f"(CLAUDE_PLUGIN_ROOT={plugin_root})", file=sys.stderr)
         # Non-fatal: setup must still complete even if this step failed.

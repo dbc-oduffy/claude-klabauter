@@ -712,6 +712,28 @@ def test_variable_used_as_path_prefix_is_not_treated_as_unexpanded_shape(env, mo
     assert guard._is_unexpanded_variable_target('"$D"')
 
 
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "D=/x/proj/tasks/x; mkdir -p $D; echo hi > $D/pass-1.log",
+        'export D="/tmp/y" && mkdir -p "$D"',
+        "for D in a b; do touch $D; done",
+        "read -r D && mkdir ${D}",
+        "local D=1; mkdir $D",
+    ],
+)
+def test_variable_assigned_earlier_in_the_command_is_not_unexpanded(cmd):
+    """doe-claude-4d, 2026-09-23: `D=...; mkdir -p $D` was denied as
+    "'$D' did not expand -- the variable was never set"."""
+    assert "D" in guard._names_assigned_in(cmd)
+    assert not guard._is_unexpanded_variable_target("$D", guard._names_assigned_in(cmd))
+
+
+def test_unassigned_variable_still_matches_with_other_names_assigned():
+    assigned = guard._names_assigned_in("E=1; mkdir $D")
+    assert guard._is_unexpanded_variable_target("$D", assigned)
+
+
 def test_write_into_a_different_git_repo_does_not_bump_here(env, tmp_path, monkeypatch):
     """A target that resolves to SOME git root (even a foreign one) is C4's
     concern, never this guard's -- see module docstring, "PREDICATE"."""

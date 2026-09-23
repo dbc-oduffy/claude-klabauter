@@ -49,7 +49,7 @@ decision is needed. Either path installs the same engine.
 ```
 python3 scripts/setup.py --i-am-agent      # agent path, non-interactive
 python3 scripts/setup.py                   # human path, interactive prompts where needed
-python3 scripts/setup.py --check           # deterministic check-only, no side effects
+python3 scripts/setup.py --check           # liveness only: confirms the script runs, checks nothing else
 ```
 
 Windows: `python scripts\setup.py` with the same flags.

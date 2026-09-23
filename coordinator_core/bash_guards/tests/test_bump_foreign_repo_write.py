@@ -2668,3 +2668,24 @@ def test_ac5_powershell_start_process_cross_repo_memo_invocation_recognized_unde
 
     assert guard._command_invokes_cross_repo_memo(cmd, None, dialect=Dialect.POWERSHELL) is True
     assert guard._command_invokes_cross_repo_memo(cmd, None) is False
+
+
+# --- expansion-valued paths are unknowable, never joined onto a cwd ---
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd /some/other && python x.py > $S/install2.log",
+        'cd /some/other && echo hi > "${S}/out.txt"',
+        "echo hi > `pwd`/out.txt",
+        "cd $ELSEWHERE && echo hi > out.txt",
+    ],
+)
+def test_expansion_valued_write_or_cd_target_yields_no_candidate(command, tmp_path):
+    assert list(guard._iter_write_sink_candidates(command, str(tmp_path))) == []
+
+
+def test_literal_redirect_after_cd_still_yields_a_candidate(tmp_path):
+    cands = list(guard._iter_write_sink_candidates("cd sub && echo hi > out.txt", str(tmp_path)))
+    assert len(cands) == 1 and cands[0][2] == "out.txt"
