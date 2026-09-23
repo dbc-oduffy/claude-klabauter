@@ -362,6 +362,10 @@ class Report:
     #: `settings.json` hooks removed because the coordinator plugin already
     #: delivers them on the same event (`drop_double_fired_settings_hooks`).
     hook_dedupe: dict | None = None
+    #: The settings-manifest env checker's verdict after its apply pass: which
+    #: all-machines values it wrote and which findings remain
+    #: (`apply_settings_manifest_env`).
+    settings_env: dict | None = None
     #: The platform's installed-plugin record as this run left it, and whether
     #: the path it names actually resolves. Separate from `plugin_settings`
     #: because they are different files answering different questions: that one
@@ -1598,6 +1602,57 @@ def register_plugin_settings() -> None:
     tmp_path = settings_path.with_suffix(settings_path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(settings, indent=2), newline="\n")
     tmp_path.replace(settings_path)
+
+
+#: The coordinator plugin's settings-env checker, relative to its clone. Its
+#: `_SPEC` is the executable form of the settings manifest's env table (DoE pins
+#: the two together), so running it keeps the cloud on that single source: a new
+#: all-machines row reaches cloud with no change here.
+SETTINGS_ENV_CHECKER_REL = ("bin", "check-settings-env.py")
+
+
+def apply_settings_manifest_env(report: Report) -> None:
+    """Apply the settings manifest's all-machines env values to the
+    `settings.json` this run wrote, and record the checker's verdict.
+
+    The values are not written here by name, deliberately — see
+    `SETTINGS_ENV_CHECKER_REL`. `--apply` writes only `all_machines` rows, so a
+    machine-specific row is reported, never forced. Unapplied values each gate a
+    tool out of the session silently (agent teams, the task tools), so any
+    finding left after the apply pass raises, and `run_step` carries it to the
+    session verdict rule.
+    """
+    checker = Path(CLONES["coordinator-claude"]["dest"]).joinpath(*SETTINGS_ENV_CHECKER_REL)
+    if not checker.is_file():
+        raise FileNotFoundError(f"settings-env checker not found at {checker}")
+    settings_path = _claude_home() / "settings.json"
+    result = subprocess.run(
+        [sys.executable, str(checker), "--settings", str(settings_path), "--apply", "--json"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        stdin=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    try:
+        verdict = json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        verdict = None
+    if not isinstance(verdict, dict):
+        report.settings_env = {"exit_code": result.returncode, "applied": None, "findings": None}
+        raise RuntimeError(
+            f"check-settings-env exited {result.returncode} with no JSON verdict: "
+            + ((result.stderr or result.stdout or "").strip()[-400:] or "<no output>")
+        )
+    findings = verdict.get("findings") or []
+    report.settings_env = {
+        "exit_code": result.returncode,
+        "applied": verdict.get("applied") or [],
+        "findings": findings,
+    }
+    if result.returncode != 0:
+        named = ", ".join(f"{f.get('var')} ({f.get('kind')})" for f in findings) or "<none named>"
+        raise RuntimeError(f"check-settings-env exited {result.returncode}; unapplied: {named}")
 
 
 def verify_plugin_settings(report: Report) -> None:
@@ -3284,6 +3339,7 @@ def main() -> int:
     )
     run_step("run scripts/setup.py", lambda: run_claude_klabauter_setup(report), report)
     run_step("register plugin settings", register_plugin_settings, report)
+    run_step("apply settings-manifest env", lambda: apply_settings_manifest_env(report), report)
     run_step("verify plugin settings", lambda: verify_plugin_settings(report), report)
     run_step("pin session PATH", lambda: pin_session_path(report), report)
     run_step("register live plugin record", register_live_plugin_record, report)

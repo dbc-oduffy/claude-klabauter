@@ -56,12 +56,13 @@ def _head_tree_sha(repo):
 
 
 def test_refuses_depth_2_rollback(tmp_path):
-    """v0 -> v1 -> a third commit whose staged bytes restore v0's exact
+    """v0 -> v1 -> v2 -> a commit whose staged bytes restore v0's exact
     blob at depth 2: refused, `ok is False`, findings named, nothing
     landed."""
     repo = _repo(tmp_path)
     _commit_scoped(repo, "p.txt", "v0\n", "v0")
     _commit_scoped(repo, "p.txt", "v1\n", "v1")
+    _commit_scoped(repo, "p.txt", "v2\n", "v2")
     before = _head_sha(repo)
 
     result = _commit_scoped(repo, "p.txt", "v0\n", "revert p", detect_rollback=True)
@@ -79,6 +80,7 @@ def test_no_tree_or_commit_object_written_on_refusal(tmp_path):
     repo = _repo(tmp_path)
     _commit_scoped(repo, "p.txt", "v0\n", "v0")
     _commit_scoped(repo, "p.txt", "v1\n", "v1")
+    _commit_scoped(repo, "p.txt", "v2\n", "v2")
     before_head = _head_sha(repo)
     before_tree = _head_tree_sha(repo)
 

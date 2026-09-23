@@ -34,12 +34,12 @@ this module does not walk for it and does not spawn `git rev-parse`.
 Writer discipline -- deliberately NOT a whole-file read-modify-write
 replace. An audit record must not be lossy under concurrent writers, since
 more than one guard can record a fire in the same turn. So every write here
-is a single `O_APPEND` append of one encoded JSON line. On POSIX this is
-atomic at the OS level (single `write()` under `O_APPEND`), so concurrent
-writers cannot clobber each other's lines -- that guarantee is believed true
-but not independently verified for Windows (`O_APPEND` maps to
-`FILE_APPEND_DATA`), which this project's Windows-first-class rule means
-should not be read as pinned by test here.
+goes through `coordinator_core.atomic_append.append_line`, the shared
+atomic-append primitive: genuine kernel `O_APPEND` on POSIX, `CreateFileW`
+with `FILE_APPEND_DATA` on Windows (the CRT's `O_APPEND` emulation there is
+neither atomic under concurrent writers nor byte-preserving -- it also
+silently rewrites `\n` to `\r\n`), so concurrent writers cannot clobber each
+other's lines and a written line's bytes are never mangled.
 
 Import-light and stdlib-only, by design: this runs on the Stop hot path,
 which the dispatcher exists to keep cheap. No `subprocess`, no third-party
@@ -53,6 +53,8 @@ import os
 import time
 import uuid
 from typing import Optional
+
+from coordinator_core import atomic_append
 
 _LEDGER_DIRNAME = os.path.join("state", "block-discharge")
 
@@ -86,11 +88,13 @@ def _append_record(path: str, record: dict) -> bool:
         directory = os.path.dirname(path)
         os.makedirs(directory, exist_ok=True)
         line = (json.dumps(record, sort_keys=True) + "\n").encode("utf-8")
-        fd = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
-        try:
-            os.write(fd, line)
-        finally:
-            os.close(fd)
+        # coordinator_core.atomic_append is the one atomic-multi-process-append
+        # primitive: plain os.open(..., O_APPEND) is both non-atomic under
+        # concurrent writers on Windows (CRT emulates it via seek+write) AND
+        # silently rewrites '\n' to '\r\n' there (CRT text-mode translation),
+        # even for already-encoded bytes. Reuse rather than re-open-code either
+        # fix here.
+        atomic_append.append_line(path, line)
         return True
     except OSError:
         return False

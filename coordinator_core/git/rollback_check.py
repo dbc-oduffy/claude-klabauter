@@ -18,10 +18,11 @@ refuse a commit; `P2d`/`P2e` call it from the two agent commit routes
 For each candidate path a caller is about to commit, walks HEAD's
 first-parent line up to `window` steps and asks: does the path's NEW value
 (a blob sha, or `ABSENT` for a deletion) exact-match a version the path
-already held at some ancestor depth on that line? A new value equal to
-`head_sha`'s own is no change and never a finding; `depth` counts
-first-parent steps, `depth=1` being `head_sha` itself, so every finding is
-at `depth>=2` -- an OLDER version coming back. `refusal()` applies K-016's rule: refuse if any single
+already held at some ancestor depth on that line? Per the plan, depth
+counts the path's own VERSIONS (a commit that did not touch it adds none):
+V(1) is `head_sha`'s value, and `N == V(d+1)` is a rollback at depth `d`,
+discarding the `d` most recent changes. `N == V(1)` is no change and never a
+finding; `depth=1` undoes only the latest change. `refusal()` applies K-016's rule: refuse if any single
 finding has `depth >= 2`, or three or more paths each have a finding at any
 depth ("breadth-3").
 
@@ -191,10 +192,11 @@ def find_exact_blob_rollbacks(
     window: int = 1000,
 ) -> List[RollbackFinding]:
     """For each `candidates` path -> new value (`blob sha` or `ABSENT`),
-    the shallowest first-parent depth `d >= 1` at which `head_sha`'s
-    first-parent line already held that exact value, as a
+    the version depth `d >= 1` (module docstring) at which `head_sha`'s
+    first-parent line last held that exact value, as a
     `RollbackFinding(path, depth, restores_commit)`. A path with no match
-    within `window` first-parent steps contributes no finding. Pure read;
+    within `window` first-parent steps, or equal to head's own value,
+    contributes no finding. Pure read;
     see the module docstring's negative spec for what it never does."""
     common_dir = Path(common_dir)
     if not candidates:
@@ -202,20 +204,28 @@ def find_exact_blob_rollbacks(
     ancestors = _first_parent_ancestors(common_dir, head_sha, window)
     findings: List[RollbackFinding] = []
     for path, new_value in candidates.items():
-        # A path this commit leaves as HEAD has it restores nothing. Without
-        # this, every unchanged claimed path -- and every never-tracked one
-        # declared absent -- matched its own unchanged history at depth 1,
-        # and three of them tripped breadth-3 on a commit reverting nothing.
-        if _blob_at_commit(common_dir, head_sha, path) == new_value:
-            continue
-        for depth, sha in ancestors:
+        # Depth counts VERSIONS of the path, not commits: a commit that did
+        # not touch `path` adds no version. V(1) is head's own value -- equal
+        # to it is no change, never a finding (counting it made every
+        # unchanged claimed path a depth-1 hit, and three tripped breadth-3).
+        version = 0
+        previous: object = _NO_VERSION
+        for _step, sha in ancestors:
             old_value = _blob_at_commit(common_dir, sha, path)
-            if old_value is None:
+            if old_value is None or old_value == previous:
                 continue
+            version += 1
+            previous = old_value
             if old_value == new_value:
-                findings.append(RollbackFinding(path, depth, sha))
+                if version >= 2:
+                    findings.append(RollbackFinding(path, version - 1, sha))
                 break
     return findings
+
+
+#: `find_exact_blob_rollbacks`' "no version seen yet" marker -- distinct from
+#: `ABSENT`, which is itself a version.
+_NO_VERSION = object()
 
 
 def refusal(findings: List[RollbackFinding]) -> bool:

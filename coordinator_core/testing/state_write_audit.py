@@ -278,7 +278,7 @@ def pytest_configure(config) -> None:
     # Opened BEFORE the hook is installed: a record write inside the hook
     # uses this already-open fd via os.write, never a second open() call,
     # which would otherwise recurse through the hook it is running in.
-    _out_fd = os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    _out_fd = os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0), 0o644)
     try:
         sys.addaudithook(_audit_hook)
     except Exception:

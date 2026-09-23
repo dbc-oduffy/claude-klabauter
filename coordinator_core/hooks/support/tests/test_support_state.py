@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import time
 
 import pytest
@@ -135,12 +136,15 @@ class TestBinImplDrift:
         installed = bin_dir / "machine-local"
         installed.write_text("OLD\n", encoding="utf-8")
         os.chmod(installed, 0o755)
+        # Windows has no exec bit (st_mode reads 0o666), so pin preservation of
+        # whatever mode the platform recorded rather than a POSIX literal.
+        mode_before = stat.S_IMODE(installed.stat().st_mode)
 
         banner = bin_impl_drift.check_and_refresh(bin_dir, now=1000.0)
         assert banner is not None
         assert "machine-local" in banner
         assert installed.read_text(encoding="utf-8") == "NEW\n"
-        assert oct(installed.stat().st_mode)[-3:] == "755"
+        assert stat.S_IMODE(installed.stat().st_mode) == mode_before
 
     def test_never_seeds_a_file_not_already_installed(self, tmp_path, monkeypatch):
         plugin_root = tmp_path / "plugin"

@@ -10,10 +10,10 @@ scaffold taught authors the retired vocabulary before they could read the
 doctrine that would tell them otherwise. This suite asserts the scaffold now
 emits `disposition` rows, mentions `case_against` (the strongest-honest-case
 field required on `backlogged`/`wont_do`), and that the emitted sample rows
-still validate against the vendored plan-tasks schema (2.0.0).
+still validate against the vendored plan-tasks schema (2.1.0).
 
 Spec backlink: cross-repo/inbox/2026-08-06-doe-claude-em-deferral-both-sides-adopted-three-legs-for-you.md
-Spec backlink: coordinator_core/frontmatter/schemas/plan-tasks.schema.json (x-schema-version 2.0.0)
+Spec backlink: coordinator_core/frontmatter/schemas/plan-tasks.schema.json (x-schema-version 2.1.0)
 
 Loaded by file path (`importlib.machinery.SourceFileLoader`) since
 `coordinator-doc-new` is an extensionless polyglot entrypoint, not a `.py`
@@ -121,9 +121,11 @@ class TestPlanTemplateEmitsLiveDispositionVocabulary(unittest.TestCase):
         # added (`writes_under`), and `writes` items now refuse a trailing
         # `/` or `\`. That narrowing is the only way these sample rows could
         # have become invalid; the validate() below re-proves they did not.
-        # (The 1.14.0 hop had left this pin unmoved and red.) Equality, never a
-        # range -- see the docstring note.
-        self.assertEqual(schema.get("x-schema-version"), "2.0.0")
+        # (The 1.14.0 hop had left this pin unmoved and red.) 2.0.0 -> 2.1.0
+        # (a5ed12bdf7) re-looked: one optional property added
+        # (`external_reads_ungated`), no `required` delta, no existing property
+        # changed. Equality, never a range -- see the docstring note.
+        self.assertEqual(schema.get("x-schema-version"), "2.1.0")
         for row in rows:
             jsonschema.validate(instance=row, schema=schema)
 

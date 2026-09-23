@@ -168,6 +168,7 @@ def _patch_network_steps_ok(monkeypatch, cloud_mod):
         report.setup_exit_code = 0
 
     monkeypatch.setattr(cloud_mod, "run_claude_klabauter_setup", _fake_run_claude_klabauter_setup)
+    monkeypatch.setattr(cloud_mod, "apply_settings_manifest_env", lambda report: None)
 
 
 def _patch_network_steps_all_raise(monkeypatch, cloud_mod):

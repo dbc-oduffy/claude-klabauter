@@ -172,3 +172,21 @@ class TestReadLedgerAggregatesAcrossSessions:
         records, skipped = bd.read_ledger(repo_root, session_id=None)
         assert records == []
         assert skipped == 0
+
+
+class TestLedgerWriteIsLfOnly:
+    """coordinator-python-writers-emit-crlf-on-windows: plain os.open(..., O_APPEND)
+    on Windows text-translates '\\n' to '\\r\\n' even for already-encoded bytes.
+    The ledger must stay LF-only on every platform, since a git checkout with
+    core.autocrlf=true only normalizes what git itself writes -- not bytes this
+    module appends into an existing working-tree file."""
+
+    def test_fire_and_discharge_records_are_lf_only(self, tmp_path):
+        repo_root = str(tmp_path)
+        nonce = bd.record_fire(repo_root, "sess-crlf", "guard-x", "reason")
+        assert nonce is not None
+        assert bd.record_discharge(repo_root, "sess-crlf", nonce, "did the thing")
+
+        ledger_path = tmp_path / "state" / "block-discharge" / "sess-crlf.jsonl"
+        raw = ledger_path.read_bytes()
+        assert b"\r\n" not in raw

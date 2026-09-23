@@ -153,9 +153,10 @@ def test_branch0_gate_routes_a_multi_row_mirror_to_coordinator_publish(tmp_path)
     route = [line for line in out.splitlines() if line.startswith("route:")]
     assert len(route) == 1, out
     assert "coordinator-publish" in route[0]
-    # Every registered row matched, and a bare `coordinator-publish` already
-    # means exactly that — naming them back would be noise.
-    assert route[0].rstrip().endswith("coordinator-publish")
+    # Every registered row matched, so the route names no rows back -- only the
+    # typed word, which publish.py resolves as a mirror alias (466e418198) so
+    # the route line runs verbatim.
+    assert route[0].rstrip().endswith("coordinator-publish klabauter")
 
 
 def test_branch0_gate_route_names_a_partial_match_explicitly(tmp_path):
