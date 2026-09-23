@@ -135,7 +135,8 @@ def test_non_matching_cmdlines_are_ignored(probe_mod):
 def test_engine_root_is_derived_from_the_matched_path(probe_mod):
     servers = probe_mod._enumerate_resident_warm_servers(_FakePsutil([_proc(500, 1)]))
 
-    assert [s["engine_root"] for s in servers] == [Path("/engine")]
+    # The enumerator resolve()s the path, which anchors "/engine" on Windows's drive.
+    assert [s["engine_root"] for s in servers] == [Path("/engine").resolve()]
 
 
 def test_returned_entries_carry_the_documented_shape(probe_mod):

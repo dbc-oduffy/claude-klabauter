@@ -323,6 +323,11 @@ def test_install_door_raises_when_prebuilt_exe_and_sidecar_disagree(tmp_path, mo
     bad_provenance = tmp_path / "bad-provenance.json"
     bad_provenance.write_text(json.dumps({"image_sha256": "0" * 64}), encoding="utf-8")
     monkeypatch.setattr(door_install, "_PREBUILT_PROVENANCE", bad_provenance)
+    # Ambient source drift (an unrelated, possibly mid-edit box state) would
+    # route this through the self-heal compile-fresh branch instead of the
+    # copy-prebuilt branch this test targets -- pinned absent so only the
+    # exe/sidecar disagreement under test is exercised.
+    monkeypatch.setattr(door_install, "committed_prebuilt_source_drift", lambda: [])
 
     with pytest.raises(door_install.DoorInstallError):
         door_install.install_door(bin_dst, engine_root)

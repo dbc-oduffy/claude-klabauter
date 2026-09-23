@@ -182,7 +182,7 @@ required = false
 # reports, never blocks." Kept for schema completeness (the enum admits no
 # INFO value); matches the resident-debris probe's same convention below.
 severity_if_fail = "degraded"
-remediation = "Run python3 scripts/setup.py to write the install-class engine.target default (candidate for a claude-klabauter developer box, main for a claude-klabauter install)"
+remediation = "Run python3 scripts/setup.py to write the install-class engine.target default (candidate on a box with the claude-klabauter or DoE source tree, main otherwise)"
 
 # ---------------------------------------------------------------------------
 # Cluster: install — coordinator_core import, engine bootstrap, and

@@ -303,6 +303,34 @@ def _current_source_fingerprint() -> "dict[str, str]":
 _WINDOWS_PREBUILT_PROVENANCE = _DOOR_DIR / "door.exe.provenance.json"
 
 
+def _source_matches_recorded(path: Path, recorded_hash: "Optional[str]") -> bool:
+    """True iff `path`'s recorded hash matches `recorded_hash`, either as
+    checked out or after a CRLF<->LF normalisation.
+
+    The recorded hash is `sha256` of the checkout bytes on the machine that
+    ran the build -- `door.exe.provenance.json` is written by `write_
+    provenance()` reading these same source files off disk, with whatever
+    line endings that box's checkout had (Windows: `autocrlf` CRLF; a
+    POSIX/cloud clone: LF). The bytes this function reads are THIS
+    checkout's, which may differ in line endings alone from the box that
+    built the committed binary -- a content-identical source then hashes
+    differently and reads as drift that is not real drift. Comparing the raw
+    hash first (the common case, no normalisation cost) and falling back to
+    both CRLF->LF and LF->CRLF normalised forms answers "is this the same
+    source" regardless of which checkout produced which line endings,
+    without touching what `write_provenance` itself records."""
+    if recorded_hash is None:
+        return False
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() == recorded_hash:
+        return True
+    to_lf = raw.replace(b"\r\n", b"\n")
+    if hashlib.sha256(to_lf).hexdigest() == recorded_hash:
+        return True
+    to_crlf = to_lf.replace(b"\n", b"\r\n")
+    return hashlib.sha256(to_crlf).hexdigest() == recorded_hash
+
+
 def committed_prebuilt_source_drift() -> "list[str]":
     """Names of the door sources that differ from those the committed
     `door.exe` was built from -- empty when the prebuilt is current.
@@ -311,6 +339,12 @@ def committed_prebuilt_source_drift() -> "list[str]":
     committed prebuilt, so a prebuilt itself behind `door.c` passes all of
     them; this compares the prebuilt's own recorded source hashes against
     the sources on disk instead, which is answerable without a compiler.
+
+    LINE-ENDING-SAFE: the recorded hash is of whichever checkout (CRLF on
+    Windows `autocrlf`, LF on POSIX/cloud) built the committed binary; a
+    source that is byte-identical in CONTENT but differs only in line
+    endings from that checkout must not read as drift -- see
+    `_source_matches_recorded`.
 
     Raises `DoorInstallError` when the sidecar is unreadable or records no
     sources -- same convention as `_prebuilt_image_bytes`."""
@@ -328,7 +362,7 @@ def committed_prebuilt_source_drift() -> "list[str]":
     return sorted(
         path.name
         for path in door_build.SOURCES
-        if recorded.get(path.name) != door_build._sha256_file(path)
+        if not _source_matches_recorded(path, recorded.get(path.name))
     )
 
 
@@ -781,7 +815,55 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
     # one, so the two install-time door writers can never disagree on which
     # builder POSIX gets.
     if sys.platform == "win32":
-        if _PREBUILT_DOOR_EXE.exists():
+        # SELF-HEAL ON DRIFT (incident: the committed door.exe sat 11 days
+        # behind its sources -- door.c etc changed on POSIX/cloud boxes that
+        # cannot compile it, and every Windows box installed the stale prebuilt
+        # verbatim; `committed_prebuilt_source_drift` already knew, but only
+        # `install_health` asked it. A Windows box HAS a compiler more often
+        # than not (this repo's own dev flow requires one to build door.exe at
+        # all) -- when the committed prebuilt is behind, compile from the
+        # CURRENT sources instead of installing a binary already known to be
+        # wrong, falling back to the (loudly-flagged) stale prebuilt only when
+        # no compiler is available. Never raises out of install for this: a
+        # missing compiler still gets a working door, just an advertised-stale
+        # one.
+        drifted: "list[str]" = []
+        if _PREBUILT_DOOR_EXE.exists() and _WINDOWS_PREBUILT_PROVENANCE.exists():
+            try:
+                drifted = committed_prebuilt_source_drift()
+            except DoorInstallError:
+                drifted = []
+
+        if drifted:
+            try:
+                door_build._find_compiler(None)
+            except SystemExit:
+                print(
+                    f"[door-install] WARNING: committed prebuilt {_PREBUILT_DOOR_EXE} is "
+                    f"behind its sources ({', '.join(drifted)}) and no C compiler is "
+                    "available to rebuild it -- installing the stale prebuilt anyway. "
+                    "Remediation: run `python -m coordinator_core.warm.door.build "
+                    "<engine_root> --output coordinator_core/warm/door/door.exe` on a "
+                    "Windows box with clang or MSVC, then commit the rebuilt door.exe "
+                    "and its provenance sidecar.",
+                    file=sys.stderr,
+                )
+                _replace_possibly_running_image(_PREBUILT_DOOR_EXE, dest_exe)
+                print(f"[door-install] copied prebuilt {_PREBUILT_DOOR_EXE} -> {dest_exe}")
+                shutil.copy2(_PREBUILT_PROVENANCE, dest_provenance)
+            else:
+                import tempfile
+
+                with tempfile.TemporaryDirectory() as tmp:
+                    fresh = Path(tmp) / "door.exe"
+                    door_build.build(engine_root, output=fresh)
+                    _replace_possibly_running_image(fresh, dest_exe)
+                    shutil.copy2(fresh.parent / (fresh.name + ".provenance.json"), dest_provenance)
+                print(
+                    f"[door-install] committed prebuilt was behind its sources "
+                    f"({', '.join(drifted)}) -- compiled fresh at {dest_exe} instead"
+                )
+        elif _PREBUILT_DOOR_EXE.exists():
             _replace_possibly_running_image(_PREBUILT_DOOR_EXE, dest_exe)
             print(f"[door-install] copied prebuilt {_PREBUILT_DOOR_EXE} -> {dest_exe}")
             if _PREBUILT_PROVENANCE.exists():

@@ -1775,6 +1775,38 @@ _DEV_CLONE_GENERIC_MARKERS = (
 _DEV_CLONE_GENERIC_MIN_COUNT = 2
 
 
+def _has_doe_dev_clone_marker(path: Path) -> bool:
+    """True iff `path` carries a DoE dev-clone marker under `coordinator/`.
+    The published coordinator-claude repo ships its plugin at the repo root,
+    so these markers under `coordinator/` exist only in the DoE source tree."""
+    coordinator_dir = path / "coordinator"
+    return coordinator_dir.is_dir() and any(
+        (coordinator_dir / marker).exists() for marker in _DEV_CLONE_DISTINCTIVE_MARKERS
+    )
+
+
+def _authoring_tree_on_box(coord_path: Path) -> str | None:
+    """Name the authoring tree that makes this box a makers' box, or None.
+
+    PM ruling 2026-09-23: an engine install on a box where the claude-klabauter source
+    tree or the DoE source tree is present runs the `candidate` channel;
+    without either, it runs `main`. Claude-Klabauter is found through
+    `engine_source_root()`, whose registry key survives the publish rename
+    (a literal repo-named key in this file does not); DoE through the
+    resolved coordinator-claude root's dev-clone markers."""
+    try:
+        from coordinator_core.engine_root import engine_source_root
+
+        source = engine_source_root()
+    except Exception:
+        source = None
+    if source and Path(source).is_dir():
+        return f"engine source tree at {source}"
+    if _has_doe_dev_clone_marker(coord_path):
+        return f"DoE source tree at {coord_path}"
+    return None
+
+
 def _looks_like_coordinator_claude_source(path: Path) -> bool:
     """Positive evidence `path` is an actual coordinator-claude checkout,
     either shape: the OSS mirror/source-clone shape (`.claude-plugin/
@@ -1788,10 +1820,7 @@ def _looks_like_coordinator_claude_source(path: Path) -> bool:
         (path / "commands").is_dir() or (path / "hooks").is_dir()
     )
     coordinator_dir = path / "coordinator"
-    has_distinctive_marker = coordinator_dir.is_dir() and any(
-        (coordinator_dir / marker).exists()
-        for marker in _DEV_CLONE_DISTINCTIVE_MARKERS
-    )
+    has_distinctive_marker = _has_doe_dev_clone_marker(path)
     generic_marker_count = sum(
         (coordinator_dir / marker).exists()
         for marker in _DEV_CLONE_GENERIC_MARKERS
@@ -2552,18 +2581,13 @@ def register_claude_klabauter_root(
         checkout, or one that is not this box's registered mirror,
         acquires no track_ref.
       - claude-klabauter: machine-local set repos.claude_klabauter AND
-        `engine.target = "main"` (PM ruling 2026-08-16: installing klabauter
-        itself targets the full release) — neither claude_klabauter key nor
-        `track_ref` is written; a consumer never publishes, so `track_ref`
-        stays publish-side only. The dual-boot auto-arm above does NOT apply
-        here — this branch is otherwise unchanged in behaviour and output.
-        ASSUMES a fresh clone checked out on the remote default (`main`) —
-        very probably true for the fresh-install case this branch targets,
-        silently false for an install from an existing checkout on a
-        feature branch (staff-eng C8 review, Finding 13). Not enforced:
-        nothing refuses, nothing writes a new key; an advisory line prints
-        the clone's actual ref when it disagrees with the "main" being
-        declared, turning the silent assumption visible.
+        `engine.target` — `candidate` on a makers' box (the claude-klabauter or DoE
+        source tree present, `_authoring_tree_on_box`), `main` otherwise
+        (PM ruling 2026-09-23, superseding 2026-08-16's unconditional
+        `main`). Neither claude_klabauter key nor `track_ref` is written; a
+        consumer never publishes, so `track_ref` stays publish-side only.
+        The installer never moves the checkout: when its branch disagrees
+        with the declared channel, an advisory names the `git switch`.
         Per the agreed cross-repo contract
         (cross-repo/inbox/2026-08-05-doe-claude-em-klabauter-location-
         belongs-in-the-registry-not-a-pointer-file.md), the registry
@@ -2678,21 +2702,27 @@ def register_claude_klabauter_root(
         # something else. Made visible, not fixed: print the clone's
         # actual checked-out ref so the assumption is a line an operator
         # can see, not a silent guess.
+        authoring_tree = _authoring_tree_on_box(coord_path)
+        channel = "candidate" if authoring_tree else "main"
+        print(
+            f"engine channel: {channel} ("
+            + (f"makers' box: {authoring_tree}" if authoring_tree else "no claude-klabauter or DoE source tree on this box")
+            + ")"
+        )
         key_values = {
-            "engine.target": "main",
+            "engine.target": channel,
             "repos.claude_klabauter": str(claude_klabauter_root_resolved),
         }
 
         def _klabauter_identity_advisory() -> None:
             actual_branch = _git_current_branch(claude_klabauter_root_resolved)
-            if actual_branch is not None and actual_branch != "main":
+            if actual_branch is not None and actual_branch != channel:
                 print()
                 print(
-                    f"[ADVISORY] this klabauter checkout is on {actual_branch!r}, not "
-                    "'main' -- engine.target is being declared 'main' per the "
-                    "install-class default regardless (a fresh clone assumption; "
-                    "see register_claude_klabauter_root's docstring)."
+                    f"[ADVISORY] engine.target declares {channel!r}, but this klabauter "
+                    f"checkout is on {actual_branch!r}. Switch it with:"
                 )
+                print(f"    git -C {claude_klabauter_root_resolved} switch {channel}")
 
         pending_advisories.append(_klabauter_identity_advisory)
     elif identity == "claude-klabauter":

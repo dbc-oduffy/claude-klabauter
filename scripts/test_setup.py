@@ -3854,3 +3854,40 @@ def test_precompile_skips_when_package_root_absent(setup_mod, tmp_path, monkeypa
     setup_mod.install_precompiled_bytecode(tmp_path, _precompile_args())
 
     assert "not found — skipping precompile" in capsys.readouterr().err
+
+
+# --- engine channel: candidate on a makers' box, main otherwise (PM 2026-09-23) ---
+
+
+def _no_engine_source(monkeypatch):
+    import coordinator_core.engine_root as engine_root
+
+    monkeypatch.setattr(engine_root, "engine_source_root", lambda: None)
+
+
+def test_channel_is_main_without_claude_klabauter_or_doe(setup_mod, monkeypatch, tmp_path):
+    _no_engine_source(monkeypatch)
+    oss_coordinator = tmp_path / "coordinator-claude"
+    (oss_coordinator / ".claude-plugin").mkdir(parents=True)
+    assert setup_mod._authoring_tree_on_box(oss_coordinator) is None
+
+
+def test_channel_is_candidate_with_the_claude_klabauter_source_tree(setup_mod, monkeypatch, tmp_path):
+    import coordinator_core.engine_root as engine_root
+
+    monkeypatch.setattr(engine_root, "engine_source_root", lambda: str(tmp_path))
+    assert "engine source tree" in setup_mod._authoring_tree_on_box(tmp_path / "absent")
+
+
+def test_a_registered_but_missing_claude_klabauter_tree_does_not_count(setup_mod, monkeypatch, tmp_path):
+    import coordinator_core.engine_root as engine_root
+
+    monkeypatch.setattr(engine_root, "engine_source_root", lambda: str(tmp_path / "gone"))
+    assert setup_mod._authoring_tree_on_box(tmp_path / "absent") is None
+
+
+def test_channel_is_candidate_with_the_doe_source_tree(setup_mod, monkeypatch, tmp_path):
+    _no_engine_source(monkeypatch)
+    doe = tmp_path / "DoE-claude"
+    (doe / "coordinator" / "cockpit-contract").mkdir(parents=True)
+    assert "DoE source tree" in setup_mod._authoring_tree_on_box(doe)

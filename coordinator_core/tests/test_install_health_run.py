@@ -845,6 +845,18 @@ def _patch_verdict(monkeypatch, status, detail="detail"):
         "coordinator_core.ops.install_health_run.door_install.verify_installed_provenance",
         lambda bin_dst: ProvenanceVerdict(status, detail),
     )
+    # `check_door_provenance` also runs `_report_prebuilt_currency`, which asks
+    # the REAL `committed_prebuilt_source_drift()` -- an ambient fact about
+    # this checkout's own door.exe/door.c pair, unrelated to the verdict this
+    # helper exists to control. Left unmocked, these tests read the box's
+    # actual (possibly mid-edit) source drift instead of the fixed `status`
+    # under test. Pinned to "current" here; the drift leg has its own
+    # dedicated tests (`test_prebuilt_behind_its_sources_fails_with_a_rebuild_
+    # remediation`, `test_current_prebuilt_reports_nothing`).
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.door_install.committed_prebuilt_source_drift",
+        lambda: [],
+    )
 
 
 def test_check_door_provenance_ok_exits_zero(monkeypatch, capsys):

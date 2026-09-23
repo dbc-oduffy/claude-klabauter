@@ -659,8 +659,26 @@ static int path_parent(const char *path, char *out, size_t out_size) {
  *
  * Everything here is PRE-DELIVERY: absent socket, refused connect, stale
  * socket file left by a hard-killed server, full backlog -- all of them mean
- * exactly "fall through", with no diagnostic, per the safety property. */
+ * exactly "fall through", with no diagnostic, per the safety property.
+ *
+ * `g_connect_no_server`, reset to 0 at the top of every call, is set to 1
+ * iff the failure is the POSIX counterpart of `warm/client.py`'s ONLY spawn
+ * trigger -- `ENOENT` (no socket file at all) or `ECONNREFUSED` (a corpse
+ * file, nothing listening; see `client.py`'s own comment: "on POSIX the two
+ * are one outcome wearing two shapes: no server"). Left at 0 for every
+ * other failure -- a full backlog (`EAGAIN`/timeout) is a BUSY server,
+ * never a spawn trigger -- and on the success path. A plain static rather
+ * than an added out-parameter: `connect_socket(sock_path)`'s call site is
+ * pinned verbatim by `tests/test_params_file_stdin_route.py`,
+ * `tests/test_warm_escape_hatch_gate.py`, and
+ * `tests/test_posix_door_cold_leg_route.py` (each locates it by exact
+ * substring to prove a pre-delivery gate precedes the transport), and this
+ * door is single-threaded start to finish, so a static carries the one bit
+ * those tests' pinned call site has no room to grow a parameter for. */
+static int g_connect_no_server = 0;
+
 static int connect_socket(const char *path) {
+    g_connect_no_server = 0;
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
@@ -701,6 +719,9 @@ static int connect_socket(const char *path) {
          * a socket the first `send()` fails on. Treat it as the refusal it
          * is: fall through, which is what a busy server should produce. */
         if (errno != EINPROGRESS && errno != EALREADY) {
+            if (errno == ENOENT || errno == ECONNREFUSED) {
+                g_connect_no_server = 1;
+            }
             close(fd);
             return -1;
         }
@@ -1058,6 +1079,128 @@ static int resolve_fallback_script(const char *engine_root, char *script_path) {
  * did not answer, which gets `emit_hook_pass_loudly` -- never a deny (the
  * engine being down is no reason to wall off Bash) and never a silent pass
  * (an unrun guard must not read as one that allowed). */
+/* =========================================================================
+ * RESPAWN ON MISS -- the no-server branch only, never on busy/timeout.
+ *
+ * POSIX twin of `door.c :: door_maybe_spawn_server` -- see that function's
+ * own docstring for the full rationale (mirrors `warm/client.py ::
+ * _spawn_once`, shares rather than invents the rate-limit file, never
+ * blocks, never waits on the child). `svc_dir` is the caller's already-
+ * resolved `<base>/coordinator/warm/<clone_hash>` (the directory the
+ * connect loop just proved private and non-substitutable), so this
+ * function does no path derivation of its own beyond appending the lock
+ * file's name -- byte-identical to `breadcrumb.boot_lock_path` by
+ * construction. */
+#define DOOR_SPAWN_DEBOUNCE_SECS 2.0
+
+static void door_maybe_spawn_server(const char *engine_root, const char *svc_dir) {
+    char lock_path[PATH_MAX];
+    if (snprintf(lock_path, sizeof(lock_path), "%s/warm.json.boot.lock", svc_dir) < 0) {
+        return;
+    }
+
+    int fd = open(lock_path, O_CREAT | O_RDWR, 0600);
+    if (fd < 0) return; /* fail open: no debounce state reachable, no spawn */
+
+    /* Stamp lives at byte offset 1, matching `breadcrumb.py ::
+     * _CLAIM_STAMP_OFFSET` (byte 0 is a lock byte this door never takes) --
+     * a Python `try_claim_boot` reader of this same file parses it
+     * identically. */
+    char stamp_buf[32];
+    memset(stamp_buf, 0, sizeof(stamp_buf));
+    /* `lseek` + `read`/`write` rather than `pread`/`pwrite` -- this file
+     * defines no `_POSIX_C_SOURCE`/`_XOPEN_SOURCE` feature-test macro, and
+     * `pread`/`pwrite`'s declaration is conditional on one under glibc; the
+     * seek-then-io pair needs neither and is what the rest of this door
+     * already uses (`lseek` for other offset-based reads in this file). */
+    ssize_t got = -1;
+    if (lseek(fd, 1, SEEK_SET) != (off_t)-1) {
+        got = read(fd, stamp_buf, sizeof(stamp_buf) - 1);
+    }
+
+    double now = (double)time(NULL);
+    double stamp = -1.0;
+    if (got > 0) stamp = strtod(stamp_buf, NULL);
+    double age = now - stamp;
+    if (stamp > 0.0 && age > -DOOR_SPAWN_DEBOUNCE_SECS && age < DOOR_SPAWN_DEBOUNCE_SECS) {
+        /* A recent stamp vouches for an in-flight spawn -- debounced. */
+        close(fd);
+        return;
+    }
+
+    char new_stamp[32];
+    int stamp_len = snprintf(new_stamp, sizeof(new_stamp), "%.3f\n", now);
+    if (stamp_len > 0 && lseek(fd, 1, SEEK_SET) != (off_t)-1) {
+        ssize_t wrote = write(fd, new_stamp, (size_t)stamp_len);
+        (void)wrote;
+    }
+    close(fd);
+
+    char server_script[PATH_MAX];
+    if (snprintf(server_script, sizeof(server_script),
+                 "%s/coordinator_core/warm/server.py", engine_root) < 0) {
+        return;
+    }
+
+    /* PYTHONPATH=<engine_root>, PREPENDED ahead of this process's own
+     * environment -- mirrors `ops/ceremony/detached_spawn.py ::
+     * _child_env`'s own fix for the same defect class door.c's twin
+     * describes: a script spawned by resolved path alone (no `-m`) would
+     * otherwise resolve `coordinator_core` via whichever finder answers
+     * first, which on a box with an ambient editable install is the LIVE
+     * working tree, not this validated engine root (DR-315 s2). */
+    extern char **environ;
+    size_t env_count = 0;
+    for (char **p = environ; p && *p; p++) env_count++;
+    char **child_env = (char **)calloc(env_count + 2, sizeof(char *));
+    char *pythonpath_entry = NULL;
+    if (child_env) {
+        size_t pp_len = strlen("PYTHONPATH=") + strlen(engine_root) + 1;
+        pythonpath_entry = (char *)malloc(pp_len);
+        if (pythonpath_entry) {
+            snprintf(pythonpath_entry, pp_len, "PYTHONPATH=%s", engine_root);
+            child_env[0] = pythonpath_entry;
+            for (size_t i = 0; i < env_count; i++) child_env[1 + i] = environ[i];
+            child_env[1 + env_count] = NULL;
+        } else {
+            free(child_env);
+            child_env = NULL;
+        }
+    }
+
+    char *spawn_argv[3];
+    spawn_argv[0] = (char *)PYTHON_BIN;
+    spawn_argv[1] = server_script;
+    spawn_argv[2] = NULL;
+
+    posix_spawn_file_actions_t actions;
+    int actions_ok = posix_spawn_file_actions_init(&actions) == 0;
+    if (actions_ok) {
+        int devnull = open("/dev/null", O_RDWR);
+        if (devnull >= 0) {
+            posix_spawn_file_actions_adddup2(&actions, devnull, STDIN_FILENO);
+            posix_spawn_file_actions_adddup2(&actions, devnull, STDOUT_FILENO);
+            posix_spawn_file_actions_adddup2(&actions, devnull, STDERR_FILENO);
+            /* `devnull` itself must not leak into the child past the dup2s
+             * above -- best-effort close, matching this function's whole
+             * "never let a failure here block the spawn attempt" posture. */
+            posix_spawn_file_actions_addclose(&actions, devnull);
+        }
+    }
+
+    pid_t pid = 0;
+    posix_spawnp(&pid, PYTHON_BIN, actions_ok ? &actions : NULL, NULL,
+                 spawn_argv, child_env ? child_env : environ);
+    if (actions_ok) posix_spawn_file_actions_destroy(&actions);
+    /* Fire-and-forget: never wait on the child (no `waitpid`), never
+     * observe its exit. A detached grandchild that outlives this
+     * short-lived door process is reaped by init/launchd on exit, not by
+     * this process, exactly like every other `spawn_detached` caller in
+     * this package. */
+    free(pythonpath_entry);
+    free(child_env);
+}
+
 static int hook_fall_through(int argc, char **argv, const char *engine_root) {
     char script_path[PATH_MAX];
     if (resolve_fallback_script(engine_root, script_path) != 0) {
@@ -1416,6 +1559,8 @@ int main(int argc, char **argv) {
     char bases[2][PATH_MAX];
     int base_count = runtime_base_candidates(bases, 2);
     int fd = -1;
+    char chosen_dir[PATH_MAX];
+    chosen_dir[0] = '\0';
     for (int i = 0; i < base_count && fd < 0; i++) {
         char sock_dir[PATH_MAX];
         char sock_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
@@ -1428,9 +1573,21 @@ int main(int argc, char **argv) {
         if (!path_parent(sock_dir, warm_dir, sizeof(warm_dir))) continue;
         if (!dir_not_substitutable(warm_dir)) continue;
         if (!dir_is_private(sock_dir)) continue;
+        snprintf(chosen_dir, sizeof(chosen_dir), "%s", sock_dir);
         fd = connect_socket(sock_path);
     }
     if (fd < 0) {
+        /* RESPAWN ON MISS -- the no-server branch only. `g_connect_no_server`
+         * is set only for `ENOENT`/`ECONNREFUSED` (`connect_socket`'s own
+         * docstring), the POSIX counterpart of `warm/client.py`'s only
+         * spawn trigger; a full backlog or any other failure never sets it,
+         * matching the anti-storm table's "never spawn on busy". Runs in
+         * BOTH hook and normal mode, before the loud pass / cold
+         * fall-through below, and never changes this call's own verdict or
+         * exit code. */
+        if (g_connect_no_server && chosen_dir[0] != '\0') {
+            door_maybe_spawn_server(engine_root, chosen_dir);
+        }
         int rc = fall_through(argc, argv, engine_root);
         free(engine_root);
         return rc;

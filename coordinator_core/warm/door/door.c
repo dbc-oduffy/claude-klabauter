@@ -132,6 +132,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <wchar.h>
 #include <wctype.h>
 
@@ -1080,10 +1081,24 @@ static int fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w)
     PROCESS_INFORMATION pi;
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
+    /* STARTF_USESTDHANDLES: without it, CreateProcessW does NOT propagate
+     * THIS process's own (possibly redirected-to-a-pipe) std handles to the
+     * child -- a console child with no inherited console instead attaches a
+     * NEW one, so a caller capturing this door's output via redirection
+     * (`coordinator-install.exe *> file`) got a 0-byte file while the
+     * child's own diagnostics appeared on a console nobody was redirecting.
+     * Explicit here, matching `hook_fall_through`'s own STARTF_USESTDHANDLES
+     * block a few dozen lines up -- that leg always got this right; this
+     * one, the ordinary (non-hook) cold fall-through every install-class CLI
+     * takes, did not. */
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+    si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
     ZeroMemory(&pi, sizeof(pi));
 
     BOOL spawned = CreateProcessW(
-        NULL, cmdline_w, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
+        NULL, cmdline_w, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
     free(cmdline_w);
 
     if (!spawned) {
@@ -1341,6 +1356,177 @@ static int emit_indeterminate(const char *detail) {
     return 1;
 }
 
+/* =========================================================================
+ * RESPAWN ON MISS -- the no-server branch only, never on busy/timeout.
+ *
+ * Mirrors `warm/client.py :: _spawn_once` (called only on the pipe-absent
+ * trigger, ERROR_FILE_NOT_FOUND -- see the caller below; ERROR_PIPE_BUSY
+ * and every other CreateFileW failure never reach this function) and its
+ * rate limit, `warm/breadcrumb.py :: should_spawn` / `try_claim_boot`.
+ *
+ * NOT A BYTE-FOR-BYTE PORT of `try_claim_boot`'s full stamp-and-lock
+ * machinery: that primitive assumes its CLAIMING process stays alive for
+ * the whole boot window it vouches for (a long-lived server/forwarder);
+ * this door's own process lifetime is milliseconds, so a lock it held
+ * would already be released by the time a debounce actually mattered. This
+ * function instead shares the exact file `try_claim_boot` locks
+ * (`<svc_dir>/warm.json.boot.lock`, `breadcrumb.boot_lock_path`) as a
+ * plain TIMESTAMP debounce: a stamp younger than `DOOR_SPAWN_DEBOUNCE_SECS`
+ * (breadcrumb.py's own `SPAWN_DEBOUNCE_SECS`) means a spawn was attempted
+ * very recently by ANY process (this door or the Python client), so this
+ * call skips; otherwise it re-stamps and spawns. Sharing the file rather
+ * than inventing a second one means a door-triggered spawn also debounces
+ * a Python-side `should_spawn` caller's `try_claim_boot` read for the same
+ * window, and vice versa.
+ *
+ * NEVER BLOCKS, NEVER WAITS ON THE CHILD: `CreateProcessW` then an
+ * immediate `CloseHandle` of both returned handles, no
+ * `WaitForSingleObject`. Brightline: this function's own cost is a handful
+ * of small file ops plus one `CreateProcessW` -- no retry, no polling loop
+ * -- so it cannot push the door's own process time toward the 50ms floor.
+ * Fully detached: `bInheritHandles=FALSE`, `CREATE_NO_WINDOW |
+ * CREATE_NEW_PROCESS_GROUP` (never `DETACHED_PROCESS` -- see
+ * `ops/ceremony/detached_spawn.py :: _windows_detached_flags`'s own
+ * docstring for the measured console-window-storm this combination avoids).
+ *
+ * Best-effort throughout: any failure (env var absent, directory
+ * uncreatable, lock file unopenable, spawn itself failing) is swallowed
+ * silently and this function returns -- exactly `_spawn_once`'s own "never
+ * raise, never affect the caller's own verdict" contract. */
+#define DOOR_SPAWN_DEBOUNCE_SECS 2.0
+
+static int door_ensure_dir_recursive_w(wchar_t *path) {
+    if (CreateDirectoryW(path, NULL) || GetLastError() == ERROR_ALREADY_EXISTS) return 1;
+    wchar_t *sep = wcsrchr(path, L'\\');
+    if (!sep || sep == path) return 0;
+    wchar_t saved = *sep;
+    *sep = L'\0';
+    int ok = door_ensure_dir_recursive_w(path);
+    *sep = saved;
+    if (!ok) return 0;
+    return CreateDirectoryW(path, NULL) || GetLastError() == ERROR_ALREADY_EXISTS;
+}
+
+static void door_maybe_spawn_server(const wchar_t *engine_root_w, const char *clone_hash) {
+    wchar_t base[MAX_PATH];
+    DWORD n = GetEnvironmentVariableW(L"COORDINATOR_WARM_RUNTIME_BASE", base, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) {
+        n = GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH);
+        if (n == 0 || n >= MAX_PATH) return; /* fail open: no base, no spawn */
+    }
+
+    wchar_t clone_hash_w[17];
+    for (int i = 0; i < 16; i++) clone_hash_w[i] = (wchar_t)(unsigned char)clone_hash[i];
+    clone_hash_w[16] = L'\0';
+
+    wchar_t svc_dir[MAX_PATH * 2];
+    if (swprintf(svc_dir, MAX_PATH * 2, L"%s\\coordinator\\warm\\%s", base, clone_hash_w) < 0) return;
+    if (!door_ensure_dir_recursive_w(svc_dir)) return;
+
+    wchar_t lock_path[MAX_PATH * 2 + 32];
+    if (swprintf(lock_path, MAX_PATH * 2 + 32, L"%s\\warm.json.boot.lock", svc_dir) < 0) return;
+
+    HANDLE h = CreateFileW(lock_path, GENERIC_READ | GENERIC_WRITE,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                            OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return;
+
+    /* Stamp lives at byte offset 1, matching `breadcrumb.py ::
+     * _CLAIM_STAMP_OFFSET` -- byte 0 is reserved there for a lock byte this
+     * door never takes; kept at the same offset so a Python reader of this
+     * same file (a denied `try_claim_boot` caller) parses it identically. */
+    char stamp_buf[32];
+    ZeroMemory(stamp_buf, sizeof(stamp_buf));
+    DWORD got = 0;
+    LARGE_INTEGER off; off.QuadPart = 1;
+    SetFilePointerEx(h, off, NULL, FILE_BEGIN);
+    ReadFile(h, stamp_buf, sizeof(stamp_buf) - 1, &got, NULL);
+
+    double now = (double)time(NULL);
+    double stamp = -1.0;
+    if (got > 0) stamp = strtod(stamp_buf, NULL);
+    double age = now - stamp;
+    if (stamp > 0.0 && age > -DOOR_SPAWN_DEBOUNCE_SECS && age < DOOR_SPAWN_DEBOUNCE_SECS) {
+        /* A recent stamp vouches for an in-flight spawn -- debounced. */
+        CloseHandle(h);
+        return;
+    }
+
+    char new_stamp[32];
+    int stamp_len = snprintf(new_stamp, sizeof(new_stamp), "%.3f\n", now);
+    if (stamp_len > 0) {
+        SetFilePointerEx(h, off, NULL, FILE_BEGIN);
+        DWORD wrote = 0;
+        WriteFile(h, new_stamp, (DWORD)stamp_len, &wrote, NULL);
+    }
+    CloseHandle(h);
+
+    wchar_t server_script[MAX_PATH * 2];
+    if (swprintf(server_script, MAX_PATH * 2,
+                 L"%s\\coordinator_core\\warm\\server.py", engine_root_w) < 0) {
+        return;
+    }
+
+    wchar_t cmdline[MAX_PATH * 4];
+    if (swprintf(cmdline, MAX_PATH * 4, L"\"%s\" \"%s\"", PYTHON_BIN_W, server_script) < 0) {
+        return;
+    }
+
+    /* PYTHONPATH=<engine_root>, PREPENDED ahead of this process's own
+     * environment -- mirrors `ops/ceremony/detached_spawn.py :: _child_env`,
+     * whose own docstring names the exact failure this closes: a script
+     * spawned by resolved path alone (no `-m`) puts only its own containing
+     * directory on `sys.path[0]`, so `import coordinator_core` inside the
+     * child resolves via whichever finder answers first once that comes up
+     * empty -- on a box with an ambient editable install, the LIVE working
+     * tree, not this validated engine root (DR-315 s2). Built as a fresh
+     * block (copy of this process's own environment, plus one prepended
+     * variable) rather than mutating this process's real environment, which
+     * would leak into every later child this SAME door process might still
+     * spawn. */
+    LPWCH env_block = GetEnvironmentStringsW();
+    wchar_t *new_env = NULL;
+    if (env_block) {
+        size_t prefix_len = wcslen(L"PYTHONPATH=") + wcslen(engine_root_w) + 1; /* +1 NUL */
+        size_t total = prefix_len;
+        for (LPWCH p = env_block; *p; ) {
+            size_t seg_len = wcslen(p);
+            total += seg_len + 1;
+            p += seg_len + 1;
+        }
+        total += 1; /* final double-NUL terminator */
+        new_env = (wchar_t *)malloc(total * sizeof(wchar_t));
+        if (new_env) {
+            wchar_t *w = new_env;
+            int n2 = swprintf(w, prefix_len, L"PYTHONPATH=%s", engine_root_w);
+            w += (n2 > 0 ? (size_t)n2 : 0) + 1;
+            for (LPWCH p = env_block; *p; ) {
+                size_t seg_len = wcslen(p);
+                memcpy(w, p, (seg_len + 1) * sizeof(wchar_t));
+                w += seg_len + 1;
+                p += seg_len + 1;
+            }
+            *w = L'\0';
+        }
+        FreeEnvironmentStringsW(env_block);
+    }
+
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    ZeroMemory(&pi, sizeof(pi));
+
+    DWORD flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT;
+    BOOL spawned = CreateProcessW(
+        NULL, cmdline, NULL, NULL, FALSE, flags, new_env, engine_root_w, &si, &pi);
+    free(new_env);
+    if (!spawned) return;
+    /* Fire-and-forget: never wait on the child, never observe its exit. */
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+}
+
 int main(void) {
     /* argv[0] is not forwarded -- only argv[1:] crosses the wire, per the
      * protocol this door speaks (module docstring). GetCommandLineW +
@@ -1553,6 +1739,19 @@ int main(void) {
     HANDLE pipe = CreateFileW(pipe_name, GENERIC_READ | GENERIC_WRITE, 0, NULL,
                                OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
     if (pipe == INVALID_HANDLE_VALUE) {
+        /* RESPAWN ON MISS -- the no-server branch only. ERROR_FILE_NOT_FOUND
+         * is the exact Windows counterpart of `warm/client.py`'s
+         * FileNotFoundError spawn trigger (module docstring's "THE ANTI-
+         * STORM TABLE": "THE ONLY SPAWN TRIGGER, then cold"). ERROR_PIPE_BUSY
+         * (server up, contended) and every other CreateFileW failure never
+         * reach this branch -- spawning on those is the storm the table
+         * forbids. Runs in BOTH hook and normal mode, before the loud pass /
+         * cold fall-through below, and never changes this call's own
+         * verdict or exit code -- see `door_maybe_spawn_server`'s own
+         * docstring for the full contract. */
+        if (GetLastError() == ERROR_FILE_NOT_FOUND) {
+            door_maybe_spawn_server(engine_root_w, clone_hash);
+        }
         return fall_through_and_free(argc, wargv, engine_root_w);
     }
 

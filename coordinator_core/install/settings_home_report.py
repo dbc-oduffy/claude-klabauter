@@ -67,6 +67,7 @@ from pathlib import Path
 
 from coordinator_core.install.door_install import (
     BARE_FORWARDER_NAME,
+    DOOR_INSTALLED_NAME,
     DoorInstallError,
     ImageCurrencyAudit,
     audit_installed_image_currency,
@@ -544,15 +545,30 @@ def check_settings_home(settings_home_path: Path, claude_klabauter_root: Path) -
     report.forwarder_expected = len(expected)
     bin_dir = settings_home_path / "bin"
 
-    try:
-        audit = audit_installed_image_currency(
-            bin_dir, _names_the_installer_gives_an_image(expected.keys(), bin_dir)
-        )
-    except DoorInstallError as exc:
-        report.door_image_audit_error = str(exc)
-        audit = ImageCurrencyAudit(current=[], stale=[])
+    # NO DOOR IMAGE AT ALL IS NOT AN AUDIT FAILURE. `audit_installed_image_currency`
+    # raises unconditionally when `bin_dir` carries no readable
+    # `DOOR_INSTALLED_NAME` -- a normal state for a box that has landed only
+    # Python forwarders (see `door_install.audit_installed_image_currency`'s
+    # own "NO DOOR MEANS NO IMAGES TO AUDIT" paragraph). Reporting THAT as
+    # `door_image_audit_error` made `format_report_lines` print an
+    # unconditional FAIL line while `complete` stayed True (nothing else in
+    # the fixture was broken) -- one module disagreeing with itself about
+    # whether the settings home was complete. Gated on the exe's own
+    # presence, not `is_door_installed` (which also demands the sidecar):
+    # the audit's only real precondition is readable bytes at
+    # `DOOR_INSTALLED_NAME`, the same file `_reference_image_bytes` reads.
+    if (bin_dir / DOOR_INSTALLED_NAME).is_file():
+        try:
+            audit = audit_installed_image_currency(
+                bin_dir, _names_the_installer_gives_an_image(expected.keys(), bin_dir)
+            )
+        except DoorInstallError as exc:
+            report.door_image_audit_error = str(exc)
+            audit = ImageCurrencyAudit(current=[], stale=[])
+        else:
+            report.door_image_stale = audit.stale
     else:
-        report.door_image_stale = audit.stale
+        audit = ImageCurrencyAudit(current=[], stale=[])
     door_current = set(audit.current)
 
     missing: list[str] = []

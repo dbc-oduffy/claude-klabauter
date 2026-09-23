@@ -154,10 +154,21 @@ def test_audit_reads_one_inode_once(tmp_path, prebuilt_bytes, monkeypatch):
     assert len(reads) == 2, reads
 
 
-def test_provenance_verdict_separates_currency_from_self_consistency(tmp_path, prebuilt_bytes):
+def test_provenance_verdict_separates_currency_from_self_consistency(tmp_path, prebuilt_bytes, monkeypatch):
     """A stale install's exe and sidecar agree with each other perfectly --
     that agreement is what `ok` used to certify, and it is exactly what a
-    build-behind box satisfies."""
+    build-behind box satisfies.
+
+    Pinned to the POSIX source-fingerprint leg of `verify_installed_provenance`
+    (`sys.platform` forced off `win32`): this test asserts against
+    `_current_source_fingerprint`'s drifted-sources detail, which is a
+    question only that leg asks. The Windows leg compares the installed
+    binary's hash against the real committed prebuilt instead (pinned by
+    `test_verify_installed_provenance_ok` and this file's Windows-branch
+    tests), so run unpinned this test's synthetic `prebuilt_bytes` payload
+    reads as `stale` against the real prebuilt for an unrelated reason.
+    """
+    monkeypatch.setattr(door_install.sys, "platform", "linux")
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
 
@@ -267,7 +278,15 @@ def test_an_unanswerable_currency_question_is_not_reported_as_ok(tmp_path, monke
     through to `ok`, so a caller could not tell "verified current" from "could
     not look" -- while `check_settings_home`'s currency leg FAILED loudly on
     the identical condition. Two sibling gates, opposite verdicts, one cause,
-    inside the very change that exists to stop that shape."""
+    inside the very change that exists to stop that shape.
+
+    Pinned to the POSIX source-fingerprint leg (`sys.platform` forced off
+    `win32`): that is the leg `_current_source_fingerprint` feeds, and the
+    Windows leg's own unreadable-prebuilt "unverifiable" case is pinned
+    separately by `test_report_goes_red_only_when_an_image_diverges`'s
+    siblings in this file / `test_verify_installed_provenance_ok`.
+    """
+    monkeypatch.setattr(door_install.sys, "platform", "linux")
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     payload = door_install.NATIVE_IMAGE_MAGIC[0] + b"whatever this box installed"
