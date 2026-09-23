@@ -1110,6 +1110,32 @@ SESSION_ENV_PRECEDENCE = (
 )
 
 
+def session_env_candidates() -> frozenset:
+    """Every non-empty value currently set across ``SESSION_ENV_PRECEDENCE``,
+    in THIS process's own environment — not just the single top-precedence
+    one ``resolve_session_id`` returns.
+
+    Exists for an identity CHECK (``is this claim mine?``) that must not be
+    fooled by the ladder's own precedence order: a cloud harness does not
+    always populate the same subset of the three session-id env vars on
+    every subprocess spawn of a claim tool, so a claim recorded under a
+    LOWER-precedence var's value can legitimately disagree with a LATER
+    call's top-precedence ``resolve_session_id()`` result while still being
+    the same session — both values came from this session's own env, just
+    read at two different moments with two different subsets populated.
+    Membership here answers "is this value one of MY OWN currently-set
+    ids", never "is this anyone's id" — nothing here reads a peer's
+    environment.
+
+    Never used to WRITE an identity (that stays ``resolve_session_id``'s
+    single top-precedence answer, unchanged) — only to widen a same-session
+    RECOGNITION check on the read side.
+    """
+    return frozenset(
+        v for var in SESSION_ENV_PRECEDENCE if (v := os.environ.get(var, ""))
+    )
+
+
 #: UUID-shape gate for `session_identity_override` — mirrors
 #: `coordinator_core.git.commit_trailers._UUID_RE` exactly (same
 #: fail-safe direction: a caller-supplied override that is not UUID-shaped

@@ -7,8 +7,8 @@ cannot pin: the eight-surface wire registration (an op missing one of them ships
 present-but-dead, or silently degrades to `repo_root=None`), and the op's own
 refusal-to-write.
 
-The async handler is driven through `asyncio.run` in plain sync tests — this repo
-carries no pytest-asyncio dependency.
+The handler is now a plain sync `def` (dispatch offloads it via
+`asyncio.to_thread`); tests call it directly.
 
 Zero spawns. `locked_rmw` never runs on this path and no case needs a real git
 repo, so every fixture is a bare `tmp_path` tree with a `.git` DIRECTORY and no
@@ -17,7 +17,6 @@ repo, so every fixture is a bare `tmp_path` tree with a `.git` DIRECTORY and no
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -31,8 +30,8 @@ from coordinator_core.roadmap import prep_gate as pg
 OP_KEY = "plan.prep_gate"
 
 
-def _run(coro):
-    return asyncio.run(coro)
+def _run(result):
+    return result
 
 
 def _gate(params: dict, repo_root: Path) -> dict:

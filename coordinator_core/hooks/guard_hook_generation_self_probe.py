@@ -55,7 +55,7 @@ _SELF_PROBE_TIMEOUT_SECS = 5
 
 
 @register_op("hooks.guard_hook_generation_self_probe")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     try:
         from coordinator_core.ops.session.guard_hook_generation_self_probe import (
             run_self_probe,

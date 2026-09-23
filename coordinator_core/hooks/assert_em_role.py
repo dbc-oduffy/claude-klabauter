@@ -272,7 +272,7 @@ def _compose_oversize_repo_banner(rel_path: str, byte_len: int) -> str:
 
 
 @register_op("hooks.assert_em_role")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     payload = params.get("payload")
     if not isinstance(payload, Mapping):
         payload = {}

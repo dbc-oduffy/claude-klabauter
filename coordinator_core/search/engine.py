@@ -594,7 +594,15 @@ def _stage_grep_filter(args: Sequence[str]) -> Stage:
     def apply(lines: List[str]) -> List[str]:
         return [ln for ln in lines if bool(rx.search(ln)) != invert]
 
-    return Stage("grep", apply, False)
+    # DoE-claude#85 row 10: `needs_complete_input=True`, not False. A downstream
+    # filter grep is order/selection-sensitive over the UPSTREAM search's raw
+    # match set -- if the upstream truncated at a cap (match-cap/file-cap) before
+    # this filter ran, matches that would have passed the filter may already be
+    # gone, and the caller has no way to tell a genuinely-filtered result from a
+    # truncated-then-filtered one. That is exactly the class `needs_complete_input`
+    # exists to force a refusal for (see `Stage`'s own docstring); `False` here let
+    # a truncated upstream search render as a confidently complete filtered answer.
+    return Stage("grep", apply, True)
 
 
 def _stage_cut(args: Sequence[str]) -> Stage:
@@ -809,6 +817,17 @@ def run(spec: SearchSpec, cwd: str = ".", stop_after: Optional[int] = None) -> S
     files_scanned = 0
     truncated = False
     cap_hit: Optional[str] = None
+    # DoE-claude#85 row 16: whether the DEFAULT prune set (not the caller's own
+    # `--exclude-dir`) actually removed a directory this walk would otherwise have
+    # descended into. Pruning is a deliberate, accepted divergence from real grep
+    # when the answer still has real content (see `DEFAULT_PRUNE_DIRS`'s own
+    # docstring) -- but an EMPTY result under a pruned walk is unverifiable: real
+    # grep may have matched only inside a pruned directory (a huge `.venv`/
+    # `node_modules`/`dist` tree is exactly where a common word is likeliest to
+    # hit), and rendering a confident "(no matches)" for that case is the module's
+    # own documented worst failure mode. See the decline below.
+    user_exclude_dirs = set(spec.exclude_dir)
+    default_prune_hit = False
     # (shown, end_lineno) of the last rendered context group, or None if nothing has
     # been rendered yet -- used to decide whether the next group needs a `--` separator
     # (F4). Crossing a file boundary always breaks adjacency, which falls out for free
@@ -949,6 +968,8 @@ def run(spec: SearchSpec, cwd: str = ".", stop_after: Optional[int] = None) -> S
                 continue
             stop = False
             for root, dirs, files in os.walk(base):
+                if any(d in DEFAULT_PRUNE_DIRS and d not in user_exclude_dirs for d in dirs):
+                    default_prune_hit = True
                 dirs[:] = [d for d in dirs if d not in prune]
                 relative = os.path.relpath(root, base)
                 for filename in sorted(files):
@@ -972,6 +993,15 @@ def run(spec: SearchSpec, cwd: str = ".", stop_after: Optional[int] = None) -> S
         else:
             if not scan(base, target):
                 break
+
+    if not out and default_prune_hit:
+        # A confident "(no matches)" that only holds because this walk skipped a
+        # default-pruned directory is not a faithful answer to the query -- decline
+        # so the caller falls through to the real command (DoE-claude#85 row 16).
+        raise Unanswerable(
+            "no matches found, but the walk skipped default-pruned dir(s) that "
+            "were never searched -- cannot confirm this answer against real grep"
+        )
 
     return SearchResult(out, files_scanned, truncated, cap_hit,
                         (time.process_time() - started) * 1000)

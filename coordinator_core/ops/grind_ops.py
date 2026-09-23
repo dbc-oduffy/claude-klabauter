@@ -123,7 +123,7 @@ def _resolve_path(repo_root: Optional[Path], value: str) -> Path:
 
 
 @register_op("lessons.extract")
-async def _lessons_extract(
+def _lessons_extract(
     params: dict[str, Any], repo_root: Optional[Path]
 ) -> dict[str, Any]:
     """Source op: thin adapter over `extract-lessons.py::extract()`.
@@ -167,7 +167,7 @@ class VerifyRefusalError(RuntimeError):
 
 
 @register_op("lessons.verify_extraction")
-async def _lessons_verify_extraction(
+def _lessons_verify_extraction(
     params: dict[str, Any], repo_root: Optional[Path]
 ) -> dict[str, Any]:
     """Verify op: thin adapter over `extract-lessons.py::verify()`, the
@@ -209,7 +209,7 @@ async def _lessons_verify_extraction(
 
 
 @register_op("doctrine.surface_split_regenerate")
-async def _doctrine_surface_split_regenerate(
+def _doctrine_surface_split_regenerate(
     params: dict[str, Any], repo_root: Optional[Path]
 ) -> dict[str, Any]:
     """Regenerate op: thin adapter over `generate-doctrine-surface-

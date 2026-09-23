@@ -122,7 +122,7 @@ def _advisory_reason(target: str, hits: list) -> str:
 
 
 @register_op("hooks.guard_posix_invocation_doctrine_write")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Write|Edit|MultiEdit) op: advise (never deny) when a write
     introduces a new POSIX-only coordinator-CLI invocation into a doctrine
     surface tree."""

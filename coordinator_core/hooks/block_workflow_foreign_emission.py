@@ -115,7 +115,7 @@ def _session_mismatch_reason(script: Path, session: str, recorded_session: str) 
 
 
 @register_op("hooks.block_workflow_foreign_emission")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Workflow) op: refuse to fire a script this session did not
     emit."""
     # Normalize the two params shapes

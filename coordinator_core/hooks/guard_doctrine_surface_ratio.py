@@ -276,7 +276,7 @@ def evaluate(payload: dict):
 
 
 @register_op("hooks.guard_doctrine_surface_ratio")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Write|Edit|MultiEdit) op: price a byte-adding write to a
     doctrine surface against its D2 tier, advisory-only on the ratio path,
     deny-only on new-file admission overrun."""

@@ -104,7 +104,7 @@ def _deny_reason(target: str, exc: SyntaxError, after: str) -> str:
 
 
 @register_op("hooks.guard_python_syntax_on_write")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Write|Edit|MultiEdit) op: deny a write that leaves
     unparseable Python on disk under `coordinator_core/`.
 

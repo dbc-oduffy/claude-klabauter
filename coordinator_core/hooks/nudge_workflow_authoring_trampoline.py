@@ -115,7 +115,7 @@ def _is_inline_script_launch(tool_input: object) -> bool:
 
 
 @register_op("hooks.nudge_workflow_authoring_trampoline")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Skill, Workflow) op: nudge toward the emitted-and-fired
     path at either of the two hand-authoring entry points, once per session.
     """

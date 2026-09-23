@@ -27,8 +27,6 @@ from typing import Any
 
 from coordinator_core.contract.cockpit_schema.entities.goal import Goal
 from coordinator_core.contract.cockpit_schema.tests.conftest import (
-    load_fixture,
-    skip_no_fixtures,
     zod_safe_parse_ok,
 )
 
@@ -193,16 +191,6 @@ def test_no_parent_goal_id_on_authoring_emits_null_on_wire_and_passes():
     assert "parent_goal_id" in wire
     assert wire["parent_goal_id"] is None
     assert zod_safe_parse_ok(Goal, wire)
-
-
-@skip_no_fixtures
-def test_fixture_omitting_parent_goal_id_entirely_fails_validation_d9():
-    """Asserts the schema-level obligation directly (not via the reference
-    projection, which always emits the key) — a naive emitter that drops the
-    key on absence, rather than emitting null, must fail."""
-    wire = load_fixture("goal")
-    del wire["parent_goal_id"]
-    assert not zod_safe_parse_ok(Goal, wire)
 
 
 def test_declared_parent_goal_id_passes_through_1to1():

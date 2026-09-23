@@ -130,7 +130,7 @@ def _compose_workflow_offer(in_window_count: int, env: object = None) -> str:
 
 
 @register_op("hooks.nudge_multiwave_workflow")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Agent|Workflow) op: offer a Workflow after a burst of
     hand-dispatched write-capable executors."""
     # Normalize the two params shapes

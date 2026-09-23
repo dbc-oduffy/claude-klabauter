@@ -246,7 +246,7 @@ def _advisory_message(target: str, detected: str):
 
 
 @register_op("hooks.nudge_plan_test_surface_tier")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Write|Edit|MultiEdit) op: advise (never deny) when a plan
     body's write leaves a Tier-F/U test-surface row, or an Anti-scope
     section naming an execution vehicle."""

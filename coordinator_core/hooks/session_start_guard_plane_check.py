@@ -137,7 +137,7 @@ def build_report() -> "str | None":
 
 
 @register_op("hooks.session_start_guard_plane_check")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """SessionStart(*) op — see module docstring for the report contract.
     Never raises: `build_report()`'s own internal reads are already
     exception-scoped per-file; a failure here degrades to `no_advisory()`."""

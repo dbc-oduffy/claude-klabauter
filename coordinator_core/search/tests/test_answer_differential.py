@@ -269,6 +269,39 @@ def test_prunes_dot_git_by_default(tree):
     assert not any(".git" in line for line in ours)
 
 
+def test_declines_empty_answer_when_default_pruned_dir_could_hold_the_match(tree):
+    """DoE-claude#85 row 16: a plain repo-wide search must not confidently render
+    "(no matches)" when the only real match lives inside a default-pruned
+    directory (e.g. a `.venv`/`node_modules`/`dist` tree) this walk never looked
+    at -- that is a false "(no matches)" the caller cannot tell from a genuine one.
+    Contrast with `test_prunes_dot_git_by_default`: that fixture's match set is
+    NOT empty (other `alpha` hits exist outside `.git`), so it still answers.
+    """
+    node_modules = tree / "node_modules"
+    node_modules.mkdir()
+    (node_modules / "pkg.js").write_text("needle only lives here\n")
+    assert answer("grep -rn needle .", cwd=str(tree)) is None
+
+
+def test_answers_empty_when_no_default_prune_dir_present(tree):
+    """The decline above is scoped to the pruning-caused-emptiness case -- a
+    genuinely empty result with nothing pruned still answers normally."""
+    text = answer("grep -rn zzzznosuchneedle .", cwd=str(tree))
+    assert text is not None
+    assert text.startswith("(no matches)")
+
+
+def test_downstream_grep_filter_declines_on_truncated_upstream(tree, monkeypatch):
+    """DoE-claude#85 row 10: a downstream `| grep` filter over an upstream search
+    that hit a truncation cap must decline, not silently render a filtered result
+    computed over an incomplete match set -- see `_stage_grep_filter`'s own
+    `needs_complete_input=True` fix."""
+    from coordinator_core.search import engine
+
+    monkeypatch.setattr(engine, "MAX_MATCH_LINES", 1)
+    assert answer("grep -rn alpha . | grep check", cwd=str(tree)) is None
+
+
 def test_truncation_forces_refusal_for_aggregate_stage(tree, monkeypatch):
     """A truncated search feeding `wc -l` would produce a confidently wrong count."""
     from coordinator_core.search import engine

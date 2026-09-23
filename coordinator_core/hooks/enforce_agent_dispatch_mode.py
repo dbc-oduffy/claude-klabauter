@@ -117,7 +117,7 @@ def _teammate_name_deny_message(name: str) -> Optional[str]:
 
 
 @register_op("hooks.enforce_agent_dispatch_mode")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Agent) op: the sole `updatedInput` emitter for mode
     elevation, worktree-isolation stripping, named-dispatch stripping, and
     foreground-dispatch rerouting. See module docstring for concern order.

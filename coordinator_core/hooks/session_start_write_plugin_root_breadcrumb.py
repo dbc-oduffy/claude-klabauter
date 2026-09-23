@@ -65,7 +65,7 @@ def _breadcrumb_path() -> "Path | None":
 
 
 @register_op("hooks.session_start_write_plugin_root_breadcrumb")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     try:
         target = _breadcrumb_path()
         if target is None:

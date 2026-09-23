@@ -86,7 +86,7 @@ def _compose_skipped_guard_breadcrumb(skipped: "list[str]") -> str:
 
 
 @register_op("hooks.preuse_write_dispatch")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Write|Edit|MultiEdit|NotebookEdit) op: evaluate every
     registered write guard against this payload and return its verdict.
 

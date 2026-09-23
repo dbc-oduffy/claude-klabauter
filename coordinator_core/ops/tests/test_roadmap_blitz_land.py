@@ -16,8 +16,6 @@ cases stub it deliberately, because what is under test is the handover and not t
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 from coordinator_core.ops import roadmap_blitz_land as mod
@@ -58,12 +56,10 @@ def test_shipped_in_reaches_land_wave(monkeypatch, repo):
     seen: dict = {}
     monkeypatch.setattr(mod, "land_wave", _capturing_land_wave(seen))
 
-    asyncio.run(
-        mod._handler(
+    mod._handler(
             {"wave_result": {"waveIndex": 0}, "shipped_in": "d434d54fb"},
             repo_root=repo,
         )
-    )
 
     assert seen.get("shipped_in") == "d434d54fb"
 
@@ -77,7 +73,7 @@ def test_shipped_in_is_optional_and_absent_stays_none(monkeypatch, repo):
     seen: dict = {}
     monkeypatch.setattr(mod, "land_wave", _capturing_land_wave(seen))
 
-    asyncio.run(mod._handler({"wave_result": {"waveIndex": 0}}, repo_root=repo))
+    mod._handler({"wave_result": {"waveIndex": 0}}, repo_root=repo)
 
     assert seen.get("shipped_in") is None
 
@@ -88,12 +84,10 @@ def test_an_empty_shipped_in_is_refused_at_the_wire(monkeypatch, repo):
     monkeypatch.setattr(mod, "land_wave", _capturing_land_wave({}))
 
     with pytest.raises(ValueError, match="shipped_in"):
-        asyncio.run(
-            mod._handler(
+        mod._handler(
                 {"wave_result": {"waveIndex": 0}, "shipped_in": "  "},
                 repo_root=repo,
             )
-        )
 
 
 def test_branch_and_limit_still_reach_land_wave(monkeypatch, repo):
@@ -102,12 +96,10 @@ def test_branch_and_limit_still_reach_land_wave(monkeypatch, repo):
     seen: dict = {}
     monkeypatch.setattr(mod, "land_wave", _capturing_land_wave(seen))
 
-    asyncio.run(
-        mod._handler(
+    mod._handler(
             {"wave_result": {"waveIndex": 0}, "branch": "work/x", "limit": 3},
             repo_root=repo,
         )
-    )
 
     assert seen.get("branch") == "work/x"
     assert seen.get("limit") == 3

@@ -3517,7 +3517,28 @@ def _fire_nudge_unrouted_sizing() -> Optional[Dict[str, Any]]:
 # wrapper this module already had the tools to write.
 # ---------------------------------------------------------------------------
 
-import asyncio as _hooks_asyncio
+import asyncio as _real_asyncio
+
+
+class _HooksAsyncioShim:
+    """Local shim over the stdlib `asyncio` module (never mutates the real
+    module) -- some `hooks.*` handlers below are plain `def` now (dispatch
+    offloads them via `asyncio.to_thread`; see
+    `_ZERO_AWAIT_PRE_EXISTING_ALLOWLIST`'s discharge note), so a call site's
+    result may already be a resolved value rather than a coroutine.
+    `asyncio.run` only accepts a coroutine -- pass a plain value straight
+    through instead."""
+
+    def run(self, result, *args, **kwargs):
+        if _real_asyncio.iscoroutine(result):
+            return _real_asyncio.run(result, *args, **kwargs)
+        return result
+
+    def __getattr__(self, name):
+        return getattr(_real_asyncio, name)
+
+
+_hooks_asyncio = _HooksAsyncioShim()
 
 from coordinator_core.hooks import block_unenumerated_agent_type as _hook_block_unenumerated_agent_type
 from coordinator_core.hooks import cater_subagent_start as _hook_cater_subagent_start

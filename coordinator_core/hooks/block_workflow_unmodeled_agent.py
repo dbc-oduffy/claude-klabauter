@@ -599,7 +599,7 @@ def _compose_partial_modeled_context(
 
 
 @register_op("hooks.block_workflow_unmodeled_agent")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Workflow) op: gate an Opus-session Workflow launch whose
     `agent()` calls carry no `model:`/rostered `agentType:` cost signal."""
     env = params.get("env")

@@ -149,8 +149,8 @@ def write_sidecar(output_exe: Path, engine_root: Path) -> Path:
         try:
             os.replace(tmp, sidecar_path)
             return sidecar_path
-        except PermissionError:
-            if attempt == _SIDECAR_REPLACE_ATTEMPTS - 1:
+        except OSError as exc:
+            if not isinstance(exc, PermissionError) or attempt == _SIDECAR_REPLACE_ATTEMPTS - 1:
                 tmp.unlink(missing_ok=True)
                 raise
             time.sleep(0.01)

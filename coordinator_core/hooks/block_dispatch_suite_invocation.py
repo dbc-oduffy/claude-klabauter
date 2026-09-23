@@ -213,7 +213,7 @@ def _compose_precision_deny_reason(
 
 
 @register_op("hooks.block_dispatch_suite_invocation")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Agent, Workflow) op: deny a dispatch brief carrying a
     suite-shaped imperative command or a directory-scoped Tier-F/U one."""
     # Normalize the two params shapes

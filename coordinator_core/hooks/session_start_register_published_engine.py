@@ -105,7 +105,7 @@ def discover_published_mirror() -> "Path | None":
 
 
 @register_op("hooks.session_start_register_published_engine")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     try:
         root, resolution_class = coordinator_engine_root_with_class()
     except Exception:

@@ -643,6 +643,54 @@ class TestClaimArtifact:
         # Re-claim of my own plan in the same live session -> ACCEPTED.
         assert claims.claim_artifact("plan", "p-1", cwd=str(repo)) is True
 
+    def test_plan_reentrant_accepted_across_session_env_precedence_drift(
+        self, tmp_path, monkeypatch
+    ):
+        """DoE-claude issue #85 row 11: a cloud session's harness does not
+        always populate the SAME subset of the three session-id env vars on
+        every subprocess spawn of a claim tool. The claim was originally
+        recorded under a LOWER-precedence var's value (``CLAUDE_CODE_SESSION_
+        ID`` only); THIS re-claim call additionally has a HIGHER-precedence
+        var (``COORDINATOR_SESSION_ID``) set to a DIFFERENT string. Both
+        values are this session's own -- ``resolve_session_id``'s top-
+        precedence answer must not make this read as a foreign/concurrent
+        holder."""
+        repo = _make_repo(tmp_path)
+        cloud_native_id = "cc-native-session-id-0001"
+        wrapper_id = "coordinator-wrapper-id-0002"
+
+        # Original claim recorded when ONLY the platform-native var was set.
+        monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", cloud_native_id)
+        _make_claim(repo, "plan", "p-drift", session_id=cloud_native_id)
+        _write_session(repo, cloud_native_id, _fresh())
+
+        # Re-claim call: the SAME session, but now a higher-precedence var is
+        # ALSO set (e.g. a wrapper minted it lazily), to a different string.
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", wrapper_id)
+        assert claims.claim_artifact("plan", "p-drift", cwd=str(repo)) is True
+        # Idempotent -- the recorded holder is UNCHANGED, not overwritten.
+        assert (
+            _claim_dir(repo, "plan", "p-drift") / "session_id"
+        ).read_text().strip() == cloud_native_id
+
+    def test_plan_reentrant_env_drift_does_not_admit_a_foreign_session(
+        self, tmp_path, monkeypatch
+    ):
+        """The env-precedence-drift tolerance above must not become a hole a
+        genuinely DIFFERENT live session can walk through: a foreign holder
+        whose recorded sid matches NONE of my currently-set env-tier values
+        is still refused."""
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch, sid="me-sid")
+        _make_claim(repo, "plan", "p-foreign", session_id="a-different-live-sid")
+        _write_session(repo, "a-different-live-sid", _fresh())
+        assert claims.claim_artifact("plan", "p-foreign", cwd=str(repo)) is False
+        assert (
+            _claim_dir(repo, "plan", "p-foreign") / "session_id"
+        ).read_text().strip() == "a-different-live-sid"
+
     def test_handoff_same_session_reclaim_rejected_T16a(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
         _set_me(monkeypatch)

@@ -11,14 +11,13 @@ Covers:
     - no op spawns a subprocess (`subprocess.run`/`Popen` patched to raise).
 
 Async invocation follows the house convention (test_cutover_advance.py):
-plain sync test functions wrapping the async handler in `asyncio.run(...)`.
+plain sync test functions wrapping the async handler in `...`.
 
 Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md § C9
 """
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 from pathlib import Path
 
@@ -66,11 +65,9 @@ def test_lessons_extract_no_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         created="2026-01-01",
     )
 
-    result = asyncio.run(
-        grind_ops._lessons_extract(
+    result = grind_ops._lessons_extract(
             {"lessons_dir": str(lessons_dir), "shortname": "proj"}, tmp_path
         )
-    )
     assert result["exit_code"] == 0
     assert len(result["records"]) == 1
     record = result["records"][0]
@@ -88,11 +85,9 @@ def test_lessons_verify_extraction_pass(tmp_path: Path, monkeypatch: pytest.Monk
         body="First lesson body",
         created="2026-01-01",
     )
-    extraction = asyncio.run(
-        grind_ops._lessons_extract(
+    extraction = grind_ops._lessons_extract(
             {"lessons_dir": str(lessons_dir), "shortname": "proj"}, tmp_path
         )
-    )
     manifest_path = tmp_path / "extraction.json"
     import json
 
@@ -107,11 +102,9 @@ def test_lessons_verify_extraction_pass(tmp_path: Path, monkeypatch: pytest.Monk
             "summary": "First lesson title text",
         }
     ]
-    result = asyncio.run(
-        grind_ops._lessons_verify_extraction(
+    result = grind_ops._lessons_verify_extraction(
             {"manifest": str(manifest_path), "records": passing_records}, tmp_path
         )
-    )
     assert result == {"ok": True, "failing_ids": []}
 
 
@@ -125,11 +118,9 @@ def test_lessons_verify_extraction_fail(tmp_path: Path, monkeypatch: pytest.Monk
         body="First lesson body",
         created="2026-01-01",
     )
-    extraction = asyncio.run(
-        grind_ops._lessons_extract(
+    extraction = grind_ops._lessons_extract(
             {"lessons_dir": str(lessons_dir), "shortname": "proj"}, tmp_path
         )
-    )
     manifest_path = tmp_path / "extraction.json"
     import json
 
@@ -144,11 +135,9 @@ def test_lessons_verify_extraction_fail(tmp_path: Path, monkeypatch: pytest.Monk
             "summary": "Fabricated entry that does not exist",
         }
     ]
-    result = asyncio.run(
-        grind_ops._lessons_verify_extraction(
+    result = grind_ops._lessons_verify_extraction(
             {"manifest": str(manifest_path), "records": failing_records}, tmp_path
         )
-    )
     assert result["ok"] is False
     assert result["failing_ids"] == ["proj-L99"]
 
@@ -158,12 +147,10 @@ def test_lessons_verify_extraction_missing_manifest_is_a_refusal(
 ):
     _no_spawn(monkeypatch)
     with pytest.raises(grind_ops.VerifyRefusalError):
-        asyncio.run(
-            grind_ops._lessons_verify_extraction(
+        grind_ops._lessons_verify_extraction(
                 {"manifest": str(tmp_path / "never-existed.json"), "records": []},
                 tmp_path,
             )
-        )
 
 
 def test_lessons_verify_extraction_bad_input_exit_is_a_refusal_not_a_fail(
@@ -178,15 +165,13 @@ def test_lessons_verify_extraction_bad_input_exit_is_a_refusal_not_a_fail(
     empty_extraction_dir = tmp_path / "extractions"
     empty_extraction_dir.mkdir()
     with pytest.raises(grind_ops.VerifyRefusalError):
-        asyncio.run(
-            grind_ops._lessons_verify_extraction(
+        grind_ops._lessons_verify_extraction(
                 {
                     "manifest": str(empty_extraction_dir),
                     "records": [{"id": "proj-L1", "source": "", "summary": "x"}],
                 },
                 tmp_path,
             )
-        )
 
 
 def test_doctrine_surface_split_regenerate_no_spawn(
@@ -208,20 +193,16 @@ def test_doctrine_surface_split_regenerate_no_spawn(
         build["preamble"], encoding="utf-8", newline="\n"
     )
 
-    result = asyncio.run(
-        grind_ops._doctrine_surface_split_regenerate(
+    result = grind_ops._doctrine_surface_split_regenerate(
             {"split_dir": str(split_dir), "allow_dirty": True}, tmp_path
         )
-    )
     assert result == {"exit_code": 0}
 
     # Idempotent: a second regenerate against the now-refreshed README.md
     # is a no-drift no-op under check_mode.
-    result = asyncio.run(
-        grind_ops._doctrine_surface_split_regenerate(
+    result = grind_ops._doctrine_surface_split_regenerate(
             {"split_dir": str(split_dir), "check_mode": True}, tmp_path
         )
-    )
     assert result == {"exit_code": 0}
 
 
@@ -260,10 +241,8 @@ def test_doctrine_surface_split_regenerate_default_path_spawns_exactly_once(
 
     monkeypatch.setattr(subprocess, "run", _counting_run)
 
-    result = asyncio.run(
-        grind_ops._doctrine_surface_split_regenerate(
+    result = grind_ops._doctrine_surface_split_regenerate(
             {"split_dir": str(split_dir)}, tmp_path
         )
-    )
     assert result == {"exit_code": 0}
     assert spawn_count == 1

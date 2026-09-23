@@ -109,7 +109,7 @@ def test_guard_plane_check_op_reports_absence(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
-    result = _run(session_start_guard_plane_check._handler({}))
+    result = session_start_guard_plane_check._handler({})
     context = result["hookSpecificOutput"]["additionalContext"]
     assert "NO registered coordinator hook" in context
 
@@ -121,16 +121,14 @@ def test_guard_plane_check_op_reports_absence(tmp_path, monkeypatch):
 
 def test_announce_job_mode_reports_resolved_mode(monkeypatch):
     monkeypatch.setenv("COORDINATOR_JOB_MODE", "interactive")
-    result = _run(
-        session_start_announce_job_mode._handler({"payload": {"session_id": "sess-1"}})
-    )
+    result = session_start_announce_job_mode._handler({"payload": {"session_id": "sess-1"}})
     context = result["hookSpecificOutput"]["additionalContext"]
     assert "interactive" in context
     assert "asserted via COORDINATOR_JOB_MODE" in context
 
 
 def test_announce_job_mode_fails_open_on_bad_payload():
-    result = _run(session_start_announce_job_mode._handler({}))
+    result = session_start_announce_job_mode._handler({})
     assert "hookSpecificOutput" in result  # resolves even with an absent payload
 
 
@@ -150,7 +148,7 @@ def test_self_probe_fails_open_when_engine_module_unimportable(monkeypatch):
         return real_import(name, *a, **k)
 
     monkeypatch.setattr(builtins, "__import__", _blocked)
-    result = _run(guard_hook_generation_self_probe._handler({}))
+    result = guard_hook_generation_self_probe._handler({})
     assert result == {}  # no_advisory()
 
 
@@ -158,7 +156,7 @@ def test_self_probe_returns_context_when_probe_emits_text(monkeypatch):
     import coordinator_core.ops.session.guard_hook_generation_self_probe as real_probe
 
     monkeypatch.setattr(real_probe, "run_self_probe", lambda config_dir=None: "banner text")
-    result = _run(guard_hook_generation_self_probe._handler({}))
+    result = guard_hook_generation_self_probe._handler({})
     assert "banner text" in result["hookSpecificOutput"]["additionalContext"]
 
 
@@ -182,14 +180,12 @@ def test_doe_claude_wrong_repo_guard_accepts_exact_slug(tmp_path):
 
 
 def test_doe_claude_root_handler_no_op_when_nothing_confirmed(tmp_path):
-    result = _run(
-        session_start_register_doe_claude_root._handler({"payload": {"cwd": str(tmp_path)}})
-    )
+    result = session_start_register_doe_claude_root._handler({"payload": {"cwd": str(tmp_path)}})
     assert result == {}  # no_advisory() -- tmp_path carries no dev-repo sentinel
 
 
 def test_doe_claude_root_handler_never_raises_on_absent_payload():
-    result = _run(session_start_register_doe_claude_root._handler({}))
+    result = session_start_register_doe_claude_root._handler({})
     assert result == {}
 
 
@@ -211,7 +207,7 @@ def test_is_stamped_engine_root_accepts_nonempty_stamp(tmp_path):
 
 
 def test_published_engine_handler_never_raises():
-    result = _run(session_start_register_published_engine._handler({}))
+    result = session_start_register_published_engine._handler({})
     assert isinstance(result, dict)
 
 
@@ -222,7 +218,7 @@ def test_published_engine_handler_never_raises():
 
 def test_repair_commit_msg_hook_no_op_outside_a_git_repo(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    result = _run(session_start_repair_prepare_commit_msg_hook._handler({}))
+    result = session_start_repair_prepare_commit_msg_hook._handler({})
     assert isinstance(result, dict)
 
 
@@ -243,7 +239,7 @@ def test_repair_commit_msg_first_existing_finds_real_file(tmp_path):
 def test_plugin_root_breadcrumb_no_op_without_plugin_root(monkeypatch, tmp_path):
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
-    result = _run(session_start_write_plugin_root_breadcrumb._handler({}))
+    result = session_start_write_plugin_root_breadcrumb._handler({})
     assert isinstance(result, dict)
     assert not (tmp_path / ".claude" / ".coordinator-plugin-root").exists()
 
@@ -253,7 +249,7 @@ def test_plugin_root_breadcrumb_writes_atomically(monkeypatch, tmp_path):
     plugin_root.mkdir()
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
     monkeypatch.setenv("HOME", str(tmp_path))
-    _run(session_start_write_plugin_root_breadcrumb._handler({}))
+    session_start_write_plugin_root_breadcrumb._handler({})
     breadcrumb = tmp_path / ".claude" / ".coordinator-plugin-root"
     assert breadcrumb.read_text(encoding="utf-8").strip() == plugin_root.as_posix()
 
@@ -263,10 +259,10 @@ def test_plugin_root_breadcrumb_idempotent_no_rewrite(monkeypatch, tmp_path):
     plugin_root.mkdir()
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
     monkeypatch.setenv("HOME", str(tmp_path))
-    _run(session_start_write_plugin_root_breadcrumb._handler({}))
+    session_start_write_plugin_root_breadcrumb._handler({})
     breadcrumb = tmp_path / ".claude" / ".coordinator-plugin-root"
     mtime_before = breadcrumb.stat().st_mtime_ns
-    _run(session_start_write_plugin_root_breadcrumb._handler({}))
+    session_start_write_plugin_root_breadcrumb._handler({})
     assert breadcrumb.stat().st_mtime_ns == mtime_before
 
 
@@ -280,7 +276,7 @@ def test_bin_drift_refresh_fails_open_on_error(monkeypatch):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(sessionstart_bin_drift_refresh, "check_and_refresh", _raise)
-    result = _run(sessionstart_bin_drift_refresh._handler({}))
+    result = sessionstart_bin_drift_refresh._handler({})
     assert result == {}
 
 
@@ -288,7 +284,7 @@ def test_bin_drift_refresh_returns_banner(monkeypatch):
     monkeypatch.setattr(
         sessionstart_bin_drift_refresh, "check_and_refresh", lambda bin_dir: "refreshed x"
     )
-    result = _run(sessionstart_bin_drift_refresh._handler({}))
+    result = sessionstart_bin_drift_refresh._handler({})
     assert "refreshed x" in result["hookSpecificOutput"]["additionalContext"]
 
 
@@ -299,7 +295,7 @@ def test_bin_drift_refresh_returns_banner(monkeypatch):
 
 def test_ensure_http_forwarder_no_op_without_plugin_root(monkeypatch):
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    result = _run(sessionstart_ensure_http_forwarder._handler({}))
+    result = sessionstart_ensure_http_forwarder._handler({})
     assert result == {}
 
 
@@ -359,7 +355,7 @@ def test_sweep_boot_handler_never_raises(monkeypatch):
 
 def test_assert_em_role_missing_plugin_root_still_returns_envelope(monkeypatch):
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    result = _run(assert_em_role._handler({"payload": {}}))
+    result = assert_em_role._handler({"payload": {}})
     assert "hookSpecificOutput" in result
     assert result["hookSpecificOutput"]["hookEventName"] == "SessionStart"
 
@@ -371,7 +367,7 @@ def test_assert_em_role_delivers_plugin_snippet(monkeypatch, tmp_path):
         "You are the EM.", encoding="utf-8"
     )
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
-    result = _run(assert_em_role._handler({"payload": {"cwd": str(tmp_path)}}))
+    result = assert_em_role._handler({"payload": {"cwd": str(tmp_path)}})
     assert "You are the EM." in result["hookSpecificOutput"]["additionalContext"]
 
 
@@ -379,14 +375,14 @@ def test_assert_em_role_missing_plugin_snippet_banners(monkeypatch, tmp_path):
     plugin_root = tmp_path / "plugin"
     plugin_root.mkdir()
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
-    result = _run(assert_em_role._handler({"payload": {"cwd": str(tmp_path)}}))
+    result = assert_em_role._handler({"payload": {"cwd": str(tmp_path)}})
     context = result["hookSpecificOutput"]["additionalContext"]
     assert "agent-role-em.md MISSING" in context
 
 
 def test_assert_em_role_repo_slot_is_silent_when_absent(monkeypatch, tmp_path):
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    result = _run(assert_em_role._handler({"payload": {"cwd": str(tmp_path)}}))
+    result = assert_em_role._handler({"payload": {"cwd": str(tmp_path)}})
     context = result["hookSpecificOutput"]["additionalContext"]
     assert "em-context.md" not in context
 

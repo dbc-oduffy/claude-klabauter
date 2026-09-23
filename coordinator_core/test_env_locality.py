@@ -128,7 +128,7 @@ def test_wsl_is_attended_and_says_windows(monkeypatch):
     guards, so the basis must name the Windows host, not merely 'not cloud'."""
     _force_linux(monkeypatch)
     monkeypatch.setattr(EL.os, "uname",
-                        lambda: _Uname("6.6.114.1-microsoft-standard-WSL2"))
+                        lambda: _Uname("6.6.114.1-microsoft-standard-WSL2"), raising=False)
     got = EL._machine_rung_uncached({})
     assert got.call == "attended"
     assert got.confidence == "certain"
@@ -139,7 +139,7 @@ def test_consumer_silicon_rescues_a_nested_vm_on_a_laptop(monkeypatch):
     """A Docker-Desktop-class VM is a headless VM by shape, but the host CPU
     passes through -- consumer silicon means somebody's machine is underneath."""
     _force_linux(monkeypatch)
-    monkeypatch.setattr(EL.os, "uname", lambda: _Uname("6.1.0-linuxkit"))
+    monkeypatch.setattr(EL.os, "uname", lambda: _Uname("6.1.0-linuxkit"), raising=False)
     monkeypatch.setattr(EL, "_cpu_brand_linux",
                         lambda *a: ("AMD Ryzen 9 7950X 16-Core Processor", "0xa601206"))
     got = EL._machine_rung_uncached({})
@@ -149,7 +149,7 @@ def test_consumer_silicon_rescues_a_nested_vm_on_a_laptop(monkeypatch):
 
 def test_masked_silicon_with_synthetic_microcode_is_cloud(monkeypatch):
     _force_linux(monkeypatch)
-    monkeypatch.setattr(EL.os, "uname", lambda: _Uname("6.18.44-fc-v24"))
+    monkeypatch.setattr(EL.os, "uname", lambda: _Uname("6.18.44-fc-v24"), raising=False)
     monkeypatch.setattr(EL, "_cpu_brand_linux",
                         lambda *a: ("Intel(R) Xeon(R) Processor @ 2.80GHz", "0x1"))
     got = EL._machine_rung_uncached({})
@@ -161,7 +161,7 @@ def test_generic_hypervisor_brand_stays_suspect(monkeypatch):
     """The one irreducible band. Rounding this to either answer is the defect
     the third state exists to prevent."""
     _force_linux(monkeypatch)
-    monkeypatch.setattr(EL.os, "uname", lambda: _Uname("5.15.0-generic"))
+    monkeypatch.setattr(EL.os, "uname", lambda: _Uname("5.15.0-generic"), raising=False)
     monkeypatch.setattr(EL, "_cpu_brand_linux",
                         lambda *a: ("QEMU Virtual CPU version 2.5+", "0x1"))
     monkeypatch.setattr(EL.os.path, "exists", lambda p: False)
@@ -203,7 +203,7 @@ def test_harness_rung_wins_over_machine_rung(monkeypatch):
     _force_linux(monkeypatch)
     monkeypatch.setattr(EL, "_cpu_brand_linux",
                         lambda *a: ("Intel(R) Core(TM) Ultra 9 285K", "0x114"))
-    monkeypatch.setattr(EL.os, "uname", lambda: _Uname("6.1.0"))
+    monkeypatch.setattr(EL.os, "uname", lambda: _Uname("6.1.0"), raising=False)
     EL._MACHINE_CACHE.clear()
     got = EL.locality({"CLAUDE_CODE_REMOTE": "true"})
     assert got.call == "cloud" and got.rung == "harness"
@@ -213,7 +213,7 @@ def test_cross_check_surfaces_disagreement(monkeypatch):
     _force_linux(monkeypatch)
     monkeypatch.setattr(EL, "_cpu_brand_linux",
                         lambda *a: ("Intel(R) Core(TM) Ultra 9 285K", "0x114"))
-    monkeypatch.setattr(EL.os, "uname", lambda: _Uname("6.1.0"))
+    monkeypatch.setattr(EL.os, "uname", lambda: _Uname("6.1.0"), raising=False)
     out = EL.cross_check({"CLAUDE_CODE_REMOTE": "true"})
     assert out["agree"] is False, "harness says cloud, silicon says attended"
     assert out["effective"].rung == "harness"
@@ -221,7 +221,7 @@ def test_cross_check_surfaces_disagreement(monkeypatch):
 
 def test_cross_check_agree_is_none_when_harness_is_silent(monkeypatch):
     _force_linux(monkeypatch)
-    monkeypatch.setattr(EL.os, "uname", lambda: _Uname("6.1.0"))
+    monkeypatch.setattr(EL.os, "uname", lambda: _Uname("6.1.0"), raising=False)
     out = EL.cross_check({})
     assert out["agree"] is None
 
@@ -264,6 +264,166 @@ def test_module_spawns_nothing():
                 f"env_locality must not call {node.func.attr!r} "
                 f"(line {node.lineno})"
             )
+
+
+# ------------------------------------------------------------ accelerator
+def _clear_accel(monkeypatch):
+    EL._ACCEL_CACHE.clear()
+    monkeypatch.setattr(EL, "IS_WINDOWS", False)
+    monkeypatch.setattr(EL, "IS_DARWIN", False)
+    monkeypatch.setattr(EL, "IS_LINUX", True)
+
+
+def test_accel_calls_come_from_the_closed_vocabulary():
+    got = EL.accelerator({})
+    assert got.call in EL.ACCEL_CALLS
+    assert got.confidence in EL.CONFIDENCES
+
+
+def test_scan_path_for_finds_a_file_with_no_exec(tmp_path, monkeypatch):
+    monkeypatch.setattr(EL, "IS_WINDOWS", False)
+    target = tmp_path / "nvidia-smi"
+    target.write_text("#!/bin/sh\n")
+    assert EL._scan_path_for("nvidia-smi", {"PATH": str(tmp_path)}) is True
+    assert EL._scan_path_for("nvidia-smi", {"PATH": str(tmp_path / "nope")}) is False
+
+
+def test_scan_path_for_respects_pathext_on_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(EL, "IS_WINDOWS", True)
+    target = tmp_path / "nvidia-smi.EXE"
+    target.write_text("")
+    env = {"PATH": str(tmp_path), "PATHEXT": ".EXE;.BAT"}
+    assert EL._scan_path_for("nvidia-smi", env) is True
+    assert EL._scan_path_for("other-tool", env) is False
+
+
+def test_scan_path_for_empty_path_is_false():
+    assert EL._scan_path_for("nvidia-smi", {}) is False
+
+
+def test_nvidia_via_path_scan(monkeypatch):
+    _clear_accel(monkeypatch)
+    monkeypatch.setattr(EL, "_scan_path_for", lambda name, env: True)
+    got = EL._accelerator_uncached({})
+    assert got.call == "nvidia"
+    assert got.confidence == "high"
+    assert "PATH" in got.basis
+
+
+def test_nvidia_via_linux_proc_driver(monkeypatch):
+    _clear_accel(monkeypatch)
+    monkeypatch.setattr(EL, "_scan_path_for", lambda name, env: False)
+    monkeypatch.setattr(EL.os.path, "exists", lambda p: p == "/proc/driver/nvidia")
+    got = EL._accelerator_uncached({})
+    assert got.call == "nvidia"
+    assert "/proc/driver/nvidia" in got.basis
+
+
+def test_nvidia_via_linux_dev_node(monkeypatch):
+    _clear_accel(monkeypatch)
+    monkeypatch.setattr(EL, "_scan_path_for", lambda name, env: False)
+    monkeypatch.setattr(EL.os.path, "exists", lambda p: p == "/dev/nvidia0")
+    got = EL._accelerator_uncached({})
+    assert got.call == "nvidia"
+    assert "/dev/nvidia0" in got.basis
+
+
+def test_nvidia_via_windows_system32(monkeypatch):
+    monkeypatch.setattr(EL, "IS_WINDOWS", True)
+    monkeypatch.setattr(EL, "IS_DARWIN", False)
+    monkeypatch.setattr(EL, "IS_LINUX", False)
+    monkeypatch.setattr(EL, "_scan_path_for", lambda name, env: False)
+    monkeypatch.setattr(EL.os.path, "exists",
+                        lambda p: p == r"C:\Windows\System32\nvidia-smi.exe")
+    got = EL._accelerator_uncached({})
+    assert got.call == "nvidia"
+    assert "System32" in got.basis
+
+
+def test_mps_on_apple_silicon(monkeypatch):
+    monkeypatch.setattr(EL, "IS_WINDOWS", False)
+    monkeypatch.setattr(EL, "IS_DARWIN", True)
+    monkeypatch.setattr(EL, "IS_LINUX", False)
+    monkeypatch.setattr(EL, "_scan_path_for", lambda name, env: False)
+
+    def _apple_uname():
+        u = _Uname("23.0.0")
+        u.machine = "arm64"
+        return u
+
+    monkeypatch.setattr(EL.os, "uname", _apple_uname, raising=False)
+    got = EL._accelerator_uncached({})
+    assert got.call == "mps"
+    assert got.confidence == "high"
+
+
+def test_none_on_intel_mac(monkeypatch):
+    monkeypatch.setattr(EL, "IS_WINDOWS", False)
+    monkeypatch.setattr(EL, "IS_DARWIN", True)
+    monkeypatch.setattr(EL, "IS_LINUX", False)
+    monkeypatch.setattr(EL, "_scan_path_for", lambda name, env: False)
+    monkeypatch.setattr(EL.os, "uname", lambda: _Uname("23.0.0"), raising=False)  # machine=x86_64
+    got = EL._accelerator_uncached({})
+    assert got.call == "none"
+    assert "Intel" in got.basis
+
+
+def test_none_high_confidence_on_masked_server_silicon(monkeypatch):
+    _clear_accel(monkeypatch)
+    monkeypatch.setattr(EL, "_scan_path_for", lambda name, env: False)
+    monkeypatch.setattr(EL.os.path, "exists", lambda p: False)
+    monkeypatch.setattr(EL, "machine_rung",
+                        lambda env, force=False: EL.Locality(
+                            "cloud", "high", "machine",
+                            "masked server silicon (Xeon), microcode=0x1"))
+    got = EL._accelerator_uncached({})
+    assert got.call == "none"
+    assert got.confidence == "high"
+
+
+def test_unknown_when_passthrough_device_with_no_driver(monkeypatch):
+    _clear_accel(monkeypatch)
+    monkeypatch.setattr(EL, "_scan_path_for", lambda name, env: False)
+    monkeypatch.setattr(EL, "machine_rung",
+                        lambda env, force=False: EL.Locality(
+                            "attended", "medium", "machine", "peripherals present"))
+    monkeypatch.setattr(EL.os.path, "exists", lambda p: p == "/dev/dri")
+    got = EL._accelerator_uncached({})
+    assert got.call == "unknown"
+    assert got.confidence == "low"
+
+
+def test_none_when_no_signal_at_all(monkeypatch):
+    _clear_accel(monkeypatch)
+    monkeypatch.setattr(EL, "_scan_path_for", lambda name, env: False)
+    monkeypatch.setattr(EL, "machine_rung",
+                        lambda env, force=False: EL.Locality(
+                            "attended", "medium", "machine", "peripherals present"))
+    monkeypatch.setattr(EL.os.path, "exists", lambda p: False)
+    got = EL._accelerator_uncached({})
+    assert got.call == "none"
+    assert got.confidence == "medium"
+
+
+def test_accelerator_is_memoized(monkeypatch):
+    EL._ACCEL_CACHE.clear()
+    EL.accelerator({})
+    calls = []
+    monkeypatch.setattr(EL, "_accelerator_uncached",
+                        lambda env: calls.append(1) or EL.Accel("x", "low", "p", "b"))
+    EL.accelerator({})
+    assert calls == [], "accelerator is machine-constant and must not recompute"
+    EL._ACCEL_CACHE.clear()
+
+
+def test_accelerator_env_is_a_parameter(monkeypatch):
+    """Passing an explicit env must be the only thing consulted -- ambient
+    os.environ must never be read, matching locality()'s own guarantee."""
+    monkeypatch.setattr(EL, "IS_WINDOWS", True)
+    monkeypatch.setattr(EL, "IS_DARWIN", False)
+    monkeypatch.setattr(EL, "IS_LINUX", False)
+    monkeypatch.setenv("PATH", r"C:\somewhere-nvidia-lives")  # abs-path-ok: fake test-only path, never resolved
+    assert EL._scan_path_for("nvidia-smi", {}) is False
 
 
 def test_winreg_key_path_has_single_separators():

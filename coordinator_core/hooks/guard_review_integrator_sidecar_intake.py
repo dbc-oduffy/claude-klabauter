@@ -187,7 +187,7 @@ def _compose_stale_candidates_message(candidates: "list[str]"):
 
 
 @register_op("hooks.guard_review_integrator_sidecar_intake")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Agent) op: deny a dispatch to review-integrator whose
     prompt does not name an on-disk findings sidecar."""
     if params.get("tool_name", "") != "Agent":

@@ -126,7 +126,7 @@ def _first_existing(paths: "list[str]") -> str:
 
 
 @register_op("hooks.session_start_repair_prepare_commit_msg_hook")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     cwd = os.getcwd()
 
     hooks_dir = _git_hooks_dir(cwd)

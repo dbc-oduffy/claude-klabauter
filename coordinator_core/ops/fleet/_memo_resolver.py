@@ -1361,3 +1361,73 @@ def unique_nearest_receiver(
         return None
     matches = _nearest_receiver_matches(receiver_em_id, all_repos, n=2)
     return matches[0] if len(matches) == 1 else None
+
+
+# ---------------------------------------------------------------------------
+# Never-inbox mirrors (PM ruling 2026-09-23) — the ONE chokepoint every
+# delivery path (memo.send's `to:` and `cc:` legs, and the `cross-repo-memo`
+# CLI which forwards onto memo.send) must call before writing a byte.
+#
+# coordinator-claude and claude-klabauter are publish mirrors, not EM working
+# trees, and must NEVER receive a cross-repo/inbox/ write — on ANY machine,
+# regardless of how (or whether) that machine's registry declares them.
+# `reroute_owner()`/`publish_mirror_path_match()` above already rereoute a
+# CORRECTLY-registered mirror to its owner, but that routing is itself
+# registry-state-dependent (`publish.mirrors.<key>.path`/`.owner` must be
+# set) — the live hole this closes (2026-09-23, reported by example-retrieval-repo-em):
+# a `to: coordinator-claude-em` item on a machine where that mirror wasn't
+# (fully) declared fell through registry-driven classification entirely,
+# resolved as an ordinary `repos.*` receiver, and got written+committed+
+# marked `status: sent` into a coordinator-claude clone.
+#
+# Deliberately hardcoded, unlike every other reader in this module: this is
+# not a registry fact to read declaratively, it is a fixed identity these two
+# repos always carry (their receiver-EM names, or the mirror's own path
+# basename) — no registry state should ever be able to change the answer.
+# ---------------------------------------------------------------------------
+
+#: The mirror clone's own folder-name convention — catches "anything
+#: resolving to those repos" even when addressed by an unlisted alias, so
+#: long as the resolved repo path's basename matches (case-insensitive).
+_NEVER_INBOX_MIRROR_PATH_BASENAMES = frozenset({"coordinator-claude", "claude-klabauter"})
+
+
+def never_inbox_mirror_refusal(
+    receiver_em_id: str, receiver_repo_path: Optional[Path],
+) -> Optional[str]:
+    """Return the register-style refusal text if the RESOLVED write target
+    `receiver_repo_path` is the coordinator-claude or claude-klabauter clone
+    itself, else `None`.
+
+    Deliberately keyed on the RESOLVED repo path, never on `receiver_em_id`
+    alone: addressing a correctly-configured mirror by name is legitimate and
+    already reroutes to its owner (`reroute_owner`, inside
+    `resolve_receiver_inbox`) — checking the addressed NAME would refuse that
+    legitimate owner-delivery too. This only fires when the write would
+    actually land inside the mirror clone (the live-hole shape: an
+    incompletely-registered mirror falling through to ordinary `repos.*`
+    resolution instead of rerouting). `receiver_repo_path is None` (nothing
+    resolved, or genuinely unregistered) always returns `None` — that case
+    is judged by the caller's own UNKNOWN RECEIVER refusal, not this one.
+
+    Callers MUST check this ahead of any write — a `None` result is the only
+    "safe to proceed" signal; a non-`None` result names the correct receiver
+    and the caller refuses the whole send/cc-leg loud, before any byte moves,
+    exactly like the existing UNKNOWN RECEIVER refusal.
+
+    One fact plus the alternative (docs/wiki/guard-messaging.md § Register):
+    no self-legitimacy, no apology, no override key.
+    """
+    if receiver_repo_path is None:
+        return None
+    try:
+        basename = os.path.basename(str(receiver_repo_path).rstrip("/\\")).lower()
+    except Exception:
+        basename = ""
+    if basename not in _NEVER_INBOX_MIRROR_PATH_BASENAMES:
+        return None
+    return (
+        f"memo: {receiver_em_id!r} resolves to a publish mirror, which has no inbox.\n"
+        "  Send coordinator/doctrine topics to claude-central-em; "
+        "engine/klabauter topics to claude-klabauter-em."
+    )

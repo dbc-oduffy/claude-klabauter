@@ -66,7 +66,7 @@ def _deny_message(env: object = None) -> str:
 
 
 @register_op("hooks.block_worktree_tool")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(EnterWorktree|ExitWorktree) op: deny EnterWorktree unless
     the repo-root sentinel override is active; always allow ExitWorktree."""
     # Params arrives wrapped as

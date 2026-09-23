@@ -1321,6 +1321,18 @@ from coordinator_core import publish_lane  # noqa: E402
 OP_TIMEOUT_OVERRIDES = _types.MappingProxyType(dict(_OP_TIMEOUT_OVERRIDES))
 
 
+#: DoE-claude#85 row 8: ops that never deny for a missing/unresolvable routing
+#: key, degrading to repo_root=None instead. Named narrowly (not "every hooks.*
+#: op") -- `repo_root` for these two is used only to scope the composed guard
+#: chain it dispatches into, never to attribute a write to a repo, unlike
+#: `hooks.track_touched_files` and its siblings which must stay fail-loud
+#: (AC-1c, pinned by test_dispatch_message.py).
+_NEVER_DENY_ON_MISSING_KEY_OPS = frozenset({
+    "hooks.preuse_bash_dispatch",
+    "hooks.postuse_stop_family_dispatch",
+})
+
+
 def resolve_op_repo_key(method: str, request_repo: Optional[Path]) -> Optional[Path]:
     """Resolve the effective repo key for this op per the AC-1b keying table.
 
@@ -1394,9 +1406,26 @@ def resolve_request_repo(msg: dict) -> Optional[Path]:
                          None if the field is absent, empty, or not a string.
 
     Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C1b
+
+    Cloud-session fallback (DoE-claude#85 row 8): the remote hook envelope
+    (`CLAUDE_CODE_REMOTE=true`) carries no cwd and never stamps
+    `_origin_worktree`. Rather than let every common_dir-scoped op fail
+    loud for the entire session, fall back to `CLAUDE_PROJECT_DIR` (the
+    env var the cloud runner sets to the checked-out project root) and
+    then the process cwd. Local/cold sessions are unaffected: this branch
+    only runs when the envelope field itself is absent.
     """
     raw = msg.get(_ORIGIN_WORKTREE_FIELD)
     if not raw or not isinstance(raw, str):
+        if os.environ.get("CLAUDE_CODE_REMOTE") == "true":
+            fallback = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+            if fallback:
+                _sys.stderr.write(
+                    "coordinator_core.ipc: _origin_worktree absent on remote "
+                    f"envelope; falling back to {fallback!r} "
+                    "(CLAUDE_PROJECT_DIR or process cwd)\n"
+                )
+                return Path(fallback).resolve()
         return None
     return Path(raw).resolve()
 
@@ -2377,15 +2406,34 @@ async def _dispatch_message_impl(msg: dict) -> dict:
     try:
         op_repo_key = resolve_op_repo_key(method, request_repo)
     except ValueError as exc:
-        _log().debug("coordinator_core.ipc: routing key error for %r: %s", method, exc)
-        return {
-            "jsonrpc": "2.0",
-            "id": id_,
-            "error": {
-                "code": INVALID_PARAMS,
-                "message": f"Missing required routing key: {exc}",
-            },
-        }
+        # PM ruling (DoE-claude#85 row 8): "a hook never denies because
+        # routing/engine context is missing -- it passes with a loud stderr
+        # note, never a refusal." Scoped to _NEVER_DENY_ON_MISSING_KEY_OPS
+        # NOT every "hooks.*" op: several hook ops (e.g.
+        # hooks.track_touched_files) genuinely need the repo key for
+        # correctness -- misattributing a touched-file write to the wrong
+        # repo is worse than the refusal AC-1c already gives them, and
+        # test_dispatch_message.py pins that fail-loud contract for those.
+        # This degrade applies only to the PreToolUse/PostToolUse guard-
+        # chain composition ops named in the issue, where `repo_root` is
+        # used only to scope the composed guard chain, not to attribute a
+        # write.
+        if method in _NEVER_DENY_ON_MISSING_KEY_OPS:
+            _sys.stderr.write(
+                f"coordinator_core.ipc: routing key unresolvable for {method!r} "
+                f"({exc}); degrading to repo_root=None per hook-never-denies ruling\n"
+            )
+            op_repo_key = None
+        else:
+            _log().debug("coordinator_core.ipc: routing key error for %r: %s", method, exc)
+            return {
+                "jsonrpc": "2.0",
+                "id": id_,
+                "error": {
+                    "code": INVALID_PARAMS,
+                    "message": f"Missing required routing key: {exc}",
+                },
+            }
 
     # Step 6: Invoke handler — pass (params, repo_root=op_repo_key) so handlers receive the
     # canonical per-request repo key (git_common_dir or show-toplevel per AC-1b table).

@@ -211,7 +211,7 @@ def _resolve_plan(raw: str, worktree_root: Path) -> Path:
 
 
 @register_op("plan.stamp_prepped")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "plan.stamp_prepped" handler. See module docstring."""
     if repo_root is None:
         raise ValueError("plan.stamp_prepped requires a resolved repo_root")

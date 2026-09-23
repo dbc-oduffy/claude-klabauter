@@ -1092,7 +1092,29 @@ def claim_artifact(
     held_sid = _read_claim_field(claim_dir, "session_id")
 
     # Re-entrant self-claim (PLAN CLASS ONLY) — BEFORE the liveness branch.
-    if class_ == "plan" and liveness.claim_held_by_me(str(claim_dir), sid, cwd):
+    #
+    # ``sid`` is the TOP-precedence identity this call resolved (``core.
+    # resolve_session_id`` — COORDINATOR_SESSION_ID > CLAUDE_SESSION_ID >
+    # CLAUDE_CODE_SESSION_ID). A cloud session's harness does not always
+    # populate the SAME subset of those three vars on every subprocess spawn
+    # (a hook-triggered claim vs a skill-triggered claim vs a bash-tool
+    # claim can each see a different slice of the same session's own env) —
+    # so the claim WRITTEN earlier may be keyed on a LOWER-precedence var's
+    # value while THIS call's ``sid`` resolves to a DIFFERENT, HIGHER-
+    # precedence var that happens to also be set now. Both values are this
+    # session's own — comparing only the single top-precedence one is
+    # exactly the "which env var is read at claim time vs check time"
+    # disagreement class ``SESSION_ENV_PRECEDENCE``'s own docstring names
+    # (core.py) for a sibling guard, reproduced here. Accept a match against
+    # ANY currently-set tier, not just ``sid``, before falling through to
+    # the live-holder refusal — this never widens WHO can self-claim (every
+    # candidate is still read out of THIS process's own environment, never a
+    # peer's), it only stops the ladder's own precedence order from
+    # rejecting this session's own earlier claim.
+    if class_ == "plan" and (
+        liveness.claim_held_by_me(str(claim_dir), sid, cwd)
+        or (held_sid and held_sid in core.session_env_candidates())
+    ):
         _report_claim_neighbours(class_, basename, cwd)
         return True
 

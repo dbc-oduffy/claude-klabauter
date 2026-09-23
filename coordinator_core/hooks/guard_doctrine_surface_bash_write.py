@@ -1129,7 +1129,7 @@ def evaluate(payload: dict):
 
 
 @register_op("hooks.guard_doctrine_surface_bash_write")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Bash|PowerShell) op: deny a Bash/PowerShell command whose
     SINK writes a `_claude_md_ledger.GOVERNED_AUTHORING_SURFACES` file,
     closing the Bash escape from the Write/Edit/MultiEdit-only C7 admission

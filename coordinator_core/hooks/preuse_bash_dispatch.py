@@ -73,7 +73,7 @@ from coordinator_core.ipc import register_op
 
 
 @register_op("hooks.preuse_bash_dispatch")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Bash|PowerShell) op: run the full bash-guard chain against
     this payload and return its verdict.
 

@@ -265,7 +265,7 @@ def _advisory_reason(target: str, subcommand: str, lineno: int, anchor: "Optiona
 
 
 @register_op("hooks.guard_test_tree_git_fixture_spawn")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Write|Edit|MultiEdit|NotebookEdit) op: advise (never deny)
     when a proposed test-tree edit shells `git` to build fixture state."""
     if params.get("tool_name", "") not in _GUARDED_TOOLS:

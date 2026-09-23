@@ -232,7 +232,7 @@ def _repo_root_for(target: Path) -> Path:
 
 
 @register_op("hooks.check_claude_md_size")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Write|Edit|MultiEdit) op: C7 admission-gate deny plus the
     byte-size soft-warn -- the residual advisory legs of the CLAUDE.md
     budget gate (the HARD_LIMIT_BYTES deny is a separate, already-landed

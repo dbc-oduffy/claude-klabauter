@@ -42,6 +42,7 @@ Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C10
 
 from __future__ import annotations
 
+import asyncio
 from typing import Mapping, Optional
 
 from coordinator_core.hooks._envelope import context_only, no_advisory
@@ -90,7 +91,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
         lambda: _session_start_write_plugin_root_breadcrumb_handler(leg_params),
     ):
         try:
-            result = await leg_call()
+            result = await asyncio.to_thread(leg_call)
         except Exception:
             continue
         text = _extract_context(result)

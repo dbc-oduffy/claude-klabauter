@@ -64,3 +64,19 @@ def test_a_persistent_hold_raises_and_leaves_no_temp(tmp_path, monkeypatch):
         door_build.write_sidecar(exe, tmp_path)
 
     assert [p.name for p in tmp_path.iterdir()] == []
+
+
+def test_a_non_sharing_failure_raises_at_once_and_leaves_no_temp(tmp_path, monkeypatch):
+    exe = tmp_path / "door.exe"
+    calls = []
+
+    def gone(*_a, **_k):
+        calls.append(1)
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(door_build.os, "replace", gone)
+    with pytest.raises(FileNotFoundError):
+        door_build.write_sidecar(exe, tmp_path)
+
+    assert calls == [1]
+    assert [p.name for p in tmp_path.iterdir()] == []

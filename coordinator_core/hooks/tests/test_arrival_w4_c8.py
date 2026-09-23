@@ -26,8 +26,10 @@ import asyncio
 import pytest
 
 
-def _run(coro):
-    return asyncio.run(coro)
+def _run(result):
+    if asyncio.iscoroutine(result):
+        return asyncio.run(result)
+    return result
 
 
 # ---------------------------------------------------------------------------

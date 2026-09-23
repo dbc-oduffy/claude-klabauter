@@ -60,7 +60,7 @@ GENERATES: list = []
 
 
 @register_op("roadmap.blitz_land")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "roadmap.blitz_land" handler. See module docstring."""
     if repo_root is None:
         raise ValueError("roadmap.blitz_land requires a resolved repo_root")

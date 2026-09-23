@@ -70,6 +70,14 @@ NEGATIVE SPEC:
     belongs to the caller (see ``coordinator_core.session.mode_resolution``).
   - Does NOT cache the harness rung. That rung is per-caller and already free;
     only the machine-constant rung 1 is memoized.
+
+``accelerator(env)`` -- a neighbouring, independently memoized report: does
+this host carry a GPU accelerator (nvidia / mps / none / unknown)? Same
+negative spec: no ``nvidia-smi`` exec, ``env`` passed in, stat-only probes,
+reports rather than decides. A ``shutil.which``-style PATH scan is done by
+hand (``_scan_path_for``) rather than via ``shutil.which`` itself, because
+that stdlib helper reads ``PATHEXT`` from ambient ``os.environ`` regardless of
+any ``path=`` override -- exactly the ambient read this module refuses to do.
 """
 
 from __future__ import annotations
@@ -80,6 +88,7 @@ import sys
 from typing import Dict, Mapping, NamedTuple, Optional, Tuple
 
 __all__ = ["Locality", "os_family", "locality", "cross_check",
+           "Accel", "accelerator",
            "IS_WINDOWS", "IS_DARWIN", "IS_LINUX"]
 
 IS_WINDOWS = os.name == "nt"
@@ -96,6 +105,21 @@ CONFIDENCES = ("certain", "high", "medium", "low")
 
 
 class Locality(NamedTuple):
+    call: str
+    confidence: str
+    rung: str
+    basis: str
+
+
+#: Closed vocabulary for `accelerator()`. `none` is a positive finding (no
+#: signal of any accelerator, not merely "didn't look"); `unknown` is the
+#: accelerator ladder's own irreducible band -- a GPU device node present with
+#: no NVIDIA driver/tool signal, e.g. an un-driven passthrough device or a
+#: non-NVIDIA GPU. Collapsing it into `none` would round away a real "maybe".
+ACCEL_CALLS = ("nvidia", "mps", "none", "unknown")
+
+
+class Accel(NamedTuple):
     call: str
     confidence: str
     rung: str
@@ -330,3 +354,101 @@ def cross_check(env: Optional[Mapping[str, str]] = None) -> dict:
         "agree": None if h is None else (h.call == m.call),
         "effective": h if h is not None else m,
     }
+
+
+# ------------------------------------------------------------ accelerator
+def _scan_path_for(name: str, env: Mapping[str, str]) -> bool:
+    """A ``shutil.which``-style PATH scan with no exec -- ``os.path.isfile``
+    checks only, over directories from the PASSED-IN ``env``, never ambient
+    ``os.environ``. Respects ``PATHEXT`` on win32 (also read from ``env``,
+    with stdlib's own default) since the bare name carries no extension
+    there."""
+    raw = env.get("PATH") or env.get("Path") or ""
+    if not raw:
+        return False
+    dirs = raw.split(os.pathsep)
+    if IS_WINDOWS:
+        pathext = env.get("PATHEXT") or ".COM;.EXE;.BAT;.CMD"
+        suffixes = [e for e in pathext.split(os.pathsep) if e] or [".EXE"]
+    else:
+        suffixes = [""]
+    for d in dirs:
+        if not d:
+            continue
+        for suf in suffixes:
+            try:
+                if os.path.isfile(os.path.join(d, name + suf)):
+                    return True
+            except OSError:
+                continue
+    return False
+
+
+def _nvidia_signal(env: Mapping[str, str]) -> Tuple[bool, str]:
+    """One short-circuiting probe chain, cheapest first. Every leg is a stat
+    or a PATH scan -- no exec, per the module's negative spec."""
+    if _scan_path_for("nvidia-smi", env):
+        return True, "nvidia-smi resolvable on PATH"
+    if IS_LINUX:
+        if os.path.exists("/proc/driver/nvidia"):
+            return True, "/proc/driver/nvidia present"
+        if os.path.exists("/dev/nvidia0"):
+            return True, "/dev/nvidia0 present"
+    if IS_WINDOWS:
+        root = env.get("SystemRoot") or r"C:\Windows"
+        candidate = os.path.join(root, "System32", "nvidia-smi.exe")
+        if os.path.exists(candidate):
+            return True, r"%SystemRoot%\System32\nvidia-smi.exe present"
+    return False, ""
+
+
+def _accelerator_uncached(env: Mapping[str, str]) -> Accel:
+    found, basis = _nvidia_signal(env)
+    if found:
+        return Accel("nvidia", "high", "probe", basis)
+
+    if IS_DARWIN:
+        # No CPU-brand string is available without an exec on macOS; the
+        # architecture word from the same `os.uname()` rung 1 already calls
+        # is the stat-free stand-in for the module's `Apple M\d` consumer
+        # class -- every Apple-Silicon Mac (M1/M2/M3/...) reports arm64,
+        # every Intel Mac reports x86_64.
+        machine = os.uname().machine
+        if machine == "arm64":
+            return Accel("mps", "high", "probe",
+                        "darwin arm64 -- Apple Silicon (Apple M\\d class)")
+        return Accel("none", "high", "probe",
+                    "darwin %s -- Intel Mac, no MPS" % machine)
+
+    if IS_LINUX:
+        m = machine_rung(env)
+        if m.rung == "machine" and "masked server silicon" in m.basis:
+            # A cloud VM's masked server silicon is itself the corroborator:
+            # no accelerator is the expected shape for that class of host.
+            return Accel("none", "high", "probe",
+                        "server-masked silicon on a cloud host -- no "
+                        "accelerator expected")
+        if os.path.exists("/dev/dri"):
+            # A GPU device node exists but nothing above named it NVIDIA --
+            # a passthrough device with no driver loaded, or a non-NVIDIA
+            # GPU. The irreducible band; do not round it to `none`.
+            return Accel("unknown", "low", "probe",
+                        "/dev/dri present with no NVIDIA driver/tool signal")
+
+    return Accel("none", "medium", "probe", "no accelerator signal found")
+
+
+#: Machine-constant like rung 1, and memoized the same way.
+_ACCEL_CACHE: Dict[str, Accel] = {}
+
+
+def accelerator(env: Optional[Mapping[str, str]] = None,
+                force: bool = False) -> Accel:
+    """Does this host carry a GPU accelerator? ``nvidia`` / ``mps`` / ``none``
+    / ``unknown``, same confidence/basis shape as ``Locality``. Reports only;
+    what to do about it stays with the caller."""
+    if not force and "v" in _ACCEL_CACHE:
+        return _ACCEL_CACHE["v"]
+    value = _accelerator_uncached(os.environ if env is None else env)
+    _ACCEL_CACHE["v"] = value
+    return value

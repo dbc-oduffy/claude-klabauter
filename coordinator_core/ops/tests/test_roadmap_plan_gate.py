@@ -12,7 +12,6 @@ Zero spawns; every case builds its corpus in `tmp_path`.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -34,7 +33,7 @@ def _baton(root: Path, stub_id: str, extra: str = "") -> None:
 
 
 def _call(root: Path, **params):
-    return asyncio.run(op_module._handler(params, repo_root=root))
+    return op_module._handler(params, repo_root=root)
 
 
 @pytest.fixture()
@@ -161,7 +160,7 @@ def test_a_missing_repo_root_is_refused(corpus):
     """No cwd fallback: deriving a root from where the caller happened to stand
     makes the answer depend on the caller's directory."""
     with pytest.raises(ValueError, match="repo_root"):
-        asyncio.run(op_module._handler({}, repo_root=None))
+        op_module._handler({}, repo_root=None)
 
 
 def test_a_held_target_is_matched_not_unmatched(corpus):

@@ -239,7 +239,7 @@ def evaluate(payload: dict):
 
 
 @register_op("hooks.derive_setup_copies")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PostToolUse(Write|Edit|MultiEdit) op: re-derive a canonical
     `setup/`-tree write's paired install-template copy, or warn on a write
     landing directly on a derived copy."""

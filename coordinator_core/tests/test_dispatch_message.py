@@ -695,6 +695,48 @@ def test_resolve_op_repo_key_common_dir_missing_raises():
         )
 
 
+def test_resolve_request_repo_falls_back_on_remote_envelope(tmp_path, monkeypatch):
+    """DoE-claude#85 row 8: a cloud session (CLAUDE_CODE_REMOTE=true) sends a hook
+    envelope with no `_origin_worktree` field at all -- resolve_request_repo must
+    fill the key from CLAUDE_PROJECT_DIR rather than returning None and forcing a
+    common_dir-scoped op to fail loud for the whole session."""
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+    monkeypatch.delenv(_ORIGIN_WORKTREE_FIELD, raising=False)
+    result = resolve_request_repo({})
+    assert result == tmp_path.resolve()
+
+
+def test_resolve_request_repo_local_session_unaffected(monkeypatch):
+    """A non-remote session with no _origin_worktree still gets None -- the
+    fallback is scoped to CLAUDE_CODE_REMOTE=true only."""
+    monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)
+    assert resolve_request_repo({}) is None
+
+
+def test_dispatch_message_preuse_bash_dispatch_degrades_instead_of_denying():
+    """DoE-claude#85 row 8 / PM ruling: hooks.preuse_bash_dispatch never denies
+    for lack of routing context -- it degrades to repo_root=None rather than
+    returning INVALID_PARAMS, even when the envelope carries no
+    _origin_worktree and no remote-session fallback applies (e.g.
+    CLAUDE_CODE_REMOTE unset and CLAUDE_PROJECT_DIR unset/unresolvable).
+    Contrast with hooks.track_touched_files above, which must stay fail-loud."""
+    msg = {"jsonrpc": "2.0", "id": 1, "method": "hooks.preuse_bash_dispatch",
+           "params": {"payload": {}}}
+    result = _run(dispatch_message(msg))
+    assert "error" not in result, (
+        f"hooks.preuse_bash_dispatch must never deny on a missing routing key; "
+        f"got {result!r}"
+    )
+
+
+def test_never_deny_on_missing_key_ops_stay_fail_loud_scoped():
+    """The degrade set is a narrow allowlist, not every hooks.* op -- a
+    correctness-sensitive hook (hooks.track_touched_files) must not be in it."""
+    assert "hooks.track_touched_files" not in ipc._NEVER_DENY_ON_MISSING_KEY_OPS
+    assert "hooks.preuse_bash_dispatch" in ipc._NEVER_DENY_ON_MISSING_KEY_OPS
+
+
 def _is_test_like_module_name(dotted_name: str) -> bool:
     """True for a test/fixture-shaped module name the coverage walk must not treat as an op.
 

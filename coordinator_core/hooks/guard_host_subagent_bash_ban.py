@@ -41,7 +41,7 @@ from coordinator_core.ipc import register_op
 
 
 @register_op("hooks.guard_host_subagent_bash_ban")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Bash) op: deny a dispatched subagent's Bash call on a
     host that declares `subagent_bash_policy: deny`."""
     if not isinstance(params, dict):

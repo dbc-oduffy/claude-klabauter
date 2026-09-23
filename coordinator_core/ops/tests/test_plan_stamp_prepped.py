@@ -16,7 +16,6 @@ no `git init`.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -33,8 +32,8 @@ OP_KEY = "plan.stamp_prepped"
 BY = "test-session-01"
 
 
-def _run(coro):
-    return asyncio.run(coro)
+def _run(result):
+    return result
 
 
 def _stamp(params: dict, repo_root: Path) -> dict:

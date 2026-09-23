@@ -3910,6 +3910,7 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
         )
         print(f"  Re-run manually: {engine_py} -m coordinator_core.install.substrate --setup-only "
               f"(CLAUDE_PLUGIN_ROOT={plugin_root})", file=sys.stderr)
+        return True
     return False
 
 

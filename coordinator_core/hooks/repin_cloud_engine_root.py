@@ -175,7 +175,7 @@ def repin_cloud_engine_root(
 
 
 @register_op("hooks.repin_cloud_engine_root")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     try:
         repin_cloud_engine_root()
     except Exception:  # noqa: BLE001 - belt-and-braces; repin_cloud_engine_root itself never raises

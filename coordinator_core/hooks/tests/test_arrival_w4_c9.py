@@ -64,14 +64,12 @@ def test_op_is_registered(op_name):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_bwfe_no_advisory_on_non_workflow(tmp_path):
-    result = await bwfe._handler({"tool_name": "Bash"})
+def test_bwfe_no_advisory_on_non_workflow(tmp_path):
+    result = bwfe._handler({"tool_name": "Bash"})
     assert result == {}
 
 
-@pytest.mark.asyncio
-async def test_bwfe_sha_mismatch_denies_and_names_settings_home_launcher(tmp_path):
+def test_bwfe_sha_mismatch_denies_and_names_settings_home_launcher(tmp_path):
     script = tmp_path / "plan.workflow.mjs"
     script.write_text("console.log('a');\n", encoding="utf-8")
     receipt = script.with_name(script.name + ".emitted.json")
@@ -79,7 +77,7 @@ async def test_bwfe_sha_mismatch_denies_and_names_settings_home_launcher(tmp_pat
         json.dumps({"sha256": "0" * 64, "session_id": "abc12345"}),
         encoding="utf-8",
     )
-    result = await bwfe._handler(
+    result = bwfe._handler(
         {
             "tool_name": "Workflow",
             "tool_input": {"scriptPath": str(script)},
@@ -96,8 +94,7 @@ async def test_bwfe_sha_mismatch_denies_and_names_settings_home_launcher(tmp_pat
     assert "python3" not in reason
 
 
-@pytest.mark.asyncio
-async def test_bwfe_session_mismatch_denies(tmp_path):
+def test_bwfe_session_mismatch_denies(tmp_path):
     script = tmp_path / "plan.workflow.mjs"
     script.write_bytes(b"console.log('a');\n")
     actual_sha = hashlib.sha256(script.read_bytes()).hexdigest()
@@ -106,7 +103,7 @@ async def test_bwfe_session_mismatch_denies(tmp_path):
         json.dumps({"sha256": actual_sha, "session_id": "peer-session"}),
         encoding="utf-8",
     )
-    result = await bwfe._handler(
+    result = bwfe._handler(
         {
             "tool_name": "Workflow",
             "tool_input": {"scriptPath": str(script)},
@@ -119,8 +116,7 @@ async def test_bwfe_session_mismatch_denies(tmp_path):
     assert "DIFFERENT session" in hso["permissionDecisionReason"]
 
 
-@pytest.mark.asyncio
-async def test_bwfe_verifying_receipt_no_advisory(tmp_path):
+def test_bwfe_verifying_receipt_no_advisory(tmp_path):
     script = tmp_path / "plan.workflow.mjs"
     script.write_bytes(b"console.log('a');\n")
     actual_sha = hashlib.sha256(script.read_bytes()).hexdigest()
@@ -128,7 +124,7 @@ async def test_bwfe_verifying_receipt_no_advisory(tmp_path):
     receipt.write_text(
         json.dumps({"sha256": actual_sha, "session_id": "same"}), encoding="utf-8"
     )
-    result = await bwfe._handler(
+    result = bwfe._handler(
         {
             "tool_name": "Workflow",
             "tool_input": {"scriptPath": str(script)},
@@ -139,11 +135,10 @@ async def test_bwfe_verifying_receipt_no_advisory(tmp_path):
     assert result == {}
 
 
-@pytest.mark.asyncio
-async def test_bwfe_no_receipt_no_advisory(tmp_path):
+def test_bwfe_no_receipt_no_advisory(tmp_path):
     script = tmp_path / "hand-authored.workflow.mjs"
     script.write_text("console.log('a');\n", encoding="utf-8")
-    result = await bwfe._handler(
+    result = bwfe._handler(
         {
             "tool_name": "Workflow",
             "tool_input": {"scriptPath": str(script)},
@@ -153,8 +148,7 @@ async def test_bwfe_no_receipt_no_advisory(tmp_path):
     assert result == {}
 
 
-@pytest.mark.asyncio
-async def test_bwfe_sha_mismatch_denies_through_the_wrapped_envelope(tmp_path):
+def test_bwfe_sha_mismatch_denies_through_the_wrapped_envelope(tmp_path):
     """Pins the same wrapped-envelope
     fix as `test_bwt_denies_enter_worktree_through_the_wrapped_envelope`."""
     script = tmp_path / "plan.workflow.mjs"
@@ -164,7 +158,7 @@ async def test_bwfe_sha_mismatch_denies_through_the_wrapped_envelope(tmp_path):
         json.dumps({"sha256": "0" * 64, "session_id": "abc12345"}),
         encoding="utf-8",
     )
-    result = await bwfe._handler(
+    result = bwfe._handler(
         {
             "payload": {
                 "tool_name": "Workflow",
@@ -183,8 +177,7 @@ async def test_bwfe_sha_mismatch_denies_through_the_wrapped_envelope(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_aewf_never_denies(tmp_path):
+def test_aewf_never_denies(tmp_path):
     """Pinned per source module docstring's own NEVER DENIES contract."""
     for payload in (
         {},
@@ -192,14 +185,13 @@ async def test_aewf_never_denies(tmp_path):
         {"tool_name": "Workflow", "tool_input": {"script": "console.log(1)"}},
         {"tool_name": "Workflow", "tool_input": {"scriptPath": "/nope/nope.mjs"}},
     ):
-        result = await aewf._handler(payload)
+        result = aewf._handler(payload)
         if result:
             decision = result.get("hookSpecificOutput", {}).get("permissionDecision")
             assert decision != "deny"
 
 
-@pytest.mark.asyncio
-async def test_aewf_allows_on_verifying_receipt(tmp_path):
+def test_aewf_allows_on_verifying_receipt(tmp_path):
     script = tmp_path / "plan.workflow.mjs"
     script.write_bytes(b"console.log('a');\n")
     actual_sha = hashlib.sha256(script.read_bytes()).hexdigest()
@@ -208,7 +200,7 @@ async def test_aewf_allows_on_verifying_receipt(tmp_path):
         json.dumps({"sha256": actual_sha, "session_id": "s1", "plan": "my-plan.md"}),
         encoding="utf-8",
     )
-    result = await aewf._handler(
+    result = aewf._handler(
         {
             "tool_name": "Workflow",
             "tool_input": {"scriptPath": str(script)},
@@ -221,9 +213,8 @@ async def test_aewf_allows_on_verifying_receipt(tmp_path):
     assert "my-plan.md" in hso["additionalContext"]
 
 
-@pytest.mark.asyncio
-async def test_aewf_silent_for_inline_script():
-    result = await aewf._handler(
+def test_aewf_silent_for_inline_script():
+    result = aewf._handler(
         {"tool_name": "Workflow", "tool_input": {"script": "console.log(1)"}}
     )
     assert result == {}
@@ -234,9 +225,8 @@ async def test_aewf_silent_for_inline_script():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_swi_strips_worktree_isolation():
-    result = await swi._handler(
+def test_swi_strips_worktree_isolation():
+    result = swi._handler(
         {
             "tool_name": "Workflow",
             "tool_input": {"scriptPath": "x.mjs", "isolation": "worktree"},
@@ -248,17 +238,15 @@ async def test_swi_strips_worktree_isolation():
     assert "worktree" in hso["additionalContext"].lower()
 
 
-@pytest.mark.asyncio
-async def test_swi_passes_through_other_isolation_values():
-    result = await swi._handler(
+def test_swi_passes_through_other_isolation_values():
+    result = swi._handler(
         {"tool_name": "Workflow", "tool_input": {"isolation": "remote"}}
     )
     assert result == {}
 
 
-@pytest.mark.asyncio
-async def test_swi_no_advisory_on_non_workflow():
-    result = await swi._handler(
+def test_swi_no_advisory_on_non_workflow():
+    result = swi._handler(
         {"tool_name": "Agent", "tool_input": {"isolation": "worktree"}}
     )
     assert result == {}
@@ -269,33 +257,29 @@ async def test_swi_no_advisory_on_non_workflow():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_bwt_denies_enter_worktree():
-    result = await bwt._handler({"tool_name": "EnterWorktree"})
+def test_bwt_denies_enter_worktree():
+    result = bwt._handler({"tool_name": "EnterWorktree"})
     hso = result["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"
     assert "Worktrees banned" in hso["permissionDecisionReason"]
 
 
-@pytest.mark.asyncio
-async def test_bwt_allows_exit_worktree():
-    result = await bwt._handler({"tool_name": "ExitWorktree"})
+def test_bwt_allows_exit_worktree():
+    result = bwt._handler({"tool_name": "ExitWorktree"})
     assert result == {}
 
 
-@pytest.mark.asyncio
-async def test_bwt_no_advisory_on_other_tool():
-    result = await bwt._handler({"tool_name": "Bash"})
+def test_bwt_no_advisory_on_other_tool():
+    result = bwt._handler({"tool_name": "Bash"})
     assert result == {}
 
 
-@pytest.mark.asyncio
-async def test_bwt_denies_enter_worktree_through_the_wrapped_envelope():
+def test_bwt_denies_enter_worktree_through_the_wrapped_envelope():
     """Both engine doors send `params`
     as `{"payload": <event>}`, not the flat event this module used to read
     directly (`params.get("tool_name")`). Through the wrapped door the guard
     was a structural no-op; this pins the fix."""
-    result = await bwt._handler({"payload": {"tool_name": "EnterWorktree"}})
+    result = bwt._handler({"payload": {"tool_name": "EnterWorktree"}})
     hso = result["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"
 
@@ -305,9 +289,8 @@ async def test_bwt_denies_enter_worktree_through_the_wrapped_envelope():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_nwat_no_advisory_without_real_session(tmp_path):
-    result = await nwat._handler(
+def test_nwat_no_advisory_without_real_session(tmp_path):
+    result = nwat._handler(
         {
             "tool_name": "Skill",
             "tool_input": {"skill": "workflow-authoring"},
@@ -317,9 +300,8 @@ async def test_nwat_no_advisory_without_real_session(tmp_path):
     assert result == {}
 
 
-@pytest.mark.asyncio
-async def test_nwat_no_advisory_for_scriptpath_launch():
-    result = await nwat._handler(
+def test_nwat_no_advisory_for_scriptpath_launch():
+    result = nwat._handler(
         {
             "tool_name": "Workflow",
             "tool_input": {"scriptPath": "x.mjs"},
@@ -329,9 +311,8 @@ async def test_nwat_no_advisory_for_scriptpath_launch():
     assert result == {}
 
 
-@pytest.mark.asyncio
-async def test_nwat_no_advisory_for_other_skill():
-    result = await nwat._handler(
+def test_nwat_no_advisory_for_other_skill():
+    result = nwat._handler(
         {
             "tool_name": "Skill",
             "tool_input": {"skill": "unrelated-skill"},
@@ -346,9 +327,8 @@ async def test_nwat_no_advisory_for_other_skill():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_nmw_no_advisory_on_subagent_dispatch():
-    result = await nmw._handler(
+def test_nmw_no_advisory_on_subagent_dispatch():
+    result = nmw._handler(
         {
             "tool_name": "Agent",
             "agent_id": "some-agent",
@@ -359,9 +339,8 @@ async def test_nmw_no_advisory_on_subagent_dispatch():
     assert result == {}
 
 
-@pytest.mark.asyncio
-async def test_nmw_no_advisory_for_non_write_capable_type():
-    result = await nmw._handler(
+def test_nmw_no_advisory_for_non_write_capable_type():
+    result = nmw._handler(
         {
             "tool_name": "Agent",
             "tool_input": {"subagent_type": "Explore"},
@@ -371,9 +350,8 @@ async def test_nmw_no_advisory_for_non_write_capable_type():
     assert result == {}
 
 
-@pytest.mark.asyncio
-async def test_nmw_env_override_suppresses():
-    result = await nmw._handler(
+def test_nmw_env_override_suppresses():
+    result = nmw._handler(
         {
             "tool_name": "Agent",
             "tool_input": {"subagent_type": "coordinator:executor"},
@@ -389,9 +367,8 @@ async def test_nmw_env_override_suppresses():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_bdsi_no_advisory_on_non_dispatch_tool():
-    result = await bdsi._handler({"tool_name": "Bash"})
+def test_bdsi_no_advisory_on_non_dispatch_tool():
+    result = bdsi._handler({"tool_name": "Bash"})
     assert result == {}
 
 
@@ -400,9 +377,8 @@ async def test_bdsi_no_advisory_on_non_dispatch_tool():
 _BDSI_FIRING_PROMPT = "Run the full test suite: python3 -m pytest"
 
 
-@pytest.mark.asyncio
-async def test_bdsi_denies_imperative_suite_command():
-    result = await bdsi._handler(
+def test_bdsi_denies_imperative_suite_command():
+    result = bdsi._handler(
         {"tool_name": "Agent", "tool_input": {"prompt": _BDSI_FIRING_PROMPT}}
     )
     hso = result["hookSpecificOutput"]
@@ -410,9 +386,8 @@ async def test_bdsi_denies_imperative_suite_command():
     assert "Tier-" in hso["permissionDecisionReason"]
 
 
-@pytest.mark.asyncio
-async def test_bdsi_override_marker_suppresses():
-    result = await bdsi._handler(
+def test_bdsi_override_marker_suppresses():
+    result = bdsi._handler(
         {
             "tool_name": "Agent",
             "tool_input": {
@@ -426,9 +401,8 @@ async def test_bdsi_override_marker_suppresses():
     assert result == {}
 
 
-@pytest.mark.asyncio
-async def test_bdsi_env_override_suppresses():
-    result = await bdsi._handler(
+def test_bdsi_env_override_suppresses():
+    result = bdsi._handler(
         {
             "tool_name": "Agent",
             "tool_input": {"prompt": _BDSI_FIRING_PROMPT},
@@ -438,11 +412,10 @@ async def test_bdsi_env_override_suppresses():
     assert result == {}
 
 
-@pytest.mark.asyncio
-async def test_bdsi_denies_imperative_suite_command_through_the_wrapped_envelope():
+def test_bdsi_denies_imperative_suite_command_through_the_wrapped_envelope():
     """Pins the same wrapped-envelope
     fix as `test_bwt_denies_enter_worktree_through_the_wrapped_envelope`."""
-    result = await bdsi._handler(
+    result = bdsi._handler(
         {"payload": {"tool_name": "Agent", "tool_input": {"prompt": _BDSI_FIRING_PROMPT}}}
     )
     hso = result["hookSpecificOutput"]
@@ -454,19 +427,17 @@ async def test_bdsi_denies_imperative_suite_command_through_the_wrapped_envelope
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_bwua_no_advisory_without_transcript():
-    result = await bwua._handler(
+def test_bwua_no_advisory_without_transcript():
+    result = bwua._handler(
         {"tool_name": "Workflow", "tool_input": {"script": "agent('x')"}}
     )
     assert result == {}
 
 
-@pytest.mark.asyncio
-async def test_bwua_no_advisory_on_non_opus_transcript(tmp_path):
+def test_bwua_no_advisory_on_non_opus_transcript(tmp_path):
     transcript = tmp_path / "transcript.jsonl"
     transcript.write_text('{"model":"claude-sonnet-4"}\n', encoding="utf-8")
-    result = await bwua._handler(
+    result = bwua._handler(
         {
             "tool_name": "Workflow",
             "tool_input": {"script": "agent('x')"},
@@ -476,11 +447,10 @@ async def test_bwua_no_advisory_on_non_opus_transcript(tmp_path):
     assert result == {}
 
 
-@pytest.mark.asyncio
-async def test_bwua_denies_unmodeled_agent_under_opus(tmp_path):
+def test_bwua_denies_unmodeled_agent_under_opus(tmp_path):
     transcript = tmp_path / "transcript.jsonl"
     transcript.write_text('{"model":"claude-opus-4"}\n', encoding="utf-8")
-    result = await bwua._handler(
+    result = bwua._handler(
         {
             "tool_name": "Workflow",
             "tool_input": {"script": "agent('do the thing')"},
@@ -492,11 +462,10 @@ async def test_bwua_denies_unmodeled_agent_under_opus(tmp_path):
     assert "agent() call" in hso["permissionDecisionReason"]
 
 
-@pytest.mark.asyncio
-async def test_bwua_allows_fully_modeled_script_under_opus(tmp_path):
+def test_bwua_allows_fully_modeled_script_under_opus(tmp_path):
     transcript = tmp_path / "transcript.jsonl"
     transcript.write_text('{"model":"claude-opus-4"}\n', encoding="utf-8")
-    result = await bwua._handler(
+    result = bwua._handler(
         {
             "tool_name": "Workflow",
             "tool_input": {"script": "agent('x', {model: 'sonnet'})"},
@@ -506,12 +475,11 @@ async def test_bwua_allows_fully_modeled_script_under_opus(tmp_path):
     assert result == {}
 
 
-@pytest.mark.asyncio
-async def test_bwua_partial_modeled_warns_via_additional_context(tmp_path):
+def test_bwua_partial_modeled_warns_via_additional_context(tmp_path):
     transcript = tmp_path / "transcript.jsonl"
     transcript.write_text('{"model":"claude-opus-4"}\n', encoding="utf-8")
     script = "agent('a', {model: 'sonnet'}); agent('b');"
-    result = await bwua._handler(
+    result = bwua._handler(
         {
             "tool_name": "Workflow",
             "tool_input": {"script": script},
@@ -524,11 +492,10 @@ async def test_bwua_partial_modeled_warns_via_additional_context(tmp_path):
     assert "2 agent() calls" in hso["additionalContext"]
 
 
-@pytest.mark.asyncio
-async def test_bwua_env_override_suppresses(tmp_path):
+def test_bwua_env_override_suppresses(tmp_path):
     transcript = tmp_path / "transcript.jsonl"
     transcript.write_text('{"model":"claude-opus-4"}\n', encoding="utf-8")
-    result = await bwua._handler(
+    result = bwua._handler(
         {
             "tool_name": "Workflow",
             "tool_input": {"script": "agent('x')"},

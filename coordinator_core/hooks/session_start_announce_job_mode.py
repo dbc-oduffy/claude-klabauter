@@ -55,7 +55,7 @@ def _append_durable_line(line: str) -> None:
 
 
 @register_op("hooks.session_start_announce_job_mode")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     payload = params.get("payload")
     if not isinstance(payload, Mapping):
         payload = {}

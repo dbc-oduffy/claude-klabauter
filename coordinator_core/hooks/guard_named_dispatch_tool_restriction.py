@@ -63,7 +63,7 @@ from coordinator_core.ipc import register_op
 
 
 @register_op("hooks.guard_named_dispatch_tool_restriction")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Agent) op: offer to strip `name` off a named Explore/Plan
     dispatch, denying only on this guard's own fail-closed leg."""
     # Normalize the two params shapes

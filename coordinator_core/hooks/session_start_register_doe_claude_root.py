@@ -175,7 +175,7 @@ def _maybe_seed_repos_doe_claude(root_str: str) -> None:
 
 
 @register_op("hooks.session_start_register_doe_claude_root")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     payload = params.get("payload")
     if not isinstance(payload, Mapping):
         payload = {}

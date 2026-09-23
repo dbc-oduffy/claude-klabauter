@@ -180,6 +180,7 @@ from coordinator_core.ops.fleet._memo_compose import (
 from coordinator_core.ops.fleet._memo_resolver import (
     AmbiguousReceiverError,
     RegistryReadError,
+    never_inbox_mirror_refusal as _never_inbox_mirror_refusal,
     resolve_receiver_inbox as _resolve_receiver_inbox,
     suggest_nearest_receiver as _suggest_nearest_receiver,
 )
@@ -825,6 +826,11 @@ def _resolve_cc_targets(cc_list: list) -> tuple[Optional[list], Optional[str]]:
             )
         except AmbiguousReceiverError as exc:
             return None, f"memo.send: cc target {name!r}: {exc}"
+        # By-path check: catches an unlisted alias resolving into the
+        # mirror clone anyway (the live-hole shape).
+        mirror_refusal = _never_inbox_mirror_refusal(name, receiver_repo_path)
+        if mirror_refusal is not None:
+            return None, f"memo.send: cc target {name!r}: {mirror_refusal}"
         if inbox_dir is None:
             suggestion = _suggest_nearest_receiver(name, all_repos)
             suggestion_clause = f" Did you mean {suggestion!r}?" if suggestion else ""
@@ -1669,6 +1675,18 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         )
     except AmbiguousReceiverError as exc:
         return build_setup_error_result(_MODE, dry_run, f"memo.send: {exc}")
+
+    # PM ruling 2026-09-23 — checked by the RESOLVED write target's own repo
+    # path, not by the addressed name: a correctly-configured mirror already
+    # reroutes to its owner above (`reroute_owner`, inside
+    # `_resolve_receiver_inbox`) and that owner delivery is fine — this only
+    # fires when the ACTUAL write target is the mirror clone itself (the
+    # live-hole shape: an incompletely-registered mirror falling through to
+    # ordinary repos.* resolution). Still before any write. See
+    # `_memo_resolver.never_inbox_mirror_refusal`.
+    mirror_refusal = _never_inbox_mirror_refusal(to, receiver_repo_path)
+    if mirror_refusal is not None:
+        return build_setup_error_result(_MODE, dry_run, mirror_refusal)
 
     # Warn-once where THIS RECEIVER's inbox shows no one draining it. Sited
     # here rather than earlier so the probe reads the addressee's own inbox

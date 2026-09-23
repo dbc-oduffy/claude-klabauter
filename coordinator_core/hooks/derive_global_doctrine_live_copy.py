@@ -288,7 +288,7 @@ def evaluate(payload: dict):
 
 
 @register_op("hooks.derive_global_doctrine_live_copy")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PostToolUse(Write|Edit|MultiEdit) AND SessionStart op: re-derive the
     live global CLAUDE.md/rules mirror and the in-plugin published copy from
     their tracked coordinator-claude-repo sources, when drifted and this

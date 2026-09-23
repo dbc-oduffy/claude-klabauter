@@ -937,7 +937,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 @register_op("hooks.block_unenumerated_agent_type")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Agent) op door onto `check()` above (W4-C8 arrival,
     docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C8). Same contract as
     every other single-guard `hooks.*` op in this package: `params` is the

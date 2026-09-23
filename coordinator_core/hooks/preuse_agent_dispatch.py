@@ -86,7 +86,7 @@ def _is_deny(envelope) -> bool:
     return isinstance(hso, dict) and hso.get("permissionDecision") == "deny"
 
 
-async def _call_suite_invocation_leg(params: dict) -> dict:
+def _call_suite_invocation_leg(params: dict) -> dict:
     """Leg 1 — `hooks.block_dispatch_suite_invocation`, a sibling row's
     writes: (docs/plans/2026-09-18-doe-holds-no-scripts.md line 2227), not
     yet landed in this engine as of this dispatch. Imported lazily, inside
@@ -98,32 +98,32 @@ async def _call_suite_invocation_leg(params: dict) -> dict:
     """
     from coordinator_core.hooks.block_dispatch_suite_invocation import _handler
 
-    result = await _handler(params)
+    result = _handler(params)
     if not isinstance(result, dict):
         return {}
     return result
 
 
-async def _call_unenumerated_agent_type_leg(params: dict) -> dict:
+def _call_unenumerated_agent_type_leg(params: dict) -> dict:
     from coordinator_core.hooks.block_unenumerated_agent_type import _handler
 
-    return await _handler(params)
+    return _handler(params)
 
 
-async def _call_review_integrator_leg(params: dict) -> dict:
+def _call_review_integrator_leg(params: dict) -> dict:
     from coordinator_core.hooks.guard_review_integrator_sidecar_intake import _handler
 
-    return await _handler(params)
+    return _handler(params)
 
 
-async def _call_enforce_dispatch_mode_leg(params: dict) -> dict:
+def _call_enforce_dispatch_mode_leg(params: dict) -> dict:
     from coordinator_core.hooks.enforce_agent_dispatch_mode import _handler
 
-    return await _handler(params)
+    return _handler(params)
 
 
 @register_op("hooks.preuse_agent_dispatch")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Agent) op: run the four-guard fan-in, first-deny-wins.
     See module docstring for registration order and isolation contract.
     """
@@ -138,7 +138,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
         ("guard_review_integrator_sidecar_intake", _call_review_integrator_leg),
     ):
         try:
-            out = await leg_fn(params)
+            out = leg_fn(params)
         except BaseException:
             skipped.append(leg_name)
             continue
@@ -166,7 +166,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
 
     # Leg 4 — the sole updatedInput emitter, reached only once legs 1-3
     # have all declined to deny. NOT isolated — see module docstring.
-    out = await _call_enforce_dispatch_mode_leg(params)
+    out = _call_enforce_dispatch_mode_leg(params)
     if not isinstance(out, dict):
         return no_advisory()
     return out

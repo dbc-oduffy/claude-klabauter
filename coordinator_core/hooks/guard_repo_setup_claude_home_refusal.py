@@ -219,7 +219,7 @@ def _deny_reason() -> str:
 
 
 @register_op("hooks.guard_repo_setup_claude_home_refusal")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Bash|PowerShell) op: deny a command that scaffolds
     repo-setup against ~/.claude."""
     # Normalize the two params shapes

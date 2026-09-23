@@ -149,11 +149,14 @@ async def _run_leg(leg: SkillLeg, params: dict) -> Optional[str]:
     text or `None`. Any exception (import failure — a not-yet-landed
     sibling module — or the leg's own crash) propagates to the caller's own
     per-leg isolation."""
+    import asyncio
     import importlib
 
     mod = importlib.import_module(leg.module_path)
     handler = getattr(mod, "_handler")
-    out = await handler(params)
+    out = handler(params)
+    if asyncio.iscoroutine(out):
+        out = await out
     return _extract_context_text(out)
 
 

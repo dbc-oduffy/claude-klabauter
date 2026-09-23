@@ -336,7 +336,7 @@ def _disclose(reason: str) -> dict:
 
 
 @register_op("hooks.sessionstart_ensure_http_forwarder")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     try:
         forwarder_path = _forwarder_module_path()
         if forwarder_path is None:

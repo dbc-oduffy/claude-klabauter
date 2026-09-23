@@ -383,6 +383,133 @@ def test_container_registry_keys_are_not_heal_targets(monkeypatch, tmp_path):
     )
 
 # ---------------------------------------------------------------------------
+# DoE-claude#85 row 9: a `git worktree add` checkout's `.git` is a FILE, not a
+# directory — `_classify_target` used to read that as `missing` and silently
+# drop the repo from the fleet, and `_ensure_hook` used to build an
+# impossible `<root>/.git/hooks/<name>` path under it.
+# ---------------------------------------------------------------------------
+
+
+def _make_worktree(tmp_path: Path, name: str = "wt") -> Path:
+    """A real `git worktree add` checkout under `tmp_path`, returned as its
+    own root path. Skips if `git` is unresolvable — this exercises git's own
+    on-disk shape, not a hand-rolled approximation of it."""
+    import pytest
+
+    git = shutil.which("git")
+    if not git:
+        pytest.skip("no git resolvable on PATH in this environment")
+    main_repo = tmp_path / "main"
+    main_repo.mkdir()
+    env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+    no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    subprocess.run([git, "init", "-q", str(main_repo)], check=True, env=env, creationflags=no_window)
+    (main_repo / "f.txt").write_text("x", encoding="utf-8")
+    subprocess.run([git, "-C", str(main_repo), "add", "f.txt"], check=True, env=env, creationflags=no_window)
+    subprocess.run(
+        [git, "-C", str(main_repo), "commit", "-q", "-m", "init"], check=True, env=env, creationflags=no_window
+    )
+    wt_root = tmp_path / name
+    subprocess.run(
+        [git, "-C", str(main_repo), "worktree", "add", str(wt_root), "-b", name],
+        check=True,
+        env=env,
+        creationflags=no_window,
+    )
+    return wt_root
+
+
+def test_resolve_git_hooks_dir_follows_worktree_gitfile_indirection(tmp_path):
+    """`.git` as a file (a `git worktree add` checkout) resolves to the
+    COMMON dir's `hooks/`, not a nonexistent `<root>/.git/hooks/`."""
+    wt_root = _make_worktree(tmp_path)
+
+    resolved = ghi._resolve_git_hooks_dir(str(wt_root))
+
+    assert resolved is not None
+    assert os.path.isdir(resolved), f"resolved git dir does not exist: {resolved}"
+    # The common dir is the MAIN repo's `.git`, shared across worktrees —
+    # never a per-worktree `.git/worktrees/<name>` directory.
+    assert os.path.normcase(os.path.normpath(resolved)) == os.path.normcase(
+        os.path.normpath(str(tmp_path / "main" / ".git"))
+    )
+
+
+def test_classify_target_admits_a_worktree_checkout(tmp_path):
+    """A worktree `.git` file must not classify as `missing` — that silently
+    drops the repo from the fleet enumeration (DoE-claude#85 row 9)."""
+    wt_root = _make_worktree(tmp_path)
+    (wt_root / "CLAUDE.md").write_text("x", encoding="utf-8")
+
+    assert ghi._classify_target(str(wt_root)) == "worktree"
+
+
+def test_ensure_hook_installs_into_worktree_common_dir(tmp_path, monkeypatch):
+    """`_ensure_hook` writes the hook under the COMMON dir's `hooks/`, not a
+    literal `<root>/.git/hooks/` that never exists for a worktree checkout."""
+    wt_root = _make_worktree(tmp_path)
+    coord_bin = tmp_path / "bin"
+    coord_bin.mkdir()
+    (coord_bin / "coordinator-prepare-commit-msg").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(ghi, "_resolve_coord_bin", lambda bin_dir, name: str(coord_bin))
+
+    rc = ghi.ensure_prepare_commit_msg_hook(str(coord_bin), root=str(wt_root))
+
+    assert rc == 0
+    installed = tmp_path / "main" / ".git" / "hooks" / "prepare-commit-msg"
+    assert installed.is_file(), "hook was not written into the common gitdir"
+    never_written = wt_root / ".git" / "hooks" / "prepare-commit-msg"
+    assert not never_written.exists(), (
+        "'.git' is a FILE for a worktree, not a directory — this path can "
+        "never legitimately exist"
+    )
+
+
+def test_ensure_hooks_fleet_one_bad_repo_does_not_abort_the_rest(tmp_path, monkeypatch, capsys):
+    """A repo whose hook install raises must not prevent LATER repos (sorted
+    after it) from being healed — the fleet loop used to have no
+    per-iteration guard, so one exception propagated out of
+    `ensure_hooks_fleet` and silently skipped every repo after it,
+    including — on some registries — coordinator-claude/klabauter
+    themselves (DoE-claude#85 row 9)."""
+    good_root = tmp_path / "zzz-good"
+    good_root.mkdir()
+    (good_root / ".git").mkdir()
+    (good_root / "CLAUDE.md").write_text("x", encoding="utf-8")
+
+    monkeypatch.setattr(
+        ghi,
+        "_registry_repo_roots",
+        lambda bin_dir: [
+            ("repos.aaa_bad", "/definitely/not/a/real/path"),
+            ("repos.zzz_good", str(good_root)),
+        ],
+    )
+    monkeypatch.setattr(ghi, "_classify_target", lambda root: (
+        "worktree" if root == str(good_root) else "worktree"
+    ))
+
+    def _fake_ensure(bin_dir, root=None, outcome=None, check_only=False):
+        if root == "/definitely/not/a/real/path":
+            raise OSError("simulated: unreadable .git")
+        if outcome is not None:
+            outcome.append("installed-absent")
+        return 0
+
+    monkeypatch.setattr(ghi, "ensure_prepare_commit_msg_hook", _fake_ensure)
+
+    rc = ghi.ensure_hooks_fleet(str(tmp_path))
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "repos.zzz_good prepare-commit-msg: installed-absent" in captured.err, (
+        "the good repo sorted AFTER the bad one must still be healed"
+    )
+    assert "unexpected error" in captured.err
+    assert "repos.aaa_bad" in captured.err
+
+
+# ---------------------------------------------------------------------------
 # The no-session gate is GENERATED from the ladder, never hand-copied.
 # ---------------------------------------------------------------------------
 

@@ -143,7 +143,7 @@ def _deny_reason(target: str, violations: list) -> str:
 
 
 @register_op("hooks.guard_doctrine_changelog_prose")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Write|Edit|MultiEdit) op: advise on new changelog-shaped
     doctrine prose, deny new changelog-shaped config debt."""
     if params.get("tool_name", "") not in _GUARDED_TOOLS:

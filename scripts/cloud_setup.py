@@ -2650,6 +2650,29 @@ def run_example_retrieval_repo_cloud_install(report: Report) -> None:
             f"{RETRIEVAL_REPO_SLUG} installer exited {result.returncode}; its combined output is above"
         )
 
+    # DoE-claude#85 row 5. `--cloud` mode installs a pinned, narrow pre-boot
+    # requirements set for the DAEMON, then `<repo> --no-deps` (the deliberate
+    # lean/heavy boundary this project's own installer draws — never widened
+    # here; CUDA torch in a no-GPU container is the exact trap that boundary
+    # exists to avoid). Neither leg installs the `dev` extra (pytest and the
+    # rest of the test-tier set), so a session that goes on to run this
+    # repo's tests hits a bare ImportError with no pointer back to a fix.
+    # Doc/remediation route, not an auto-install: this claude-klabauter checkout has no
+    # standing to widen ANOTHER repo's declared install boundary, and the
+    # right extra/index for a given test tier is that repo's call, not ours.
+    remediation_cmd = (
+        f"{sys.executable} -m pip install --user "
+        "--extra-index-url https://download.pytorch.org/whl/cpu "
+        f"-e {rag_root}[dev]"
+    )
+    report.rag_install["post_boot_test_deps_remediation"] = remediation_cmd
+    _safe_print(
+        "[cloud_setup] "
+        f"{RETRIEVAL_REPO_SLUG} was installed --no-deps (lean boundary, by design) — "
+        "its test/dev dependencies (pytest, ...) are NOT installed. To run its "
+        f"tests, install them post-boot with CPU torch:\n  {remediation_cmd}"
+    )
+
 
 def _claude_json_path() -> Path:
     """`$HOME/.claude.json` — the MCP config surface, a SIBLING of `.claude/`.

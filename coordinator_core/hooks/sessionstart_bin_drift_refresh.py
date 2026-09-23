@@ -29,7 +29,7 @@ from coordinator_core.ipc import register_op
 
 
 @register_op("hooks.sessionstart_bin_drift_refresh")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     try:
         banner = check_and_refresh(settings_home() / "bin")
     except Exception:

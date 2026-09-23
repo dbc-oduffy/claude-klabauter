@@ -9,7 +9,6 @@ touch `/root` or `/home/user`.
 
 from __future__ import annotations
 
-import asyncio
 import os
 import time
 from pathlib import Path
@@ -32,7 +31,7 @@ def test_op_registered():
 
 
 def test_handler_returns_no_advisory():
-    result = asyncio.run(mod._handler({}))
+    result = mod._handler({})
     assert result == {"hookSpecificOutput": {"hookEventName": "SessionStart"}} or result.get(
         "hookSpecificOutput", {}
     ).get("additionalContext") is None

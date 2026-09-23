@@ -115,7 +115,7 @@ def _warn_reason(target: str, length: int) -> str:
 
 
 @register_op("hooks.guard_handoff_summary_cap_on_write")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Write|Edit|MultiEdit) op: advise (never deny) when a
     write leaves a handoff's `summary:` frontmatter over its 140-char
     cap."""

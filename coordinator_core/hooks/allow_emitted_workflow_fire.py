@@ -125,7 +125,7 @@ def _decide(params: dict) -> Optional[str]:
 
 
 @register_op("hooks.allow_emitted_workflow_fire")
-async def _handler(params: dict, repo_root=None) -> dict:
+def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Workflow) op: auto-approve a fire whose script carries a
     verifying emission receipt."""
     try:

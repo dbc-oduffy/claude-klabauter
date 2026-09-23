@@ -39,8 +39,6 @@ that cannot be faked without a real `hooks.json`.
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 from coordinator_core.ops.session import emit_effective_delivery
@@ -115,7 +113,7 @@ def test_preuse_write_dispatch_delegates_to_evaluate(monkeypatch):
         return sentinel
 
     monkeypatch.setattr(preuse_write_dispatch, "evaluate", _fake_evaluate)
-    result = asyncio.run(preuse_write_dispatch._handler({"tool_name": "Write", "tool_input": {}}))
+    result = preuse_write_dispatch._handler({"tool_name": "Write", "tool_input": {}})
     assert result is sentinel
 
 
@@ -124,7 +122,7 @@ def test_preuse_write_dispatch_fails_open_on_engine_exception(monkeypatch):
         raise RuntimeError("engine exploded")
 
     monkeypatch.setattr(preuse_write_dispatch, "evaluate", _raise)
-    result = asyncio.run(preuse_write_dispatch._handler({"tool_name": "Write", "tool_input": {}}))
+    result = preuse_write_dispatch._handler({"tool_name": "Write", "tool_input": {}})
     assert result == {}
 
 
@@ -144,7 +142,7 @@ def test_python_syntax_guard_scope_predicate():
 
 
 def test_python_syntax_guard_allows_wrong_tool():
-    result = asyncio.run(guard_python_syntax_on_write._handler({"tool_name": "Read", "tool_input": {}}))
+    result = guard_python_syntax_on_write._handler({"tool_name": "Read", "tool_input": {}})
     assert result == {}
 
 
@@ -155,7 +153,7 @@ def test_python_syntax_guard_denies_unparseable_write(tmp_path):
         "tool_name": "Write",
         "tool_input": {"file_path": str(target), "content": "def broken(:\n    pass\n"},
     }
-    result = asyncio.run(guard_python_syntax_on_write._handler(params))
+    result = guard_python_syntax_on_write._handler(params)
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
@@ -166,7 +164,7 @@ def test_python_syntax_guard_allows_valid_write(tmp_path):
         "tool_name": "Write",
         "tool_input": {"file_path": str(target), "content": "def fine():\n    return 1\n"},
     }
-    result = asyncio.run(guard_python_syntax_on_write._handler(params))
+    result = guard_python_syntax_on_write._handler(params)
     assert result == {}
 
 
@@ -214,9 +212,7 @@ def test_posix_invocation_detect_nested_expansion_reported_once():
 
 
 def test_posix_doctrine_write_guard_allows_wrong_tool():
-    result = asyncio.run(
-        guard_posix_invocation_doctrine_write._handler({"tool_name": "Read", "tool_input": {}})
-    )
+    result = guard_posix_invocation_doctrine_write._handler({"tool_name": "Read", "tool_input": {}})
     assert result == {}
 
 
@@ -225,7 +221,7 @@ def test_posix_doctrine_write_guard_advises_on_hit(tmp_path):
     target.parent.mkdir(parents=True)
     content = "run: ${COORDINATOR_SETTINGS_HOME:-$HOME}/bin/coordinator-doc-new"
     params = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": content}}
-    result = asyncio.run(guard_posix_invocation_doctrine_write._handler(params))
+    result = guard_posix_invocation_doctrine_write._handler(params)
     assert result.get("hookSpecificOutput", {}).get("permissionDecision") == "allow"
 
 
@@ -237,12 +233,12 @@ def test_posix_doctrine_write_guard_advises_on_hit(tmp_path):
 
 
 def test_test_tree_git_fixture_guard_allows_wrong_tool():
-    result = asyncio.run(guard_test_tree_git_fixture_spawn._handler({"tool_name": "Read", "tool_input": {}}))
+    result = guard_test_tree_git_fixture_spawn._handler({"tool_name": "Read", "tool_input": {}})
     assert result == {}
 
 
 def test_review_integrator_sidecar_guard_allows_wrong_tool():
-    result = asyncio.run(guard_review_integrator_sidecar_intake._handler({"tool_name": "Read", "tool_input": {}}))
+    result = guard_review_integrator_sidecar_intake._handler({"tool_name": "Read", "tool_input": {}})
     assert result == {}
 
 
@@ -256,12 +252,12 @@ def test_handoff_summary_cap_guard_allows_short_summary(tmp_path):
     target.parent.mkdir(parents=True)
     content = "---\nsummary: short\n---\nbody\n"
     params = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": content}}
-    result = asyncio.run(guard_handoff_summary_cap_on_write._handler(params))
+    result = guard_handoff_summary_cap_on_write._handler(params)
     assert result == {}
 
 
 def test_handoff_summary_cap_guard_allows_wrong_tool():
-    result = asyncio.run(guard_handoff_summary_cap_on_write._handler({"tool_name": "Read", "tool_input": {}}))
+    result = guard_handoff_summary_cap_on_write._handler({"tool_name": "Read", "tool_input": {}})
     assert result == {}
 
 
@@ -271,7 +267,7 @@ def test_handoff_summary_cap_guard_allows_wrong_tool():
 
 
 def test_repo_setup_claude_home_refusal_allows_wrong_tool():
-    result = asyncio.run(guard_repo_setup_claude_home_refusal._handler({"tool_name": "Read", "tool_input": {}}))
+    result = guard_repo_setup_claude_home_refusal._handler({"tool_name": "Read", "tool_input": {}})
     assert result == {}
 
 
@@ -281,18 +277,16 @@ def test_repo_setup_claude_home_refusal_denies_through_the_wrapped_envelope(tmp_
     directly. Through the wrapped door the guard was a structural no-op;
     this pins the fix."""
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
-    result = asyncio.run(
-        guard_repo_setup_claude_home_refusal._handler(
-            {
-                "payload": {
-                    "tool_name": "Bash",
-                    "tool_input": {
-                        "command": "python3 -m coordinator_core.install.scaffold_structure"
-                    },
-                    "cwd": str(tmp_path),
-                }
+    result = guard_repo_setup_claude_home_refusal._handler(
+        {
+            "payload": {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": "python3 -m coordinator_core.install.scaffold_structure"
+                },
+                "cwd": str(tmp_path),
             }
-        )
+        }
     )
     hso = result["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"
@@ -304,7 +298,7 @@ def test_repo_setup_claude_home_refusal_denies_through_the_wrapped_envelope(tmp_
 
 
 def test_plan_test_surface_tier_allows_wrong_tool():
-    result = asyncio.run(nudge_plan_test_surface_tier._handler({"tool_name": "Read", "tool_input": {}}))
+    result = nudge_plan_test_surface_tier._handler({"tool_name": "Read", "tool_input": {}})
     assert result == {}
 
 

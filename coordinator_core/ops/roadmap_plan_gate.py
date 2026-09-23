@@ -108,7 +108,7 @@ def _select_verdict(report: Dict[str, Any], subject: Optional[str], gate: str) -
 
 
 @register_op("roadmap.plan_gate")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "roadmap.plan_gate" handler. See module docstring."""
     if repo_root is None:
         raise ValueError("roadmap.plan_gate requires a resolved repo_root")
