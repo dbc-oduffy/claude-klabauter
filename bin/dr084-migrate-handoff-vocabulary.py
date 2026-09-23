@@ -211,16 +211,16 @@ def parse_record(path, lines, bounds):
 
 
 def repo_relative(path, repo_root):
-    return os.path.relpath(path, repo_root)
+    return os.path.relpath(path, repo_root).replace(os.sep, "/")
 
 
 def _is_live_handoff_path(path, repo_root):
-    rel = repo_relative(path, repo_root).replace(os.sep, "/")
+    rel = repo_relative(path, repo_root)
     return rel.startswith("state/handoffs/")
 
 
 def _is_archived_handoff_path(path, repo_root):
-    rel = repo_relative(path, repo_root).replace(os.sep, "/")
+    rel = repo_relative(path, repo_root)
     return rel.startswith("archive/handoffs/")
 
 

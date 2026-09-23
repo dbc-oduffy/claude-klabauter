@@ -38,6 +38,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
@@ -334,6 +335,11 @@ def _assert_stub_door_image_is_executable(door_path: Path) -> None:
 @pytest.mark.cadence
 @pytest.mark.warm_tier
 @pytest.mark.spawns_process
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="the stub door is a shebang script; Windows cannot exec it under the .exe name. "
+    "test_forwarder_routes_through_door covers Windows with the committed prebuilt door.exe",
+)
 def test_post_install_ordering_stubbed_door_image_records_warm_route(tmp_path):
     """The regression fixture F-022 actually asks for (chunk C3): the
     POST-INSTALL ordering case -- a warm listener resident FIRST, door

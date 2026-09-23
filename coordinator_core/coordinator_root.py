@@ -35,6 +35,10 @@ def _resolve_plugin_root_for_machine_local(coord_path: Path) -> Path | None:
     installer exited 0 having silently installed no forwarders at all. A proxy
     probe can go stale without the thing it stands for moving; a probe for the
     real artifact cannot."""
+    if not Path(coord_path).parts:
+        # Path("") is Path("."): an unresolved root, whose cwd-relative join
+        # exists inside the engine tree.
+        return None
     for candidate in (coord_path / "coordinator", coord_path):
         if (candidate / "templates" / "bin" / "_machine_local.py").is_file():
             return candidate

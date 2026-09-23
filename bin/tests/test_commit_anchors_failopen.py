@@ -49,6 +49,26 @@ def _require_shim() -> None:
         pytest.skip("bin/claude-klabauter-commit-anchors.py not on disk")
 
 
+_UNIMPORTABLE_ENGINE: Path | None = None
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _unimportable_engine(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """A `coordinator_core` that raises on import, put first on PYTHONPATH.
+
+    An installed box carries a site-packages `.pth` that puts the published engine
+    on every interpreter's sys.path, so a throwaway cwd alone does not make the
+    invoke subprocess fail — it answers `commit.anchors` for real and the shim
+    prints trailers."""
+    global _UNIMPORTABLE_ENGINE
+    root = tmp_path_factory.mktemp("unimportable-engine")
+    (root / "coordinator_core").mkdir()
+    (root / "coordinator_core" / "__init__.py").write_text(
+        'raise ImportError("isolated: engine deliberately unimportable")\n', encoding="utf-8"
+    )
+    _UNIMPORTABLE_ENGINE = root
+
+
 def _run(
     env_overrides: dict[str, str],
     unset: tuple[str, ...] = (),
@@ -60,6 +80,7 @@ def _run(
     for key in unset:
         env.pop(key, None)
     env.update(env_overrides)
+    env["PYTHONPATH"] = str(_UNIMPORTABLE_ENGINE)
     return subprocess.run(
         [sys.executable, str(_SHIM), *(extra_args or [])],
         env=env,

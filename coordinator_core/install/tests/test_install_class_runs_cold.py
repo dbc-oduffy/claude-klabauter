@@ -14,9 +14,12 @@ level), not inferred from a name or a roster. What this file enforces:
   1. Every CLI that could plausibly install -- it imports `coordinator_core.install`
      or is named like an installer -- carries an explicit declaration, so a new
      one cannot land unclassified and silently go warm.
-  2. Every declared install-class CLI is refused by `name_is_warm_servable`,
-     gets no native door image, and is absent from BOTH warm allowlist keys
-     (the server's own fail-closed gate).
+  2. Every declared install-class CLI is absent from BOTH warm allowlist keys
+     (the server's own fail-closed gate), and still gets the one native door
+     image -- its only Windows bare-name launcher. The door never dials the
+     engine for it: door_core.c's `door_install_class_basenames` sends it
+     straight to the cold leg, pinned against these declarations by
+     coordinator_core/warm/door/tests/test_install_class_table_parity.py.
 """
 
 from __future__ import annotations
@@ -26,7 +29,7 @@ import re
 
 import pytest
 
-from coordinator_core.install import door_install, substrate
+from coordinator_core.install import door_install
 
 _BIN = door_install._GENERATOR_BIN_DIR
 _ALLOWLIST = door_install._GENERATOR_BIN_DIR.parents[1] / "coordinator_core" / "ops" / "warm_entrypoint_allowlist.json"
@@ -63,13 +66,8 @@ def test_the_ruling_s_named_installers_are_install_class():
 
 
 @pytest.mark.parametrize("name", _INSTALL_CLASS)
-def test_install_class_is_not_warm_servable_and_gets_no_image(name, tmp_path):
-    assert not door_install.name_is_warm_servable(name)
-    bin_dst = tmp_path / "bin"
-    bin_dst.mkdir()
-    assert substrate._write_native_door_forwarder(
-        name, bin_dst, check_only=False, engine_root=tmp_path / "engine"
-    ) is None
+def test_install_class_gets_the_door_image(name):
+    assert door_install.name_gets_door_image(name)
 
 
 def test_install_class_is_absent_from_both_warm_allowlist_keys():

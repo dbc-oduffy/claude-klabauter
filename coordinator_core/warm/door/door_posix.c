@@ -1427,6 +1427,25 @@ int main(int argc, char **argv) {
      * through. */
     resolve_own_basename();
 
+    /* ---- -2. THE INSTALL-CLASS GATE (door_core.h ::
+     * door_basename_is_install_class) -- checked immediately after this
+     * image's own basename resolves, before engine-root resolution and
+     * before the socket dial, matching door.c's own twin gate exactly. An
+     * install-class CLI never reaches `door_maybe_spawn_server` or hook
+     * mode's logic; it falls straight to the cold entrypoint. `NULL` is
+     * passed for the engine root -- this gate fires before
+     * `resolve_engine_root` has run, matching every other pre-resolution
+     * fall-through in this file.
+     *
+     * `!g_own_basename_ok` takes the cold leg UNCONDITIONALLY too, the same
+     * fail direction 0b below uses and for the same reason: an unresolved
+     * image name means `door_entrypoint_basename()` would answer for the
+     * pre-C0 default instead of the name actually invoked, which this door
+     * cannot prove is not install-class. */
+    if (!g_own_basename_ok || door_basename_is_install_class(door_entrypoint_basename())) {
+        return fall_through(argc, argv, NULL);
+    }
+
     /* ---- -1. THE PER-INVOCATION ESCAPE HATCH (COORDINATOR_WARM) -- checked
      * before engine-root resolution and before the socket dial, matching the
      * Python client's own precedence (warm/client.py ::

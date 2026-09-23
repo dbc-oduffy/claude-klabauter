@@ -74,7 +74,7 @@ from coordinator_core.install.door_install import (
     is_door_installed,
     is_native_image,
     launcher_is_installable,
-    name_is_warm_servable,
+    name_gets_door_image,
 )
 from coordinator_core.warm.door import build as door_build
 from coordinator_core.install.engine_root_for_install import resolve_engine_root_for_install
@@ -360,7 +360,7 @@ def _names_the_installer_gives_an_image(expected_names, bin_dir: Path) -> list[s
 
     THE FILTER IS THE WRITER'S OWN TWO PREDICATES, not a roster.
     `_write_native_door_forwarder` refuses exactly twice -- a process-
-    replacing entrypoint (`name_is_warm_servable`) and a name the published
+    replacing entrypoint (`name_gets_door_image`) and a name the published
     engine carries no script for (`launcher_is_installable`) -- so asking
     the same two questions here cannot drift from what the writer did. A
     hand-kept list, or the door-eligible allowlist, both misclassify in both
@@ -372,7 +372,7 @@ def _names_the_installer_gives_an_image(expected_names, bin_dir: Path) -> list[s
     `launcher_is_installable` leg: the warm-servable filter still applies,
     and the remainder audits as before rather than being silently exempted.
     """
-    names = [n for n in expected_names if name_is_warm_servable(n)]
+    names = [n for n in expected_names if name_gets_door_image(n)]
 
     try:
         engine_root = Path(

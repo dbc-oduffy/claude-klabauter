@@ -3886,8 +3886,50 @@ def test_a_registered_but_missing_claude_klabauter_tree_does_not_count(setup_mod
     assert setup_mod._authoring_tree_on_box(tmp_path / "absent") is None
 
 
+def test_a_source_key_pointed_at_the_published_mirror_does_not_count(setup_mod, monkeypatch, tmp_path):
+    """A consumer box has only the mirror; a stale key naming it must not flip it to candidate."""
+    import types
+
+    import coordinator_core.engine_root as engine_root
+
+    mirror = tmp_path / "claude-klabauter"
+    mirror.mkdir()
+    fake_shim = types.SimpleNamespace(_ml_dir=lambda: None, _registry_value=lambda _dir, _key: str(mirror))
+    monkeypatch.setattr(engine_root, "_load_shim", lambda: fake_shim)
+    monkeypatch.setattr(engine_root, "published_engine_mirror_path", lambda: str(mirror))
+    assert setup_mod._authoring_tree_on_box(tmp_path / "absent") is None
+
+
 def test_channel_is_candidate_with_the_doe_source_tree(setup_mod, monkeypatch, tmp_path):
     _no_engine_source(monkeypatch)
     doe = tmp_path / "DoE-claude"
     (doe / "coordinator" / "cockpit-contract").mkdir(parents=True)
     assert "DoE source tree" in setup_mod._authoring_tree_on_box(doe)
+
+
+class _CompleteReport:
+    complete = True
+
+
+@pytest.mark.parametrize("forwarders_failed", [False, True])
+def test_verify_settings_home_fails_when_the_forwarder_writer_failed(
+    forwarders_failed, setup_mod, tmp_path, monkeypatch, capsys
+):
+    """A presence-complete report is not a PASS when this run's forwarder
+    writer reported failures: an older image at the path satisfies presence
+    for a name the writer failed to refresh."""
+    from coordinator_core import _settings_home
+    from coordinator_core.install import settings_home_report
+
+    monkeypatch.setattr(_settings_home, "settings_home", lambda: tmp_path)
+    monkeypatch.setattr(settings_home_report, "check_settings_home", lambda *_a: _CompleteReport())
+    monkeypatch.setattr(settings_home_report, "format_report_lines", lambda _r: [])
+
+    setup_mod.install_verify_settings_home(
+        Path(__file__).resolve().parent.parent, forwarders_failed=forwarders_failed
+    )
+
+    captured = capsys.readouterr()
+    assert ("PASS [settings-home] complete" in captured.out) is not forwarders_failed
+    assert ("FAIL bin/ forwarders" in captured.out) is forwarders_failed
+    assert ("is incomplete" in captured.err) is forwarders_failed

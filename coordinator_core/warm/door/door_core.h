@@ -299,6 +299,27 @@ int door_argv_declares_params_stdin(int argc, const char *const *argv);
  * would then no longer be honest about. */
 int door_basename_declares_stdin_read(const char *basename);
 
+/* =========================================================================
+ * The install-class basename gate -- checked right after the image's own
+ * basename resolves, BEFORE engine-root resolution and before any transport
+ * dial. PM ruling 2026-09-23: an install-class CLI (`INSTALL_CLASS = True`
+ * in `coordinator/bin/<name>.py`) never dials the warm engine -- it
+ * installs, re-registers, or removes it, so serving it warm would run it
+ * inside the server it is replacing. A hit goes straight to the cold
+ * entrypoint (`fall_through`): never `door_maybe_spawn_server`, never hook
+ * mode's logic.
+ *
+ * Runtime source of truth is `door_install_class_basenames` in
+ * `door_core.c`; semantic source of truth is each CLI's own
+ * `INSTALL_CLASS = True` declaration in `coordinator/bin/`.
+ * `test_install_class_table_parity.py` is the one hop between them.
+ *
+ * COMPARISON POLICY: exact byte compare (`strcmp`), same reasoning and the
+ * same platform caveat as `door_basename_declares_stdin_read` immediately
+ * above -- see that function's own comment for the Windows case-folding
+ * limit, which applies here verbatim. */
+int door_basename_is_install_class(const char *basename);
+
 /* Appends the top-level `hook_event_name` string of the hook payload `json`
  * to `out` (caller `buf_init`s first), NUL-terminated. Returns 0 when the
  * payload is not an object or carries no such string. */

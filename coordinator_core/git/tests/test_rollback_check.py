@@ -120,10 +120,10 @@ def test_status_d_revert_of_in_window_add_undeclared(tmp_path):
     assert rollback_check.refusal(findings) is True
 
 
-def test_breadth_3_depth_1_refused_on_breadth_alone(tmp_path):
-    """Three distinct paths each match ONLY at depth 1 (the value about to
-    be replaced -- an ordinary no-op-content edit) -- refused on breadth,
-    with no single finding at depth >= 2."""
+def test_unchanged_paths_are_never_findings(tmp_path):
+    """Three paths whose new value IS head's value restore nothing, so they
+    produce no finding and no breadth-3 refusal. doe-claude-4d hit exactly
+    this: a claim set holding read-only paths refused a one-file commit."""
     repo = _repo(tmp_path)
     (repo / "a.txt").write_text("a\n", encoding="utf-8", newline="\n")
     (repo / "b.txt").write_text("b\n", encoding="utf-8", newline="\n")
@@ -138,9 +138,20 @@ def test_breadth_3_depth_1_refused_on_breadth_alone(tmp_path):
     }
     findings = rollback_check.find_exact_blob_rollbacks(_common(repo), head, candidates, window=500)
 
-    assert {f.path for f in findings} == {"a.txt", "b.txt", "c.txt"}
-    assert all(f.depth == 1 for f in findings)
-    assert rollback_check.refusal(findings) is True
+    assert findings == []
+    assert rollback_check.refusal(findings) is False
+
+
+def test_never_tracked_path_declared_absent_is_not_a_finding(tmp_path):
+    """ABSENT for a path HEAD never tracked leaves the tree unchanged."""
+    repo = _repo(tmp_path)
+    head = _commit(repo, "p.txt", "v\n", "v")
+
+    findings = rollback_check.find_exact_blob_rollbacks(
+        _common(repo), head, {"never.txt": rollback_check.ABSENT}, window=500
+    )
+
+    assert findings == []
 
 
 def test_clean_multi_path_edit_no_findings(tmp_path):
@@ -159,9 +170,8 @@ def test_clean_multi_path_edit_no_findings(tmp_path):
     assert rollback_check.refusal(findings) is False
 
 
-def test_lone_depth_1_revert_allowed(tmp_path):
-    """A single path whose new value matches only `head_sha`'s own current
-    version -- an ordinary edit target, not refused."""
+def test_a_path_left_as_head_has_it_is_not_a_finding(tmp_path):
+    """A new value equal to `head_sha`'s own version changes nothing."""
     repo = _repo(tmp_path)
     head = _commit(repo, "p.txt", "cur\n", "cur")
 
@@ -169,9 +179,7 @@ def test_lone_depth_1_revert_allowed(tmp_path):
         _common(repo), head, {"p.txt": _blob_sha(b"cur\n")}, window=500
     )
 
-    assert len(findings) == 1
-    assert findings[0].depth == 1
-    assert rollback_check.refusal(findings) is False
+    assert findings == []
 
 
 def test_first_parent_only_side_branch_content_never_reported(tmp_path):
@@ -205,14 +213,13 @@ def test_first_parent_only_side_branch_content_never_reported(tmp_path):
     )
     assert findings == []
 
-    # The merge commit's own tree (kept "a\n" via -s ours) counts as depth
-    # 1; the root's "r\n" is still reachable, deeper, on the first-parent
-    # line.
+    # The merge commit's own tree (kept "a\n" via -s ours) is the current
+    # value, so re-committing it is no finding; the root's "r\n" is still
+    # reachable, deeper, on the first-parent line.
     findings_own = rollback_check.find_exact_blob_rollbacks(
         _common(repo), merge_sha, {"p.txt": _blob_sha(b"a\n")}, window=500
     )
-    assert len(findings_own) == 1
-    assert findings_own[0].depth == 1
+    assert findings_own == []
 
     findings_root = rollback_check.find_exact_blob_rollbacks(
         _common(repo), merge_sha, {"p.txt": _blob_sha(b"r\n")}, window=500

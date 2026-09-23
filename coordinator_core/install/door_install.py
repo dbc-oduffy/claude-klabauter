@@ -1408,15 +1408,23 @@ def declared_install_class(name: str) -> Optional[bool]:
     return None if match is None else match.group(1) == b"True"
 
 
-def name_is_warm_servable(name: str) -> bool:
-    """False for a name in `_EXEC_SHAPED_NAMES` or one whose CLI declares
-    `INSTALL_CLASS = True` -- see both for why neither may reach the door.
+def name_gets_door_image(name: str) -> bool:
+    """False only for a name in `_EXEC_SHAPED_NAMES` -- see it for why a
+    process-replacing entrypoint may never reach the door.
+
+    An `INSTALL_CLASS = True` name DOES get the image: the door itself routes
+    it straight to its cold leg by basename (door_core.c's
+    `door_install_class_basenames`, parity-pinned against
+    `declared_install_class`), never dialling or respawning the engine. That
+    keeps one native launcher per name (DR-365) and install cold (PM ruling
+    2026-09-23) at once; without the image the name had no Windows bare-name
+    launcher at all.
 
     NOT the same answer as `launcher_is_installable`, and the callers must
-    not collapse them: an unservable name still WANTS its Python forwarder
-    pair (it is a live PATH tool, just not a warm-servable one), whereas a
-    publish-excluded name wants no launcher at all."""
-    return name not in _EXEC_SHAPED_NAMES and declared_install_class(name) is not True
+    not collapse them: an imageless name still WANTS its Python forwarder
+    pair (it is a live PATH tool), whereas a publish-excluded name wants no
+    launcher at all."""
+    return name not in _EXEC_SHAPED_NAMES
 
 
 def launcher_is_installable(engine_root: Path, name: str) -> bool:

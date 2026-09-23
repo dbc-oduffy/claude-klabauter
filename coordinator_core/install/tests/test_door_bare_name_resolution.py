@@ -303,6 +303,7 @@ def test_posix_rules_ignore_a_powershell_sibling(tmp_path: Path) -> None:
     assert hits == [door], f"the `.ps1` must not rank at all under POSIX rules; got {hits}"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="needs POSIX mode bits; chmod(0o644) cannot clear an exec bit Windows never had")
 def test_posix_rules_skip_a_non_executable_candidate(tmp_path: Path) -> None:
     """A mode-0644 file is not a door: a real POSIX shell skips it and keeps
     searching PATH. The POSIX model says so; the Windows model stays mode-blind."""

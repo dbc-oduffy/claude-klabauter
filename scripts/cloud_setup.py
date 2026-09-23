@@ -1519,7 +1519,12 @@ def _claude_home() -> Path:
             )
         base = claude_home_env
     else:
-        base = Path.home()
+        # `Path.home()` alone ignores `HOME` on Windows (it reads
+        # `USERPROFILE`), contradicting the docstring's stated resolution
+        # order. Read `HOME` explicitly first, falling through to
+        # `Path.home()` only when unset, so the order is CLAUDE_HOME -> HOME
+        # -> platform home on every platform, not just POSIX.
+        base = os.environ.get("HOME") or Path.home()
     return Path(base) / ".claude"
 
 

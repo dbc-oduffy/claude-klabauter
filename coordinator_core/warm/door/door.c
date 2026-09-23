@@ -751,6 +751,20 @@ static int door_basename_declares_stdin_read_w(const wchar_t *basename) {
     return declared;
 }
 
+/* Wide-basename adapter over `door_basename_is_install_class` (door_core.c)
+ * -- same shape and the same fail-closed direction as
+ * `door_basename_declares_stdin_read_w` immediately above, for the same
+ * reason: a name this door cannot even render cannot be proven safe to
+ * dial the engine for. */
+static int door_basename_is_install_class_w(const wchar_t *basename) {
+    int len = 0;
+    char *basename_u8 = wide_to_utf8(basename, &len);
+    if (!basename_u8) return 1;
+    int is_install_class = door_basename_is_install_class(basename_u8);
+    free(basename_u8);
+    return is_install_class;
+}
+
 /* Forward declaration -- `write_all` is defined below (used by
  * `emit_indeterminate`, further down still), needed here one section
  * earlier by `emit_hook_deny` immediately below. */
@@ -1592,6 +1606,25 @@ int main(void) {
      * `door_entrypoint_basename()`) and the warm request built in step 6
      * below need it available regardless of how far this function gets. */
     resolve_own_basename();
+
+    /* ---- -2. THE INSTALL-CLASS GATE (door_core.h ::
+     * door_basename_is_install_class) -- checked immediately after this
+     * image's own basename resolves, before engine-root resolution and
+     * before any transport dial. An install-class CLI never reaches
+     * `door_maybe_spawn_server` or hook mode's logic; it falls straight to
+     * the cold entrypoint, matching every other pre-resolution fall-through
+     * in this file (`NULL` engine root -- this gate fires before
+     * `resolve_engine_root` has run). Not excluded for hook mode: an
+     * install-class CLI is never a hook guard, but if one were ever wired
+     * as one, running it warm would still be wrong for the same reason.
+     * `!g_own_basename_ok` takes the cold leg UNCONDITIONALLY too, the same
+     * fail direction the stdin-reading gate below uses and for the same
+     * reason: an unresolved image name means `door_entrypoint_basename()`
+     * would hand the predicate the pre-C0 default instead of the name
+     * actually invoked, which this door cannot prove is not install-class. */
+    if (!g_own_basename_ok || door_basename_is_install_class_w(door_entrypoint_basename())) {
+        return fall_through_and_free(argc, wargv, NULL);
+    }
 
     /* ---- -1. THE PER-INVOCATION ESCAPE HATCH (COORDINATOR_WARM) -- checked
      * before engine-root resolution and before the pipe dial, matching the

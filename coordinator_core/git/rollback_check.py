@@ -18,10 +18,10 @@ refuse a commit; `P2d`/`P2e` call it from the two agent commit routes
 For each candidate path a caller is about to commit, walks HEAD's
 first-parent line up to `window` steps and asks: does the path's NEW value
 (a blob sha, or `ABSENT` for a deletion) exact-match a version the path
-already held at some ancestor depth on that line? `depth=1` is `head_sha`'s
-own current version (the value about to be replaced by an ordinary edit --
-matching it alone is ordinary, not a rollback); `depth>=2` is an OLDER
-version coming back. `refusal()` applies K-016's rule: refuse if any single
+already held at some ancestor depth on that line? A new value equal to
+`head_sha`'s own is no change and never a finding; `depth` counts
+first-parent steps, `depth=1` being `head_sha` itself, so every finding is
+at `depth>=2` -- an OLDER version coming back. `refusal()` applies K-016's rule: refuse if any single
 finding has `depth >= 2`, or three or more paths each have a finding at any
 depth ("breadth-3").
 
@@ -202,6 +202,12 @@ def find_exact_blob_rollbacks(
     ancestors = _first_parent_ancestors(common_dir, head_sha, window)
     findings: List[RollbackFinding] = []
     for path, new_value in candidates.items():
+        # A path this commit leaves as HEAD has it restores nothing. Without
+        # this, every unchanged claimed path -- and every never-tracked one
+        # declared absent -- matched its own unchanged history at depth 1,
+        # and three of them tripped breadth-3 on a commit reverting nothing.
+        if _blob_at_commit(common_dir, head_sha, path) == new_value:
+            continue
         for depth, sha in ancestors:
             old_value = _blob_at_commit(common_dir, sha, path)
             if old_value is None:

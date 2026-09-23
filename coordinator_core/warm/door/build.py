@@ -38,10 +38,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -125,11 +127,39 @@ def write_sidecar(output_exe: Path, engine_root: Path) -> Path:
     write would translate a bare `\\n` to `\\r\\n` on Windows, which is
     harmless here (the C reader trims trailing `\\r`/`\\n`/whitespace) but
     unnecessary -- this writes exactly the bytes the contract promises.
+
+    A LIVE DOOR READS THIS FILE ON EVERY INVOCATION, and the installer calls
+    this once per named forwarder (~445 times a run). On Windows a truncating
+    write while a door holds the file open is `[Errno 13]`, which failed four
+    names on a real install. So: an unchanged sidecar is not rewritten, and a
+    changed one lands whole via `os.replace`, retried briefly because a
+    door's read holds the handle for microseconds, not across the retry.
     """
     resolved = str(Path(engine_root).resolve())
     sidecar_path = output_exe.parent / SIDECAR_FILENAME
-    sidecar_path.write_text(resolved + "\n", encoding="utf-8", newline="")
+    content = (resolved + "\n").encode("utf-8")
+    try:
+        if sidecar_path.read_bytes() == content:
+            return sidecar_path
+    except OSError:
+        pass
+    tmp = sidecar_path.with_name(f"{sidecar_path.name}.{os.getpid()}.tmp")
+    tmp.write_bytes(content)
+    for attempt in range(_SIDECAR_REPLACE_ATTEMPTS):
+        try:
+            os.replace(tmp, sidecar_path)
+            return sidecar_path
+        except PermissionError:
+            if attempt == _SIDECAR_REPLACE_ATTEMPTS - 1:
+                tmp.unlink(missing_ok=True)
+                raise
+            time.sleep(0.01)
     return sidecar_path
+
+
+#: `write_sidecar`'s retry bound: 10 x 10ms rides out a door's read, and a
+#: file held longer than that is not a reader, so it raises.
+_SIDECAR_REPLACE_ATTEMPTS = 10
 
 
 def _sha256_file(path: Path) -> str:

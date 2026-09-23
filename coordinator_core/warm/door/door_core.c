@@ -531,7 +531,6 @@ static const char *const door_stdin_reading_basenames[] = {
     "normalize-snippet",
     "percolate-mirror",
     "queue-triage",
-    "refresh-plugin-live-install",
     "statusline",
     "subagent-statusline",
     "survey-consume-gate",
@@ -546,6 +545,46 @@ int door_basename_declares_stdin_read(const char *basename) {
     if (basename == NULL) return 0;
     for (size_t i = 0; i < DOOR_STDIN_READING_BASENAMES_COUNT; i++) {
         if (strcmp(basename, door_stdin_reading_basenames[i]) == 0) return 1;
+    }
+    return 0;
+}
+
+/* =========================================================================
+ * The install-class basename table -- see door_core.h for the full policy.
+ * PM ruling 2026-09-23: install-class CLIs (`INSTALL_CLASS = True` in
+ * `coordinator/bin/<name>.py`) never dial the warm engine -- they install,
+ * re-register, or remove it. THE LIST LIVES HERE, NOT IN A GENERATED
+ * HEADER, for the same reason `door_stdin_reading_basenames` does (see that
+ * table's own comment); keep this name and spelling exact, the parity
+ * test's falsifier greps for `door_install_class_basenames`.
+ * ========================================================================= */
+static const char *const door_install_class_basenames[] = {
+    "break_glass",
+    "coordinator-install",
+    "coordinator-uninstall",
+    "fleet-env-bind",
+    "fleet-env-cutover",
+    "gen-settings-hooks",
+    "install-claude-doe-wrapper",
+    "install-doe-claude-precommit-hook",
+    "install-meta-repo-precommit-hook",
+    "install-publish-repo-precommit-hook",
+    "install-sentinel-write",
+    "install-shell-init-guard-seam",
+    "probe-prereq",
+    "refresh-plugin-live-install",
+    "repo-setup-args-and-register",
+    "run-platform-localize",
+    "seed-marketplace-enabledplugins",
+};
+
+#define DOOR_INSTALL_CLASS_BASENAMES_COUNT \
+    (sizeof(door_install_class_basenames) / sizeof(door_install_class_basenames[0]))
+
+int door_basename_is_install_class(const char *basename) {
+    if (basename == NULL) return 0;
+    for (size_t i = 0; i < DOOR_INSTALL_CLASS_BASENAMES_COUNT; i++) {
+        if (strcmp(basename, door_install_class_basenames[i]) == 0) return 1;
     }
     return 0;
 }

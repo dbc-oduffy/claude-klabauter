@@ -88,7 +88,7 @@ body
 
 def _write(dir_path: Path, name: str, content: str) -> Path:
     p = dir_path / name
-    p.write_text(content, encoding="utf-8")
+    p.write_text(content, encoding="utf-8", newline="")
     return p
 
 
@@ -343,6 +343,7 @@ def test_atomic_write_leaves_no_temp_file_behind(_mod, tmp_path: Path) -> None:
     assert leftovers == []
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows carries only a read-only bit; there is no 0o644 to preserve")
 def test_atomic_write_preserves_original_file_mode(_mod, tmp_path: Path) -> None:
     target = _write(tmp_path, "target.md", "line one\nline two\n")
     os.chmod(target, 0o644)
@@ -350,6 +351,7 @@ def test_atomic_write_preserves_original_file_mode(_mod, tmp_path: Path) -> None
     assert stat.S_IMODE(os.stat(target).st_mode) == 0o644
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows carries only a read-only bit; there is no 0o644 to preserve")
 def test_real_migration_preserves_file_mode(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     active_path = repo / "state" / "handoffs" / "active.md"

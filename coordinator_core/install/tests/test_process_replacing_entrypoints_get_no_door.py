@@ -33,17 +33,17 @@ import pytest
 from coordinator_core.install import door_install, substrate
 
 
-def test_claude_doe_is_not_warm_servable():
+def test_claude_doe_gets_no_door_image():
     """The roster is reachable through a named predicate, not read directly
     by its callers -- `substrate` asks the question, `door_install` owns the
     answer."""
-    assert not door_install.name_is_warm_servable("claude-doe")
+    assert not door_install.name_gets_door_image("claude-doe")
 
 
-def test_an_ordinary_op_name_is_warm_servable():
+def test_an_ordinary_op_name_gets_a_door_image():
     """The roster is a carve-out, not a gate: everything else still cuts
     over. `blocked` is the name the 2026-09-02 report reproduced on."""
-    assert door_install.name_is_warm_servable("blocked")
+    assert door_install.name_gets_door_image("blocked")
 
 
 def test_no_native_image_is_written_for_a_process_replacing_name(tmp_path):

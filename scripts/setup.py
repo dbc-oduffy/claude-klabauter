@@ -3770,7 +3770,7 @@ def install_warm_door(repo_root: Path, claude_klabauter_root_resolved: Path, arg
     )
 
 
-def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_root_resolved: Path, args: Args) -> None:
+def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_root_resolved: Path, args: Args) -> bool:
     """Best-effort install-chain step: lands the `<settings-home>/bin`
     agent-helper forwarders (`coordinator_core.install.substrate`'s
     `_install_bin_resolvers` leg) via that module's own `--setup-only` CLI
@@ -3809,6 +3809,11 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
     skipped under `--register-only` (no coordinator-claude/plugin-root
     resolution attempted in that mode, matching the other post-registration
     steps it sits beside in `main`).
+
+    Returns True when the forwarder writer itself failed (could not spawn, or
+    exited non-zero). `install_verify_settings_home` needs it: its presence
+    check passes on a name the writer FAILED to refresh whenever an older
+    image still sits at that path.
     """
     print()
     print("--- Install: settings-home bin/ forwarders (coordinator/bin/*) ---")
@@ -3816,7 +3821,7 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
     coord_path, coord_source = _resolve_coordinator_claude_root(repo_root, args)
     if coord_source.is_publish_mirror_rejected:
         print("[ADVISORY] coordinator-claude root resolved to a publish mirror — skipping bin-forwarder install.", file=sys.stderr)
-        return
+        return False
     plugin_root = _resolve_plugin_root_for_machine_local(coord_path)
     if plugin_root is None or not (plugin_root / "templates").is_dir():
         print(
@@ -3824,7 +3829,7 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
             "(no templates/ dir) — skipping bin-forwarder install.",
             file=sys.stderr,
         )
-        return
+        return False
 
     env = dict(os.environ)
     env["CLAUDE_PLUGIN_ROOT"] = str(plugin_root)
@@ -3863,7 +3868,7 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
         )
         print(f"  Re-run manually: {engine_py} -m coordinator_core.install.substrate --setup-only "
               f"(CLAUDE_PLUGIN_ROOT={plugin_root})", file=sys.stderr)
-        return
+        return True
     output = (proc.stdout + proc.stderr).strip()
     if not args.agent_mode and output:
         print(output)
@@ -3881,7 +3886,7 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
         print(f"  Re-run manually: {engine_py} -m coordinator_core.install.substrate --setup-only "
               f"(CLAUDE_PLUGIN_ROOT={plugin_root})", file=sys.stderr)
         # Non-fatal: setup must still complete even if this step failed.
-        return
+        return True
 
     # A 0 exit code alone
     # doesn't prove a forwarder actually landed on disk (the exact
@@ -3905,6 +3910,7 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
         )
         print(f"  Re-run manually: {engine_py} -m coordinator_core.install.substrate --setup-only "
               f"(CLAUDE_PLUGIN_ROOT={plugin_root})", file=sys.stderr)
+    return False
 
 
 #: Dependency-ordered claude-doe launcher chain: (label, CLI relpath under
@@ -4478,7 +4484,7 @@ def install_fleet_shared_environment(repo_root: Path, claude_klabauter_root_reso
     print(f"fleet shared environment: {status}")
 
 
-def install_verify_settings_home(claude_klabauter_root_resolved: Path) -> None:
+def install_verify_settings_home(claude_klabauter_root_resolved: Path, *, forwarders_failed: bool = False) -> None:
     """Install-chain step: report whether `<settings-home>` is actually
     complete, not merely whether each of its individual population steps
     (bin-forwarder install, `.percolate-identity`, machine identity
@@ -4497,6 +4503,12 @@ def install_verify_settings_home(claude_klabauter_root_resolved: Path) -> None:
     `main`) — an incomplete settings home does not abort the rest of setup;
     it is reported so the operator (or the doctor probe, later) can act on
     it, per the plan's "checkable, not silently emergent" ask.
+
+    `forwarders_failed` is this run's writer verdict, which the on-disk
+    oracle cannot see: a stale image from an earlier install satisfies
+    presence for a name this run failed to write. It overrides a complete
+    report rather than being folded into the shared oracle, because the
+    doctor probe's cold re-check has no writer verdict to consult.
     """
     print()
     print("--- Install: settings-home completeness ---")
@@ -4518,8 +4530,10 @@ def install_verify_settings_home(claude_klabauter_root_resolved: Path) -> None:
     report = check_settings_home(settings_home_path, claude_klabauter_root_resolved)
     for line in format_report_lines(report):
         print(line)
+    if forwarders_failed:
+        print("FAIL bin/ forwarders: the writer reported failures this run (see the forwarder step above); presence alone does not verify them")
 
-    if report.complete:
+    if report.complete and not forwarders_failed:
         print(f"PASS [settings-home] complete at {settings_home_path}")
     else:
         print(
@@ -4698,7 +4712,7 @@ def main(argv: list[str]) -> int:
         # the ~2.34ms native door to a cold interpreter start with NO error and
         # no signal -- just a slower path nobody is looking at. Pinned by
         # coordinator_core/install/tests/test_door_bare_name_ordering.py.
-        install_bin_forwarders(repo_root, engine_py, claude_klabauter_root_resolved, args)
+        forwarders_failed = install_bin_forwarders(repo_root, engine_py, claude_klabauter_root_resolved, args)
         install_warm_door(repo_root, claude_klabauter_root_resolved, args)
         install_claude_doe_launcher_chain(repo_root, engine_py, claude_klabauter_root_resolved, args)
         register_live_plugin_root(repo_root, claude_klabauter_root_resolved, args)
@@ -4708,7 +4722,7 @@ def main(argv: list[str]) -> int:
         install_machine_identity(repo_root, claude_klabauter_root_resolved, args)
         install_host_sampler_task(repo_root, claude_klabauter_root_resolved)
         install_fleet_shared_environment(repo_root, claude_klabauter_root_resolved, args)
-        install_verify_settings_home(claude_klabauter_root_resolved)
+        install_verify_settings_home(claude_klabauter_root_resolved, forwarders_failed=forwarders_failed)
 
     print()
     if probe_hard_failure:

@@ -1447,7 +1447,7 @@ def _write_native_door_forwarder(
     # launcher, just never the native one". The stale image an earlier
     # install wrote is taken back for the same reason it is there: it
     # outranks nothing on POSIX, it IS the name's only file.
-    if not door_install.name_is_warm_servable(name):
+    if not door_install.name_gets_door_image(name):
         print(
             f"[install-substrate] {name}: no native door forwarder -- this "
             "entrypoint replaces its own process, which the warm leg cannot "
