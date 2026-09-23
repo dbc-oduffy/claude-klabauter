@@ -297,6 +297,7 @@ from coordinator_core.git.commit import (
     commit_paths,
     hash_worktree_blobs_via_spawn,
 )
+from coordinator_core.git.commit_trailers import apply_missing_trailers
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.push import PUSH_STATUS_NOT_ATTEMPTED
 from coordinator_core.ops.dirty_tree_gate import parse_porcelain_paths
@@ -1772,6 +1773,14 @@ async def _commit_group(
     # to do internally.
     present_paths = [p for p in group["paths"] if (Path(worktree_root) / p).exists()]
     deleted_paths = [p for p in group["paths"] if p not in present_paths]
+    # Engine-owned trailers (Session-Id/Deliverable-Id/Co-Authored-By): this
+    # route lands via `commit_paths`' commit-tree plumbing, which fires no
+    # git hooks, so `apply_missing_trailers` is its only attach point. The
+    # caller's own `session_id` (this function's own parameter) is passed as
+    # the override so attribution resolves that SAME session's transcript.
+    message = apply_missing_trailers(
+        message, worktree_root, group["paths"], session_id_override=session_id
+    )
     try:
         outcome = commit_paths(
             worktree_root,

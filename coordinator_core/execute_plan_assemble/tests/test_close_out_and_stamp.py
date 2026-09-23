@@ -4075,3 +4075,50 @@ class TestRepoIdentityGateWiring:
 # ===========================================================================
 
 
+class TestCoAuthoredByAttachedOnCloseOutCommit:
+    """`apply_missing_trailers` is wired into this module's `commit_paths`
+    call site (state/cross-repo/inbox/2026-09-23-example-game-repo-em-commit-
+    trailers-owned-by-engine.md) -- pinned end-to-end against a REAL commit,
+    same style as `TestRepoIdentityGateWiring`'s `COORDINATOR_SESSION_ID`
+    pattern above."""
+
+    def test_close_out_commit_carries_co_authored_by(self, tmp_path, monkeypatch):
+        from coordinator_core.git import commit_trailers as ct
+
+        ct._ATTRIBUTION_TRANSCRIPT_MEMO.clear()
+        ct._ATTRIBUTION_VALUE_MEMO.clear()
+
+        sid = "23232323-2323-4232-8232-232323232323"
+        claude_home = tmp_path / "fake-claude-home"
+        proj = claude_home / ".claude" / "projects" / "p"
+        proj.mkdir(parents=True)
+        import json
+
+        (proj / f"{sid}.jsonl").write_text(
+            json.dumps({"type": "assistant", "message": {"model": "claude-opus-5-5"}})
+            + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", sid)
+
+        root = tmp_path / "repo"
+        root.mkdir()
+        _init_repo(root)
+        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
+        for chunk_id in ("C1", "C2a", "C2b"):
+            _commit_chunk(root, "plan.md", chunk_id, deliverable_id=_DLV_VALID_SPINE)
+
+        exit_code, result, pre_head = _run_close_out(monkeypatch, root, "plan.md")
+
+        assert exit_code == coas.EXIT_OK
+        assert result["commit"]["committed_sha"] is not None
+        assert _head_sha(root) != pre_head
+
+        body = _run_git(["log", "-1", "--format=%B", "HEAD"], root).stdout
+        assert "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" in body
+
+        ct._ATTRIBUTION_TRANSCRIPT_MEMO.clear()
+        ct._ATTRIBUTION_VALUE_MEMO.clear()
+
+

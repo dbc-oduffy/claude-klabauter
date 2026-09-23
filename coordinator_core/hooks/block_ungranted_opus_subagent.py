@@ -59,22 +59,16 @@ session (verified against this repo's own hook-payload fixtures,
 travels, and `docs/reference/DR-344...`'s brightline: no shell-out is
 worth spawning to answer this). `payload.get("model")` is checked first as
 a defensive no-op (costs nothing, covers a future payload shape this
-module does not currently expect), then `_resolve_parent_model` tail-reads
+module does not currently expect), then `transcript_tail.resolve_last_assistant_model` tail-reads
 `payload["transcript_path"]` for the most recent `type == "assistant"`
 record's `message.model` field -- same bounded chunked-read shape as
 `hooks/subagent_arrival_check.py :: _read_last_nonempty_line` (8KiB
 chunks, capped at 32 chunks / ~256KiB from EOF), generalized to scan up to
-`_TAIL_SCAN_MAX_LINES` trailing lines newest-first rather than only the
+`transcript_tail`'s bounded window of trailing lines newest-first rather than only the
 literal last line, because the last on-disk record is not reliably an
-assistant turn (it may be a tool_result/user record). A SEPARATE small
-reader rather than an import of `session.receiver_state._read_tail_lines`
-or `subagent_arrival_check._read_last_nonempty_line`: both existing
-readers are function-local, un-exported utilities inside modules that
-solve a different problem (verdict-ladder classification, single-line
-arrival detection) -- this repo's own established convention (compare the
-two: they duplicate the identical chunked-read shape rather than share a
-common export) is that each hook owns its own tiny bounded reader instead
-of reaching across package/module boundaries for a private name.
+assistant turn (it may be a tool_result/user record). The reader is shared
+with `git.commit_trailers`, which resolves the attribution trailer from the
+same record.
 
 FAIL-CLOSED WHEN THE PARENT MODEL CANNOT BE DETERMINED. No transcript, an
 unreadable transcript, or a tail with no assistant record carrying a
@@ -159,6 +153,7 @@ from typing import Any, Dict, Optional
 from coordinator_core._hook_envelope import deny, rewrite_input
 from coordinator_core.hooks.block_unenumerated_agent_type import resolve_model_pins
 from coordinator_core.hooks.enforce_agent_model_pin import _clean_str
+from coordinator_core.transcript_tail import resolve_last_assistant_model
 
 CLASS = "hard-deny"
 MATCHERS = ("Agent",)
@@ -181,15 +176,6 @@ _GATED_TIER_TOKENS = ("opus", "fable")
 #: "INHERITED IS REWRITTEN, NOT DENIED".
 _INHERITED_REWRITE_MODEL = "sonnet"
 
-#: Bounded tail-read constants -- identical to
-#: `hooks/subagent_arrival_check.py`'s own `_TAIL_CHUNK_BYTES` /
-#: `_TAIL_MAX_CHUNKS` (8KiB chunks, ~256KiB cap), generalized to multiple
-#: trailing lines. See module docstring "PARENT-MODEL RESOLUTION".
-_TAIL_CHUNK_BYTES = 8192
-_TAIL_MAX_CHUNKS = 32
-_TAIL_SCAN_MAX_LINES = 64
-
-
 def _is_gated_tier(model_id: Optional[str]) -> bool:
     """True iff `model_id` names an Opus- or Fable-tier model (see module
     docstring "GATED TIERS"). Never raises; a non-string/empty input is
@@ -203,72 +189,6 @@ def _is_gated_tier(model_id: Optional[str]) -> bool:
         return False
     lowered = model_id.lower()
     return any(token in lowered for token in _GATED_TIER_TOKENS)
-
-
-def _tail_lines(path: str, *, max_lines: int = _TAIL_SCAN_MAX_LINES) -> "list[str]":
-    """Bounded tail read of `path`, returning up to `max_lines` trailing
-    non-empty lines in on-disk order. See module docstring "PARENT-MODEL
-    RESOLUTION" for the chunked-read shape and why this is a local,
-    un-shared utility. Returns [] on any failure (absent file, OSError,
-    empty file) -- never raises.
-    """
-    try:
-        with open(path, "rb") as fh:
-            fh.seek(0, os.SEEK_END)
-            file_size = fh.tell()
-            if file_size == 0:
-                return []
-
-            buf = b""
-            pos = file_size
-            chunks_read = 0
-            while pos > 0 and chunks_read < _TAIL_MAX_CHUNKS:
-                read_size = min(_TAIL_CHUNK_BYTES, pos)
-                pos -= read_size
-                fh.seek(pos)
-                buf = fh.read(read_size) + buf
-                chunks_read += 1
-                if buf.count(b"\n") > max_lines or pos == 0:
-                    break
-    except OSError:
-        return []
-
-    text = buf.decode("utf-8", errors="replace")
-    lines = [ln for ln in text.splitlines() if ln.strip()]
-    if pos > 0 and lines:
-        # The first recovered line may be a fragment (the chunk boundary
-        # landed mid-line) unless the read reached the true start of the
-        # file (pos == 0) -- drop it rather than risk a false JSON-parse
-        # failure on a partial line.
-        lines = lines[1:]
-    return lines[-max_lines:]
-
-
-def _resolve_parent_model(transcript_path: Any) -> Optional[str]:
-    """Return the most recent `type == "assistant"` record's
-    `message.model` field from `transcript_path`, scanning the bounded
-    tail newest-first. Returns None on: no/unreadable transcript_path, or
-    no qualifying record found within the tail window -- callers must
-    treat None as "unresolved", not as "the parent model is empty", and
-    fail closed per module docstring "FAIL-CLOSED WHEN THE PARENT MODEL
-    CANNOT BE DETERMINED".
-    """
-    if not isinstance(transcript_path, str) or not transcript_path:
-        return None
-    for line in reversed(_tail_lines(transcript_path)):
-        try:
-            record = json.loads(line)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if not isinstance(record, dict) or record.get("type") != "assistant":
-            continue
-        message = record.get("message")
-        if not isinstance(message, dict):
-            continue
-        model = message.get("model")
-        if isinstance(model, str) and model.strip():
-            return model.strip()
-    return None
 
 
 def _deny_reason(subagent_type: str, resolved_model: str, note: str) -> str:
@@ -330,7 +250,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         note = "inherited -- no model param, no frontmatter pin"
 
     if effective_model is None:
-        parent_model = _clean_str(payload.get("model")) or _resolve_parent_model(
+        parent_model = _clean_str(payload.get("model")) or resolve_last_assistant_model(
             payload.get("transcript_path")
         )
         if parent_model is None:

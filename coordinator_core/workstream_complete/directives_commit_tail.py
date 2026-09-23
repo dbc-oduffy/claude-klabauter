@@ -1248,6 +1248,7 @@ def run_close_commit(
     """
     from coordinator_core.git.commit import CommitRefused, FilterUnsupported, commit_paths
     from coordinator_core.git.commit import hash_worktree_blobs_via_spawn
+    from coordinator_core.git.commit_trailers import apply_missing_trailers
     from coordinator_core.ops.ceremony.commit_message import compose_message
     from coordinator_core.ops.ceremony.push import PUSH_STATUS_NOT_ATTEMPTED
     from functools import partial
@@ -1285,6 +1286,18 @@ def run_close_commit(
             sha_unverified=False,
             diagnostics=[],
         )
+    # Engine-owned trailers (Session-Id/Deliverable-Id/Co-Authored-By): this
+    # route lands via `commit_paths`' commit-tree plumbing, which fires no
+    # git hooks, so `apply_missing_trailers` is its only attach point.
+    # `session_id` is this function's own caller-supplied parameter --
+    # passed as the override so attribution resolves the SAME session's
+    # transcript the caller already identified, never a blind env re-read.
+    message = apply_missing_trailers(
+        message,
+        root,
+        list(present_paths) + list(deleted_paths),
+        session_id_override=session_id,
+    )
     try:
         outcome = commit_paths(
             root,

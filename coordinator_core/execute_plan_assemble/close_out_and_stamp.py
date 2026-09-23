@@ -174,6 +174,7 @@ from coordinator_core.locked_write import LOCK_TIMEOUT_SECS, LockTimeout, Mutate
 from coordinator_core.machine_resolver import registry_get
 from coordinator_core.git.commit import CommitRefused, FilterUnsupported, commit_paths
 from coordinator_core.git.commit import hash_worktree_blobs_via_spawn
+from coordinator_core.git.commit_trailers import apply_missing_trailers
 from coordinator_core.ops.ceremony import git_native, post_commit_tail
 from coordinator_core.ops.ceremony.commit_message import compose_message
 from coordinator_core.ops.ceremony.push import PUSH_STATUS_NOT_ATTEMPTED
@@ -3085,6 +3086,12 @@ def close_out_and_stamp(
         # and calls `push_outstanding()` itself), so there is nothing here to
         # preserve a `push_mode` for.
         message = compose_message(subject=subject)
+        # Engine-owned trailers (Session-Id/Deliverable-Id/Co-Authored-By):
+        # this route lands via `commit_paths`' commit-tree plumbing, which
+        # fires no git hooks, so `apply_missing_trailers` is its only attach
+        # point -- same shared applier `ceremony.commit_v2` uses. Never
+        # blocks: degrades to `message` unchanged on any resolution failure.
+        message = apply_missing_trailers(message, root, stage_paths)
         try:
             outcome = commit_paths(
                 root,

@@ -844,6 +844,55 @@ class TestAutoCommitSession:
         ).stdout
         assert status == ""  # nothing left dirty
 
+    def test_commit_group_carries_co_authored_by(self, tmp_path, monkeypatch):
+        """`apply_missing_trailers` is wired into `_commit_group`'s own
+        `commit_paths` call (state/cross-repo/inbox/2026-09-23-example-game-repo-em-
+        commit-trailers-owned-by-engine.md) -- pinned end-to-end against a
+        real commit, using a UUID `session_id` (so the attribution
+        resolver's override actually validates) to locate a fake
+        transcript."""
+        from coordinator_core.git import commit_trailers as ct
+
+        ct._ATTRIBUTION_TRANSCRIPT_MEMO.clear()
+        ct._ATTRIBUTION_VALUE_MEMO.clear()
+
+        sid = "67676767-6767-4767-8767-676767676767"
+        claude_home = tmp_path / "fake-claude-home"
+        proj = claude_home / ".claude" / "projects" / "p"
+        proj.mkdir(parents=True)
+        (proj / f"{sid}.jsonl").write_text(
+            json.dumps(
+                {"type": "assistant", "message": {"model": "claude-haiku-4-5-20251001"}}
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        repo = _make_repo(tmp_path)
+        core.init(sid, cwd=str(repo))
+        (repo / "a.py").write_text("a")
+        scope.touch(sid, "a.py", cwd=str(repo))
+
+        result = asyncio.run(
+            safe_commit_offer._commit_group(
+                str(repo), {"paths": ["a.py"], "message": "attribution check"}, sid
+            )
+        )
+        assert result["committed"] is True
+
+        body = subprocess.run(
+            ["git", "log", "-1", "--format=%B", result["sha"]],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            **no_console_creationflags(),
+        ).stdout
+        assert "Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>" in body
+
+        ct._ATTRIBUTION_TRANSCRIPT_MEMO.clear()
+        ct._ATTRIBUTION_VALUE_MEMO.clear()
+
     # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
     # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
     # max 150021ms against a 2000ms bar). NOT the attribution kill -- that was
