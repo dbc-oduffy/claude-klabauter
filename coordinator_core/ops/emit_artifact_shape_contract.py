@@ -322,6 +322,10 @@ preserved there as the historical record; this port carries only the CURRENT pin
     and the bundle picks up `closed_partial` (in plan.schema.json since 2.19.0 but never
     regenerated). Enum-widen only, so additive. Aligns the bundle with cockpit 4.8.0/4.9.0
     PlanSummary.status. Constant-moves-first — DoE regenerates against this stamp.
+  12.0.0 (2026-09-24) MAJOR: `plan-tasks` 3.0.0 (PM-adopted, DoE cf21c5adc) requires
+    `pm_approved: true` on a deferred row. A const is a narrowing — a document 11.1.0
+    accepted can now fail — so MAJOR. Constant-moves-first — DoE regenerates against
+    this stamp.
 Bump rule (unchanged from JS): additive $defs/enum-widen changes stay minor; any
 non-additive change (enum-narrow, field/required removal) bumps MAJOR regardless of
 whether a vendored consumer version-asserts yet — two different bundle bodies must
@@ -386,7 +390,7 @@ from coordinator_core.session.declared_writes import declare_write
 # Constants
 # ---------------------------------------------------------------------------
 
-CONTRACT_VERSION = "11.1.0"
+CONTRACT_VERSION = "12.0.0"
 
 # Generator-provenance: emits artifact-shape-contract/artifact-shape-contract.
 # schema.json under the DoE-claude coordinator/ tree, explicitly NOT claude-klabauter

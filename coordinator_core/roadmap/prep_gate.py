@@ -364,8 +364,12 @@ def _writes_shape_refused_at_emit(
     ``inventory_mint.py``'s ``_refuse_if_glob``/``_refuse_if_directory_shaped``
     raise on exactly these two shapes when minting a spine, and
     ``pathspec.py``'s ``DirectoryShapedWriteError`` (via ``_declared_paths``)
-    raises the directory case again when an already-authored spine reaches
-    emit. Both refusals fire AFTER this bar has already stamped
+    raises the trailing-separator case again when an already-authored spine
+    reaches emit. A bare path naming an existing directory passes emit and
+    halts at the emitted workflow's claimability preflight instead, after an
+    executor is spent (claude-klabauter#45 class B): its scoped-commit
+    pathspec would stage every unrelated dirty file beneath it. Every one of
+    these refusals fires AFTER this bar has already stamped
     ``mise_prepped_*`` — moving the check here catches it before the stamp,
     not after (example-retrieval-repo, 2026-09-07: 12 certified rows carried a
     directory-shaped write; DR-*-terminal-test-phase-refuse-vs-omit.md
@@ -405,7 +409,8 @@ def _writes_shape_refused_at_emit(
     return _defect(
         "writes-unreadable-at-emit",
         f"rows with a glob or directory-shaped writes: entry: {', '.join(findings)} — "
-        "dispatch.emit refuses both shapes at emit time (inventory_mint.py, pathspec.py). "
+        "the dispatch path refuses both shapes (inventory_mint.py and pathspec.py at emit; "
+        "an existing directory at the emitted workflow's preflight). "
         "Fix: name a concrete file, or declare `writes_under: <dir>/` if the row chooses "
         "the filename at run time.",
     )
