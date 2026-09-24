@@ -49,6 +49,7 @@ from __future__ import annotations
 import ast
 import importlib
 import json
+import os
 import pkgutil
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -77,6 +78,16 @@ _PKG_DIR = str(Path(__file__).resolve().parent)
 
 _VALID_CLASSES = {"hard-deny", "advisory"}
 _VALID_MATCHERS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
+
+#: Opt-in guards, by module name -> the environment variable that enables
+#: each. Unless that variable is 1/true/on, hot-path discovery skips the module
+#: before reading its source or importing it. `discover_guard_names()` still
+#: lists them. Trap: `os.environ` is the caller's only because this engine runs
+#: in the hook's own process; a pooled engine must thread the caller's env.
+_ENV_GATED_GUARDS: Dict[str, str] = {
+    "block_em_strict_dispatch_code_write": "COORDINATOR_STRICT_DISPATCH",
+}
+_ENV_FLAG_TRUE = frozenset({"1", "true", "on"})
 
 
 class _Guard:
@@ -233,6 +244,9 @@ def _discover_guards() -> Tuple[List[_Guard], List[str]]:
     for mod_info in pkgutil.iter_modules([_PKG_DIR]):
         name = mod_info.name
         if name in ("engine", "__main__") or name.startswith("_"):
+            continue
+        flag = _ENV_GATED_GUARDS.get(name)
+        if flag and os.environ.get(flag, "").strip().lower() not in _ENV_FLAG_TRUE:
             continue
         meta = _cheap_guard_metadata(name)
         if meta is None:

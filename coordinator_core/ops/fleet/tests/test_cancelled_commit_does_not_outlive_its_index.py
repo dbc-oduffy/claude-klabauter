@@ -591,7 +591,11 @@ def test_the_distill_seam_is_the_only_porcelain_commit_and_keeps_its_pathspec():
     every one carries a pathspec, so none is a live instance of the bug this
     file exists to catch. If a seam was legitimately added, removed, or lost
     its pathspec, update this pin deliberately rather than widening the walk
-    above."""
+    above.
+
+    Narrowed to two: `push_suggestion.py` now commits through
+    `git_native.commit_authored_new_file` (dcee957ca8) and runs no porcelain
+    `git commit` of its own."""
     seams = {
         (path.name, has_pathspec)
         for path, _lineno, has_pathspec in _porcelain_commit_seams()
@@ -599,10 +603,9 @@ def test_the_distill_seam_is_the_only_porcelain_commit_and_keeps_its_pathspec():
     assert seams == {
         ("distill_apply_disposal.py", True),
         ("git_native.py", True),
-        ("push_suggestion.py", True),
     }, (
-        "expected exactly the three known porcelain `git commit` seams "
-        "(distill_apply_disposal.py, git_native.py, push_suggestion.py), all "
+        "expected exactly the two known porcelain `git commit` seams "
+        "(distill_apply_disposal.py, git_native.py), all "
         f"WITH a pathspec. Found: {sorted(seams)}. "
         "If a seam was legitimately added or removed, update this pin "
         "deliberately rather than widening the walk above."

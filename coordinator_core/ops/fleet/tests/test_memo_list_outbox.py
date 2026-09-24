@@ -174,7 +174,7 @@ class TestEnumeratesDrafts:
         assert candidate["summary"] == '"a summary"'
         assert candidate["kind"] == '"ask"'
         assert candidate["title"] == '"A draft memo"'
-        assert candidate["from"] == '"claude-klabauter-engine"'
+        assert candidate["from"] == '"sender-repo-em"'
         assert candidate["note"] is None
 
     def test_multiple_drafts_enumerated_sorted_by_filename(self, tmp_path):

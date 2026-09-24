@@ -67,7 +67,7 @@ from coordinator_core.write_guards._repo_root import resolve_repo_root
 
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
-PRIORITY = 40
+PRIORITY = 41  # hard-deny band; next free slot after block_subagent_plan_body_write (40)
 
 # Register B7: the earlier text ("Use the UE editor's checkout, or example-game-repo's
 # checkout tool, directly.") named tools outside this repo, so it read as a

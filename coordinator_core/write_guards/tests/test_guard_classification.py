@@ -150,6 +150,8 @@ import re
 from pathlib import Path
 from typing import Dict, List
 
+import pytest
+
 from coordinator_core.write_guards import engine
 
 # Every hard-deny guard, alphabetical. A hard-deny here means: the harm this
@@ -163,6 +165,7 @@ HARD_DENY_NAMES = [
     "block_derived_global_doctrine_write",
     "block_disarm_marker_sentinel_write",
     "block_duplicate_decision_record_id",
+    "block_em_strict_dispatch_code_write",
     "block_fleet_delegation_write",
     "block_foreign_family_sidecar_write",
     "block_goals_log_hand_write",
@@ -181,6 +184,7 @@ HARD_DENY_NAMES = [
     "guard_doctrine_surface_edits",
     "guard_memory_store_cap",
     "guard_settings_json_write",
+    "p4_checkout_before_edit",
     "validate_frontmatter_schema_deny",
 ]
 
@@ -199,6 +203,7 @@ ADVISORY_NAMES = [
     "check_claude_md_size",
     "guard_concrete_path_citations",
     "nudge_baton_body_bar",
+    "nudge_dangling_sizing_citation",
     "nudge_em_code_dispatch",
     "nudge_handoff_ac_shape",
     "nudge_handoff_author_lint",
@@ -215,6 +220,7 @@ ADVISORY_NAMES = [
     "nudge_shell_shaped_spawn",
     "nudge_tasks_state_folder_split",
     "nudge_terminal_artifact_edit",
+    "nudge_unattributed_process_time_figure",
     "nudge_unmarked_spawning_test",
     "nudge_windows_subprocess_popup",
     "validate_frontmatter_schema_advisory",
@@ -225,6 +231,14 @@ _EXPECTED_CLASS_BY_NAME: Dict[str, str] = {
     **{name: "hard-deny" for name in HARD_DENY_NAMES},
     **{name: "advisory" for name in ADVISORY_NAMES},
 }
+
+
+@pytest.fixture(autouse=True)
+def _enable_env_gated_guards(monkeypatch):
+    """Hot-path discovery hides an opt-in guard whose flag is unset; this file
+    classifies every guard, so it switches them all on."""
+    for flag in engine._ENV_GATED_GUARDS.values():
+        monkeypatch.setenv(flag, "1")
 
 
 def _guards() -> "List":

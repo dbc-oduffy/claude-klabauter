@@ -63,7 +63,7 @@ _spec = importlib.util.spec_from_file_location("handoff_deliverable_carry", _CLI
 _module = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_module)  # type: ignore[union-attr]
 
-from cc_invoke import require_dispatch_engine_on_path, child_env  # noqa: E402
+from cc_invoke import child_env  # noqa: E402
 
 
 def _write_frontmatter(path, **fields):
@@ -77,11 +77,9 @@ def _write_frontmatter(path, **fields):
 
 
 def _load_ops():
-    claude_klabauter_root = require_dispatch_engine_on_path()
-    from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
-    from coordinator_core.ops.mint_deliverable_id import mint
-
-    return read_frontmatter_field, mint
+    # The CLI's cascade names are placeholders until `_import_ops()` fills
+    # them (lazy imports, 1b6c42324a) — in-process callers must run it too.
+    return _module._import_ops()
 
 
 def test_carry_from_plan_frontmatter(tmp_path):

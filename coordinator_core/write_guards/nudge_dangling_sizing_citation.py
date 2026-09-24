@@ -110,12 +110,12 @@ from coordinator_core.write_guards._repo_root import resolve_repo_root
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
-# Advisory band; next free slot after nudge_session_display_name_as_identifier
-# (221) — see docs/wiki/write-guard-priority-bands.md for the band
+# Advisory band; next free slot after nudge_unattributed_process_time_figure
+# (223) — see docs/wiki/write-guard-priority-bands.md for the band
 # convention. No lower-numbered advisory guard keys off `sizing_object`
 # frontmatter or the `docs/plans/*.md` path shape for this fire condition,
 # so no same-surface collision applies.
-PRIORITY = 222
+PRIORITY = 224
 
 #: docs/plans/<name>.md — flat directory, one path segment, matching the
 #: plan's own scope ("any docs/plans frontmatter sizing_object citation").

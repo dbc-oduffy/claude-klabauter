@@ -106,12 +106,7 @@ from coordinator_core.write_guards.nudge_handoff_ac_shape import (
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
-# Advisory band; next free slot after nudge_handoff_ac_shape (220) as of
-# this plan's authoring — 222 was taken by wiki_changelog_prose_advisory
-# after the first draft. Re-check
-# `coordinator_core/write_guards/tests/test_guard_class_relay.py` at fire
-# time if this slot has also gone.
-PRIORITY = 223
+PRIORITY = 225  # advisory band; next free slot after nudge_dangling_sizing_citation (224)
 
 #: Finding codes this guard relays. AC_NO_CHECKBOXES is deliberately absent
 #: — see module docstring.
