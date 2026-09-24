@@ -5689,10 +5689,6 @@
       "_KEPT_TOP_KEYS"
     ],
     [
-      "coordinator_core/tests/test_publish_lane_budget.py",
-      "_RATIFIED_LANE_OPS"
-    ],
-    [
       "coordinator_core/tests/test_published_mirror_carries_shipped_symbols.py",
       "_DERIVED_REGISTRY_MODULES"
     ],

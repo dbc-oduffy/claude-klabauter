@@ -444,7 +444,6 @@ _KNOWN_UNCLASSIFIED_OPS_DEBT: frozenset[str] = frozenset(
         "cartography.count_references",
         "cartography.stack",
         "ceremony.init_anchor_injection_state",
-        "ceremony.scoped_git_commit",
         "ci.run_pip_audit",
         "ci.run_semgrep_scan",
         "ci.run_shellcheck_sweep",

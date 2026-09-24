@@ -79,20 +79,17 @@ def test_changes_file_is_what_the_gate_counts(parser, capsys, tmp_path):
     env = _envelope(
         parser,
         capsys,
-        ["parse-dryrun", "--stdout-file", str(stdout_file), "--source-dir", str(tmp_path),
-         "--changes-file", str(changes)],
+        ["parse-dryrun", "--stdout-file", str(stdout_file), "--changes-file", str(changes)],
     )
     assert env["preflight"]["step2_file_count"] == 2
     assert env["preflight"]["step2_has_deletions"] is False
     assert env["gates"]["step3_gate_fires"] is False
-    assert len(env["preflight"]["step2c_scan_file_list"]) == 40
 
     changes.write_text("NEW\thooks/x.py\nREMOVE\tgone.py\n", encoding="utf-8")
     env = _envelope(
         parser,
         capsys,
-        ["parse-dryrun", "--stdout-file", str(stdout_file), "--source-dir", str(tmp_path),
-         "--changes-file", str(changes)],
+        ["parse-dryrun", "--stdout-file", str(stdout_file), "--changes-file", str(changes)],
     )
     assert env["preflight"]["step2_has_deletions"] is True
     assert env["preflight"]["step2_sensitive_paths"] == ["hooks/"]

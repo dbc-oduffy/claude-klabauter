@@ -94,6 +94,7 @@ dead) and never against `run_commit_pipeline`/`git_native.py` directly.
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import shutil
@@ -391,9 +392,26 @@ def test_c6_commit_v2_process_time_gate(warm_root, tmp_path_factory) -> None:
     _git(lf_repo, "commit", "-q", "-m", "seed tracked file")
     lf_params_path = lf_repo / ".c6-lf-params.json"
     lf_committed: List[Optional[bool]] = []
+    # GLOBALLY UNIQUE CONTENT, NEVER PER-WINDOW `i`. `commit_v2.py` opts
+    # `commit_paths` into `detect_rollback=True` (P2d), which walks HEAD's
+    # first-parent line up to `window=1000` commits looking for an EXACT
+    # blob match to a value the path already held -- that is the real,
+    # intentional anti-clobber guard from `coordinator_core/git/
+    # rollback_check.py`, not a bug to route around. `i` resetting to 0 at
+    # the top of every window rewrites this path back to a blob it held
+    # ~40 first-parent commits ago (byte-identical to an earlier window's
+    # same `i`), which is indistinguishable from a genuine staged rollback
+    # and correctly earns `StagedRollbackRefused` for most of windows 2/3
+    # (depth shrinks from 39 toward 1 as `i` climbs back toward the
+    # previous window's tail, tripping K-016's depth>=2 rule until the
+    # last couple of dispatches). A real caller's successive edits never
+    # repeat a prior blob byte-for-byte, so a monotonic counter --
+    # never revisiting a value across the whole run -- is what makes this
+    # harness reproduce that shape instead of a self-inflicted rollback.
+    _lf_seq = itertools.count()
 
     def _dispatch_lf(i: int) -> int:
-        (lf_repo / lf_rel).write_text(f"harness rev {i}\n", encoding="utf-8")
+        (lf_repo / lf_rel).write_text(f"harness rev {next(_lf_seq)}\n", encoding="utf-8")
         _write_params(lf_params_path, paths=[lf_rel], message=f"c6 lf rev {i}")
         completed = _dispatch(_door_argv(door, lf_params_path, lf_repo), env)
         lf_committed.append(_parse_committed(completed.stdout))
@@ -407,9 +425,11 @@ def test_c6_commit_v2_process_time_gate(warm_root, tmp_path_factory) -> None:
     _git(crlf_repo, "commit", "-q", "-m", "seed eol=crlf file")
     crlf_params_path = crlf_repo / ".c6-crlf-params.json"
     crlf_committed: List[Optional[bool]] = []
+    # Same GLOBALLY UNIQUE CONTENT fix as `_lf_seq` above, same reason.
+    _crlf_seq = itertools.count()
 
     def _dispatch_crlf(i: int) -> int:
-        (crlf_repo / crlf_rel).write_bytes(f"@echo rev {i}\r\n".encode("ascii"))
+        (crlf_repo / crlf_rel).write_bytes(f"@echo rev {next(_crlf_seq)}\r\n".encode("ascii"))
         _write_params(crlf_params_path, paths=[crlf_rel], message=f"c6 crlf rev {i}")
         completed = _dispatch(_door_argv(door, crlf_params_path, crlf_repo), env)
         crlf_committed.append(_parse_committed(completed.stdout))

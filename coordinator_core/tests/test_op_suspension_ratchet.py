@@ -96,7 +96,7 @@ from typing import List, Optional
 import pytest
 import yaml
 
-from coordinator_core import ipc, op_budget_suspension, publish_lane
+from coordinator_core import ipc, op_budget_suspension
 from coordinator_core.op_budget_suspension import admitted_on
 from coordinator_core.telemetry.op_latency import sink_generations
 
@@ -483,22 +483,15 @@ def test_suspension_bar_ratchet_direction_not_current_value():
 
 
 # AC8 vectors -- each below is a LIVE attempt against the running mechanism, not a
-# reading of the source. A non-lane op (`queue.close`) is used throughout: it is
-# suspended, and it is NOT `ceremony.scoped_git_commit`, so any of these vectors
-# succeeding here would prove a general escape hatch rather than the one deliberate,
-# narrowly-scoped carve-out (DR-350) that this module's own docstring names.
+# reading of the source.
 _NON_LANE_SUSPENDED_OP = "session.boot_sweep"
 assert _NON_LANE_SUSPENDED_OP in op_budget_suspension.SUSPENDED_OPS
-assert _NON_LANE_SUSPENDED_OP not in publish_lane.PUBLISH_LANE_OPS
 
 
 def test_env_var_cannot_lift_suspension(monkeypatch):
-    """Vector 1: environment variable. Try the sanctioned lane's own env signal,
-    plus plausible-looking override names, against an op the lane does not name.
-    """
+    """Vector 1: environment variable. Try plausible-looking override names."""
     op = _NON_LANE_SUSPENDED_OP
     for env_name, env_value in (
-        (publish_lane.PUBLISH_LANE_ENV, "1"),
         ("COORDINATOR_SUSPENSION_BAR_MS", "999999"),
         ("COORDINATOR_OP_SUSPENSION_OVERRIDE", "1"),
         ("COORDINATOR_DISABLE_OP_SUSPENSION", "1"),
@@ -539,8 +532,6 @@ def test_op_param_cannot_lift_suspension():
         {"force": True},
         {"bypass_suspension": True},
         {"override": True},
-        {"publish_lane": True},
-        {"_publish_lane": True},
         {"suspension_bar_ms": 999999},
     ):
         ipc.allow_unstamped_dispatch()
@@ -555,57 +546,6 @@ def test_op_param_cannot_lift_suspension():
         assert error is not None and error["code"] == ipc.OP_SUSPENDED_ERROR, (
             f"params {params!r} lifted the suspension on {op} at dispatch"
         )
-
-
-def test_envelope_field_cannot_lift_suspension():
-    """Vector 3: envelope field. `_publish_lane` is a REAL envelope field with REAL
-    effect (DR-350) -- but only for the ops PUBLISH_LANE_OPS names. Stamping it on
-    an envelope for an op outside that closed list must not lift anything, at
-    either door.
-    """
-    op = _NON_LANE_SUSPENDED_OP
-    msg = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": op,
-        "_origin_worktree": ".",
-        "_publish_lane": True,
-        "params": {},
-    }
-
-    ipc.allow_unstamped_dispatch()
-    response = asyncio.run(ipc.dispatch_message(msg))
-    error = response.get("error")
-    assert error is not None and error["code"] == ipc.OP_SUSPENDED_ERROR, (
-        f"envelope field {publish_lane.PUBLISH_LANE_FIELD!r} lifted the suspension "
-        f"on {op} at dispatch"
-    )
-
-    with pytest.raises(op_budget_suspension.OpSuspendedError):
-        ipc.get_op_handler(op, msg)
-
-
-def test_publish_lane_field_is_scoped_to_its_closed_list_only():
-    """The one REAL lever (DR-350) proven not to generalise.
-
-    Stamping the lane field/env DOES lift the refusal for the one op the lane
-    names -- proving the field is live, not inert -- and then proving the exact
-    same signal does nothing for a sibling op one line above it in the same
-    roster. A vector that "does nothing at all" would be a weaker guard than one
-    that is proven live and then proven scoped.
-    """
-    lane_op = "ceremony.scoped_git_commit"
-    assert lane_op in publish_lane.PUBLISH_LANE_OPS
-
-    # The lane field lifts the dispatch-time refusal for the lane op...
-    budget = publish_lane.budget_for(lane_op, {publish_lane.PUBLISH_LANE_FIELD: True})
-    assert budget == publish_lane.PUBLISH_LANE_BUDGET_SECS
-
-    # ...and does nothing for a non-lane op carrying the identical signal.
-    budget = publish_lane.budget_for(
-        _NON_LANE_SUSPENDED_OP, {publish_lane.PUBLISH_LANE_FIELD: True}
-    )
-    assert budget is None
 
 
 def test_rows_without_a_sanctioned_fallback_name_none():

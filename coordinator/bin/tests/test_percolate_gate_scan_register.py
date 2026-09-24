@@ -121,8 +121,8 @@ def test_registry_codename_guard_splits_medium_render(tmp_path):
         ]
     )
     assert rc == 0
-    assert "read pre-transform" in out
-    assert "example-retrieval-repo" in out.split("read pre-transform")[1]
+    assert "registry_codenames guard" in out
+    assert "example-retrieval-repo" in out.split("registry_codenames guard")[1]
 
     # The plain (uncovered) MEDIUM group must show none — the covered hit
     # was routed to the new group, not duplicated into the old one.
@@ -234,7 +234,7 @@ def test_no_declared_transform_is_byte_identical_to_no_flag_run(tmp_path):
     rc_without_root, out_without_root = _run_cli(base_args)
 
     assert rc_with_root == rc_without_root == 0
-    assert "read pre-transform" not in out_with_root
+    assert "registry_codenames guard" not in out_with_root
     assert "NOTE: --percolate-root not passed" not in out_with_root
     assert "NOTE: --percolate-root not passed" in out_without_root
     # Stripping the added NOTE line leaves the two outputs identical --
@@ -310,5 +310,5 @@ def test_undeclared_target_degrades_to_no_split(tmp_path):
         ]
     )
     assert rc == 0
-    assert "read pre-transform" not in out
+    assert "registry_codenames guard" not in out
     assert "example-retrieval-repo" in out

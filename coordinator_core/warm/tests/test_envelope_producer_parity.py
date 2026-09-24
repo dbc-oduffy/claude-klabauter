@@ -21,23 +21,17 @@ FIVE LEGS, none of which may be dropped.
   LEG 1 (`test_envelope_field_sets_match`) -- the two field sets, read by
   DIFFERENT means from the two sources (`ast` on the Python side, an
   anchored text scan on the C side), compared per field. A key given as an
-  attribute on the Python side (`publish_lane.PUBLISH_LANE_FIELD`,
-  `settings_home_claim.SETTINGS_HOME_FIELD`) is resolved by importing that
-  module and reading the constant, never by hardcoding the string here --
-  hardcoding it would make this test agree with itself the moment the
-  constant changed instead of the source.
+  attribute on the Python side (`settings_home_claim.SETTINGS_HOME_FIELD`)
+  is resolved by importing that module and reading the constant, never by
+  hardcoding the string here -- hardcoding it would make this test agree
+  with itself the moment the constant changed instead of the source.
 
-  LEG 2 (`test_the_exception_list_is_closed_and_pinned`) -- `_publish_lane`
-  is the one known, DELIBERATE one-sided field
-  (`publish_lane.PUBLISH_LANE_OPS` is a closed list of one member,
-  `ceremony.scoped_git_commit`, killed 2026-08-23 under DR-344 and absent
-  from `coordinator_core/ops/` -- the lane has no reachable op, so the
-  door omitting the field costs nothing today, and adding it to `door.c`
-  would widen which route can enter the one lane the 2s brightline does
-  not govern, on a dead roster, for no caller). The exception set is
-  asserted to be EXACTLY `{"_publish_lane"}`; a second one-sided field
-  must fail here rather than being silently absorbed into a list that
-  grows without a reader.
+  LEG 2 (`test_the_exception_list_is_closed_and_pinned`) -- `_settings_home`
+  is the one known, DELIBERATE one-sided field (see the comment above
+  `_KNOWN_ONE_SIDED_FIELDS` below). The exception set is asserted to be
+  EXACTLY `{"_settings_home"}`; a second one-sided field must fail here
+  rather than being silently absorbed into a list that grows without a
+  reader.
 
   LEG 3 (`test_the_parity_check_discriminates`) -- the parity predicate
   itself, run against synthetic fixture strings (never the real sources)
@@ -90,19 +84,18 @@ _DOOR_POSIX_C = _ENGINE_ROOT / "coordinator_core" / "warm" / "door" / "door_posi
 
 _INNER_FUNC_NAME = "_try_warm_dispatch_inner"
 
-#: `_publish_lane`, `_env`, and `_settings_home` are the three recorded,
-#: deliberate asymmetries, not defects this module exists to flag -- see
-#: module docstring LEG 2. `_env` is no longer one-sided: `client.py` stamps it
-#: too, carrying ONLY the per-session guard overrides (`env_forwarding.
-#: CALLER_PREFIXES`) the doors also carry there. Its identity fields stay on
-#: `_caller`/`_settings_home` -- eng-director F1's PERMANENT dual-read split
-#: (server dual-read, not producer migration) is about those, and holds.
-#: `_settings_home` (`settings_home_claim.SETTINGS_HOME_FIELD`) is one-sided
-#: for that reason: the two doors folded their own top-level stamp of it into
-#: a REFUSE-mode `_env` entry, while `client.py` keeps stamping the legacy
-#: top-level field. Any other one-sided field is unpinned and must fail
-#: `test_envelope_field_sets_match`.
-_KNOWN_ONE_SIDED_FIELDS = frozenset({"_publish_lane", "_settings_home"})
+#: `_settings_home` is the one recorded, deliberate asymmetry, not a defect
+#: this module exists to flag -- see module docstring LEG 2. `_env` is no
+#: longer one-sided: `client.py` stamps it too, carrying ONLY the per-session
+#: guard overrides (`env_forwarding.CALLER_PREFIXES`) the doors also carry
+#: there. Its identity fields stay on `_caller`/`_settings_home` -- eng-director
+#: F1's PERMANENT dual-read split (server dual-read, not producer migration)
+#: is about those, and holds. `_settings_home`
+#: (`settings_home_claim.SETTINGS_HOME_FIELD`) is one-sided because the two
+#: doors folded their own top-level stamp of it into a REFUSE-mode `_env`
+#: entry, while `client.py` keeps stamping the legacy top-level field. Any
+#: other one-sided field is unpinned and must fail `test_envelope_field_sets_match`.
+_KNOWN_ONE_SIDED_FIELDS = frozenset({"_settings_home"})
 
 
 def _resolve_key(node: ast.expr, local_str_bindings: "dict[str, str] | None" = None) -> "str | None":
@@ -113,8 +106,7 @@ def _resolve_key(node: ast.expr, local_str_bindings: "dict[str, str] | None" = N
     producer stamps).
 
     A string constant resolves directly. An attribute access
-    (`publish_lane.PUBLISH_LANE_FIELD`, `settings_home_claim.
-    SETTINGS_HOME_FIELD`) resolves by IMPORTING the named module and
+    (`settings_home_claim.SETTINGS_HOME_FIELD`) resolves by IMPORTING the named module and
     reading the constant off it -- never by hardcoding the literal string,
     which would make this test agree with itself when the constant
     changes rather than with the source it is reading. A bare name
@@ -597,25 +589,22 @@ def test_both_doors_agree_with_each_other():
 
 
 def test_the_exception_list_is_closed_and_pinned():
-    """`_KNOWN_ONE_SIDED_FIELDS` is exactly `{"_publish_lane", "_env",
-    "_settings_home"}` -- pinned so a FOURTH one-sided field cannot be added
-    to the exception set without this failing and forcing a reviewer to
-    look at it, and so a field silently REMOVED from the exception set
-    (making it start being enforced) is equally visible."""
+    """`_KNOWN_ONE_SIDED_FIELDS` is exactly `{"_settings_home"}` -- pinned so a
+    SECOND one-sided field cannot be added to the exception set without this
+    failing and forcing a reviewer to look at it, and so a field silently
+    REMOVED from the exception set (making it start being enforced) is
+    equally visible."""
     assert _KNOWN_ONE_SIDED_FIELDS == frozenset(
-        {"_publish_lane", "_settings_home"}
+        {"_settings_home"}
     ), (
         "the exception list changed without this pin being updated -- "
-        f"got {sorted(_KNOWN_ONE_SIDED_FIELDS)}. `_publish_lane` (publish_"
-        "lane.PUBLISH_LANE_OPS is a closed list of one, ceremony.scoped_"
-        "git_commit, killed under DR-344) and "
-        "`_settings_home` (folded into a door-side `_env` REFUSE entry, "
-        "still a legacy top-level field on `client.py`) are the two "
-        "fields this module accepts as one-sided; any other entry is "
-        "undocumented"
+        f"got {sorted(_KNOWN_ONE_SIDED_FIELDS)}. `_settings_home` (folded "
+        "into a door-side `_env` REFUSE entry, still a legacy top-level "
+        "field on `client.py`) is the one field this module accepts as "
+        "one-sided; any other entry is undocumented"
     )
 
-    # `_publish_lane` is genuinely one-sided against the REAL sources today
+    # `_settings_home` is genuinely one-sided against the REAL sources today
     # -- if a future change adds it to door.c, the exception silently stops
     # doing anything (the field would already agree) and this leg should
     # keep passing; but it must never be exempting an ALREADY-two-sided
@@ -639,7 +628,7 @@ def test_a_second_one_sided_field_is_not_silently_absorbed():
     """Half of LEG 2: a one-sided field NOT in the exception list must fail
     the parity predicate rather than being quietly waved through the way an
     open-ended or unpinned exception mechanism would."""
-    python_fields = {"_engine_token", "_session_id", "_publish_lane", "_new_field_nobody_pinned"}
+    python_fields = {"_engine_token", "_session_id", "_settings_home", "_new_field_nobody_pinned"}
     c_fields = {"_engine_token", "_session_id"}
 
     mismatches = _parity_mismatches(python_fields, c_fields, _KNOWN_ONE_SIDED_FIELDS)
@@ -647,7 +636,7 @@ def test_a_second_one_sided_field_is_not_silently_absorbed():
         "a second, unpinned one-sided field was absorbed rather than "
         f"failing the predicate: {mismatches!r}"
     )
-    assert not any("_publish_lane" in m for m in mismatches), (
+    assert not any("_settings_home" in m for m in mismatches), (
         "the pinned exception field was NOT excused by the predicate"
     )
 

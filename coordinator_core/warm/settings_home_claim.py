@@ -27,12 +27,9 @@ and making it able to (per-request resolution over the request envelope, followi
 resolution. What this closes is the SILENCE: a request whose caller named a different home
 than the serving process resolved is refused, never answered.
 
-SHAPE MIRRORED FROM `coordinator_core.publish_lane`, deliberately and for the same reason.
-That module already carries one caller-owned fact across the same pipe: a small,
-stdlib-only module both ends import, one underscore-prefixed envelope field, absence read
-as "no claim" rather than as a value. This is that pattern's second instance, not a new
-convention -- see `publish_lane.PUBLISH_LANE_FIELD`'s own note on why a warm server's
-`os.environ` cannot answer a question about the caller.
+The same pattern `_caller` uses on the same pipe: a caller-owned fact carried across an
+underscore-prefixed envelope field, absence read as "no claim" rather than as a value --
+because a warm server's `os.environ` cannot answer a question about the caller.
 
 ABSENCE IS NOT A MISMATCH, and that is load-bearing. A request carrying no claim resolves
 exactly as it does today -- the plain user path (no override set anywhere) is byte-for-byte
@@ -76,7 +73,7 @@ __all__ = [
 SETTINGS_HOME_ENV = "COORDINATOR_SETTINGS_HOME"
 
 #: The JSON-RPC envelope field carrying the caller's resolved settings home,
-#: underscore-prefixed like `_session_id`, `_engine_token` and `_publish_lane` to mark it
+#: underscore-prefixed like `_session_id` and `_engine_token` to mark it
 #: transport metadata rather than an op param.
 SETTINGS_HOME_FIELD = "_settings_home"
 

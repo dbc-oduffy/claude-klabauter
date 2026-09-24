@@ -81,7 +81,7 @@ class _SubprocessSpy:
     would surface as an unrecognized/unhandled call rather than silently
     doing nothing."""
 
-    def __init__(self, *, dryrun_stdout, real_stdout, parse1_stdout, parse2_stdout,
+    def __init__(self, *, dryrun_stdout, real_stdout, parse2_stdout,
                  scan_stdout="Content-leakage scan:\n  HIGH (credential/secret shapes -- BLOCKS publish):\n    (none)\n  MEDIUM (identity / internal paths / peer-repo names -- surfaces to gate):\n    (none)\n  LOW (informational -- commit SHAs, doctrine language):\n    (none)\n",
                  scan_returncode=0,
                  drift_stdout="anchor_mode: 30day-fallback\n",
@@ -111,7 +111,6 @@ class _SubprocessSpy:
         self.pathspec_from_file_content: list[str] | None = None
         self._dryrun_stdout = dryrun_stdout
         self._real_stdout = real_stdout
-        self._parse1_stdout = parse1_stdout
         self._parse2_stdout = parse2_stdout
         self._scan_stdout = scan_stdout
         self._scan_returncode = scan_returncode
@@ -239,10 +238,8 @@ class _SubprocessSpy:
             return _completed(self._scan_returncode, self._scan_stdout, "")
         if str(_mod._PERCOLATE_GATE) in joined and "inverse-drift" in cmd:
             return _completed(0, self._drift_stdout, "")
-        if str(_mod._PARSE_DRYRUN) in joined and "--medium-leak-count" in cmd:
-            return _completed(0, self._parse2_stdout, "")
         if str(_mod._PARSE_DRYRUN) in joined:
-            return _completed(0, self._parse1_stdout, "")
+            return _completed(0, self._parse2_stdout, "")
         if "run-all-checks.py" in joined:
             return _completed(self._ci_returncode, self._ci_stdout, "")
 
@@ -273,10 +270,6 @@ def _dryrun_stdout() -> str:
 
 def _real_stdout() -> str:
     return "NEW: added-file.md\nUPDATE: changed-file.md\n"
-
-
-def _parse1_stdout() -> str:
-    return json.dumps({"preflight": {"step2c_scan_file_list": []}})
 
 
 def _parse2_stdout(gate_fires: bool = False) -> str:
@@ -340,8 +333,7 @@ def _install_sibling_cli_stub(monkeypatch, spy: "_SubprocessSpy") -> None:
 
         def _main(argv):
             if str(script) == str(_mod._PARSE_DRYRUN):
-                out = spy._parse2_stdout if "--medium-leak-count" in argv else spy._parse1_stdout
-                print(out, end="")
+                print(spy._parse2_stdout, end="")
                 return 0
             if str(script) == str(_mod._PERCOLATE_GATE):
                 if "scan-secrets" in argv:
@@ -487,7 +479,6 @@ def _run_round(tmp_path, monkeypatch, *, ci_returncode=0, ci_exists=True, gate_f
     spy = _SubprocessSpy(
         dryrun_stdout=_dryrun_stdout(),
         real_stdout=_real_stdout(),
-        parse1_stdout=_parse1_stdout(),
         parse2_stdout=_parse2_stdout(gate_fires),
         ci_returncode=ci_returncode,
         scan_returncode=scan_returncode,
@@ -1051,7 +1042,6 @@ def test_inverse_drift_failure_returns_fail(tmp_path, monkeypatch):
     spy = _SubprocessSpy(
         dryrun_stdout=_dryrun_stdout(),
         real_stdout=_real_stdout(),
-        parse1_stdout=_parse1_stdout(),
         parse2_stdout=_parse2_stdout(),
     )
     _install_manifest_stub(monkeypatch, spy)
@@ -1099,7 +1089,6 @@ def test_real_run_failure_returns_fail(tmp_path, monkeypatch):
     spy = _SubprocessSpy(
         dryrun_stdout=_dryrun_stdout(),
         real_stdout=_real_stdout(),
-        parse1_stdout=_parse1_stdout(),
         parse2_stdout=_parse2_stdout(),
     )
     _install_manifest_stub(monkeypatch, spy)
@@ -1140,7 +1129,6 @@ def test_real_run_partial_row_failure_exits_nonzero_with_verdict(tmp_path, monke
     spy = _SubprocessSpy(
         dryrun_stdout=_dryrun_stdout(),
         real_stdout=_real_stdout(),
-        parse1_stdout=_parse1_stdout(),
         parse2_stdout=_parse2_stdout(),
     )
     _install_manifest_stub(monkeypatch, spy)
@@ -1190,7 +1178,6 @@ def test_real_run_partial_row_failure_via_stderr_only_still_fails(tmp_path, monk
     spy = _SubprocessSpy(
         dryrun_stdout=_dryrun_stdout(),
         real_stdout=_real_stdout(),
-        parse1_stdout=_parse1_stdout(),
         parse2_stdout=_parse2_stdout(),
     )
     _install_manifest_stub(monkeypatch, spy)
@@ -1252,7 +1239,6 @@ def test_fully_failed_real_run_keeps_existing_exit_code(tmp_path, monkeypatch):
     spy = _SubprocessSpy(
         dryrun_stdout=_dryrun_stdout(),
         real_stdout=_real_stdout(),
-        parse1_stdout=_parse1_stdout(),
         parse2_stdout=_parse2_stdout(),
     )
     _install_manifest_stub(monkeypatch, spy)
@@ -1336,7 +1322,6 @@ def test_review_warnings_yield_pass_with_warnings_verdict(tmp_path, monkeypatch)
     spy2 = _SubprocessSpy(
         dryrun_stdout=_dryrun_stdout(),
         real_stdout=real_stdout_with_warning,
-        parse1_stdout=_parse1_stdout(),
         parse2_stdout=_parse2_stdout(),
     )
     _install_manifest_stub(monkeypatch, spy2)
@@ -1452,7 +1437,6 @@ def test_lock_spans_real_run_and_commit(tmp_path, monkeypatch):
     spy = _SubprocessSpy(
         dryrun_stdout=_dryrun_stdout(),
         real_stdout=_real_stdout(),
-        parse1_stdout=_parse1_stdout(),
         parse2_stdout=_parse2_stdout(),
     )
     _install_manifest_stub(monkeypatch, spy)
@@ -1590,7 +1574,6 @@ def test_lock_timeout_fails_loud_before_real_run(tmp_path, monkeypatch):
     spy = _SubprocessSpy(
         dryrun_stdout=_dryrun_stdout(),
         real_stdout=_real_stdout(),
-        parse1_stdout=_parse1_stdout(),
         parse2_stdout=_parse2_stdout(),
     )
     _install_manifest_stub(monkeypatch, spy)
@@ -1672,7 +1655,6 @@ def test_failed_row_refuses_with_reason_and_no_push(tmp_path, monkeypatch):
     spy = _SubprocessSpy(
         dryrun_stdout=_dryrun_stdout(),
         real_stdout=_real_stdout(),
-        parse1_stdout=_parse1_stdout(),
         parse2_stdout=_parse2_stdout(),
     )
     _install_manifest_stub(monkeypatch, spy)
@@ -1931,7 +1913,6 @@ def test_crash_after_commit_before_ci_smoke_leaves_marker_standing(tmp_path, mon
     spy = _SubprocessSpy(
         dryrun_stdout=_dryrun_stdout(),
         real_stdout=_real_stdout(),
-        parse1_stdout=_parse1_stdout(),
         parse2_stdout=_parse2_stdout(),
     )
     _install_manifest_stub(monkeypatch, spy)
@@ -2036,7 +2017,6 @@ def test_review_warnings_refusal_leaves_marker_standing_even_with_no_publish(tmp
     spy = _SubprocessSpy(
         dryrun_stdout=_dryrun_stdout(),
         real_stdout=real_stdout_with_warning,
-        parse1_stdout=_parse1_stdout(),
         parse2_stdout=_parse2_stdout(),
     )
     _install_manifest_stub(monkeypatch, spy)
@@ -2079,7 +2059,6 @@ def test_review_warnings_refuse_publish_and_print_notice_naming_reason(tmp_path,
     spy = _SubprocessSpy(
         dryrun_stdout=_dryrun_stdout(),
         real_stdout=real_stdout_with_warning,
-        parse1_stdout=_parse1_stdout(),
         parse2_stdout=_parse2_stdout(),
     )
     _install_manifest_stub(monkeypatch, spy)
@@ -2134,7 +2113,6 @@ def test_noop_with_dest_already_in_sync_does_nothing(tmp_path, monkeypatch):
     spy = _SubprocessSpy(
         dryrun_stdout="",
         real_stdout="",
-        parse1_stdout=_parse1_stdout(),
         parse2_stdout=_parse2_stdout(),
         dest_ahead_stdout="# branch.ab +0 -0\n",
     )
@@ -2172,7 +2150,6 @@ def test_realrun_noop_with_unpushed_dest_commits_still_publishes(tmp_path, monke
     spy = _SubprocessSpy(
         dryrun_stdout=_dryrun_stdout(),
         real_stdout="",
-        parse1_stdout=_parse1_stdout(),
         parse2_stdout=_parse2_stdout(),
         dest_ahead_stdout="# branch.ab +1 -0\n",
     )
@@ -2220,7 +2197,6 @@ def test_push_happens_inside_held_lock(tmp_path, monkeypatch):
     spy = _SubprocessSpy(
         dryrun_stdout=_dryrun_stdout(),
         real_stdout=_real_stdout(),
-        parse1_stdout=_parse1_stdout(),
         parse2_stdout=_parse2_stdout(),
     )
     _install_manifest_stub(monkeypatch, spy)
@@ -3051,7 +3027,6 @@ def test_default_no_op_reports_pass_noop_from_single_real_run(tmp_path, monkeypa
     spy = _SubprocessSpy(
         dryrun_stdout="",
         real_stdout="",
-        parse1_stdout=_parse1_stdout(),
         parse2_stdout=_parse2_stdout(),
         dest_ahead_stdout="# branch.ab +0 -0\n",
     )

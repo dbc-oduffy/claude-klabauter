@@ -9,6 +9,7 @@ Spec backlink: state/sizings/2026-08-18-one-entry-point-owns-the-mirror-publish.
 """
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -97,6 +98,20 @@ class _RecordingLockCtx:
         return False
 
 
+_ROW_DESTS = {
+    "claude-klabauter-publish-repo-toplevel": "X:/claude-klabauter",
+    "claude-klabauter-bin": "X:/claude-klabauter/bin",
+    "claude-klabauter": "X:/claude-klabauter/coordinator",
+}
+_ROW_FILES = {
+    "claude-klabauter-publish-repo-toplevel": "README.md",
+    "claude-klabauter-bin": "bin/.percolate-ignore",
+    "claude-klabauter": "coordinator/agents/apm.md",
+}
+
+scanned: dict = {}
+
+
 def _wire(monkeypatch, order, *, dirty=False, scan_rc=0, drift_anchor="marker", drift_real=False):
     targets = [
         "claude-klabauter-publish-repo-toplevel",
@@ -113,10 +128,6 @@ def _wire(monkeypatch, order, *, dirty=False, scan_rc=0, drift_anchor="marker", 
         "_round_held_lock",
         lambda target, **kw: _RecordingLockCtx(order, target, **kw),
     )
-    # `_split_stdout_by_row_dest` survives chunk C4 for exactly this caller
-    # (`_run_gate_legs`'s scan-secrets/inverse-drift row attribution) --
-    # unrelated to the commit pathspec, so still monkeypatched here.
-    monkeypatch.setattr(_mod._round, "_split_stdout_by_row_dest", lambda s, d: [("X:/claude-klabauter", s)])
     # Chunk C4: the commit pathspec now comes from a `RoundManifest`
     # `_read_fresh_round_manifest` reads off disk, never from `_extract_
     # change_lines`/`_build_commit_pathspec` parsing publish.py's stdout
@@ -127,14 +138,17 @@ def _wire(monkeypatch, order, *, dirty=False, scan_rc=0, drift_anchor="marker", 
         _mod._round,
         "_read_fresh_round_manifest",
         lambda repo_root, not_before: _mod._round._RoundManifest(
-            round_id="test", added_or_updated=frozenset({"a.py"})
+            round_id="test", added_or_updated=frozenset(_ROW_FILES.values())
         ),
     )
     monkeypatch.setattr(
         _mod._round, "_push_dest", lambda d: subprocess.CompletedProcess([], 0, "", "")
     )
 
-    monkeypatch.setattr(_mod, "_row_paths", lambda r: {n: ("X:/src", "X:/claude-klabauter") for n in targets})
+    # Nested dests, like the real mirror: the toplevel row's dest IS the repo
+    # root, so only deepest-prefix attribution keeps the other rows' files out
+    # of its scan.
+    monkeypatch.setattr(_mod, "_row_paths", lambda r: {n: ("X:/src", _ROW_DESTS[n]) for n in targets})
     monkeypatch.setattr(_mod._round, "_resolve_central_state", lambda: None)
 
     publish_calls = []
@@ -145,12 +159,10 @@ def _wire(monkeypatch, order, *, dirty=False, scan_rc=0, drift_anchor="marker", 
             order.append("publish")
             publish_calls.append(cmd)
             return subprocess.CompletedProcess(cmd, 0, "Rows succeeded: 3/3", "")
-        if "parse-dryrun" in joined:
-            return subprocess.CompletedProcess(
-                cmd, 0, '{"preflight": {"step2c_scan_file_list": ["a.py"]}}', ""
-            )
         if "scan-secrets" in joined:
             order.append("scan")
+            files_arg = Path(cmd[cmd.index("--files") + 1])
+            scanned[cmd[cmd.index("--target") + 1]] = files_arg.read_text(encoding="utf-8").split()
             return subprocess.CompletedProcess(cmd, scan_rc, "", "")
         if "inverse-drift" in joined:
             order.append("drift")
@@ -192,7 +204,7 @@ def _wire(monkeypatch, order, *, dirty=False, scan_rc=0, drift_anchor="marker", 
     # "publish reported no changed files; nothing to commit" and returns before the
     # commit step -- which is why the ordering assertions stopped seeing "commit".
     # Mirrors `test_percolate_round.py::_install_manifest_stub`'s shape.
-    declared = frozenset({"a.py"})
+    declared = frozenset(_ROW_FILES.values())
 
     def _fake_read_fresh_manifest(repo_root, not_before):
         return _mod._round._RoundManifest(
@@ -467,7 +479,6 @@ def test_a_resolution_abort_is_not_reported_as_an_empty_target_set(monkeypatch, 
     operator to look for a missing topology file."""
     monkeypatch.setattr(_mod, "_mirror_groups", lambda root: None)
     monkeypatch.setattr(_mod._round, "_resolve_percolate_root", lambda override: "/p")
-    monkeypatch.setattr(_mod.publish_lane, "declare_lane", lambda: None)
 
     rc = _mod.main(["claude-klabauter", "--list"])
 
@@ -475,3 +486,21 @@ def test_a_resolution_abort_is_not_reported_as_an_empty_target_set(monkeypatch, 
     assert rc == _mod._round._EXIT_USAGE
     assert "no registered publish targets" not in captured.err
     assert "resolution failed" in captured.err
+
+
+def test_each_row_scans_the_dest_copies_of_its_own_manifest_files(tmp_path, monkeypatch):
+    """The scan list is the manifest's paths joined to the repo root -- the
+    bytes that ship -- attributed to the deepest enclosing row dest. The
+    stdout-derived list it replaced dropped the `--- <subdir> ---` header and
+    joined basenames to the source root: `bin/.percolate-ignore` scanned as
+    `<source>/.percolate-ignore`, and nested files were never scanned."""
+    order: List[str] = []
+    targets, _ = _wire(monkeypatch, order)
+    scanned.clear()
+
+    _mod.main(
+        ["claude-klabauter", "--percolate-root", str(tmp_path), "--invocation-authorized"]
+    )
+
+    root = Path(os.path.realpath("X:/claude-klabauter"))
+    assert scanned == {t: [str(root / _ROW_FILES[t])] for t in targets}, scanned

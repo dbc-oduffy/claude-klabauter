@@ -262,7 +262,7 @@ def test_try_warm_dispatch_inner_forwards_params_verbatim():
     body = source[match.end():match.end() + 4000]
     # None of the additive envelope-level stamps this function performs may
     # touch `msg["params"]` or `request["params"]` -- they are all siblings
-    # of it (`_caller`, `_publish_lane`, `_settings_home_claim`), never a
+    # of it (`_caller`, `_settings_home_claim`), never a
     # rebuild of `params` itself.
     assert 'request["params"]' not in body
     assert 'msg["params"]' not in body

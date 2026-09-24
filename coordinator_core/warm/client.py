@@ -1108,26 +1108,8 @@ def _try_warm_dispatch_inner(
         "agent_id": caller.agent_id,
         "pid": caller.pid,
     }
-    # Publish-lane seam (DR-350), the same shape and the same reason as `_caller`
-    # directly above: a long-lived warm server's `os.environ` reflects whoever SPAWNED
-    # it, never the caller of any given request, so a fact about THIS caller has to
-    # cross the pipe explicitly rather than be re-resolved server-side. Stamped only
-    # when this client process is itself inside a declared percolate/publish round;
-    # absent otherwise, never sent as `false`, so a server reads absence exactly as it
-    # reads an older client -- not in the lane.
-    #
-    # Imported inside the function, not at module scope, because this module holds a
-    # strict import budget: it sits on every invocation's cold-start preamble and does
-    # not even carry a top-level `import os` (see `is_warm_enabled`). `publish_lane` is
-    # stdlib-only and its parent package is necessarily already loaded to have reached
-    # this module at all, so the cost after the first call is a `sys.modules` lookup.
-    from coordinator_core import publish_lane
-
-    if publish_lane.env_declares_lane():
-        request[publish_lane.PUBLISH_LANE_FIELD] = True
-
-    # Settings-home seam, third instance of the same shape as `_caller` and
-    # `_publish_lane` directly above and stamped for the same reason: the warm server
+    # Settings-home seam, the same shape as `_caller` directly above and stamped for
+    # the same reason: the warm server
     # resolved `settings_home()` once, from the environment of whoever SPAWNED it, and is
     # keyed on (user, engine-clone, engine-token) -- never on the settings home. Without
     # this field a caller that set `COORDINATOR_SETTINGS_HOME` is answered against a home
@@ -1139,8 +1121,8 @@ def _try_warm_dispatch_inner(
     # explicitly set the variable, so the ordinary no-override invocation stamps nothing
     # and is unchanged byte-for-byte.
     #
-    # Imported inside the function on the same import-budget grounds as `publish_lane`:
-    # this module sits on every invocation's cold-start preamble. The module is
+    # Imported inside the function on the same import-budget grounds as `_caller`
+    # above: this module sits on every invocation's cold-start preamble. The module is
     # stdlib-only and its own `_settings_home` import is deferred behind the
     # variable-is-set check, so an ordinary call pays one `os.environ.get`.
     from coordinator_core.warm import settings_home_claim

@@ -155,6 +155,42 @@ def test_is_a_commit_refused_subclass(tmp_path):
     assert issubclass(StagedRollbackRefused, CommitRefused)
 
 
+def test_reused_content_across_a_burst_is_a_real_rollback_not_a_bug(tmp_path):
+    """Regression for the `test_commit_v2_process_time_gate.py` C6
+    gate-corruption-guard failure (2026-09-24): a harness that rewrites a
+    path through the SAME sequence of exact byte values more than once
+    (`"harness rev {i}"` reset to `i=0` at the top of every burst) is
+    indistinguishable, blob-for-blob, from operator reverts and correctly
+    earns `StagedRollbackRefused` for most of the second burst -- this is
+    `rollback_check.find_exact_blob_rollbacks` (K-016) working as designed,
+    not a `commit_paths` defect. A monotonic value that never repeats a
+    prior blob is what a real caller's successive edits look like, and it
+    is never refused."""
+    repo = _repo(tmp_path)
+    for i in range(10):
+        _commit(repo, "p.txt", f"harness rev {i}\n", f"burst1 rev {i}", detect_rollback=True)
+
+    refused = 0
+    for i in range(10):
+        try:
+            _commit(repo, "p.txt", f"harness rev {i}\n", f"burst2 rev {i}", detect_rollback=True)
+        except StagedRollbackRefused:
+            refused += 1
+    assert refused > 0, (
+        "reusing burst1's exact byte sequence in burst2 should trip the "
+        "anti-rollback guard at least once -- if this assertion fails the "
+        "guard regressed, not the harness"
+    )
+
+    # The fix: a strictly monotonic value (never repeats a prior blob)
+    # never trips the guard, however many bursts run.
+    seq = iter(range(10, 10_000))
+    for _burst in range(3):
+        for _ in range(10):
+            n = next(seq)
+            _commit(repo, "p.txt", f"harness rev {n}\n", f"unique rev {n}", detect_rollback=True)
+
+
 def test_commit_v2_pin_passes_detect_rollback(tmp_path):
     """Pin: `ceremony.commit_v2`'s `commit_paths` call always passes
     `detect_rollback=True`."""

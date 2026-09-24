@@ -348,7 +348,6 @@ def _dump_op_timeouts() -> dict:
         mutation_read_deadline_for,
     )
     from coordinator_core.op_scopes import OP_KEY_SCOPE
-    from coordinator_core import publish_lane
 
     # A second clamp pass over `payload` (re-applying `min(budget,
     # CEREMONY_BUDGET_SECS)` to every entry) was deliberately dropped here: it
@@ -364,23 +363,7 @@ def _dump_op_timeouts() -> dict:
         if is_ceremony_method(op):
             payload[op] = CEREMONY_BUDGET_SECS
 
-    # Publish-lane projection (DR-350). This dump is spawned as a CHILD of the caller
-    # sizing its own kill ceiling, so it inherits that caller's environment and can see
-    # the lane declaration directly -- no envelope, and no argument to thread through
-    # the CLI. Projecting it matters for the same reason ceremony ops are projected
-    # explicitly above: a lane op reporting 2s here would hand a publish round a ~4s
-    # client ceiling for a commit the engine is willing to spend ten minutes on, and the
-    # round would be killed by its own caller long before the engine gave up. Outside a
-    # declared round `budget_for` returns None for every op and this loop is a no-op, so
-    # the dump an ordinary caller reads is byte-identical to what it was before.
-    for op in publish_lane.PUBLISH_LANE_OPS:
-        lane_budget = publish_lane.budget_for(op)
-        if lane_budget is not None:
-            payload[op] = lane_budget
-
-    # Emitted over `payload` as built above, so a lane-raised op carries ITS lane
-    # deadline rather than the ordinary one. Computed before the reserved rows are
-    # added so the loop only ever sees op names.
+    # Computed before the reserved rows are added so the loop only ever sees op names.
     ceremony_read_deadlines = {
         f"__ceremony__{op}": mutation_read_deadline_for(op)
         for op in payload

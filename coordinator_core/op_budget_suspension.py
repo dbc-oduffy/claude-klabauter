@@ -174,23 +174,12 @@ Negative-spec:
       timeout" as the alternative. There is no shape of this message in which
       that text is correct. Conforms to docs/wiki/guard-messaging.md § Register.
 
-      A SANCTIONED FALLBACK IS NOT A BYPASS, and the distinction is a PM ruling
-      of 2026-08-21, not an EM reading of this bullet: *"plain git commit is and
-      has to be the sanctioned fallback for now."* A bypass would defeat the
-      suspension — it would get the op's work done at the op's cost, which is
-      the box damage this table exists to stop. Plain `git commit` does not: it
-      is a different, cheaper mechanism that every EM in this repo already uses,
-      and the `prepare-commit-msg` hook attributes it identically (verified by
-      control, 2026-08-21 — six commits, plain git, zero op invocations, all
-      carrying `Deliverable-Id`). Naming it costs the ruling nothing.
+      A SANCTIONED FALLBACK IS NOT A BYPASS (PM ruling, 2026-08-21). A bypass
+      gets the op's work done at the op's cost, which is the box damage this
+      table exists to stop; a fallback is a different, cheaper mechanism the
+      caller can drive now, and it leaves the row when a successor is live.
 
-      "FOR NOW" IS PART OF THE RULING, so it is part of this bullet. The
-      fallback stands while the suspension does. If `ceremony.scoped_git_commit`
-      earns its way back, the `fallback` row leaves with it — this is not a
-      standing licence to hand-commit around a live op, and a reader who finds
-      this text after reinstatement is reading a stale carve-out.
-
-      The bar for adding a `fallback` to any other row: a mechanism that already
+      The bar for adding a `fallback` to a row: a mechanism that already
       exists, that a caller can drive without the op, and that preserves what the
       op guaranteed. Absent all three, the row carries none. An empty slot is the
       correct answer far more often than a plausible-sounding one — the failure
@@ -631,41 +620,25 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
             "process time. What still needs doing: something must commit."
         ),
         "fallback": (
-            "No sanctioned in-repo route remains. Use git directly with an "
-            "explicit pathspec (never a bare `git commit` — it swallows peer "
-            "staged files on this shared tree)."
+            "Use `ceremony.commit_v2` with `paths` and `message`. It commits the "
+            "worktree bytes of each named path; a deliberate partial stage you "
+            "must keep goes in `prefer_staged`."
         ),
+        # The job was rehomed, not left open: the fallback names a live
+        # successor, so the refusal must not send a reader off to build one.
+        "successor_live": True,
         "disposition": (
-            "REQUIREMENT DISCHARGED — the note's own 'what still needs doing: "
-            "something must commit' is answered. ceremony.commit_v2 is live and "
-            "dispatchable (767079e6e), and it calls git/commit.py::commit_paths at "
-            "ops/ceremony/commit_v2.py:146 — so commit_paths, written and measured "
-            "at 0.00 spawns / 3.984ms process on the common case against 5.08 / "
-            "67.500ms for the `git add` + `git commit` architecture it replaces, is "
-            "no longer the caller-less v2 it was at d20d56893. THE FALLBACK ABOVE IS "
-            "THEREFORE STALE: dial ceremony.commit_v2 rather than reaching for bare "
-            "git. NOT a drop-in for every shape the old route accepted — CR bytes "
-            "under an eol=crlf pin and text/eol-attributed paths reach a batched "
-            "fallback rather than the zero-spawn path, and the 2 procs on the "
-            "new-file arm are explicit_stage's `git check-ignore -v`, deliberately "
-            "retained because a wrong gitignore match fails SILENTLY and commits a "
-            "file the operator deliberately ignored. NOR A SEMANTIC DROP-IN, and "
-            "this row's readers are the exact affected audience: when a path named "
-            "in the pathspec is ALSO staged, commit_v2 commits the WORKTREE bytes "
-            "while the route it replaces committed the STAGED blob. Measured both "
-            "arms, same pathspec, opposite content in HEAD. A caller preserving a "
-            "deliberate partial hunk must name those paths in `prefer_staged` "
-            "(threaded through commit_v2's params) — nothing infers it, and "
-            "index-differs-from-worktree is explicitly NOT the discriminator "
-            "(git/commit.py invariant 1: equally true of an ordinary unstaged edit). "
-            "RESOLVED 2026-08-30, and the paragraph above states the trigger "
-            "WRONGLY: the losing arm needs a STALE STAGE (index differing from "
-            "HEAD, which commit_scoped reads as a deliberate partial stage), not "
-            "merely a staged path -- a reproduction built on the also-staged "
-            "framing passes against the broken code. memo.send, the one caller "
-            "with measured damage, now commits worktree bytes via commit_paths, "
-            "and prefer_deliberate_stage (DR-379) is the declared opt-in for "
-            "callers where a third party's partial stage can genuinely exist. "
+            "REQUIREMENT DISCHARGED by ceremony.commit_v2 (767079e6e), which calls "
+            "git/commit.py::commit_paths: 0.00 spawns / 3.984ms process on the "
+            "common case against 5.08 / 67.500ms for the `git add` + `git commit` "
+            "architecture it replaces. Not a drop-in for every shape: CR bytes "
+            "under an eol=crlf pin and text/eol-attributed paths take a batched "
+            "fallback, and the new-file arm keeps explicit_stage's `git "
+            "check-ignore -v` (2 procs) because a wrong gitignore match fails "
+            "silently. Semantics: commit_v2 commits WORKTREE bytes; a path with a "
+            "STALE STAGE (index differing from HEAD) that must be preserved goes in "
+            "`prefer_staged`, and prefer_deliberate_stage (DR-379) is the opt-in "
+            "where a third party's partial stage can exist. "
             "state/bug-backlog/2026-08-27-commit-v2-cutover-silently-flips-whose-c-"
             "09cf57f3b909.yaml."
         ),
@@ -1425,9 +1398,9 @@ def refusal_message(method: str) -> str:
 
     So a row MAY carry a `fallback`: the sanctioned path the caller takes right
     now. It is rendered before the reinstatement bar, because the caller reads
-    in that order. Only `ceremony.scoped_git_commit` carries one — most of these
-    ops have no equivalent a caller can drive by hand, and inventing one to fill
-    the slot would be the same improvisation the field exists to prevent.
+    in that order. Most of these ops have no equivalent a caller can drive, and
+    inventing one to fill the slot would be the same improvisation the field
+    exists to prevent.
     """
     record = SUSPENDED_OPS.get(method)
     fallback = ""
