@@ -25,14 +25,14 @@ def _git(returncode=0, stdout="", stderr=""):
     return lambda args, cwd: SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
 
 
-def _refs(*shorts, email="me@x"):
-    """Mimics `ref_rows`' `for-each-ref` output: `refname<TAB>short<TAB>email`
-    per ref. An `origin/`-led short name is a remote-tracking ref; anything
-    else is a local branch."""
+def _refs(*shorts, email="me@x", operator=""):
+    """Mimics `ref_rows`' `for-each-ref` output:
+    `refname<TAB>short<TAB>email<TAB>operator` per ref. An `origin/`-led short
+    name is a remote-tracking ref; anything else is a local branch."""
     lines = []
     for short in shorts:
         refname = f"refs/remotes/{short}" if short.startswith("origin/") else f"refs/heads/{short}"
-        lines.append(f"{refname}\t{short}\t{email}\n")
+        lines.append(f"{refname}\t{short}\t{email}\t{operator}\n")
     return "".join(lines)
 
 
@@ -131,7 +131,9 @@ class TestListWorktrees:
 # ---------------------------------------------------------------------------
 
 class TestBrief:
-    def _stub(self, monkeypatch, *, branch_lines, worktree_stdout, unique_commits=None, tip_author="me@x"):
+    def _stub(
+        self, monkeypatch, *, branch_lines, worktree_stdout, unique_commits=None, tip_author="me@x", tip_operator=""
+    ):
         unique_commits = unique_commits or []
 
         def run_git(args, cwd):
@@ -151,7 +153,7 @@ class TestBrief:
                     if not line or "->" in line:
                         continue
                     names.append(line[len("remotes/"):] if line.startswith("remotes/") else line)
-                return SimpleNamespace(returncode=0, stdout=_refs(*names, email=tip_author), stderr="")
+                return SimpleNamespace(returncode=0, stdout=_refs(*names, email=tip_author, operator=tip_operator), stderr="")
             if args[0] == "branch" and args[1] == "--merged":
                 return SimpleNamespace(returncode=0, stdout="", stderr="")
             if args[0] == "log" and args[1] == "-1":
@@ -452,6 +454,34 @@ class TestBrief:
         assert {d["value"] for d in jp["dispositions"]} == {"delete", "keep"}
         delete = next(d for d in do["directives"] if d["id"] == "d-delete-claude/cloud")
         assert delete["depends_on"] == "j-delete-claude/cloud"
+
+    def test_cloud_session_tip_stamped_with_my_operator_is_mine_stale(self, monkeypatch, tmp_path):
+        run_git = self._stub(
+            monkeypatch,
+            branch_lines="* current\n  main\n  claude/cloud\n",
+            worktree_stdout=f"worktree {tmp_path}\nHEAD abc\nbranch refs/heads/current\n",
+            tip_author="noreply@anthropic.com",
+            tip_operator="me@x",
+        )
+        do = consolidate_assemble.brief(repo_root=tmp_path, run_git=run_git)
+        branch_report = next(b for b in do["gates"]["branches"] if b["name"] == "claude/cloud")
+        assert branch_report["category"] == "mine-stale"
+        assert branch_report["operator"] == "me@x"
+        delete = next(d for d in do["directives"] if d["id"] == "d-delete-claude/cloud")
+        assert delete["depends_on"] is None
+
+    def test_cloud_session_tip_stamped_with_another_operator_stays_gated(self, monkeypatch, tmp_path):
+        run_git = self._stub(
+            monkeypatch,
+            branch_lines="* current\n  main\n  claude/cloud\n",
+            worktree_stdout=f"worktree {tmp_path}\nHEAD abc\nbranch refs/heads/current\n",
+            tip_author="noreply@anthropic.com",
+            tip_operator="someone-else@x",
+        )
+        do = consolidate_assemble.brief(repo_root=tmp_path, run_git=run_git)
+        branch_report = next(b for b in do["gates"]["branches"] if b["name"] == "claude/cloud")
+        assert branch_report["category"] == "cloud-session"
+        assert branch_report["operator"] == "someone-else@x"
 
     def test_directives_are_well_formed_for_apply_base_ordering(self, monkeypatch, tmp_path):
         run_git = self._stub(

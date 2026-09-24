@@ -51,7 +51,9 @@ Negative-spec:
       `directives[]` or `judgment_points[]`. The one exception is a
       `cloud-session` branch (see `CLOUD_SESSION_EMAIL`), which carries no
       operator identity and is surfaced behind a judgment point only —
-      never an unconditional directive, even at zero unique commits.
+      never an unconditional directive, even at zero unique commits —
+      unless its tip's `Operator:` trailer equals `my_email`, which makes
+      it `mine-stale`.
     - Do NOT re-introduce a per-commit OR per-branch `git show` — the
       inspection gather is one spawn total, across every stale branch's
       shas, not `unique_commits × ~100ms` or `stale_branches × ~100ms`
@@ -138,7 +140,7 @@ def list_branches(run_git: RunGit, repo_root: Path) -> list[dict[str, Any]]:
     return list_branches_from(ref_rows(run_git, repo_root))
 
 
-def list_branches_from(rows: list[tuple[str, str, str]]) -> list[dict[str, Any]]:
+def list_branches_from(rows: list[tuple[str, ...]]) -> list[dict[str, Any]]:
     """The parse half of `list_branches`, over already-fetched `ref_rows`,
     so a caller needing both the branch list and the tip authors spawns
     `for-each-ref` once rather than twice.
@@ -154,7 +156,7 @@ def list_branches_from(rows: list[tuple[str, str, str]]) -> list[dict[str, Any]]
     read as one it becomes a phantom `origin` branch that categorizes as
     stale work and drags a `git log` and a `git show` behind it."""
     branches: dict[str, dict[str, Any]] = {}
-    for refname, short, _email in rows:
+    for refname, short, *_rest in rows:
         if refname.startswith("refs/heads/"):
             entry = branches.setdefault(short, {"name": short, "is_local": False, "is_remote": False})
             entry["is_local"] = True
@@ -182,7 +184,7 @@ def tip_author(run_git: RunGit, repo_root: Path, ref: str) -> str:
     return proc.stdout.strip()
 
 
-def ref_rows(run_git: RunGit, repo_root: Path) -> list[tuple[str, str, str]]:
+def ref_rows(run_git: RunGit, repo_root: Path) -> list[tuple[str, ...]]:
     """`[(refname, refname_short, tip_author_email)]` over every local and
     remote-tracking ref, from ONE `git for-each-ref` call — THE single ref
     enumeration for the whole brief. Its short names plus full refnames are
@@ -198,13 +200,14 @@ def ref_rows(run_git: RunGit, repo_root: Path) -> list[tuple[str, str, str]]:
     proc = run_git(
         [
             "for-each-ref",
-            "--format=%(refname)\t%(refname:short)\t%(authoremail:trim)",
+            "--format=%(refname)\t%(refname:short)\t%(authoremail:trim)"
+            "\t%(trailers:key=Operator,valueonly,separator=%x2C)",
             "refs/heads",
             "refs/remotes",
         ],
         repo_root,
     )
-    rows: list[tuple[str, str, str]] = []
+    rows: list[tuple[str, ...]] = []
     for raw_line in proc.stdout.splitlines():
         line = raw_line.rstrip("\r\n")
         if not line.strip():
@@ -214,7 +217,9 @@ def ref_rows(run_git: RunGit, repo_root: Path) -> list[tuple[str, str, str]]:
             continue
         refname, short = parts[0], parts[1]
         email = parts[2] if len(parts) > 2 else ""
-        rows.append((refname, short, email))
+        # A repeated trailer arrives comma-joined; the first one is the stamp.
+        operator = parts[3].split(",", 1)[0].strip() if len(parts) > 3 else ""
+        rows.append((refname, short, email, operator))
     return rows
 
 
@@ -228,9 +233,17 @@ def tip_authors(run_git: RunGit, repo_root: Path) -> dict[str, str]:
     return tip_authors_from(ref_rows(run_git, repo_root))
 
 
-def tip_authors_from(rows: list[tuple[str, str, str]]) -> dict[str, str]:
+def tip_authors_from(rows: list[tuple[str, ...]]) -> dict[str, str]:
     """The map half of `tip_authors`, over already-fetched `ref_rows`."""
-    return {short: email for _refname, short, email in rows}
+    return {row[1]: row[2] for row in rows}
+
+
+def tip_operators_from(rows: list[tuple[str, ...]]) -> dict[str, str]:
+    """`{ref: Operator trailer on the tip}` over already-fetched `ref_rows`;
+    `""` when the tip carries none. The trailer is stamped by
+    prepare-commit-msg from `coordinator.operator`, so a cloud-session tip
+    (authored by `CLOUD_SESSION_EMAIL`) can still name its human."""
+    return {row[1]: (row[3] if len(row) > 3 else "") for row in rows}
 
 
 #: Branch-name segments that mark a ref as a deliberate safety copy. A backup
@@ -267,7 +280,9 @@ def is_backup_branch(name: str) -> bool:
 CLOUD_SESSION_EMAIL = "noreply@anthropic.com"
 
 
-def categorize_branch(name: str, current: str, main_branch: Optional[str], tip_email: str, my_email: str) -> str:
+def categorize_branch(
+    name: str, current: str, main_branch: Optional[str], tip_email: str, my_email: str, tip_operator: str = ""
+) -> str:
     if name == current:
         return "current"
     if main_branch is not None and name == main_branch:
@@ -275,6 +290,10 @@ def categorize_branch(name: str, current: str, main_branch: Optional[str], tip_e
     if is_backup_branch(name):
         return "backup"
     if tip_email == my_email:
+        return "mine-stale"
+    # The Operator trailer is what makes a cloud tip provably ours; without
+    # it (or naming someone else) the tip stays behind a verdict.
+    if tip_email == CLOUD_SESSION_EMAIL and tip_operator and tip_operator == my_email:
         return "mine-stale"
     if tip_email == CLOUD_SESSION_EMAIL:
         return "cloud-session"
@@ -458,6 +477,7 @@ def brief(
     # repo, re-enumerating refs this call already returns.
     ref_listing = ref_rows(run_git, repo_root)
     all_tip_authors = tip_authors_from(ref_listing)
+    all_tip_operators = tip_operators_from(ref_listing)
     branch_entries = list_branches_from(ref_listing)
     branches_report: list[dict[str, Any]] = []
     directives: list[dict[str, Any]] = []
@@ -481,17 +501,24 @@ def brief(
             continue
 
         author = all_tip_authors[ref] if ref in all_tip_authors else tip_author(run_git, repo_root, ref)
-        category = categorize_branch(name, current, main_branch, author, my_email)
+        operator = all_tip_operators.get(ref, "")
+        category = categorize_branch(name, current, main_branch, author, my_email, operator)
         if category not in ("mine-stale", "cloud-session"):
             # Report the category actually computed. The old literal `"others"`
             # collapsed every non-stale branch into one bucket, which would have
             # hidden the `backup` category from the brief the moment it existed.
-            branches_report.append({**entry, "tip_author": author, "category": category})
+            branches_report.append({**entry, "tip_author": author, "operator": operator, "category": category})
             continue
 
         commits = unique_commits(run_git, repo_root, current, ref)
         branches_report.append(
-            {**entry, "tip_author": author, "category": category, "unique_commit_count": len(commits)}
+            {
+                **entry,
+                "tip_author": author,
+                "operator": operator,
+                "category": category,
+                "unique_commit_count": len(commits),
+            }
         )
 
         shas = [line.split(" ", 1)[0] for line in commits]
