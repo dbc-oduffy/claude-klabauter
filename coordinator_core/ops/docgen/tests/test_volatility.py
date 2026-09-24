@@ -80,7 +80,7 @@ def test_goal_seed_has_no_deliverable_id():
 
 
 def test_roadmap_baton_has_handoff_id():
-    # AC13 fix (docs/plans/2026-08-01-baton-spine-information-integrity.md § A5):
+    # AC13 fix (DoE-claude:docs/plans/2026-08-01-baton-spine-information-integrity.md § A5):
     # roadmap-baton USED TO be excluded from the oracle's handoff-id-minting
     # doc_type tuple (a break-class defect — minted roadmap batons carried
     # stub_id/deliverable_id but no handoff_id at all). It is now included

@@ -640,7 +640,7 @@ def test_missing_handoffs_dir_is_a_clean_no_op(tmp_path, monkeypatch, capsys):
 
 
 # ---------------------------------------------------------------------------
-# A2 (docs/plans/2026-08-01-baton-spine-information-integrity.md AC4) —
+# A2 (DoE-claude:docs/plans/2026-08-01-baton-spine-information-integrity.md AC4) —
 # end-to-end proof that the real "commit.anchors" producer's new `Resolves:`
 # trailer (A1, coordinator_core/ops/commit_anchors.py) is what actually
 # unsticks this promoter, driven through the real producer rather than a

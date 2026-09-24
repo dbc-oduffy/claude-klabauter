@@ -567,15 +567,17 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
             "producer": _jq_or(fm.get("producer"), None),
             "_shipped_in_sha": shipped_sha_raw,
         }
-        # Human axis (C9), activation-gated (module docstring). `human_assignee` and
-        # `human_claimant` are OPTIONAL nullable HandoffSummary fields (entities/
-        # summaries.py) — while the switch is off, the keys never reach this dict at
-        # all (the model's own default=None supplies them for validation below), so
-        # the post-model_dump pop further down and this omission agree on one shape:
-        # no new key on the wire until cockpit has vendored it.
+        # Human axis (C9), activation-gated (module docstring). `human_assignee`,
+        # `human_claimant`, and `human_owner` are OPTIONAL nullable HandoffSummary
+        # fields (entities/summaries.py) — while the switch is off, the keys never
+        # reach this dict at all (the model's own default=None supplies them for
+        # validation below), so the post-model_dump pop further down and this
+        # omission agree on one shape: no new key on the wire until cockpit has
+        # vendored it.
         if _human_axis_on:
             record["human_assignee"] = _jq_or(fm.get("human_assignee"), None)
             record["human_claimant"] = _jq_or(fm.get("human_claimant"), None)
+            record["human_owner"] = _jq_or(fm.get("human_owner"), None)
         records.append(record)
 
     # Surface the baton_class degrade
@@ -699,13 +701,14 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
             if dumped.get("content_hash") is None:
                 dumped.pop("content_hash", None)
             # Human axis (C9), activation-gated: strip the model's own default=None
-            # materialization for human_assignee/human_claimant whenever the switch is
-            # off, so a flag-OFF emission carries neither key at all — the behavioural
-            # leg of AC7 (byte-identical to today's shape) depends on this pop, not
-            # just on the raw-dict omission above.
+            # materialization for human_assignee/human_claimant/human_owner whenever
+            # the switch is off, so a flag-OFF emission carries none of the keys at
+            # all — the behavioural leg of AC7 (byte-identical to today's shape)
+            # depends on this pop, not just on the raw-dict omission above.
             if not _human_axis_on:
                 dumped.pop("human_assignee", None)
                 dumped.pop("human_claimant", None)
+                dumped.pop("human_owner", None)
             validated.append(dumped)
         except ValidationError as exc:
             malformed.append({

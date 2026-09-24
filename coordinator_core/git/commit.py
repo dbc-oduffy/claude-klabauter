@@ -1247,10 +1247,18 @@ def commit_paths(
     # module's own sentinel for "this candidate's new value is absence".
     if detect_rollback and old_head is not None:
         declared_set = {d.replace("\\", "/") for d in declared_reverts}
+        # A deletion whose HEAD blob lands at another path in this same
+        # commit is a move; absence at the old path restores nothing.
+        added_blobs = {val[1] for val in assembled.values() if val is not _ABSENT}
         candidates: Dict[str, object] = {}
         for p, val in assembled.items():
             if p in declared_set:
                 continue
+            if val is _ABSENT:
+                head_dir, _, head_name = p.rpartition("/")
+                head_entry = spine.get(head_dir, {}).get(head_name)
+                if head_entry is not None and head_entry[1] in added_blobs:
+                    continue
             candidates[p] = rollback_check.ABSENT if val is _ABSENT else val[1]
         if candidates:
             findings = rollback_check.find_exact_blob_rollbacks(

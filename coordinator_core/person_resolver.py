@@ -10,12 +10,30 @@ Measured on this box: `~/.config/gh/hosts.yml` read is 0.02 ms; each
 disqualified (see § Anti-scope in the authoring plan,
 `docs/plans/2026-08-12-person-identity-primitive-first-slice.md`, chunk C3).
 
-DECLARED PRECEDENCE (write it here, test both legs):
+DECLARED PRECEDENCE (write it here, test every leg):
 
     github:    ~/.config/gh/hosts.yml `user:`   THEN   noreply-email parse
-    github_id: noreply-email parse only
+               THEN   `coordinator.operator` (fallback only, see below)
+    github_id: noreply-email parse   THEN   `coordinator.operator` noreply parse
+               (same fallback-only condition as `github`)
     display:   git config user.name
     email:     git config user.email
+
+Operator fallback (2026-09-24, C1): when neither hosts.yml nor a noreply
+`user.email` yields `github` (a cloud session has neither — no
+`~/.config/gh/hosts.yml`, no noreply `user.email`), `coordinator.operator`
+(read through the same cached `_git_config_value` — no new spawn, no `gh`,
+no `git remote`; see coordinator-prepare-commit-msg.py `_resolve_operator`,
+which writes this same config key as the commit's `Operator:` trailer) is
+read as a fallback ONLY. If its value matches the noreply-address shape, it
+is parsed exactly like `user.email` (yields both `github` and `github_id`).
+Otherwise, if it contains no `@`, it is a bare handle and is used as
+`github` directly (no `github_id` — a bare handle carries no numeric id).
+Otherwise (some other email-shaped string) it resolves nothing, matching
+`resolve_operating_person`'s unresolvable-case convention: no field, not a
+guess. This leg never overrides hosts.yml or a resolved noreply `user.email`
+— PM ruling 2026-09-24: "we only need to specify a human if there's no
+other source to do so."
 
 `hosts.yml` wins for `github` because it tracks `gh auth switch` — a switched
 CLI session updates `hosts.yml` immediately, while `git config user.email`
@@ -105,7 +123,8 @@ _GIT_TIMEOUT = 10
 #   12345678+<handle>@users.noreply.github.com
 #   <handle>@users.noreply.github.com   (no numeric id present)
 _NOREPLY_RE = re.compile(
-    r"^(?:(?P<id>\d+)\+)?(?P<handle>[^@]+)@users\.noreply\.github\.com$"
+    r"^(?:(?P<id>\d+)\+)?(?P<handle>[^@]+)@users\.noreply\.github\.com$",
+    re.IGNORECASE,
 )
 
 
@@ -294,6 +313,22 @@ def resolve_operating_person(*, home: Path | None = None) -> dict[str, str]:
     noreply_handle, noreply_id = _parse_noreply_email(email)
 
     github_value = hosts_user if hosts_user is not None else noreply_handle
+    github_id_value = noreply_id
+
+    # Operator fallback (C1) — fires ONLY when neither hosts.yml nor a
+    # noreply `user.email` yielded a `github` value. See module docstring's
+    # "Operator fallback" note: precedence stays hosts.yml > noreply email >
+    # operator, so this leg is never consulted, let alone allowed to
+    # override, when either earlier source already resolved `github`.
+    if not github_value:
+        operator = _git_config_value("coordinator.operator")
+        operator_handle, operator_id = _parse_noreply_email(operator)
+        if operator_handle:
+            github_value = operator_handle
+            github_id_value = operator_id
+        elif operator and "@" not in operator:
+            github_value = operator
+
     if github_value:
         bundle["github"] = github_value.casefold()
 
@@ -301,9 +336,9 @@ def resolve_operating_person(*, home: Path | None = None) -> dict[str, str]:
     # a numeric id is a no-op that only implies a case-sensitivity question the
     # value cannot have; matches tracker_entities.normalize_alias's strip-only
     # treatment of the github_id namespace.
-    if noreply_id:
-        bundle["github_id"] = noreply_id
-        contributor_slug = _derive_contributor_slug(int(noreply_id))
+    if github_id_value:
+        bundle["github_id"] = github_id_value
+        contributor_slug = _derive_contributor_slug(int(github_id_value))
         if contributor_slug:
             bundle["contributor_slug"] = contributor_slug
 

@@ -5,7 +5,8 @@ Purpose: the behavioural half of C9 (b) — with the machine-local registry swit
 BYTE-IDENTICAL records to today's shape: no `human_assignee`/`human_claimant`/`human_owner`
 key at all, gated or not, present or null. With the switch ON, the sections populate the
 keys from frontmatter, same caller-supplied-then-passthrough discipline as every other
-frontmatter-sourced field in these sections.
+frontmatter-sourced field in these sections. `handoffs.py` emits all three keys
+(`human_assignee`/`human_claimant`/`human_owner`); `trackers.py` emits `human_owner` only.
 
 This is also the test `test_human_axis_stays_off_the_wire.py`'s new behavioural leg (module
 docstring, C9 body part (c)) relies on — written once, shared by both rows' intent.
@@ -79,13 +80,16 @@ def test_handoffs_switch_off_omits_human_keys_entirely(mock_qr, _mock_flag, tmp_
         mock_qr, tmp_path,
         [{
             "path": "state/handoffs/x.md",
-            "frontmatter": _base_handoff_fm(human_assignee="abc123def", human_claimant="abc123def"),
+            "frontmatter": _base_handoff_fm(
+                human_assignee="abc123def", human_claimant="abc123def", human_owner="abc123def"
+            ),
         }],
     )
     assert malformed == []
     assert len(records) == 1
     assert "human_assignee" not in records[0]
     assert "human_claimant" not in records[0]
+    assert "human_owner" not in records[0]
 
 
 @patch("coordinator_core.ops.emit.sections.handoffs.human_axis_vendored", return_value=True)
@@ -95,13 +99,16 @@ def test_handoffs_switch_on_populates_from_frontmatter(mock_qr, _mock_flag, tmp_
         mock_qr, tmp_path,
         [{
             "path": "state/handoffs/x.md",
-            "frontmatter": _base_handoff_fm(human_assignee="abc123def", human_claimant="def456ghi"),
+            "frontmatter": _base_handoff_fm(
+                human_assignee="abc123def", human_claimant="def456ghi", human_owner="ghi789jkl"
+            ),
         }],
     )
     assert malformed == []
     assert len(records) == 1
     assert records[0]["human_assignee"] == "abc123def"
     assert records[0]["human_claimant"] == "def456ghi"
+    assert records[0]["human_owner"] == "ghi789jkl"
 
 
 @patch("coordinator_core.ops.emit.sections.handoffs.human_axis_vendored", return_value=True)
@@ -115,6 +122,7 @@ def test_handoffs_switch_on_null_when_frontmatter_absent(mock_qr, _mock_flag, tm
     assert len(records) == 1
     assert records[0]["human_assignee"] is None
     assert records[0]["human_claimant"] is None
+    assert records[0]["human_owner"] is None
 
 
 @patch("coordinator_core.ops.emit.sections.handoffs.human_axis_vendored", return_value=False)
@@ -134,7 +142,9 @@ def test_handoffs_switch_off_is_byte_identical_to_flag_absent_frontmatter(
         mock_qr, tmp_path,
         [{
             "path": "state/handoffs/x.md",
-            "frontmatter": _base_handoff_fm(human_assignee="abc123def", human_claimant="abc123def"),
+            "frontmatter": _base_handoff_fm(
+                human_assignee="abc123def", human_claimant="abc123def", human_owner="abc123def"
+            ),
         }],
     )
     assert without_fm == with_fm

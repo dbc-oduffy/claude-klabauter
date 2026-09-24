@@ -578,6 +578,22 @@ class HandoffSummary(BaseModel):
     claimed before C8 shipped carry no `human_claimant`, and none is
     backfilled. Absent (key omitted) while the C9 activation switch is off.
     """
+    human_owner: str | None = Field(
+        default=None,
+        json_schema_extra={"x-zod-nullable-optional": True},
+    )
+    """
+    Mirrors `TrackerSummary.human_owner` (entities/tracker_summary.py): the
+    producer-authored human who owns this handoff, emitted verbatim from
+    frontmatter only when a producer names one — never minted, never derived
+    from commit authorship (that join is cockpit's, out of scope here). Same
+    `owner` non-repurposing rule as `human_assignee`/`human_claimant` above:
+    `owner` stays the pre-existing team/person free-text field. Absent (key
+    omitted) while the C9 activation switch is off; may still be null once
+    on, when frontmatter names no owner.
+
+    Spec backlink: docs/plans/2026-09-24-human-owner-on-handoffs.md § C2.
+    """
 
 
 # ── Backlog item summary (debt / bug / improvement YAML) ────────────────────

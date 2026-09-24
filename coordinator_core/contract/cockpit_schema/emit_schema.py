@@ -492,7 +492,13 @@ GENERATES: list = []
 # this is a real (if narrower) rollout-ordering risk, not a wire-shape break.
 # `proposal`, `bug`, and `notice` remain deliberately absent from this
 # entity's enum — that narrowing predates this bump and is unchanged by it.
-CONTRACT_VERSION = "4.8.0"
+#
+# MINOR bump 4.8.0 -> 4.9.0 (2026-09-24, DoE D54): two additive changes.
+# HandoffSummary gains optional, nullable `human_owner` (the person axis
+# TrackerSummary has carried since 3.13.0; `owner` stays the repo-owner join
+# anchor), emitted only under `cockpit.human_axis_vendored`. PlanSummary's
+# `status` enum widens by `blocked`, which reached the emitter without a bump.
+CONTRACT_VERSION = "4.9.0"
 
 # ---------------------------------------------------------------------------
 # ProvenanceEnvelope conditional injection — ported verbatim from

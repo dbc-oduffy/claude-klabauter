@@ -929,6 +929,11 @@ def test_stamp_implemented_closes_cited_sizing_through_production_caller(tmp_pat
         deliverable_id=deliverable_id,
         sizing_object="state/sizings/2026-08-10-e2e.yaml",
     )
+    # The scaffold's exit-criterion link is a placeholder the stamp refuses;
+    # a real plan links it to the sizing it cites.
+    placeholder = '"<REPLACE: state/sizings/<file>.yaml | <goal_id>#kr-<kr-id> — a LINK>"'
+    assert placeholder in plan_content
+    plan_content = plan_content.replace(placeholder, '"state/sizings/2026-08-10-e2e.yaml"')
     plan_path = _write(tmp_path, plan_relpath, plan_content)
 
     # Mirrors the CLI's own `--type plan --sizing-object ...` reverse-edge
@@ -1742,6 +1747,29 @@ def test_stamp_implemented_archives_plan_and_sidecar_on_terminal_stamp(tmp_path,
     assert dest.is_file()
     assert dest_sidecar.is_file()
     assert "status: implemented" in dest.read_text(encoding="utf-8")
+
+
+def test_stamp_implemented_archives_untracked_fire_script_beside_plan(tmp_path, capsys):
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    p = _write(
+        tmp_path, "docs/plans/2026-08-01-fired.md",
+        "---\ntitle: T\nstatus: executing\n---\n\nBody.\n",
+    )
+    # Written by the emitter, never committed.
+    script = tmp_path / "docs" / "plans" / "2026-08-01-fired.workflow.mjs"
+    receipt = tmp_path / "docs" / "plans" / "2026-08-01-fired.workflow.mjs.emitted.json"
+    script.write_text("export const meta = {}\n", encoding="utf-8")
+    receipt.write_text("{}\n", encoding="utf-8")
+
+    rc = main(["stamp-implemented", "--plan", str(p)])
+    assert rc == 0
+
+    dest_dir = tmp_path / "archive" / "specs" / "2026-08"
+    assert (dest_dir / "2026-08-01-fired.md").is_file()
+    assert (dest_dir / "2026-08-01-fired.workflow.mjs").is_file()
+    assert (dest_dir / "2026-08-01-fired.workflow.mjs.emitted.json").is_file()
+    assert not script.exists() and not receipt.exists()
+    assert "untracked-at-head" not in capsys.readouterr().err
 
 
 def test_stamp_implemented_archival_failure_leaves_stamp_intact_and_reported(tmp_path, capsys):

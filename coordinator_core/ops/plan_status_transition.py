@@ -652,7 +652,9 @@ def _archive_stamped_plan(
 
     from coordinator_core.ops.fleet._common import archive_and_commit
     from coordinator_core.ops.fleet.archive_plans import (
+        _apply_untracked_sidecar_moves,
         _is_sidecar,
+        _partition_untracked_sidecars,
         _primary_for_sidecar,
         collect_live_plan_paths,
         plan_sweep,
@@ -687,16 +689,25 @@ def _archive_stamped_plan(
     if not moves:
         return None, skipped  # nothing archivable right now -- `skipped` names why, if anything
 
-    subject = (
-        f"{_PROG}: archive {len(moves)} plan document(s) "
-        f"(archived on the stamp-terminal occasion, not a corpus sweep)\n"
-    )
-    try:
-        acted, failed = asyncio.run(
-            archive_and_commit(worktree_root=worktree_root, moves=moves, subject=subject)
+    # A fire-script sidecar is untracked by construction and has no blob for
+    # archive_and_commit to repath; it follows its primary by plain rename,
+    # only after the primary's commit returns.
+    commit_moves, fs_sidecar_moves = _partition_untracked_sidecars(worktree_root, moves)
+    failed: List[dict] = []
+    if commit_moves:
+        subject = (
+            f"{_PROG}: archive {len(commit_moves)} plan document(s) "
+            f"(archived on the stamp-terminal occasion, not a corpus sweep)\n"
         )
-    except Exception as exc:  # noqa: BLE001 -- report, never let archival raise past the stamp
-        return f"archive_and_commit raised: {exc}", skipped
+        try:
+            _acted, failed = asyncio.run(
+                archive_and_commit(worktree_root=worktree_root, moves=commit_moves, subject=subject)
+            )
+        except Exception as exc:  # noqa: BLE001 -- report, never let archival raise past the stamp
+            return f"archive_and_commit raised: {exc}; sidecar rename not attempted", skipped
+    if fs_sidecar_moves:
+        _fs_acted, fs_failed = _apply_untracked_sidecar_moves(fs_sidecar_moves)
+        failed = list(failed) + fs_failed
 
     if failed:
         return f"{len(failed)} of {len(moves)} move(s) failed: {failed}", skipped

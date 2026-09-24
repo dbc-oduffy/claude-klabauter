@@ -105,7 +105,7 @@ def test_body_mention_without_trailer_does_not_resolve(git_repo, monkeypatch, ca
     """(c) A commit whose BODY merely mentions the artifact id, with no actual
     `Resolves:` trailer at the true trailer position, does NOT resolve.
 
-    Regression guard (docs/plans/2026-08-01-baton-spine-information-integrity.md
+    Regression guard (DoE-claude:docs/plans/2026-08-01-baton-spine-information-integrity.md
     § A1 test (c)): the candidate stage (`--grep --fixed-strings`) is a bare
     substring match and WILL find this commit as a candidate (the literal text
     "Resolves: dlv-test-id-body-only" appears in the message) -- but the verify

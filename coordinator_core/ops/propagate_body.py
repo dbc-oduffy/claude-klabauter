@@ -14,9 +14,9 @@ THIS IS A SIBLING VERB, NOT A WIDENING OF `handoff.correct_body`. That op's
 section adds") is deliberate and load-bearing — collapsing the two ops would
 merge two contracts that are each other's exact inverse (author-only,
 single-replacement, 512-byte cap vs peer-any, append-only, ~8KB cap). See
-docs/plans/2026-08-01-baton-spine-information-integrity.md Anti-scope.
+DoE-claude:docs/plans/2026-08-01-baton-spine-information-integrity.md Anti-scope.
 
-Authority: PM ruling 2026-08-01 (docs/plans/2026-08-01-baton-spine-
+Authority: PM ruling 2026-08-01 (DoE-claude:docs/plans/2026-08-01-baton-spine-
 information-integrity.md § Part B). DR-247 § 3 is what LICENSES dropping the
 authorship gate entirely for this op: it names that gate as anti-accident,
 not anti-adversary — "the real control was always the paper trail, not the
@@ -124,7 +124,7 @@ concept — `block_subagent_plan_body_write` denies ANY
 frontmatter `status:` or in-body `**Status:**` line — so `plan.propagate`
 applies to any plan body carrying valid frontmatter, no additional gate.
 See `_TARGET_SPECS` below and
-docs/plans/2026-08-01-baton-spine-information-integrity.md § Part B (B2).
+DoE-claude:docs/plans/2026-08-01-baton-spine-information-integrity.md § Part B (B2).
 
 This does NOT repoint `block_subagent_plan_body_write`'s deny text to name
 this verb — that guard's deny is identity-keyed and its blocked population

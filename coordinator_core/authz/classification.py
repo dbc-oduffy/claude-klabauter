@@ -1525,7 +1525,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?     YES.
     #      The appended delivery note (plus the landed commit) is read by
     #      shell consumers, other ops, and rag.
-    # Authority: docs/plans/2026-08-01-baton-spine-information-integrity.md § Part B
+    # Authority: DoE-claude:docs/plans/2026-08-01-baton-spine-information-integrity.md § Part B
     #            docs/decisions/DR-247-bounded-body-write-carveout-for-claimed-handoff.md § 3
     #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "handoff.propagate": OpClass.MUTATING,
@@ -1537,7 +1537,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # git commit-tree/update-ref write path); no additional dual-write-ban
     # consideration — this verb still writes only the single target file
     # plus its own scoped commit.
-    # Authority: docs/plans/2026-08-01-baton-spine-information-integrity.md § Part B (B2)
+    # Authority: DoE-claude:docs/plans/2026-08-01-baton-spine-information-integrity.md § Part B (B2)
     #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "plan.propagate": OpClass.MUTATING,
     # roadmap.link_stubs — MUTATING: the first op that AUTHORS a roadmap-

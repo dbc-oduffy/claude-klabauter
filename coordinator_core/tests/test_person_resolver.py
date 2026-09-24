@@ -249,10 +249,14 @@ def test_git_config_cache_is_keyed_on_repo_root_not_collided(tmp_path, monkeypat
     calls (simulating a warm process's cwd changing between requests) with
     two distinct display names; each root must resolve and cache its OWN
     value."""
-    # Two roots, repeated: resolve_operating_person calls _resolve_repo_root
-    # twice per invocation (once via user.email, once via user.name), so
-    # each simulated "request" needs its root to repeat before advancing.
-    roots = iter(["/repo/one", "/repo/one", "/repo/two", "/repo/two"])
+    # Three roots, repeated: resolve_operating_person calls _resolve_repo_root
+    # three times per invocation (user.email, user.name, and the C1 operator
+    # fallback — this fixture's user.email/hosts.yml never resolve `github`,
+    # so the fallback always fires), so each simulated "request" needs its
+    # root to repeat before advancing.
+    roots = iter(
+        ["/repo/one", "/repo/one", "/repo/one", "/repo/two", "/repo/two", "/repo/two"]
+    )
     monkeypatch.setattr(person_resolver, "_resolve_repo_root", lambda: next(roots))
 
     names = {"/repo/one": "Alice", "/repo/two": "Bob"}
@@ -300,8 +304,11 @@ def test_git_config_cache_reused_across_calls(tmp_path, monkeypatch):
     # user.name resolves successfully and is cached (1 read total across
     # both calls); user.email resolves empty every time, which is NOT
     # memoized by design (a failed resolution must not poison the cache),
-    # so it re-reads on each call: 1 + 2 = 3 total.
-    assert calls["count"] == 3
+    # so it re-reads on each call: 1 + 2 = 3. hosts.yml and user.email both
+    # miss here, so the C1 operator fallback also fires and reads
+    # `coordinator.operator` on every call for the same not-memoized reason:
+    # +2 more. Total: 3 + 2 = 5.
+    assert calls["count"] == 5
 
 
 # C1: contributor_slug pinned vectors, verified against example-cockpit-repo's own
@@ -370,6 +377,93 @@ def test_contributor_slug_rename_invariant(tmp_path, monkeypatch):
     assert first["github"] == "old-handle"
     assert second["github"] == "new-handle"
     assert first["contributor_slug"] == second["contributor_slug"] == "67c9mio1h"
+
+
+# C1: operator fallback — a cloud session with no hosts.yml and no noreply
+# `user.email` still resolves `github` from `coordinator.operator`.
+def test_operator_noreply_resolves_github_and_github_id(tmp_path, monkeypatch):
+    _patch_git_config(
+        monkeypatch,
+        {
+            "user.email": "email@fixture",
+            "coordinator.operator": "999+operator-fixture@users.noreply.github.com",
+        },
+    )
+
+    result = person_resolver.resolve_operating_person(home=tmp_path)
+
+    assert result["github"] == "operator-fixture"
+    assert result["github_id"] == "999"
+    assert result["contributor_slug"] == person_resolver._derive_contributor_slug(999)
+
+
+def test_operator_noreply_domain_matches_case_insensitively(tmp_path, monkeypatch):
+    _patch_git_config(
+        monkeypatch,
+        {"coordinator.operator": "999+operator-fixture@Users.NoReply.GitHub.com"},
+    )
+
+    result = person_resolver.resolve_operating_person(home=tmp_path)
+
+    assert result["github"] == "operator-fixture"
+    assert result["github_id"] == "999"
+
+
+def test_operator_bare_handle_resolves_github_no_id(tmp_path, monkeypatch):
+    _patch_git_config(monkeypatch, {"coordinator.operator": "Operator-Handle"})
+
+    result = person_resolver.resolve_operating_person(home=tmp_path)
+
+    assert result["github"] == "operator-handle"
+    assert "github_id" not in result
+    assert "contributor_slug" not in result
+
+
+def test_operator_non_noreply_email_stays_unresolved(tmp_path, monkeypatch):
+    _patch_git_config(monkeypatch, {"coordinator.operator": "someone@example.com"})
+
+    result = person_resolver.resolve_operating_person(home=tmp_path)
+
+    assert "github" not in result
+    assert "github_id" not in result
+
+
+def test_hosts_yml_wins_over_operator(tmp_path, monkeypatch):
+    _write_hosts_yml(tmp_path, "hosts-yml-winner")
+    _patch_git_config(
+        monkeypatch,
+        {"coordinator.operator": "999+operator-loser@users.noreply.github.com"},
+    )
+
+    result = person_resolver.resolve_operating_person(home=tmp_path)
+
+    assert result["github"] == "hosts-yml-winner"
+    # the operator leg is a fallback only — it must not smuggle its
+    # github_id in even though hosts.yml won the `github` handle.
+    assert "github_id" not in result
+
+
+def test_noreply_email_wins_over_operator(tmp_path, monkeypatch):
+    _patch_git_config(
+        monkeypatch,
+        {
+            "user.email": "111+email-winner@users.noreply.github.com",
+            "coordinator.operator": "999+operator-loser@users.noreply.github.com",
+        },
+    )
+
+    result = person_resolver.resolve_operating_person(home=tmp_path)
+
+    assert result["github"] == "email-winner"
+    assert result["github_id"] == "111"
+
+
+def test_no_source_at_all_still_returns_empty_dict(tmp_path, monkeypatch):
+    _patch_git_config(monkeypatch, {})
+
+    result = person_resolver.resolve_operating_person(home=tmp_path)
+
+    assert result == {}
 
 
 def test_contributor_slug_absent_when_github_id_unresolved(tmp_path, monkeypatch):

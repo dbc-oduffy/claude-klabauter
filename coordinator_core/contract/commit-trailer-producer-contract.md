@@ -100,7 +100,7 @@
 >   (that trailer is workstream-MEMBERSHIP grain, stamped from a workstream's first commit;
 >   `Resolves:` is COMPLETION grain, stamped only at the ceremony completion event, gated
 >   on an `archive/completed/*.md` completion entry also being present in the same staged
->   diff). Source: `docs/plans/2026-08-01-baton-spine-information-integrity.md` § A1.
+>   diff). Source: `DoE-claude:docs/plans/2026-08-01-baton-spine-information-integrity.md` § A1.
 > - **2026-07-25 (citation re-point):** Tri-plane boundary spec-backlink and the DD#1 freshness
 >   cross-check citation re-pointed to `docs/decisions/DR-236-state-is-disk-truth-workstate-store-is-pro.md`,
 >   the ratified successor authority for `docs/decisions/2026-07-03-tri-plane-ownership-boundary.md`'s
@@ -330,7 +330,7 @@ roadmap baton with a deliverable stranded `in_flight` regardless of actual compl
 oracle to `Deliverable-Id:` instead (the widen this contract does NOT make) would have converted
 that permanent false-negative into a systematic false-positive — a deliverable would read as
 "shipped" from its first pushed commit — so the fix is this producer, not a consumer-side join
-change. See `docs/plans/2026-08-01-baton-spine-information-integrity.md` § Anti-scope.
+change. See `DoE-claude:docs/plans/2026-08-01-baton-spine-information-integrity.md` § Anti-scope.
 
 ### 1.2a `Closes:` — recognized, not derived; a different consumption path
 

@@ -79,23 +79,39 @@ def _base_handoff_kwargs() -> dict:
 
 
 def test_handoff_summary_human_fields_absent_by_default():
-    """Omitting human_assignee/human_claimant entirely still validates (OPTIONAL, not
-    required-with-null) and model_dump() materializes them as null — the emit section's
-    own job (not this test's) is to strip that null back out while the switch is off."""
+    """Omitting human_assignee/human_claimant/human_owner entirely still validates
+    (OPTIONAL, not required-with-null) and model_dump() materializes them as null — the
+    emit section's own job (not this test's) is to strip that null back out while the
+    switch is off."""
     model = HandoffSummary(**_base_handoff_kwargs())
     dumped = model.model_dump()
     assert dumped["human_assignee"] is None
     assert dumped["human_claimant"] is None
+    assert dumped["human_owner"] is None
 
 
 def test_handoff_summary_human_fields_accept_a_value():
     kwargs = _base_handoff_kwargs()
     kwargs["human_assignee"] = "abc123def"
     kwargs["human_claimant"] = "abc123def"
+    kwargs["human_owner"] = "abc123def"
     model = HandoffSummary(**kwargs)
     dumped = model.model_dump()
     assert dumped["human_assignee"] == "abc123def"
     assert dumped["human_claimant"] == "abc123def"
+    assert dumped["human_owner"] == "abc123def"
+
+
+def test_handoff_summary_human_owner_mirrors_tracker_summary_human_owner():
+    """C2: `HandoffSummary.human_owner` mirrors `TrackerSummary.human_owner` — same
+    optional/nullable shape, and it never touches `owner` (the pre-existing
+    workstream/EM owner field), same non-repurposing rule as human_assignee/
+    human_claimant above."""
+    kwargs = _base_handoff_kwargs()
+    kwargs["human_owner"] = "ghi789jkl"
+    model = HandoffSummary(**kwargs)
+    assert model.owner is None
+    assert model.human_owner == "ghi789jkl"
 
 
 def test_handoff_summary_human_fields_never_widen_owner():
@@ -148,7 +164,7 @@ def test_human_fields_are_optional_nullable_not_required_with_null():
     """The x-zod-nullable-optional marker (json_schema_extra) is present on all three
     fields, distinguishing them from D9 required-with-null fields on the same entities
     (e.g. `owner`, which carries no such marker and is a plain required key)."""
-    for field_name in ("human_assignee", "human_claimant"):
+    for field_name in ("human_assignee", "human_claimant", "human_owner"):
         field = HandoffSummary.model_fields[field_name]
         assert field.json_schema_extra == {"x-zod-nullable-optional": True}
         assert field.default is None

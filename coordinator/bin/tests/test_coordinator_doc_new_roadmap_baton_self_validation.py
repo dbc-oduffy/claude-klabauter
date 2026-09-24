@@ -19,7 +19,7 @@ together (2026-08-01):
    nothing written) when the generated frontmatter fails the schema its own
    `kind`/path resolves to.
 
-3. AC13 (docs/plans/2026-08-01-baton-spine-information-integrity.md § A5):
+3. AC13 (DoE-claude:docs/plans/2026-08-01-baton-spine-information-integrity.md § A5):
    roadmap-baton batons minted from ``state/roadmap/<id>/`` carried
    ``stub_id``/``deliverable_id`` but NO ``handoff_id`` at all -- a distinct
    class of record any fleet-side ``handoff_id`` join would silently miss
@@ -209,7 +209,7 @@ class ScaffoldSelfValidationTest(unittest.TestCase):
 
 
 class RoadmapBatonMintsHandoffIdTest(unittest.TestCase):
-    """AC13 (docs/plans/2026-08-01-baton-spine-information-integrity.md § A5):
+    """AC13 (DoE-claude:docs/plans/2026-08-01-baton-spine-information-integrity.md § A5):
     minted roadmap batons must carry `handoff_id`, matching every other
     handoff-family doc_type -- this was the reported break-class defect
     (neither of example-market-data-repo's roadmap batons carries `handoff_id` at

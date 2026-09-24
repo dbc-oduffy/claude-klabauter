@@ -191,6 +191,38 @@ def test_reused_content_across_a_burst_is_a_real_rollback_not_a_bug(tmp_path):
             _commit(repo, "p.txt", f"harness rev {n}\n", f"unique rev {n}", detect_rollback=True)
 
 
+def test_move_of_a_path_absent_at_depth_2_is_not_a_rollback(tmp_path):
+    """Archiving a file created two commits ago deletes it at the old path,
+    which alone reads as restoring depth-2 absence; its blob landing at the
+    new path in the same commit makes it a move, never a refusal."""
+    repo = _repo(tmp_path)
+    _commit(repo, "live/s.yaml", "status: routed\n", "create")
+    _commit(repo, "live/s.yaml", "status: shipped\n", "ship")
+    (repo / "archive").mkdir()
+    (repo / "live/s.yaml").replace(repo / "archive/s.yaml")
+
+    outcome = gcommit.commit_paths(
+        repo, ["archive/s.yaml"], "archive s", deleted_paths=["live/s.yaml"],
+        detect_rollback=True,
+    )
+    assert outcome.sha
+
+
+def test_deletion_without_a_matching_add_still_refuses(tmp_path):
+    repo = _repo(tmp_path)
+    _commit(repo, "live/s.yaml", "status: routed\n", "create")
+    _commit(repo, "live/s.yaml", "status: shipped\n", "ship")
+    (repo / "live/s.yaml").unlink()
+    before = gcommit.head_sha(repo)
+
+    with pytest.raises(StagedRollbackRefused):
+        gcommit.commit_paths(
+            repo, [], "delete live/s.yaml", deleted_paths=["live/s.yaml"],
+            detect_rollback=True,
+        )
+    assert gcommit.head_sha(repo) == before
+
+
 def test_commit_v2_pin_passes_detect_rollback(tmp_path):
     """Pin: `ceremony.commit_v2`'s `commit_paths` call always passes
     `detect_rollback=True`."""

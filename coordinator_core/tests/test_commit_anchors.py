@@ -541,7 +541,7 @@ class TestStagedDiffPlanExtraction:
 
 # ---------------------------------------------------------------------------
 # (b2) `Resolves:` — the missing completion-grain producer
-# (docs/plans/2026-08-01-baton-spine-information-integrity.md § A1)
+# (DoE-claude:docs/plans/2026-08-01-baton-spine-information-integrity.md § A1)
 # ---------------------------------------------------------------------------
 
 class TestResolvesCompletionTrailer:

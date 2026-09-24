@@ -70,7 +70,7 @@ Negative-spec (hard-won):
     tree, so Plan-Id/Deliverable match the version actually committed (not a later local edit).
   - Does NOT emit Resolves: on every commit that carries a Deliverable-Id: — that is
     precisely the workstream-membership/completion conflation this key exists to avoid
-    (docs/plans/2026-08-01-baton-spine-information-integrity.md § Anti-scope). Resolves:
+    (DoE-claude:docs/plans/2026-08-01-baton-spine-information-integrity.md § Anti-scope). Resolves:
     is gated on an additional, independent staged-diff signal: a completion entry
     (`archive/completed/*.md`) in the SAME staged set. A commit with only Deliverable-Id:
     and no staged completion entry never emits Resolves:.
@@ -818,7 +818,7 @@ def _handler(
 
                 # --------------------------------------------------------
                 # 2b. Resolves: — completion-grain join key (missing producer,
-                # docs/plans/2026-08-01-baton-spine-information-integrity.md
+                # DoE-claude:docs/plans/2026-08-01-baton-spine-information-integrity.md
                 # § A1). Reuses the SAME deliverable_id already resolved for
                 # Deliverable-Id: above (same staged plan frontmatter) — this
                 # is NOT a second independent resolution path. Gated on an
