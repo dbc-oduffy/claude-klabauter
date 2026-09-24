@@ -274,9 +274,10 @@ def test_branch0_gate_missing_ignore_file(tmp_path):
 
 def test_scan_secrets_high_hit_blocks(tmp_path):
     target_file = tmp_path / "leaky.md"
-    target_file.write_text(
-        "here is a token: sk-abcdefghijklmnopqrstuvwx\n", encoding="utf-8"  # noqa: secrets
-    )
+    # Assembled at runtime so this source file carries no credential shape: the
+    # publish round's own leak scan reads the published copy of this test.
+    token = "sk" + "-" + "abcdefghijklmnopqrstuvwx"
+    target_file.write_text(f"here is a token: {token}\n", encoding="utf-8")
     file_list = tmp_path / "files.txt"
     file_list.write_text(str(target_file) + "\n", encoding="utf-8")
 
@@ -285,7 +286,7 @@ def test_scan_secrets_high_hit_blocks(tmp_path):
     assert "HIGH" in out
     assert "sk-a..." in out
     # The full secret must not appear verbatim in the redacted panel.
-    assert "sk-abcdefghijklmnopqrstuvwx" not in out  # noqa: secrets
+    assert token not in out
 
 
 def test_scan_secrets_medium_hit_does_not_block(tmp_path):
