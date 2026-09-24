@@ -3505,3 +3505,97 @@ def test_report_commit_residual_without_repo_root_names_the_gap_honestly(capsys)
     assert "no dest repo root given to classify" in err
 
 
+
+
+# ---------------------------------------------------------------------------
+# Step 2c — percolate.wiki_seed_count_match
+# ---------------------------------------------------------------------------
+
+
+def _seed_fixture(tmp_path, seed, published, *, renames=None):
+    """A percolate root carrying `seed` as its shipped seed manifest (and a
+    store whose `alpha` target renames per `renames`), and a dest repo whose
+    `docs/wiki/` holds `published`."""
+    root = tmp_path / "percolate-root"
+    (root / "coordinator" / "schemas").mkdir(parents=True)
+    (root / "coordinator" / "schemas" / "seed-wikis.json").write_text(
+        json.dumps({"schema_version": 1, "seed_wikis": sorted(seed)}), encoding="utf-8"
+    )
+    if renames:
+        store_dir = root / "setup" / "percolate-hooks"
+        store_dir.mkdir(parents=True)
+        pairs = "".join(f'    - src: "{s}"\n      dst: "{d}"\n' for s, d in renames.items())
+        (store_dir / "percolate-store.yaml").write_text(
+            "base:\n  basename_rename:\n" + pairs + "targets:\n  alpha:\n    hooks: []\n",
+            encoding="utf-8",
+        )
+    else:
+        (root / "setup").mkdir(parents=True, exist_ok=True)
+    repo = tmp_path / "mirror"
+    wiki = repo / "docs" / "wiki"
+    wiki.mkdir(parents=True)
+    for name in published:
+        (wiki / name).parent.mkdir(parents=True, exist_ok=True)
+        (wiki / name).write_text("x\n", encoding="utf-8")
+    return root, repo
+
+
+def test_wiki_seed_match_is_empty_on_both_sides(tmp_path):
+    root, repo = _seed_fixture(tmp_path, {"a.md", "b.md"}, {"a.md", "b.md"})
+    assert _mod._wiki_seed_mismatch(str(root), "alpha", str(repo)) == ([], [], 2)
+
+
+def test_wiki_seed_mismatch_names_extra_and_missing(tmp_path):
+    root, repo = _seed_fixture(
+        tmp_path, {"a.md", "b.md"}, {"a.md", "leaked.md", "sub/nested.md", ".percolate-ignore"}
+    )
+    extra, missing, count = _mod._wiki_seed_mismatch(str(root), "alpha", str(repo))
+    assert extra == ["leaked.md", "sub/nested.md"]
+    assert missing == ["b.md"]
+    assert count == 3
+
+
+def test_wiki_seed_compares_in_published_names(tmp_path):
+    """The seed is source names; the dest holds renamed ones. Without the
+    target's `basename_rename` mapping, the live mirror mismatches forever."""
+    renames = {"example-game-repo-for-x.md": "example-game-repo-for-x.md"}
+    root, repo = _seed_fixture(
+        tmp_path, {"a.md", "example-game-repo-for-x.md"}, {"a.md", "example-game-repo-for-x.md"},
+        renames=renames,
+    )
+    assert _mod._wiki_seed_mismatch(str(root), "alpha", str(repo)) == ([], [], 2)
+
+
+def test_wiki_seed_check_does_not_apply_without_seed_or_wiki_dir(tmp_path):
+    root, repo = _seed_fixture(tmp_path, {"a.md"}, {"a.md"})
+    assert _mod._wiki_seed_mismatch(str(tmp_path / "elsewhere"), "alpha", str(repo)) is None
+    assert _mod._wiki_seed_mismatch(str(root), "alpha", str(tmp_path / "no-wiki")) is None
+
+
+def test_round_hard_stops_on_wiki_seed_mismatch(tmp_path, monkeypatch):
+    """A mismatch refuses before the Step 3 confirm and the commit, even
+    under --yes: the confirm cannot ratify a seed change."""
+    commit_calls = _install_commit_pipeline_stub(monkeypatch)
+    root, repo = _seed_fixture(tmp_path, {"a.md"}, {"a.md", "leaked.md"})
+    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda dest: str(repo))
+
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        rc, out, _spy, _dest = _run_round(tmp_path, monkeypatch, percolate_root=root)
+
+    assert rc == _mod._EXIT_FAIL
+    assert commit_calls == []
+    assert "percolate.wiki_seed_count_match: false" in err.getvalue()
+    assert "extra:   leaked.md" in err.getvalue()
+
+
+def test_round_reports_wiki_seed_match_and_proceeds(tmp_path, monkeypatch):
+    commit_calls = _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+    root, repo = _seed_fixture(tmp_path, {"a.md"}, {"a.md"})
+    monkeypatch.setattr(_mod, "_resolve_repo_root", lambda dest: str(repo))
+
+    rc, out, _spy, _dest = _run_round(tmp_path, monkeypatch, percolate_root=root)
+
+    assert "percolate.wiki_seed_count_match: true (1 published" in out
+    assert len(commit_calls) == 1

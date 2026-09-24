@@ -2990,12 +2990,25 @@ def _hook_plane_status_line(report: Report) -> str:
     """
     hook_plane = report.hook_plane or {}
     delivery = hook_plane.get("hook_delivery", "unknown")
+    commit_hook_missing = _commit_hook_step_failed(report)
     armed = bool(
         report.hook_plane
         and hook_plane.get("hooks_registered")
         and hook_plane.get("doe_root_resolves")
+        and not commit_hook_missing
     )
-    return f"HOOK PLANE: {'ARMED' if armed else 'UNARMED'} (delivery: {delivery})"
+    suffix = "; commit hook: MISSING" if commit_hook_missing else ""
+    return f"HOOK PLANE: {'ARMED' if armed else 'UNARMED'} (delivery: {delivery}{suffix})"
+
+
+#: `run_step` name of the git-hook install step. The session-hook probe above
+#: cannot see a missing prepare-commit-msg hook, so without this the first line
+#: read ARMED on a box whose commits carried no routing trailers (F17).
+HOOKS_FLEET_STEP = "install git hooks fleet"
+
+
+def _commit_hook_step_failed(report: Report) -> bool:
+    return any(step.name == HOOKS_FLEET_STEP and not step.ok for step in report.steps)
 
 
 def _verdict_body(report: Report) -> str:
@@ -3025,6 +3038,17 @@ def _verdict_body(report: Report) -> str:
             + "\n".join(lines)
             + "\n\nThe setup script exits 0 whatever its verdicts, so this did not stop the "
             "container from starting. Treat the affected surface as absent, not working."
+        )
+
+    if _commit_hook_step_failed(report):
+        vehicle = "coordinator/bin/coordinator-ensure-prepare-commit-msg-hook.py"
+        sections.append(
+            "## Commit hook missing — commits are unattributed\n\n"
+            "prepare-commit-msg is not installed, so commits carry no Session-Id/Operator "
+            "trailers: write-claim tracking misses executor writes and a git-commit-agent "
+            "phase halts COMMIT-PARTIAL on orphans. Before committing, run "
+            f"`python3 <engine-root>/{vehicle}` from each repo you will commit in, then "
+            "confirm `.git/hooks/prepare-commit-msg` exists."
         )
 
     if report.global_doctrine is not None and report.global_doctrine.get("source") is None:

@@ -1702,6 +1702,69 @@ def _resolve_cited_sizing_deliverable_id(
         return None
 
 
+#: How far back the same-title sizing tier looks, by the sizing filename's
+#: date prefix. A sizing and the handoff it routes to are scaffolded minutes
+#: apart; the bound keeps the scan to a handful of files out of hundreds.
+_SAME_TITLE_SIZING_WINDOW_DAYS = 7
+
+
+def _resolve_same_title_sizing_deliverable_id(
+    slug: str | None, repo_root: str | None,
+) -> str | None:
+    """The `deliverable_id` of a recent sizing-object minted from this same
+    title slug, or None.
+
+    A handoff with no carry rung mints from its title slug; a sizing-object
+    scaffolded for the same work under the same title minted from that same
+    slug a moment earlier. The two ids then differ only in their random hex,
+    and nothing joins them (2026-09-24, example-retrieval-repo-ue-addon: sizing
+    `...-407949`, handoff `...-f90bf8`). Same slug is the co-membership
+    evidence; exactly one match is required — two or more is ambiguous, is
+    named on stderr, and mints fresh. `--new-chain` skips this tier.
+
+    Never raises: any failure degrades to None and the existing mint.
+    """
+    if _NEW_CHAIN_REQUESTED or not slug or not repo_root:
+        return None
+    try:
+        import datetime as _dt  # noqa: PLC0415
+
+        _ensure_engine_on_path()
+        from coordinator_core.ops.mint_deliverable_id import _id_body  # noqa: PLC0415
+
+        id_re = re.compile(
+            r'^deliverable_id:\s*["\']?(dlv-' + re.escape(_id_body(slug))
+            + r'-[0-9a-f]{6})["\']?(\s|$)'
+        )
+        cutoff = (
+            _dt.date.today() - _dt.timedelta(days=_SAME_TITLE_SIZING_WINDOW_DAYS)
+        ).isoformat()
+        sizings = os.path.join(repo_root, "state", "sizings")
+        matches = []
+        for name in sorted(os.listdir(sizings), reverse=True):
+            if not name.endswith(".yaml"):
+                continue
+            if name[:10] < cutoff:
+                break
+            with open(os.path.join(sizings, name), encoding="utf-8", errors="replace") as fh:
+                for _ in range(40):
+                    m = id_re.match(fh.readline())
+                    if m:
+                        matches.append((name, m.group(1)))
+                        break
+    except Exception:  # noqa: BLE001 -- discovery is best-effort; never blocks scaffolding
+        return None
+    if len(matches) > 1:
+        print(
+            "coordinator-doc-new: %d recent sizing-objects share this title slug "
+            "(%s) — not carrying either; pass --deliverable-id to join one."
+            % (len(matches), ", ".join(n for n, _ in matches)),
+            file=sys.stderr,
+        )
+        return None
+    return matches[0][1] if matches else None
+
+
 def _resolve_explicit_predecessor_edge_tier(
     predecessor_relpath: str | None,
     repo_root: str | None,
@@ -6979,6 +7042,19 @@ def main(argv: "list[str] | None" = None) -> int:
                     return (
                         _mint_deliverable_id(
                             deliverable_id=deliverable_id, carry_source="carry"
+                        ),
+                        "carry",
+                    )
+                # Last rung before a fresh mint: a sizing-object scaffolded
+                # for this same title already minted this work's id.
+                _same_title_dlv = _resolve_same_title_sizing_deliverable_id(
+                    _hnd_work_slug, _hnd_repo_root
+                )
+                if _same_title_dlv:
+                    return (
+                        _mint_deliverable_id(
+                            deliverable_id=_same_title_dlv,
+                            carry_source="same-title sizing-object",
                         ),
                         "carry",
                     )

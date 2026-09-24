@@ -375,25 +375,35 @@ def resolve_post_push_sha(worktree_root: Union[str, Path], pre_push_sha: Optiona
     `PushOutcome` does not expose (shape (a) -- would need a new field
     threaded out of `push_with_retry`, more invasive, not less).
 
-    Verification is by TREE identity, not the token-trailer `git log --grep`
-    the agree branch (`commit()`, above) uses for its OWN pre-push
-    resolution: that mechanism depends on the per-call `Commit-Token:`
-    trailer minted inside `commit()`, which `CommitOutcome` does not carry
-    back to any caller, and threading it out to three call sites (one of
-    which -- the two `consumed_handoff_stamp.py` / `post_commit_tail.py`
-    follow-up commits -- doesn't mint a token at all, using
-    `git_native.commit_scoped` directly) is exactly the "new plumbing" (b)
-    is supposed to avoid. Tree identity needs none: a `rebase --onto` that
-    only moves a commit's PARENT (the only kind `push_with_retry` performs)
-    reapplies the identical diff and so produces an identical tree; a
-    concurrent peer commit landing in the race window carries a DIFFERENT
-    diff and so a different tree. Tree identity is checked SECOND, behind an
-    ancestry check, because it cannot see an EMPTY peer commit: an empty
-    commit inherits its parent's tree verbatim, so a peer `--allow-empty`
-    landing on top of ours matches our tree exactly and a tree-only check
-    would adopt it. Ancestry separates the two cleanly in every case — a
-    rebase rewrites our commit and so drops it out of the new tip's history,
-    while anything built on top of ours necessarily keeps it as an ancestor.
+    Verification is by PATCH identity (`git_native.patch_id`), not the
+    token-trailer `git log --grep` the agree branch (`commit()`, above) uses
+    for its OWN pre-push resolution: that mechanism depends on the per-call
+    `Commit-Token:` trailer minted inside `commit()`, which `CommitOutcome`
+    does not carry back to any caller, and threading it out to three call
+    sites (one of which -- the two `consumed_handoff_stamp.py` /
+    `post_commit_tail.py` follow-up commits -- doesn't mint a token at all,
+    using `git_native.commit_scoped` directly) is exactly the "new plumbing"
+    (b) is supposed to avoid. Patch identity, not whole-TREE identity: a
+    `rebase --onto` that only moves a commit's PARENT (the only kind
+    `push_with_retry` performs) reapplies the identical diff, but the
+    resulting TREE (new parent's tree + our diff) is only identical to the
+    pre-push tree (old parent's tree + our diff) when the two parents'
+    trees themselves already matched -- false the moment the concurrent
+    peer commit that forced the reject touches any path disjoint from ours,
+    which is the ordinary rebase-retry case, not an edge case (state/
+    bug-backlog/2026-08-10-no-test-exercises-push-with-retry-s-reba-
+    cc84495b2bb1.yaml: a whole-tree check false-negatived on exactly this).
+    `patch_id` hashes the diff a commit introduces independent of its
+    parent, so a clean reparent still compares equal while a concurrent
+    peer's DIFFERENT diff does not. Patch identity is checked SECOND, behind
+    an ancestry check, because it cannot see an EMPTY peer commit: an empty
+    commit introduces no diff, and `git patch-id` hashes an empty diff to
+    the same value regardless of commit, so a peer `--allow-empty` landing
+    on top of ours would patch-match a genuinely empty follow-up commit and
+    a patch-id-only check would adopt it. Ancestry separates the two cleanly
+    in every case — a rebase rewrites our commit and so drops it out of the
+    new tip's history, while anything built on top of ours necessarily
+    keeps it as an ancestor.
     `pre_push_sha` is the caller's own
     already-verified value (`commit_outcome.committed_sha` in
     `run_commit_pipeline`; the pre-push `rev_parse_head()` capture in the
@@ -428,13 +438,17 @@ def resolve_post_push_sha(worktree_root: Union[str, Path], pre_push_sha: Optiona
     base = git_native.merge_base(worktree_root, pre_push_sha, post_push_sha)
     if base.ok and base.stdout.strip() == pre_push_sha:
         return pre_push_sha
-    pre_tree = git_native.rev_parse(worktree_root, f"{pre_push_sha}^{{tree}}")
-    post_tree = git_native.rev_parse(worktree_root, f"{post_push_sha}^{{tree}}")
-    if not pre_tree.ok or not post_tree.ok:
+    pre_patch = git_native.patch_id(worktree_root, pre_push_sha)
+    post_patch = git_native.patch_id(worktree_root, post_push_sha)
+    if not pre_patch.ok or not post_patch.ok:
         return pre_push_sha
-    pre_tree_sha = pre_tree.stdout.strip()
-    post_tree_sha = post_tree.stdout.strip()
-    if pre_tree_sha and pre_tree_sha == post_tree_sha:
+    # `git patch-id` prints "<patch-id> <commit-sha>" -- only the first
+    # field is the hash; the second echoes back the ref this call passed
+    # in, which differs (pre vs. post sha) by construction and would
+    # always break equality if left in.
+    pre_patch_id = pre_patch.stdout.split()[0] if pre_patch.stdout.split() else ""
+    post_patch_id = post_patch.stdout.split()[0] if post_patch.stdout.split() else ""
+    if pre_patch_id and pre_patch_id == post_patch_id:
         return post_push_sha
     return pre_push_sha
 

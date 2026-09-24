@@ -89,6 +89,13 @@ def _reject_then_never_again(monkeypatch, push_calls: list) -> None:
         return GitResult(returncode=1, stdout="", stderr=_NON_FAST_FORWARD_STDERR)
 
     monkeypatch.setattr(git_native, "push", _fake_push)
+    # `_init_repo_with_upstream` configures a same-name upstream, so
+    # `push_with_retry` pushes by explicit refspec (see that function's
+    # `upstream_info` branch, `push_with_retry: push a configured upstream
+    # by explicit refspec`) -- both call shapes must reject identically or
+    # the real (unmocked) `push_refspec` reports "up to date" against the
+    # real remote and this fake reject is never seen.
+    monkeypatch.setattr(git_native, "push_refspec", _fake_push)
     monkeypatch.setattr(
         git_native, "fetch", lambda *a, **kw: GitResult(returncode=0, stdout="", stderr="")
     )

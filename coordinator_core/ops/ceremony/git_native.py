@@ -1281,7 +1281,9 @@ def parse_check_ignore_stdin_z(stdout: str) -> List[_CheckIgnoreMatch]:
     return matches
 
 
-def check_ignore(cwd: Union[str, Path], paths: Sequence[str]) -> GitResult:
+def check_ignore(
+    cwd: Union[str, Path], paths: Sequence[str], *, timeout: float = _DEFAULT_TIMEOUT_SECS
+) -> GitResult:
     """`git check-ignore -v --stdin -z` — batched `.gitignore` match test.
 
     Purpose: `explicit_stage()`'s pre-`git add` ignored-path classification
@@ -1324,6 +1326,7 @@ def check_ignore(cwd: Union[str, Path], paths: Sequence[str]) -> GitResult:
         ["check-ignore", "-v", "--stdin", "-z"],
         cwd=cwd,
         input_data=stdin_data,
+        timeout=timeout,
     )
 
 
@@ -5567,6 +5570,26 @@ def commit_authored_new_file(
                 "traversal segment"
             ),
         )
+    # Checked BEFORE the containment resolve() below: a component carrying a
+    # colon (e.g. `state/a:b/row.yaml`) is a legality refusal, not a
+    # containment one, but `Path.resolve()` on Windows reads an embedded
+    # `a:` as a second drive letter and re-anchors the whole path there --
+    # the containment check below would then throw on a `ValueError` and
+    # report "resolves outside the worktree", the wrong diagnostic for a
+    # path that never left it. Ordering this check first means the
+    # Windows-checkout refusal fires with its own, correct message on
+    # every offending path, never only on the ones `.resolve()` happens to
+    # leave alone.
+    early_legality_refusal = illegal_path_refusal({normalized: (0, "0" * 40)})
+    if early_legality_refusal is not None:
+        return GitResult(
+            returncode=-1,
+            stdout="",
+            stderr=(
+                "commit_authored_new_file: refused -- this commit lands a path "
+                f"Windows cannot check out:\n{early_legality_refusal}"
+            ),
+        )
     target = root / normalized
     try:
         target.resolve().relative_to(root.resolve())  # fs-only: containment check, never stringified
@@ -5905,6 +5928,39 @@ def merge_base_is_ancestor(
     is deliberately not the interface here.
     """
     return _git(["merge-base", "--is-ancestor", ancestor_ref, descendant_ref], cwd=cwd)
+
+
+def patch_id(cwd: Union[str, Path], ref: str) -> GitResult:
+    """`git diff-tree -p <ref> | git patch-id --stable` — the diff a single
+    commit introduces, hashed independent of its parent.
+
+    Purpose: `push.py::resolve_post_push_sha`'s rebase-retry detection. A
+    `rebase --onto` reparents a commit onto a new base without touching the
+    diff it carries, but that new base's tree can legitimately differ from
+    the old one — e.g. a concurrent peer commit touching an unrelated file —
+    which means the REWRITTEN commit's own tree (parent tree + this diff)
+    no longer equals the pre-push commit's tree (old parent tree + this
+    diff) even though the rebase was a clean, no-op reparent. A whole-tree
+    equality check therefore false-negatives on exactly the ordinary
+    rebase-retry case whenever the peer's commit is disjoint from ours
+    (state/bug-backlog/2026-08-10-no-test-exercises-push-with-retry-s-reba-
+    cc84495b2bb1.yaml). `--stable` output is deterministic across git
+    versions (the legacy algorithm is machine/version-dependent); two
+    non-empty-diff commits carrying the identical patch are the ONLY
+    inputs this hashes equal, so a peer's unrelated commit or a genuine
+    content conflict during the rebase both still compare unequal. Two
+    `_git` calls (not a real shell pipe) because this wrapper's choke point
+    (`_git`) runs one subprocess per call; `diff-tree`'s output is passed
+    through as `patch-id`'s stdin via `input_data`, matching what a real
+    pipe would deliver — `git patch-id` skips any non-diff header lines by
+    design, so the intermediate `diff-tree` text needs no trimming.
+    """
+    diff_result = _git(["diff-tree", "-p", "--no-color", ref], cwd=cwd)
+    if not diff_result.ok:
+        return diff_result
+    return _git(
+        ["patch-id", "--stable"], cwd=cwd, input_data=diff_result.stdout
+    )
 
 
 def rev_parse_upstream(cwd: Union[str, Path]) -> GitResult:

@@ -152,7 +152,18 @@ def uncommitted_surface_refusals(root: Path) -> List[str]:
         if not live.is_file():
             continue
         try:
-            new_text = live.read_bytes().decode("utf-8", errors="replace")
+            # `.replace("\r\n", "\n")` -- a git blob is LF-normalized
+            # content (git's own storage convention); the WORKING-TREE
+            # read is not, and on a Windows checkout with the common
+            # `core.autocrlf=true` default, git rewrites every LF back to
+            # CRLF on checkout. Comparing the two unnormalized would read
+            # that checkout-time rewrite alone as "every line grew" on an
+            # otherwise byte-identical, untouched file -- a false refusal
+            # this fleet's "Windows is first-class" bar does not allow
+            # (CLAUDE.md's Runtime conventions). `commit_authored_content`'s
+            # own callers pass content in-process, never round-tripping a
+            # checkout, so this is the one read site that needs it.
+            new_text = live.read_bytes().decode("utf-8", errors="replace").replace("\r\n", "\n")
             old_entry = old_blobs.get(path)
             old_text = "" if old_entry is None else _blob_text(common_dir, old_entry[1])
         except Exception as exc:  # noqa: BLE001 -- fail closed, see module docstring.

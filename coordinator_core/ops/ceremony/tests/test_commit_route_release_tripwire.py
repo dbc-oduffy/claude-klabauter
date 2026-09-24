@@ -634,6 +634,71 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "reason": "release",
         "confirmed": False,
     },
+    # Found by the enumerator, not in the brief's seed list. Own-repo
+    # `commit_paths` self-commit of the archive artifact this op just wrote
+    # (module docstring: "commits it, so a later session can recover an
+    # evicted row"). Same shape as the other same-tree `commit_paths` sites
+    # above -- "release" pending confirmation, not an auto-ineligible.
+    "ops/archive_auto_memory_rows.py::main": {
+        "reason": "release",
+        "confirmed": False,
+    },
+    # VERIFIED INELIGIBLE by reading the body: writes a content-addressed
+    # blob and swaps a `refs/coordinator/inbox/<filename>/<commit-sha>`
+    # anchor ref via `cas_ref` (the sixth mechanism) -- not a commit at all,
+    # no worktree pathspec, no branch ref, and so no session claim over any
+    # path for `release_committed_claims` to act on.
+    "ops/fleet/_memo_anchor.py::write_anchor": {
+        "reason": "ineligible: a `cas_ref` anchor-ref write (blob + ref CAS "
+        "under refs/coordinator/inbox/), not a commit -- no worktree paths "
+        "or session claim exist here to release",
+        "confirmed": True,
+    },
+    # VERIFIED INELIGIBLE by reading the body: no session id anywhere in
+    # `_restore_one` -- it restores a PEER's lost memo (found via the
+    # anchor's own recovery ledger, not this session's own claimed work)
+    # back into this repo's inbox. Same disposition as `ops/
+    # handoff_archive_transition.py::_commit_retained_supersede_flip` above.
+    "ops/fleet/memo_heal.py::_restore_one": {
+        "reason": "ineligible: threads no session id -- it restores a lost "
+        "peer memo into this repo's inbox, not work this session itself "
+        "claimed",
+        "confirmed": True,
+    },
+    # VERIFIED INELIGIBLE by reading the body: commits into
+    # `receiver_repo_path`, a `cc:` receiver's PEER repo, never the sending
+    # session's own worktree -- same peer-delivery shape this module's own
+    # header docstring already names for `_commit_delivered_memo`'s `to:`
+    # leg ("commits into a PEER's repo and must never touch that repo's
+    # commit ledger").
+    "ops/fleet/memo_send.py::_deliver_cc_copy": {
+        "reason": "ineligible: commits into a `cc:` receiver's own PEER "
+        "repo, never the sending session's worktree -- no session claims "
+        "exist there to release",
+        "confirmed": True,
+    },
+    # Found by the enumerator, not in the brief's seed list. Own-repo
+    # `commit_paths` batch commit of the frozen review-trail diff artifacts
+    # this call just wrote (docstring: "every file pair WRITTEN in this
+    # call ... is committed in exactly ONE `commit_paths` call"). Same
+    # shape as the other same-tree `commit_paths` sites above -- "release"
+    # pending confirmation, not an auto-ineligible.
+    "ops/review_freeze_diff.py::freeze_diffs_batch": {
+        "reason": "release",
+        "confirmed": False,
+    },
+    # VERIFIED INELIGIBLE by reading the body: commits into
+    # `receiver_repo_path` -- the same peer-delivery primitive and shape as
+    # `memo_send._deliver_cc_copy` above (the function's own docstring
+    # names both siblings by name), never the sending session's own
+    # worktree.
+    "ops/tracker/push_suggestion.py::_commit_envelope": {
+        "reason": "ineligible: commits into the receiver repo (peer "
+        "delivery, same shape as memo_send's `to:`/`cc:` legs), never the "
+        "sending session's own worktree -- no session claims exist there "
+        "to release",
+        "confirmed": True,
+    },
 }
 
 

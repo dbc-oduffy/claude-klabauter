@@ -67,9 +67,11 @@ _TESTS_DIR = Path(__file__).resolve().parent
 #     REFUSAL against a simulated peer write to a real `.git/index`; the CAS
 #     comparand is git's own on-disk stat identity.
 _ALLOWED_REAL_GIT_IMPORTERS: frozenset[str] = frozenset({
+    "test_commit_admission.py",
     "test_commit_authored_content_edges.py",
     "test_commit_authored_new_file.py",
     "test_commit_cas_freshness.py",
+    "test_commit_path_legality.py",
     "test_commit_scoped.py",
     "test_commit_scoped_edges.py",
     "test_commit_scoped_in_process.py",

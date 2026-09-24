@@ -1090,9 +1090,8 @@ def _citation_lint_warning(paths: list) -> str:
         "memo.send: %d body path(s) are not repo-qualified, so the receiver "
         "will resolve them against its own tree.\n"
         "%s%s\n"
-        "  Qualify as `<repo> <path>` or `<repo>:<path>`.\n"
-        "  Nothing was written. This warning fires once per topic; the "
-        "next attempt sends." % (len(paths), listed, more_clause)
+        "  Qualify as `<repo> <path>` or `<repo>:<path>`."
+        % (len(paths), listed, more_clause)
     )
 
 
@@ -1147,7 +1146,7 @@ def _send_ack_path(sender_worktree: Path, topic: str) -> Path:
     return sender_worktree.joinpath(*_SEND_ACK_RELDIR) / digest
 
 
-def _no_reader_warning(topic: str, evidence: str) -> str:
+def _no_reader_warning(evidence: str) -> str:
     """The one-shot warning. A REGISTER, not an essay: one fact, the test the
     EM applies, and the way through — no self-legitimacy, no apology, no
     override key dressed up as a punishment.
@@ -1179,11 +1178,8 @@ def _no_reader_warning(topic: str, evidence: str) -> str:
         "  If it is plan-weight complexity, the memo IS the right artifact — "
         "re-run this exact\n"
         "  command and it will send.\n"
-        "\n"
-        "  Nothing was written. This warning fires once per topic (%s); the "
-        "next attempt sends.\n"
         "  If this host does carry a fleet, say so with "
-        "COORDINATOR_CAP_PEER_EMS_REACHABLE=1." % (evidence, topic)
+        "COORDINATOR_CAP_PEER_EMS_REACHABLE=1." % evidence
     )
 
 
@@ -1219,6 +1215,22 @@ def _warn_once(
     return warning
 
 
+def _held_once_refusal(warnings: list) -> str:
+    """Every warn-once gate that fired on this attempt, as ONE refusal.
+
+    The gates are evaluated together and each records its marker in the
+    same pass, so "the next attempt sends" is true when it is said. Gated
+    one at a time, a memo tripping two gates was refused twice, each
+    refusal promising the retry would send.
+    """
+    noun = "This warning fires" if len(warnings) == 1 else "These warnings fire"
+    return (
+        "\n\n".join(warnings)
+        + "\n  Nothing was written. %s once per topic; the next attempt sends."
+        % noun
+    )
+
+
 def _no_reader_gate(
     sender_worktree: Path, topic: str, dry_run: bool, receiver_root=None
 ) -> Optional[str]:
@@ -1235,7 +1247,7 @@ def _no_reader_gate(
         return None
 
     return _warn_once(
-        sender_worktree, topic, _no_reader_warning(topic, unreachable.evidence),
+        sender_worktree, topic, _no_reader_warning(unreachable.evidence),
         marker_text="warned: %s\n" % unreachable.evidence,
     )
 
@@ -1345,9 +1357,7 @@ def _duplicate_reply_warning(prior: dict) -> str:
     return (
         "memo.send: another session of this repo already answered that "
         "memo — topic %r, sent to %r at %s.\n"
-        "  Read that reply before sending a second one.\n"
-        "  Nothing was written. This warning fires once per topic; the "
-        "next attempt sends."
+        "  Read that reply before sending a second one."
         % (prior.get("topic"), prior.get("to"), prior.get("sent_at"))
     )
 
@@ -1689,16 +1699,6 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     if mirror_refusal is not None:
         return build_setup_error_result(_MODE, dry_run, mirror_refusal)
 
-    # Warn-once where THIS RECEIVER's inbox shows no one draining it. Sited
-    # here rather than earlier so the probe reads the addressee's own inbox
-    # instead of guessing from the venue; nothing has been written yet, so a
-    # refusal still costs nothing.
-    no_reader = _no_reader_gate(
-        sender_worktree, topic, dry_run, receiver_root=receiver_repo_path
-    )
-    if no_reader is not None:
-        return build_setup_error_result(_MODE, dry_run, no_reader)
-
     if inbox_dir is None:
         suggestion = _suggest_nearest_receiver(to, all_repos)
         suggestion_clause = f" Did you mean {suggestion!r}?" if suggestion else ""
@@ -1710,11 +1710,23 @@ def _memo_send(params: dict, repo_root=None) -> dict:
             f"<abs-path-to-repo>), or check for a typo in the draft's `to:`.",
         )
 
-    # Warn-once where THIS repo already answered `in_reply_to` from a
-    # DIFFERENT session — after the UNKNOWN RECEIVER refusal (an
-    # unresolvable receiver fails first and never uses up an ack) and
-    # before the dry_run preview return (a preview never gates, same
-    # discipline as `_no_reader_gate`).
+    # The warn-once gates — all evaluated on the same attempt and refused as
+    # one (`_held_once_refusal`). After the UNKNOWN RECEIVER refusal (an
+    # unresolvable receiver fails first and never uses up an ack) and before
+    # the dry_run preview return (a preview never gates). Nothing has been
+    # written yet, so a refusal still costs nothing.
+    #
+    # No reader: THIS RECEIVER's inbox shows no one draining it — the probe
+    # reads the addressee's own inbox rather than guessing from the venue.
+    held = []
+    no_reader = _no_reader_gate(
+        sender_worktree, topic, dry_run, receiver_root=receiver_repo_path
+    )
+    if no_reader is not None:
+        held.append(no_reader)
+
+    # Duplicate reply: THIS repo already answered `in_reply_to` from a
+    # DIFFERENT session.
     reply_to = fm.get("in_reply_to")
     if not dry_run and isinstance(reply_to, str) and reply_to.strip():
         prior_reply = _prior_reply_from_another_session(
@@ -1726,9 +1738,9 @@ def _memo_send(params: dict, repo_root=None) -> dict:
                 _duplicate_reply_warning(prior_reply),
             )
             if duplicate_warning is not None:
-                return build_setup_error_result(_MODE, dry_run, duplicate_warning)
+                held.append(duplicate_warning)
 
-    # Warn-once where the body cites a docs/state/coordinator/archive/
+    # Citation lint: the body cites a docs/state/coordinator/archive/
     # cross-repo path with no repo qualifier — the receiver resolves it
     # against ITS OWN tree, not this sender's. Skipped entirely when the
     # receiver resolves to the sender's own worktree (D4) — a self-send
@@ -1747,7 +1759,10 @@ def _memo_send(params: dict, repo_root=None) -> dict:
                 _citation_lint_warning(unqualified),
             )
             if citation_warning is not None:
-                return build_setup_error_result(_MODE, dry_run, citation_warning)
+                held.append(citation_warning)
+
+    if held:
+        return build_setup_error_result(_MODE, dry_run, _held_once_refusal(held))
 
     target_file = inbox_dir / filename
     # AC6 leg 1 — existence pre-check, independent of the O_EXCL leg below.

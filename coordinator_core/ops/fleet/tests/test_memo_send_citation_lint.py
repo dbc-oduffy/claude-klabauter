@@ -172,7 +172,9 @@ class TestCitationLintHeldOnce:
         result = _memo_send({"dry_run": False, "topic": "self-send-topic"}, repo_root=sender_repo)
         assert result["exit_code"] == 0, result
 
-    def test_both_c2_and_c3_held_once_each_in_order(self, sender_and_receiver):
+    def test_both_c2_and_c3_held_together_then_delivers(self, sender_and_receiver, caplog):
+        # Both gates fire on ONE refusal and both acks land in that pass, so
+        # the retry the refusal promises actually sends.
         sender_repo, receiver_repo = sender_and_receiver
         _seed_prior_reply_row(
             sender_repo,
@@ -196,14 +198,14 @@ class TestCitationLintHeldOnce:
         first = _memo_send({"dry_run": False, "topic": "both-warnings-topic"}, repo_root=sender_repo)
         assert first["exit_code"] == 1
         assert _send_ack_path(sender_repo, "duplicate-reply:both-warnings-topic").is_file()
-        assert not _send_ack_path(sender_repo, "citation-lint:both-warnings-topic").is_file()
+        assert _send_ack_path(sender_repo, "citation-lint:both-warnings-topic").is_file()
+        refusal = caplog.text
+        assert "already answered" in refusal
+        assert "not repo-qualified" in refusal
+        assert refusal.count("Nothing was written") == 1
 
         second = _memo_send({"dry_run": False, "topic": "both-warnings-topic"}, repo_root=sender_repo)
-        assert second["exit_code"] == 1
-        assert _send_ack_path(sender_repo, "citation-lint:both-warnings-topic").is_file()
-
-        third = _memo_send({"dry_run": False, "topic": "both-warnings-topic"}, repo_root=sender_repo)
-        assert third["exit_code"] == 0, third
+        assert second["exit_code"] == 0, second
         inbox = [
             p for p in (receiver_repo / "cross-repo" / "inbox").glob("*.md")
             if p.name != ".gitkeep"

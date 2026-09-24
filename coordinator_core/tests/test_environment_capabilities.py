@@ -95,6 +95,34 @@ def test_an_undrained_inbox_reads_as_no_reader(tmp_path):
     assert "none carries picked_up_at" in cap.evidence
 
 
+def _archive(root: Path, *, picked_up: str) -> None:
+    archive = root / "cross-repo" / "archive"
+    archive.mkdir(parents=True, exist_ok=True)
+    (archive / "2026-09-01-peer-em-drained.md").write_text(
+        f"---\ntitle: \"drained\"\nstatus: actioned\npicked_up_at: '{picked_up}'\n---\n",
+        encoding="utf-8",
+    )
+
+
+def test_a_drained_archive_outweighs_an_unstamped_inbox(tmp_path):
+    """Draining archives the memo, so a well-worked inbox holds only what is
+    not picked up yet — the drain evidence lives in `archive/`."""
+    recent = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1)).isoformat()
+    _inbox(tmp_path, picked_up=None)
+    _archive(tmp_path, picked_up=recent)
+    cap = env_mod.capability("peer_ems_reachable", {}, receiver_root=tmp_path)
+    assert cap.value is True
+    assert "last drained" in cap.evidence
+
+
+def test_an_empty_inbox_with_a_drained_archive_is_reachable(tmp_path):
+    recent = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1)).isoformat()
+    (tmp_path / "cross-repo" / "inbox").mkdir(parents=True)
+    _archive(tmp_path, picked_up=recent)
+    cap = env_mod.capability("peer_ems_reachable", {}, receiver_root=tmp_path)
+    assert cap.value is True
+
+
 def test_a_stale_drain_is_over_the_horizon(tmp_path):
     old = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=400)).isoformat()
     _inbox(tmp_path, picked_up=old)

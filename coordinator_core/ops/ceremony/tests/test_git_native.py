@@ -174,12 +174,22 @@ _WRAPPER_INVOCATIONS = [
 #: process for the whole entrypoint, counted at `subprocess.Popen` rather
 #: than at the `_git()` seam, plus a hook canary proving no hook of the
 #: destination repository fired on our behalf.
+#: `patch_id` (push-retry rebase-detection, `push.resolve_post_push_sha`) is
+#: the same shape of exclusion for the same reason: it issues TWO `_git()`
+#: calls (`diff-tree -p`, piping that output into `patch-id --stable` via
+#: `input_data`), not the single-mocked-return-value shape the (a) harness
+#: expresses. Its real-git behaviour is covered by
+#: `test_patch_id_matches_across_a_clean_rebase_and_differs_across_a_
+#: different_diff` below, and its AC3 routing (every internal call through
+#: `_git()`, never `subprocess.run` directly) by
+#: `test_composite_entrypoints_never_call_subprocess_run_directly`.
 _COMPOSITE_ENTRYPOINTS = {
     "commit_scoped",
     "commit_authored_content",
     "commit_authored_new_file",
     "stage_from_patch",
     "stage_from_patch_cas_refusal",
+    "patch_id",
 }
 
 #: Public functions deliberately excluded from `_WRAPPER_INVOCATIONS` for a
@@ -232,6 +242,15 @@ _COMPOSITE_ENTRYPOINTS = {
 #: `archive_terminal_handoffs._dirty_handoff_relpaths`) -- both callers'
 #: own fail-closed/parse/rename-record test coverage exercises this
 #: function's real body, patching `status_porcelain` one level below it.
+#: `canonical_repo_relative_path_refusal` / `first_non_canonical_path_refusal`
+#: never call `subprocess.run` -- pure string/`posixpath` predicates over an
+#: already-resolved path, called from `_commit_via_head_spine` and from
+#: `commit_scoped`/`ceremony.commit_v2`'s combined path lists respectively.
+#: The (a) harness's `mock_run.call_count == 1` assertion is a false claim
+#: against a function that never spawns, same reasoning as
+#: `directory_pathspecs` above. Covered directly below by
+#: `test_canonical_repo_relative_path_refusal_*` and
+#: `test_first_non_canonical_path_refusal_*`.
 _NON_SUBPROCESS_HELPERS = {
     "directory_pathspecs",
     "directory_pathspec_diagnostic",
@@ -239,6 +258,8 @@ _NON_SUBPROCESS_HELPERS = {
     "deferred_publisher_span",
     "rev_parse_head",
     "dirty_relpaths_from_porcelain",
+    "canonical_repo_relative_path_refusal",
+    "first_non_canonical_path_refusal",
 }
 
 #: `check_ignore()` is a thin single-`git`-call wrapper like everything in
@@ -341,6 +362,112 @@ def test_directory_pathspec_diagnostic_names_the_path():
     assert "some/dir" in diagnostic
     assert "matches whatever is inside it AT COMMIT TIME" in diagnostic
     assert "Pass explicit file paths instead" in diagnostic
+
+
+def test_canonical_repo_relative_path_refusal_accepts_a_canonical_path():
+    assert git_native.canonical_repo_relative_path_refusal("state/handoffs/x.md") is None
+
+
+def test_canonical_repo_relative_path_refusal_refuses_a_traversal_segment():
+    refusal = git_native.canonical_repo_relative_path_refusal("coordinator/../coordinator_core/x.py")
+    assert refusal is not None
+    assert "'..' path component" in refusal
+    assert "coordinator_core/x.py" in refusal  # canonical form offered as a hint
+
+
+def test_canonical_repo_relative_path_refusal_refuses_an_absolute_path():
+    refusal = git_native.canonical_repo_relative_path_refusal("/etc/passwd")
+    assert refusal is not None
+    assert "absolute path" in refusal
+
+
+def test_canonical_repo_relative_path_refusal_refuses_a_windows_drive_letter():
+    refusal = git_native.canonical_repo_relative_path_refusal("C:/Windows/x.txt")
+    assert refusal is not None
+    assert "Windows drive letter" in refusal
+
+
+def test_canonical_repo_relative_path_refusal_refuses_a_dot_git_component():
+    refusal = git_native.canonical_repo_relative_path_refusal("state/.git/hooks/x")
+    assert refusal is not None
+    assert "'.git' path component" in refusal
+
+
+def test_first_non_canonical_path_refusal_none_when_every_path_is_canonical():
+    assert git_native.first_non_canonical_path_refusal(
+        ["state/a.md", "coordinator_core/b.py"]
+    ) is None
+
+
+def test_first_non_canonical_path_refusal_reports_the_first_offender():
+    refusal = git_native.first_non_canonical_path_refusal(
+        ["state/a.md", "../escape.md", "also/../bad.md"]
+    )
+    assert refusal is not None
+    assert "'../escape.md'" in refusal
+
+
+def test_patch_id_matches_across_a_clean_rebase_and_differs_across_a_different_diff(tmp_path):
+    """`patch_id` is what `push.resolve_post_push_sha` uses to tell a clean
+    `rebase --onto` reparent (same patch id) apart from a genuinely different
+    commit (different patch id) -- see that function's own docstring for the
+    whole-tree-equality defect this replaces (state/bug-backlog/2026-08-10-
+    no-test-exercises-push-with-retry-s-reba-cc84495b2bb1.yaml)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, **no_console_creationflags())
+    subprocess.run(["git", "config", "user.email", "t@t.example"], cwd=str(repo), check=True, **no_console_creationflags())
+    subprocess.run(["git", "config", "user.name", "t"], cwd=str(repo), check=True, **no_console_creationflags())
+    (repo / "base.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True, **no_console_creationflags())
+    subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=str(repo), check=True, **no_console_creationflags())
+
+    base_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
+    ).stdout.strip()
+
+    (repo / "ours.txt").write_text("ours\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True, **no_console_creationflags())
+    subprocess.run(["git", "commit", "-q", "-m", "ours"], cwd=str(repo), check=True, **no_console_creationflags())
+    original_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
+    ).stdout.strip()
+
+    # A clean branch switch back to the base commit (tree is clean, nothing
+    # uncommitted to lose -- never `reset --hard`), then an unrelated peer
+    # commit, then a cherry-pick of "ours" back on top: a clean reparent
+    # that carries the identical diff onto a different (and so differently-
+    # treed) parent, exactly what a real `rebase --onto` performs.
+    subprocess.run(
+        ["git", "checkout", "-q", "-b", "peer-branch", base_sha], cwd=str(repo), check=True,
+        **no_console_creationflags(),
+    )
+    (repo / "peer.txt").write_text("peer\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True, **no_console_creationflags())
+    subprocess.run(["git", "commit", "-q", "-m", "peer"], cwd=str(repo), check=True, **no_console_creationflags())
+    subprocess.run(
+        ["git", "cherry-pick", original_sha], cwd=str(repo), check=True,
+        capture_output=True, **no_console_creationflags(),
+    )
+    rewritten_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
+    ).stdout.strip()
+    assert rewritten_sha != original_sha  # genuinely a different commit object
+
+    original_result = git_native.patch_id(repo, original_sha)
+    rewritten_result = git_native.patch_id(repo, rewritten_sha)
+    peer_result = git_native.patch_id(repo, "HEAD~1")  # the unrelated peer commit
+
+    assert original_result.ok and rewritten_result.ok and peer_result.ok
+    original_id = original_result.stdout.split()[0]
+    rewritten_id = rewritten_result.stdout.split()[0]
+    peer_id = peer_result.stdout.split()[0]
+
+    assert original_id == rewritten_id  # same diff, different parent -> same patch id
+    assert original_id != peer_id  # a genuinely different diff -> a different patch id
 
 
 def test_rev_parse_head_spawns_nothing(tmp_path):

@@ -231,6 +231,11 @@ def _probe_peer_ems_reachable(
     Errs toward "not reachable" only on real evidence of an undrained inbox: a
     false negative costs a warning the operator dismisses, a false positive
     costs a memo nobody reads.
+
+    The sibling `archive/` is sampled too, and it is where the evidence mostly
+    lives: draining a memo stamps it AND archives it, so a well-drained inbox
+    holds only what has not been picked up yet. Sampling `inbox/` alone read
+    claude-klabauter (2173 stamped memos archived) as "nothing drained".
     """
     root = receiver_root or Path(os.getcwd())
     inbox = None
@@ -245,14 +250,18 @@ def _probe_peer_ems_reachable(
 
     newest: Optional[str] = None
     total = 0
-    for head in _iter_inbox_frontmatter(inbox, _DRAIN_SAMPLE):
-        total += 1
-        for line in head:
-            if line.startswith("picked_up_at:"):
-                stamp = line.split(":", 1)[1].strip().strip("'\"")
-                if newest is None or stamp > newest:
-                    newest = stamp
-                break
+    archive = inbox.parent / "archive"
+    for corpus in (inbox, archive):
+        if not corpus.is_dir():
+            continue
+        for head in _iter_inbox_frontmatter(corpus, _DRAIN_SAMPLE):
+            total += 1
+            for line in head:
+                if line.startswith("picked_up_at:"):
+                    stamp = line.split(":", 1)[1].strip().strip("'\"")
+                    if newest is None or stamp > newest:
+                        newest = stamp
+                    break
     if total == 0:
         return _cap("peer_ems_reachable", False, f"{inbox} is empty — no drain evidence", env)
     if newest is None:

@@ -365,7 +365,7 @@ def test_absent_shared_index_never_deletes_the_scoped_path_it_was_asked_to_commi
     assert result.ok, result.stderr
     assert _committed_content_at_head(repo, "file.txt") == "HEAD content\n"
     assert _committed_content_at_head(repo, "other.txt") == "other content\n"
-    assert "the HEAD version was committed instead" in result.stderr
+    assert "no index file was present, so the content was taken from HEAD instead" in result.stderr
     assert "staged (index)" not in result.stderr
 
 

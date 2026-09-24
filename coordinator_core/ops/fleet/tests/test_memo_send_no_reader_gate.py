@@ -30,14 +30,24 @@ from coordinator_core.ops.fleet import memo_send
 
 
 @pytest.fixture()
-def no_reader(monkeypatch):
+def no_reader(monkeypatch, tmp_path_factory):
     """Both overrides must go, not just the one this surface reads:
     `peer_ems_reachable` is DERIVED from `fleet_present`, so leaving the
     latter pinned by this package's conftest would infer a reader back into
-    existence. Function-scoped, so it runs after that autouse pin."""
+    existence. Function-scoped, so it runs after that autouse pin.
+
+    Calls without `receiver_root` probe cwd's inbox, so cwd is pinned to an
+    undrained one — never to whatever repo the suite happens to run in."""
     monkeypatch.delenv("COORDINATOR_CAP_PEER_EMS_REACHABLE", raising=False)
     monkeypatch.delenv("COORDINATOR_CAP_FLEET_PRESENT", raising=False)
     monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "remote")
+    cwd = tmp_path_factory.mktemp("undrained-receiver")
+    inbox = cwd / "cross-repo" / "inbox"
+    inbox.mkdir(parents=True)
+    (inbox / "2026-09-01-peer-em-unread.md").write_text(
+        "---\ntitle: \"unread\"\nstatus: open\n---\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(cwd)
 
 
 @pytest.fixture()
@@ -133,7 +143,6 @@ def test_the_warning_names_the_test_and_the_way_through(no_reader, tmp_path):
     assert "clear win" in warning
     assert "plan-weight" in warning
     assert "re-run" in warning
-    assert "Nothing was written" in warning
 
 
 def test_override_restores_normal_sending(no_reader, tmp_path, monkeypatch):
@@ -183,9 +192,19 @@ def test_the_warning_separates_liveness_from_drainage(no_reader, tmp_path):
     knew it had been messaging that session all day, and overrode a refusal that was
     right — it had measured inbox drainage, not session liveness. The text has to make
     the claim it actually makes, because the override is one keystroke."""
-    warning = memo_send._no_reader_warning("topic", "12 memos sampled, none stamped")
+    warning = memo_send._no_reader_warning("12 memos sampled, none stamped")
 
     assert "draining that inbox" in warning
     assert "Not a claim that the session is dead" in warning
     assert "Measured: 12 memos sampled, none stamped" in warning
     assert "no peer EM is reachable" not in warning
+
+
+def test_held_once_refusal_states_the_way_through_once():
+    """One footer for however many gates fired — a register states a fact once."""
+    one = memo_send._held_once_refusal(["a"])
+    two = memo_send._held_once_refusal(["a", "b"])
+    assert one.count("Nothing was written") == 1
+    assert "This warning fires once per topic; the next attempt sends." in one
+    assert two.count("Nothing was written") == 1
+    assert "These warnings fire once per topic; the next attempt sends." in two
