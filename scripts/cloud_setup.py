@@ -2635,6 +2635,13 @@ def run_example_retrieval_repo_cloud_install(report: Report) -> None:
     (see that constant's own comment). The per-OS persistent service remains
     that mode's own skip; this module still asserts nothing about it.
 
+    Addons install INSIDE this call, never as a step of this module: the
+    ``--cloud`` install runs each addon's own declared cloud pre-boot step,
+    discovered off the machine-local ``repos.*`` roots (example-retrieval-repo 447ab39d4).
+    So this module names no addon step; its obligation is only that
+    `register_machine_local_repo_keys` has written each located addon's key
+    first, and that RAG_INSTALL_TIMEOUT_S covers the addon steps too.
+
     ``--cloud`` is an ASSERTION, not a detection. This module IS the cloud
     provisioning entrypoint (see the module docstring), so it knows the mode
     first-hand; `resolve_cloud_mode` accepts the explicit flag for exactly this
