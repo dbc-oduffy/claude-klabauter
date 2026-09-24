@@ -163,6 +163,7 @@ import subprocess
 import sys
 from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
+from coordinator_core.daily_branch import is_work_branch
 from coordinator_core.coverage import (
     _is_planning_artifact_path,
     _resolve_numstat_row_path,
@@ -180,11 +181,6 @@ _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
 _LOC_RE = re.compile(r"(\d+) insertion|(\d+) deletion")
 _TEST_DIR_RE = re.compile(r"(^|/)tests?/")
 
-# coordinator:review A.1 names `work/*` as the shared, peer-advanceable
-# branch shape that must never default to `origin/main...HEAD` — a bare
-# invocation there sweeps in every session's already-committed work, not
-# just the caller's own. See `_resolve_range`'s bare-argv branch.
-_SHARED_BRANCH_RE = re.compile(r"^work/")
 
 # chain_oracle (C3) defensive file-granularity noise exclusion — a commit is
 # noise IFF every file it touches matches one of these path rules; a MIXED
@@ -561,7 +557,7 @@ def _resolve_range(argv: List[str]) -> Tuple[Optional[str], Optional[str], int]:
     else:
         if not session_id:
             branch = _current_branch()
-            if _SHARED_BRANCH_RE.match(branch):
+            if is_work_branch(branch):
                 print(
                     f"{_PROG}: refusing to default to origin/main..HEAD on "
                     f"shared branch {branch!r} — pass --session-id or an "
@@ -785,6 +781,55 @@ def _count_untrailered_commits(range_: str) -> int:
     return 0 if shas is None else len(shas)
 
 
+def _measure_uncommitted_tree() -> Dict[str, object]:
+    """Measure the uncommitted working tree (staged + unstaged changes to
+    tracked files, against HEAD) via ONE git spawn: `git diff --numstat
+    HEAD`. `_session_scoped` falls back to this ONLY when its committed-
+    commit scan (including the session-aware floor retry) matches zero
+    commits: the ceremony that dispatches this gate mid-chain can run
+    BEFORE its own commit lands, so a zero-commit scan does not mean there
+    is nothing to review — it means the work is still sitting uncommitted,
+    which a commit-trailer scan structurally cannot see (P143-T1,
+    DoE-accepted).
+
+    Same noise/prose/ceremony-exhaust exclusion as the committed path
+    (`_is_noise_path`/`_is_prose_bearing_path`/`_is_ceremony_exhaust_path`),
+    so bookkeeping and doc-only edits still contribute nothing. `commits` is
+    always 0 here — an uncommitted diff has no commit boundary to count —
+    so only `loc`/`surfaces` can trip this leg's verdict.
+
+    Untracked files are deliberately NOT included: a second `git status
+    --porcelain` spawn to add them is not justified without evidence of a
+    live gap, and this stays a one-spawn measurement."""
+    out, rc = _run_git(["diff", "--numstat", "HEAD"])
+    loc = 0
+    surfaces: Set[str] = set()
+    files: Set[str] = set()
+    if rc != 0:
+        return {"loc": loc, "commits": 0, "surfaces": surfaces, "files": files}
+    for line in out.splitlines():
+        m = _CHAIN_NUMSTAT_RE.match(line)
+        if not m:
+            continue
+        added, deleted, raw_path = m.group(1), m.group(2), m.group(3)
+        path = _resolve_numstat_row_path(raw_path)
+        if (
+            _is_noise_path(path)
+            or _is_prose_bearing_path(path)
+            or _is_ceremony_exhaust_path(path)
+        ):
+            continue
+        a = int(added) if added.isdigit() else 0
+        d = int(deleted) if deleted.isdigit() else 0
+        row_loc = a + d
+        if _is_planning_artifact_path(path):
+            row_loc = int(row_loc * _PLANNING_LOC_WEIGHT)
+        loc += row_loc
+        surfaces.add(_classify_surface(path))
+        files.add(path)
+    return {"loc": loc, "commits": 0, "surfaces": surfaces, "files": files}
+
+
 def _session_scoped(range_: str, session_id: str) -> int:
     """`--session-id`-filtered scan over `range_`.
 
@@ -857,6 +902,23 @@ def _session_scoped(range_: str, session_id: str) -> int:
                 filtered_count = len(filtered_shas)
 
     if filtered_count == 0:
+        uncommitted = _measure_uncommitted_tree()
+        uncommitted_surfaces = uncommitted["surfaces"]  # type: ignore[assignment]
+        uncommitted_files = uncommitted["files"]  # type: ignore[assignment]
+        uncommitted_loc = int(uncommitted["loc"])  # type: ignore[arg-type]
+        if uncommitted_loc or uncommitted_surfaces:
+            verdict = _verdict(uncommitted_loc, 0, len(uncommitted_surfaces))
+            print(
+                f"range={range_} loc={uncommitted_loc} commits=0 "
+                f"surfaces={len(uncommitted_surfaces)} files={len(uncommitted_files)} "
+                f"filtered_to=0 basis=code-only+uncommitted-tree VERDICT={verdict}"
+            )
+            print(
+                "note: session-id matched 0 commits — measured the "
+                "uncommitted working tree instead (P143-T1, DoE-accepted)",
+                file=sys.stderr,
+            )
+            return 0
         print(
             f"range={range_} loc=0 commits=0 surfaces=0 files=0 "
             f"filtered_to=0 basis=code-only VERDICT=indeterminate"

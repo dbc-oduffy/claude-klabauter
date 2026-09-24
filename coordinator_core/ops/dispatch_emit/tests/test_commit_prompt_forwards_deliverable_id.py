@@ -106,8 +106,44 @@ def test_commit_prompt_instructs_the_agent_to_actually_call_the_resolver():
     call = _commit_agent_call(
         ["a.py"], "Commit wave 1", 0, ["C1"], deliverable_id="dlv-a-plan-99b845"
     )
-    assert "apply_missing_trailers(message, repo, paths)" in call
+    assert (
+        'apply_missing_trailers(message, repo, paths, deliverable_id_override="dlv-a-plan-99b845")'
+        in call
+    )
     assert "before calling" in call.lower()
+
+
+def test_commit_prompt_names_the_literal_id_and_forbids_hand_writing_it():
+    """AC5: the prompt states the literal id and the exact override call,
+    never `--deliverable-id`, and tells the agent to delete a pre-existing,
+    differing `Deliverable-Id:` line from its own message rather than
+    leave it for the resolver to reconcile."""
+    call = _commit_agent_call(
+        ["a.py"], "Commit wave 1", 0, ["C1"], deliverable_id="dlv-a-plan-99b845"
+    )
+    assert "dlv-a-plan-99b845" in call
+    assert "--deliverable-id" not in call
+    assert "delete" in call.lower()
+    assert "deliverable-id" in call.lower()
+
+
+def test_emit_script_names_the_executing_plans_id_not_a_foreign_pathspec_plans(
+    tmp_path,
+):
+    """AC6: a wave whose pathspec includes a foreign `docs/plans/*.md`
+    declaring a different `deliverable_id` must still emit the executing
+    plan's own id, and never the foreign one, in the commit prompt."""
+    other_plan = tmp_path / "other.md"
+    other_plan.write_text(
+        "---\ntitle: other\ndeliverable_id: dlv-other-plan-deadbeef\n---\n\n# other\n",
+        encoding="utf-8",
+    )
+    plan_path = _write_plan(
+        tmp_path, "deliverable_id: dlv-executing-plan-99b845"
+    )
+    script = emit_script(plan_path, repo_root=tmp_path)
+    assert "dlv-executing-plan-99b845" in script
+    assert "dlv-other-plan-deadbeef" not in script
 
 
 def test_commit_prompt_treats_a_mismatched_trailer_as_a_report_not_a_refusal():

@@ -8434,3 +8434,224 @@ class TestFanInCarriedItemsBlockedVisibility:
         assert retained["disposition"] == "blocked"
         assert retained["description"] == "row cf-collides-bb0004 (primary)"
         assert retained["disposition_detail"] == "no Windows host in CI"
+
+
+# ---------------------------------------------------------------------------
+# handoff_phase_stamp restamp-quartet carry (docs/plans/2026-09-23-exec-
+# authorized-restamp-shape.md, C3). These fixtures build their plan through
+# the REAL restamp_execution_authorization/stamp_execution_authorization
+# verbs (C1) rather than hand-writing the quartet, per that plan's C3 row
+# ("the convergence and removal tests exercise the real restamp/quartet-
+# removal verb").
+# ---------------------------------------------------------------------------
+
+
+def _init_stamp_repo(repo: Path) -> None:
+    subprocess.run(
+        ["git", "init", "-b", "work/test/2026-01-01", str(repo)],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        stdin=subprocess.DEVNULL,
+        **no_console_creationflags(),
+    )
+    for args in (
+        ["config", "commit.gpgsign", "false"],
+        ["config", "user.email", "test@example.com"],
+        ["config", "user.name", "Test"],
+    ):
+        subprocess.run(
+            ["git", "-C", str(repo), *args],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            stdin=subprocess.DEVNULL,
+            **no_console_creationflags(),
+        )
+    (repo / "README.md").write_text("init\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(repo), "add", "README.md"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        stdin=subprocess.DEVNULL,
+        **no_console_creationflags(),
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-m", "init"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        stdin=subprocess.DEVNULL,
+        **no_console_creationflags(),
+    )
+
+
+_STAMP_PLAN_TEXT = """---
+title: "restamp fixture plan"
+status: draft
+---
+
+# Restamp fixture plan
+
+Some body content.
+"""
+
+_STAMP_HANDOFF_TEXT = """---
+title: "restamp fixture handoff"
+created: 2026-09-23
+branch: work/test/2026-01-01
+status: open
+predecessor: none
+kind: session-handoff
+category: infra
+summary: "restamp-quartet carry fixture"
+---
+
+# Restamp fixture handoff
+"""
+
+
+class TestHandoffPhaseStampCarriesRestampQuartet:
+    """Real-git spawn is load-bearing here too (see module header): the plan
+    fixtures below are minted through the real exec_auth_stamp verbs, not
+    hand-assembled, per the C3 dependency on C1's output."""
+
+    pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+    def _mint_plan(self, tmp_path: Path) -> Path:
+        _init_stamp_repo(tmp_path)
+        plan_dir = tmp_path / "docs" / "plans"
+        plan_dir.mkdir(parents=True)
+        plan_path = plan_dir / "2026-09-23-restamp-fixture.md"
+        plan_path.write_text(_STAMP_PLAN_TEXT, encoding="utf-8")
+
+        from coordinator_core.review_assemble.exec_auth_stamp import (
+            stamp_execution_authorization,
+        )
+
+        exit_code, result = stamp_execution_authorization(
+            str(plan_path), "PM", "make it so", at="2026-09-23", repo_root=tmp_path
+        )
+        assert exit_code == 0 and result["applied"] is True
+        return plan_path
+
+    def _restamp_plan(self, tmp_path: Path, plan_path: Path) -> None:
+        from coordinator_core.review_assemble.exec_auth_stamp import (
+            restamp_execution_authorization,
+        )
+
+        # Change the body so the restamp verb has something to rebind.
+        text = plan_path.read_text(encoding="utf-8")
+        plan_path.write_text(text.replace("Some body content.", "Changed body content."), encoding="utf-8")
+
+        exit_code, result = restamp_execution_authorization(
+            str(plan_path), "EM Alice", "amended after review", at="2026-09-24", repo_root=tmp_path
+        )
+        assert exit_code == 0 and result["applied"] is True
+
+    def _mint_handoff(self, tmp_path: Path, *, with_stale_restamp: bool = False) -> Path:
+        handoff_dir = tmp_path / "state" / "handoffs"
+        handoff_dir.mkdir(parents=True)
+        handoff_path = handoff_dir / "2026-09-23-restamp-fixture.md"
+        text = _STAMP_HANDOFF_TEXT
+        if with_stale_restamp:
+            text = text.replace(
+                "kind: session-handoff\n",
+                "kind: session-handoff\n"
+                "execution_authorized_by: PM\n"
+                "execution_authorized_at: '2026-09-23'\n"
+                "execution_authorized_sha: deadbeef\n"
+                'execution_authorized_note: "make it so"\n'
+                "execution_restamped_by: EM Bob\n"
+                "execution_restamped_at: '2026-09-20'\n"
+                "execution_restamped_from_sha: stalefeed\n"
+                'execution_restamped_note: "a stale prior restamp"\n',
+            )
+        handoff_path.write_text(text, encoding="utf-8")
+        return handoff_path
+
+    def _stamp(self, tmp_path: Path, handoff_path: Path, plan_path: Path) -> dict:
+        import asyncio
+
+        from coordinator_core.ops.handoff_phase_stamp import _handler
+
+        return asyncio.run(
+            _handler(
+                {
+                    "handoff_path": str(handoff_path),
+                    "phase": "execution",
+                    "plan_path": str(plan_path),
+                },
+                repo_root=tmp_path,
+            )
+        )
+
+    def test_restamp_quartet_is_copied_onto_the_handoff(self, tmp_path: Path) -> None:
+        plan_path = self._mint_plan(tmp_path)
+        self._restamp_plan(tmp_path, plan_path)
+        handoff_path = self._mint_handoff(tmp_path)
+
+        result = self._stamp(tmp_path, handoff_path, plan_path)
+        assert result["exit_code"] == 0
+        assert result["applied"] is True
+
+        plan_fm = plan_path.read_text(encoding="utf-8")
+        handoff_fm = handoff_path.read_text(encoding="utf-8")
+        for field in (
+            "execution_restamped_by",
+            "execution_restamped_at",
+            "execution_restamped_from_sha",
+            "execution_restamped_note",
+        ):
+            plan_line = [ln for ln in plan_fm.splitlines() if ln.startswith(f"{field}:")][0]
+            handoff_lines = [ln for ln in handoff_fm.splitlines() if ln.startswith(f"{field}:")]
+            assert handoff_lines, f"{field} missing from handoff"
+            assert handoff_lines[0] == plan_line
+
+    def test_restamp_quartet_copy_is_idempotent(self, tmp_path: Path) -> None:
+        plan_path = self._mint_plan(tmp_path)
+        self._restamp_plan(tmp_path, plan_path)
+        handoff_path = self._mint_handoff(tmp_path)
+
+        first = self._stamp(tmp_path, handoff_path, plan_path)
+        assert first["applied"] is True
+
+        second = self._stamp(tmp_path, handoff_path, plan_path)
+        assert second["exit_code"] == 0
+        assert second["applied"] is False
+
+    def test_stale_quartet_is_removed_when_plan_carries_none(self, tmp_path: Path) -> None:
+        plan_path = self._mint_plan(tmp_path)  # no restamp on the plan
+        handoff_path = self._mint_handoff(tmp_path, with_stale_restamp=True)
+
+        result = self._stamp(tmp_path, handoff_path, plan_path)
+        assert result["exit_code"] == 0
+        assert result["applied"] is True
+
+        handoff_fm = handoff_path.read_text(encoding="utf-8")
+        for field in (
+            "execution_restamped_by",
+            "execution_restamped_at",
+            "execution_restamped_from_sha",
+            "execution_restamped_note",
+        ):
+            assert f"{field}:" not in handoff_fm
+
+    def test_no_restamp_on_plan_and_none_on_handoff_stays_a_plain_stamp(self, tmp_path: Path) -> None:
+        """A plan without a restamp quartet stamps exactly as today (C3 body:
+        'the quartet stays optional')."""
+        plan_path = self._mint_plan(tmp_path)
+        handoff_path = self._mint_handoff(tmp_path)
+
+        result = self._stamp(tmp_path, handoff_path, plan_path)
+        assert result["applied"] is True
+        handoff_fm = handoff_path.read_text(encoding="utf-8")
+        assert "execution_authorized_by: PM" in handoff_fm
+        for field in (
+            "execution_restamped_by",
+            "execution_restamped_at",
+            "execution_restamped_from_sha",
+            "execution_restamped_note",
+        ):
+            assert f"{field}:" not in handoff_fm

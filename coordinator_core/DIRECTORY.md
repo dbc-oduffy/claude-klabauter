@@ -112,7 +112,6 @@ Each sub-module self-registers its op via `register_op()` at import time.
 | `run_semgrep_scan.py` | `ci.run_semgrep_scan` | Runs a tiered semgrep scan over a diff scope, native `shutil.which` fallback-tier dispatch |
 | `run_shellcheck_sweep.py` | `ci.run_shellcheck_sweep` | Runs shellcheck over the caller's own worktree's tracked `.sh` files |
 | `scan_content_leakage.py` | `percolate.scan_content_leakage_tiers` | Three-tier (HIGH/MEDIUM/LOW) content-leakage regex sweep over an about-to-publish tree |
-| `schema_drift_gate.py` | `schema.drift_gate` | GATING reduction of `schema_drift_watch.scan_vendored_schema_drift()` to a pass/fail verdict — blocks only on a positively observed DRIFT, never on INDETERMINATE/UNRESOLVED |
 | `session_context.py` | — | Shared `resolve_current_session_id(worktree_root)` resolver |
 | `verify_fix_files_changed.py` | `bug_sweep.verify_fix_files_changed` | Read-only comparison of a fix-manifest's claimed-fixed files against `git diff --name-only` |
 | `verify_scout_inventory_completeness.py` | `research.verify_scout_inventory_completeness` | Read-only disk-first existence/line-count check of expected scout inventory files |
@@ -124,14 +123,12 @@ Spine in `context.py`/`validate.py`; per-entity porters under `sections/`.
 | File | Purpose |
 |---|---|
 | `_slug.py` | Shared hostname slug helper |
-| `backlog_history.py` | Backlog-history block assembly (C5) |
 | `context.py` | `EmitContext` + provenance envelope builder |
 | `deliverable_status.py` | §8.16 `deliverable_status` cross-entity join |
 | `doe_drift.py` | DoE-HEAD conformance fixture resolver + drift-check |
 | `enrich.py` | Parallel, order-preserving last-modified-at enrichment |
 | `resolvers.py` | Run-context resolution, root resolvers, git-ancestor / shipped-on-main helpers (not an emitter — the writer half was cut 2026-08-22/23) |
 | `normalizers.py` | Shared AC5-PROVENANCE normalization utilities |
-| `recorder.py` | Backlog-history recorder (`backlog.record` op) |
 | `validate.py` | Zod validation against the vendored contract pin |
 
 `ops/emit/sections/` — one porter module per cockpit entity family (envelope key noted):

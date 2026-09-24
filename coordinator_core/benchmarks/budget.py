@@ -12,6 +12,16 @@ latency distributions and stripped their `"_provisional": true` markers. `defaul
 carries the marker, and that is deliberate, not leftover — MUTATING was define-only in wave-1
 (qsub-01 AC7) and remains unmeasured. The manifest's own `_phase0_baseline.note` records this.
 
+2026-09-24 (docs/plans/2026-09-12-memo-send-enrolled-in-the-composition-gate.md, C1): a second
+class of override exists since C9, distinct from a Phase-0-measured one. A spawn-count-only
+override's `target_ms`/`tolerance` copy the tier default verbatim (provisional, for a MUTATING
+op) only to satisfy `_validated_budget`'s required shape, and its `_rationale` says so by citing
+`_validated_budget` in words. Such an override's ABSENCE of `_provisional` is NOT a measurement
+claim -- its timing is exactly as settled as the tier default it copies, no more. Nine overrides
+already joined this class before `memo.send` did (census: `state/mise-inventory/` per-plan
+census row 9 for this plan); this paragraph names the class by its `_rationale` marker rather
+than listing keys, since the list moves.
+
 `resolve_budget()` does NOT branch on `_provisional`, by design: it is measurement-state metadata
 for readers of the manifest, not an input to budget resolution. Its live readers are
 `tests/test_budget.py` (`test_provisional_flags_match_phase0_measurement_state` asserts MUTATING
@@ -25,14 +35,18 @@ op-proportionality cluster C-17 and the assessment was refuted — see
 machine-checked record of which tier is still unmeasured. Do not treat a `_provisional` value as
 SLA-authoritative.
 
-**Third tier, forward-binding only (do NOT populate):** a future per-tool-call (hook-port) budget
-tier is anticipated — see qsub-01 plan § Out of scope, "A future per-tool-call (hook-port) budget
-tier — foundational #4, forward-binding note only." JSON has no native comment syntax, so this
-future `defaults.HOOK_PORT` (or equivalent) slot is documented here rather than seeded empty in
-the manifest; when that tier lands, add a `defaults.HOOK_PORT` key to `budget-manifest.json` and
-extend this resolver's op_class handling accordingly. It is NOT present in the manifest today.
+**`defaults.HOOK_PORT` — the per-tool-call hook tier.** It exists in the manifest today and is
+measured in process time, on the warm path only (DR-315's resident engine). It has no `OpClass`
+member — `OpClass` classifies write semantics (authz), not a latency tier — so it is reached only
+by naming it explicitly: `resolve_budget(op, "HOOK_PORT")`. It carries `_provisional: true` until
+a real hook op has been measured warm end-to-end (ehms-05/06/07); see the `_provisional` section
+above for what that marker does and does not mean. **`manifest["overrides"]` entries are
+tier-blind** — `resolve_budget` checks `overrides[op]` before consulting any tier, keyed by op
+name only, so a `hooks.*` override would win over `HOOK_PORT` silently for any op it covers; no
+such override exists today (see `test_budget.py`'s regression guard).
 
 Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10 § C3
+Spec backlink: docs/plans/2026-09-23-hook-port-budget-tier-and-ehms-04-reconciliation.md § C1
 """
 
 from __future__ import annotations

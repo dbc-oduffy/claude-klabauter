@@ -549,12 +549,14 @@ def _sibling_roots() -> List[Path]:
 
         roots.append(Path(coordinator_engine_root()))
     except Exception:
+        # engine root unresolvable in this environment; other roots still apply
         pass
     try:
         from coordinator_core._settings_home import settings_home
 
         roots.append(settings_home() / "bin")
     except Exception:
+        # settings-home unresolvable in this environment; other roots still apply
         pass
     return roots
 

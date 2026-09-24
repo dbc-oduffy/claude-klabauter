@@ -3,13 +3,16 @@
 Covers the gating reduction of scan_vendored_schema_drift()'s verdict — see
 that module's docstring for the op-key/contract: `schema.drift_gate`.
 
-Status -> ok mapping under test:
-    DRIFT         -> ok=False (the only blocking case)
+Status -> ok mapping under test (P143-T35: divergence_kind now discriminates
+which DRIFT verdicts block):
+    DRIFT, any entry divergence_kind == "shape"       -> ok=False (blocking)
+    DRIFT, every entry divergence_kind in {"prose-only", None} -> ok=True (advisory)
     MATCH         -> ok=True
     INDETERMINATE -> ok=True (inability to check must never block a merge)
     UNRESOLVED    -> ok=True (no DoE clone on this machine — not applicable)
 
 Spec backlink: cross-repo/inbox/2026-07-23-example-cockpit-repo-em-coordinator-doc-new-category-no-validation.md
+               docs/plans/2026-09-22-inbox-blitz-bundled-xs-s-fixes-2026-09-11.md (P143-T35).
 """
 from __future__ import annotations
 
@@ -47,7 +50,7 @@ def _patch_scan(monkeypatch: pytest.MonkeyPatch, report: dict) -> None:
 
 
 class TestEvaluate:
-    def test_drift_blocks(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_shape_drift_blocks(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_scan(
             monkeypatch,
             _report(
@@ -57,6 +60,7 @@ class TestEvaluate:
                         "schema": "improvement-queue.schema.json",
                         "detail": "diverges",
                         "direction": "we-are-behind",
+                        "divergence_kind": "shape",
                     }
                 ],
             ),
@@ -71,11 +75,93 @@ class TestEvaluate:
                 "schema": "improvement-queue.schema.json",
                 "detail": "diverges",
                 "direction": "we-are-behind",
+                "divergence_kind": "shape",
             }
         ]
         assert "improvement-queue.schema.json" in result["message"]
         assert "we-are-behind" in result["message"]
         assert "re-vendor" in result["message"].lower()
+
+    def test_prose_only_drift_advises_not_blocks(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_scan(
+            monkeypatch,
+            _report(
+                "DRIFT",
+                drifted=[
+                    {
+                        "schema": "handoff.schema.json",
+                        "detail": "diverges",
+                        "direction": "we-are-behind",
+                        "divergence_kind": "prose-only",
+                    }
+                ],
+            ),
+        )
+
+        result = evaluate()
+
+        assert result["ok"] is True
+        assert result["status"] == "DRIFT"
+        assert "handoff.schema.json" in result["message"]
+        assert "prose only" in result["message"]
+        assert "not blocking" in result["message"].lower()
+
+    def test_unclassified_divergence_kind_advises_not_blocks(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An older advisory build with no `divergence_kind` key must never
+        block — absence of evidence is not evidence of shape divergence."""
+        _patch_scan(
+            monkeypatch,
+            _report(
+                "DRIFT",
+                drifted=[
+                    {
+                        "schema": "a.schema.json",
+                        "detail": "diverges",
+                        "direction": "both",
+                    }
+                ],
+            ),
+        )
+
+        result = evaluate()
+
+        assert result["ok"] is True
+        assert result["status"] == "DRIFT"
+
+    def test_mixed_shape_and_prose_only_blocks_and_names_only_shape(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_scan(
+            monkeypatch,
+            _report(
+                "DRIFT",
+                drifted=[
+                    {
+                        "schema": "shape.schema.json",
+                        "detail": "d",
+                        "direction": "we-are-ahead",
+                        "divergence_kind": "shape",
+                    },
+                    {
+                        "schema": "prose.schema.json",
+                        "detail": "d",
+                        "direction": "both",
+                        "divergence_kind": "prose-only",
+                    },
+                ],
+            ),
+        )
+
+        result = evaluate()
+
+        assert result["ok"] is False
+        # Both are still reported in `drifted` (unfiltered pass-through)...
+        assert {d["schema"] for d in result["drifted"]} == {"shape.schema.json", "prose.schema.json"}
+        # ...but the blocking message names only the shape-drifted entry.
+        assert "shape.schema.json" in result["message"]
+        assert "prose.schema.json" not in result["message"]
 
     def test_match_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_scan(monkeypatch, _report("MATCH"))
@@ -113,31 +199,20 @@ class TestEvaluate:
         assert result["status"] == "UNRESOLVED"
         assert "no DoE clone" in (result["message"] or "")
 
-    def test_multiple_drifted_schemas_all_named(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_shape_drift_direction_unknown_placeholder(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A shape-drifted entry with no direction key still renders legibly, not a KeyError."""
         _patch_scan(
             monkeypatch,
             _report(
                 "DRIFT",
                 drifted=[
-                    {"schema": "a.schema.json", "detail": "d", "direction": "we-are-ahead"},
-                    {"schema": "b.schema.json", "detail": "d", "direction": "both"},
+                    {
+                        "schema": "a.schema.json",
+                        "detail": "d",
+                        "direction": None,
+                        "divergence_kind": "shape",
+                    }
                 ],
-            ),
-        )
-
-        result = evaluate()
-
-        assert result["ok"] is False
-        assert "a.schema.json" in result["message"] and "we-are-ahead" in result["message"]
-        assert "b.schema.json" in result["message"] and "[both]" in result["message"]
-
-    def test_drift_direction_unknown_placeholder(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A drifted entry with no direction key still renders legibly, not a KeyError."""
-        _patch_scan(
-            monkeypatch,
-            _report(
-                "DRIFT",
-                drifted=[{"schema": "a.schema.json", "detail": "d", "direction": None}],
             ),
         )
 
@@ -146,8 +221,7 @@ class TestEvaluate:
         assert result["ok"] is False
         assert "direction unknown" in result["message"]
 
-
-    def test_drift_message_names_a_mirror_fallthrough_degrade(
+    def test_shape_drift_message_names_a_mirror_fallthrough_degrade(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Y4 fix — the scan's schemas_dir_degrade_reason must be visible to a
@@ -164,6 +238,7 @@ class TestEvaluate:
                         "schema": "handoff.schema.json",
                         "detail": "diverges",
                         "direction": "we-are-behind",
+                        "divergence_kind": "shape",
                     }
                 ],
                 schemas_dir_rung="module-relative",
@@ -179,7 +254,7 @@ class TestEvaluate:
         assert "mirror's own copies" in result["message"]
         assert "source-root-unregistered" in result["message"]
 
-    def test_drift_message_silent_on_a_genuine_source_comparison(
+    def test_shape_drift_message_silent_on_a_genuine_source_comparison(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _patch_scan(
@@ -191,6 +266,7 @@ class TestEvaluate:
                         "schema": "handoff.schema.json",
                         "detail": "diverges",
                         "direction": "we-are-behind",
+                        "divergence_kind": "shape",
                     }
                 ],
                 schemas_dir_rung="engine-source",

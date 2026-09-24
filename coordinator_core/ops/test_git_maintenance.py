@@ -67,20 +67,33 @@ def test_hourly_is_a_task_list_never_the_hourly_schedule():
     assert "--schedule=hourly" not in gm._TIER_ARGV["hourly"]
 
 
-def test_daily_is_a_schedule_and_weekly_is_not():
+def test_daily_and_weekly_are_task_lists_never_a_schedule():
     """`maintenance.strategy=incremental` makes git's schedules cumulative, so
     `--schedule=weekly` re-runs every task `--schedule=daily` ran that same
     day. Measured, that put the weekly tier at 515.6ms/9 procs against the
-    500ms brightline, of which 328ms was daily's work done twice. Daily keeps
-    its schedule because nothing above it duplicates anything; weekly names
-    the one task the daily set does not carry.
+    500ms brightline, of which 328ms was daily's work done twice. Weekly
+    names the one task the daily set does not carry.
+
+    Daily is ALSO no longer a schedule (R9 / P153-C25): `--schedule=daily`
+    included `loose-objects`, which packs unreachable loose objects out from
+    under weekly's plain `git prune` before it ever gets a chance to see them
+    loose (state/bug-backlog/2026-08-30-the-daily-tier-packs-unreachable-
+    objects-309a82437447.yaml). See `test_daily_then_weekly_reaps_an_object_daily_already_packed`
+    for the falsifier this row asked for.
 
     These two equality assertions ARE the cumulative-schedule-trap pin: no
     value of `_TIER_ARGV["weekly"]` (or a hypothetical fourth tier above
     daily) can regain `--schedule=weekly`/`--schedule=monthly` without
     breaking one of them first, which is why there is no separate loop test
     for that keyword ban here."""
-    assert gm._TIER_ARGV["daily"] == ("maintenance", "run", "--schedule=daily")
+    assert gm._TIER_ARGV["daily"] == (
+        "maintenance",
+        "run",
+        "--task=commit-graph",
+        "--task=incremental-repack",
+    )
+    assert "--schedule=daily" not in gm._TIER_ARGV["daily"]
+    assert "loose-objects" not in " ".join(gm._TIER_ARGV["daily"])
     assert gm._TIER_ARGV["weekly"] == ("maintenance", "run", "--task=pack-refs")
 
 
@@ -268,6 +281,67 @@ def test_prune_runs_before_the_maintenance_run_not_after(tmp_path, monkeypatch):
 
     assert "prune" in verbs and "maintenance" in verbs
     assert verbs.index("prune") < verbs.index("maintenance"), verbs
+
+
+def _churn(repo: Path, n: int) -> None:
+    """N throwaway commits, mirroring the spike's own `repro_steps` -- a
+    fresh repo's `loose-objects` task has its own internal count threshold
+    and is a no-op below it, so a repro without churn silently proves
+    nothing about the trap it claims to reproduce."""
+    for i in range(n):
+        (repo / f"churn-{i}.txt").write_text(f"{i}\n", encoding="utf-8")
+        _git(repo, "add", f"churn-{i}.txt")
+        _git(repo, "commit", "-qm", f"churn {i}")
+
+
+def test_daily_then_weekly_reaps_an_object_daily_already_packed(tmp_path):
+    """THE R9 FALSIFIER (P153-C25): daily THEN weekly, one repo, an
+    unreachable blob planted and backdated past the prune expiry BEFORE
+    daily runs. Reproduces the spike's repro_steps and its kill criterion
+    (1): the blob must be gone after daily-then-weekly.
+
+    This case FAILS against the pre-change `_TIER_ARGV["daily"]` --
+    `--schedule=daily` includes `loose-objects`, which packs the already-old
+    blob before weekly's prune leg ever runs, and a plain `git prune` only
+    ever drops LOOSE objects. Asserted directly below by monkeypatching
+    `_TIER_ARGV` back to that shape and confirming the same blob survives."""
+    repo = _init_repo(tmp_path)
+    _churn(repo, 30)
+    sha = _plant_unreachable_blob(repo, "packed-by-daily\n", age_days=30)
+    assert _git(repo, "cat-file", "-e", sha).returncode == 0
+
+    gm.run_tier(repo, "daily")
+    result = gm.run_tier(repo, "weekly")
+
+    assert result.pruned is True
+    assert _git(repo, "cat-file", "-e", sha).returncode != 0, "unreachable blob survived"
+
+
+def test_daily_then_weekly_falsifier_fails_against_the_pre_change_daily_argv(tmp_path, monkeypatch):
+    """The other half of the falsifier: replaying the SAME scenario against
+    the pre-R9 daily argv (`--schedule=daily`, which carries `loose-objects`)
+    must reproduce the filed bug -- the blob survives, because daily already
+    packed it before weekly's prune leg got a chance to see it loose."""
+    monkeypatch.setitem(gm._TIER_ARGV, "daily", ("maintenance", "run", "--schedule=daily"))
+    repo = _init_repo(tmp_path)
+    # `maintenance.strategy=incremental` is what assigns `loose-objects` to
+    # the daily schedule in the first place -- without it `--schedule=daily`
+    # runs no tasks at all, and the trap this test replays never fires. This
+    # is the `git_perf_config.apply()` shape the R9 spike's own repro_steps
+    # used, set here directly rather than through that module so this test
+    # keeps its own scenario self-contained.
+    _git(repo, "config", "maintenance.strategy", "incremental")
+    _churn(repo, 30)
+    sha = _plant_unreachable_blob(repo, "packed-by-daily\n", age_days=30)
+    assert _git(repo, "cat-file", "-e", sha).returncode == 0
+
+    gm.run_tier(repo, "daily")
+    gm.run_tier(repo, "weekly")
+
+    assert _git(repo, "cat-file", "-e", sha).returncode == 0, (
+        "blob should still survive against the pre-change daily argv -- "
+        "if this now fails, the falsifier above stopped proving anything"
+    )
 
 
 def test_prune_expiry_is_gits_own_default():

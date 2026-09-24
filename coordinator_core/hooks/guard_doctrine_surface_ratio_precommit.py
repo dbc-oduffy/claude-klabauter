@@ -361,7 +361,7 @@ def _save_baseline(baseline: dict) -> None:
         try:
             os.unlink(tmp_path)
         except OSError:
-            pass
+            pass  # best-effort tmp-file cleanup ahead of the re-raise below
         raise
 
 
@@ -369,7 +369,7 @@ def _persist_baseline_fail_open(baseline: dict) -> None:
     try:
         _save_baseline(baseline)
     except Exception:
-        pass
+        pass  # named fail-open: a persist failure must not block the commit
 
 
 def _build_tier_of(rows: "list[tuple[int, int, str]]"):
@@ -522,7 +522,7 @@ def main() -> int:
                 return 1
             return 0
     except Exception:
-        pass
+        pass  # sanctioned-path filtering failed; fall through and admit unfiltered rows
 
     try:
         admission_denials = _new_file_admission_denials(rows)

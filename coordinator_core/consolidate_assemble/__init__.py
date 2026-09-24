@@ -48,7 +48,10 @@ Negative-spec:
     - Do NOT touch a branch/worktree whose tip-commit author is not
       `my_email` — such entries are reported in `gates.branches`/
       `gates.worktrees` with `category: "others"` and never appear in
-      `directives[]` or `judgment_points[]`.
+      `directives[]` or `judgment_points[]`. The one exception is a
+      `cloud-session` branch (see `CLOUD_SESSION_EMAIL`), which carries no
+      operator identity and is surfaced behind a judgment point only —
+      never an unconditional directive, even at zero unique commits.
     - Do NOT re-introduce a per-commit OR per-branch `git show` — the
       inspection gather is one spawn total, across every stale branch's
       shas, not `unique_commits × ~100ms` or `stale_branches × ~100ms`
@@ -255,6 +258,15 @@ def is_backup_branch(name: str) -> bool:
     )
 
 
+#: Claude Code cloud sessions author and commit as this identity, with no
+#: operator identity anywhere on the commit — so a `claude/*` branch never
+#: matches `my_email` and would be stranded as `others`. It does not prove
+#: whose session made it (in a shared repo it may be a peer operator's), so
+#: its category gates every directive behind a judgment point: nothing is
+#: absorbed or deleted without a verdict, including a zero-unique branch.
+CLOUD_SESSION_EMAIL = "noreply@anthropic.com"
+
+
 def categorize_branch(name: str, current: str, main_branch: Optional[str], tip_email: str, my_email: str) -> str:
     if name == current:
         return "current"
@@ -264,6 +276,8 @@ def categorize_branch(name: str, current: str, main_branch: Optional[str], tip_e
         return "backup"
     if tip_email == my_email:
         return "mine-stale"
+    if tip_email == CLOUD_SESSION_EMAIL:
+        return "cloud-session"
     return "others"
 
 
@@ -468,7 +482,7 @@ def brief(
 
         author = all_tip_authors[ref] if ref in all_tip_authors else tip_author(run_git, repo_root, ref)
         category = categorize_branch(name, current, main_branch, author, my_email)
-        if category != "mine-stale":
+        if category not in ("mine-stale", "cloud-session"):
             # Report the category actually computed. The old literal `"others"`
             # collapsed every non-stale branch into one bucket, which would have
             # hidden the `backup` category from the brief the moment it existed.
@@ -477,11 +491,11 @@ def brief(
 
         commits = unique_commits(run_git, repo_root, current, ref)
         branches_report.append(
-            {**entry, "tip_author": author, "category": "mine-stale", "unique_commit_count": len(commits)}
+            {**entry, "tip_author": author, "category": category, "unique_commit_count": len(commits)}
         )
 
         shas = [line.split(" ", 1)[0] for line in commits]
-        stale_branches.append({"entry": entry, "name": name, "commits": commits, "shas": shas})
+        stale_branches.append({"entry": entry, "name": name, "category": category, "commits": commits, "shas": shas})
         all_shas.extend(shas)
 
     # Dedup preserving first-encounter order: the same sha can legitimately
@@ -499,15 +513,32 @@ def brief(
 
         delete_directive_id = f"d-delete-{name}"
         if not commits:
+            is_cloud = stale["category"] == "cloud-session"
+            delete_jp_id = f"j-delete-{name}"
             directives.append(
                 {
                     "id": delete_directive_id,
                     "cli": "delete-only",
                     "args": [name] + (["origin"] if entry["is_remote"] else []),
-                    "depends_on": None,
+                    "depends_on": delete_jp_id if is_cloud else None,
                     "already_satisfied": False,
                 }
             )
+            if is_cloud:
+                judgment_points.append(
+                    build_judgment_point(
+                        None,
+                        id=delete_jp_id,
+                        question=f"Cloud-session branch {name!r} has no unique commits — delete or keep?",
+                        dispositions=[
+                            build_disposition("delete", resolves=[delete_directive_id]),
+                            build_disposition("keep"),
+                        ],
+                        evidence={"commits": [], "inspections": []},
+                        reason="insufficient-evidence",
+                        revalidate_at_dispatch=False,
+                    )
+                )
             continue
 
         inspections = [{"sha": sha, "stat": global_stats.get(sha, "")} for sha in shas]

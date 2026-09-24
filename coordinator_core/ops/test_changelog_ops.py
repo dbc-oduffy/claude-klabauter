@@ -766,29 +766,17 @@ def test_plans_touched_falls_back_to_worktree_when_as_of_unresolvable(tmp_path: 
 
 
 # ---------------------------------------------------------------------------
-# changelog.upsert_reviewed — surgical single-field **Reviewed:** upsert
-# (cross-repo/inbox/2026-07-21-claude-central-em-reviewed-line-surgical-upsert.md)
+# changelog.upsert_reviewed — RETIRED EMITTER (DR-374, 2026-09-24)
 #
-# Curation-preserving counterpart to append_day: unlike append_day (which
-# recomposes the whole machine section from supplied fields), upsert_reviewed
-# must touch ONLY the **Reviewed:** line(s), leaving hand-curated
-# Scope:/Commits:/etc content byte-identical.
+# Was a surgical single-field **Reviewed:** upsert re-derived from
+# state/review-trail/ records
+# (cross-repo/inbox/2026-07-21-claude-central-em-reviewed-line-surgical-upsert.md).
+# DR-374 gravestoned that store outright (permanently empty; 9c199a3ce3), so
+# the op no longer reads it or emits a value — it only strips a pre-existing,
+# contiguous **Reviewed:** block down to nothing, leaving every other
+# hand-curated line (Scope:/Commits:/etc) byte-identical, and never
+# re-inserts.
 # ---------------------------------------------------------------------------
-
-
-def _write_review_record(worktree: Path, date: str, suffix: str, **fields) -> None:
-    trail_dir = worktree / "state" / "review-trail"
-    trail_dir.mkdir(parents=True, exist_ok=True)
-    record = {
-        "sha_range": "abc1234..def5678",
-        "reviewer": "code-reviewer",
-        "verdict": "pass",
-        "diff_loc": 42,
-    }
-    record.update(fields)
-    (trail_dir / f"{date}-{suffix}.json").write_text(
-        json.dumps(record), encoding="utf-8"
-    )
 
 
 _CURATED_BLOCK_TMPL = (
@@ -809,11 +797,12 @@ _CURATED_BLOCK_TMPL = (
 
 
 class TestUpsertReviewed:
-    def test_upsert_replaces_only_reviewed_line_rest_byte_identical(
+    def test_upsert_strips_existing_reviewed_line_rest_byte_identical(
         self, tmp_path: Path
     ) -> None:
-        """(a) upsert replaces only the Reviewed: line; curated Scope:/Commits:
-        and every other line survive byte-identical."""
+        """(a) upsert strips only the Reviewed: line; curated Scope:/Commits:
+        and every other line survive byte-identical. No review-trail read —
+        DR-374 gravestoned that store, so this op never re-derives a value."""
         date = "2026-02-01"
         machine = "machine-a"
         week_dir = tmp_path / "state" / "week-changelog"
@@ -826,32 +815,18 @@ class TestUpsertReviewed:
         )
         changelog_file.write_text(original, encoding="utf-8")
 
-        _write_review_record(
-            tmp_path, date, "120000-sid1",
-            sha_range="aaa1111..bbb2222", reviewer="patrik", verdict="pass", diff_loc=12,
-        )
-
         result = upsert_reviewed(worktree=tmp_path, date=date, machine=machine)
 
         assert result["action"] == "replaced"
         assert result["out_path"] == str(changelog_file)
 
         content = changelog_file.read_text(encoding="utf-8")
-        assert (
-            "**Reviewed:** sha_range=aaa1111..bbb2222 reviewer=the Staff Engineer verdict=pass diff_loc=12"
-            in content
-        )
         assert "none — flag for /workweek-complete Step 7" not in content
+        assert "**Reviewed:**" not in content
 
-        # Every other line of the section is byte-identical to the original.
-        expected = _CURATED_BLOCK_TMPL.format(
-            date=date,
-            machine=machine,
-            reviewed_line=(
-                "**Reviewed:** sha_range=aaa1111..bbb2222 reviewer=the Staff Engineer "
-                "verdict=pass diff_loc=12\n"
-            ),
-        )
+        # Every other line of the section is byte-identical to the original,
+        # with the **Reviewed:** line simply gone.
+        expected = _CURATED_BLOCK_TMPL.format(date=date, machine=machine, reviewed_line="")
         assert content == expected
 
     def test_upsert_idempotent_rerun(self, tmp_path: Path) -> None:
@@ -868,10 +843,6 @@ class TestUpsertReviewed:
                 reviewed_line="**Reviewed:** none — flag for /workweek-complete Step 7\n",
             ),
             encoding="utf-8",
-        )
-        _write_review_record(
-            tmp_path, date, "120000-sid1",
-            sha_range="aaa1111..bbb2222", reviewer="patrik", verdict="pass", diff_loc=12,
         )
 
         first = upsert_reviewed(worktree=tmp_path, date=date, machine=machine)
@@ -904,39 +875,23 @@ class TestUpsertReviewed:
 
         assert result["action"] == "no_match"
 
-    def test_upsert_inserts_reviewed_line_when_none_previously_rendered(
+    def test_upsert_unchanged_when_no_reviewed_line_present(
         self, tmp_path: Path
     ) -> None:
-        """A section with NO **Reviewed:** line at all (has_non_trivial was False
-        at compose time, reviewed_lines was empty) still gets the line inserted
-        once review-trail records appear for that date."""
+        """A section with NO **Reviewed:** line at all is left untouched
+        ("unchanged") — the retired op never inserts one."""
         date = "2026-02-01"
         machine = "machine-a"
         week_dir = tmp_path / "state" / "week-changelog"
         week_dir.mkdir(parents=True)
         changelog_file = week_dir / f"{date}.md"
-        changelog_file.write_text(
-            _CURATED_BLOCK_TMPL.format(date=date, machine=machine, reviewed_line=""),
-            encoding="utf-8",
-        )
-        _write_review_record(
-            tmp_path, date, "120000-sid1",
-            sha_range="ccc3333..ddd4444", reviewer="sid", verdict="warn", diff_loc=7,
-        )
+        original = _CURATED_BLOCK_TMPL.format(date=date, machine=machine, reviewed_line="")
+        changelog_file.write_text(original, encoding="utf-8")
 
         result = upsert_reviewed(worktree=tmp_path, date=date, machine=machine)
 
-        assert result["action"] == "replaced"
-        content = changelog_file.read_text(encoding="utf-8")
-        assert (
-            "**Reviewed:** sha_range=ccc3333..ddd4444 reviewer=sid verdict=warn diff_loc=7"
-            in content
-        )
-        assert "**Scope:** Hand-curated narrative that must survive untouched." in content
-        # Inserted right after **Validation:**, before **Links:**.
-        lines = content.splitlines()
-        validation_idx = next(i for i, ln in enumerate(lines) if ln.startswith("**Validation:**"))
-        assert lines[validation_idx + 1].startswith("**Reviewed:**")
+        assert result["action"] == "unchanged"
+        assert changelog_file.read_text(encoding="utf-8") == original
 
     def test_upsert_handler_rejects_unsafe_machine(self, tmp_path: Path) -> None:
         """JSON-RPC handler containment: 'machine' must be a safe filename segment."""
@@ -974,19 +929,19 @@ class TestUpsertReviewed:
     def test_upsert_non_contiguous_stray_reviewed_line_preserved(
         self, tmp_path: Path
     ) -> None:
-        """A curator-added, non-contiguous
-        stray line that happens to start with "**Reviewed:**" elsewhere in the
-        section must NOT be relocated/collapsed by the strip-then-reinsert
-        path. old_indices is non-contiguous here, so upsert_reviewed must fall
-        back to fresh-insertion (anchored on **Validation:**) and leave the
-        stray line exactly where the curator put it."""
+        """Two curator-added, non-contiguous lines that happen to start with
+        "**Reviewed:**" (one inside the Scope narrative, one at the managed
+        block's old position) must NOT be stripped or relocated — the
+        contiguity check means neither is a single managed run, so
+        upsert_reviewed treats the whole thing as "no managed block found"
+        and leaves both exactly where the curator put them."""
         date = "2026-02-01"
         machine = "machine-a"
         week_dir = tmp_path / "state" / "week-changelog"
         week_dir.mkdir(parents=True)
         changelog_file = week_dir / f"{date}.md"
         # A hand-curated section with a stray "**Reviewed:**"-prefixed line
-        # inside the Scope narrative (non-contiguous with the managed block).
+        # inside the Scope narrative (non-contiguous with the old managed block).
         original = (
             f"## {date} — {machine}\n"
             "\n"
@@ -1005,40 +960,15 @@ class TestUpsertReviewed:
         )
         changelog_file.write_text(original, encoding="utf-8")
 
-        _write_review_record(
-            tmp_path, date, "120000-sid1",
-            sha_range="aaa1111..bbb2222", reviewer="patrik", verdict="pass", diff_loc=12,
-        )
-
         result = upsert_reviewed(worktree=tmp_path, date=date, machine=machine)
 
-        assert result["action"] == "replaced"
+        assert result["action"] == "unchanged"
         content = changelog_file.read_text(encoding="utf-8")
+        assert content == original
 
-        # The stray curator line survives, untouched and unrelocated.
+        # Both lines survive, untouched and unrelocated.
         assert "**Reviewed:** stray curator note, not the managed block" in content
-        # The newly-derived Reviewed value is present too.
-        assert (
-            "**Reviewed:** sha_range=aaa1111..bbb2222 reviewer=the Staff Engineer "
-            "verdict=pass diff_loc=12" in content
-        )
-        # Non-contiguous old_indices means NO strip happens at all (this is
-        # the point of the fix) — the pre-existing "none" placeholder line is
-        # untouched, not stripped, exactly like the stray curator line.
         assert "**Reviewed:** none — flag for /workweek-complete Step 7" in content
-        # Fresh-insertion path anchors the new block right after **Validation:**.
-        lines = content.splitlines()
-        validation_idx = next(i for i, ln in enumerate(lines) if ln.startswith("**Validation:**"))
-        assert lines[validation_idx + 1].startswith(
-            "**Reviewed:** sha_range=aaa1111..bbb2222"
-        )
-        # The stray line still precedes **Plans touched:**, exactly as authored.
-        stray_idx = next(
-            i for i, ln in enumerate(lines)
-            if ln == "**Reviewed:** stray curator note, not the managed block"
-        )
-        plans_idx = next(i for i, ln in enumerate(lines) if ln.startswith("**Plans touched:**"))
-        assert stray_idx < plans_idx
 
     def test_upsert_leaves_sibling_machine_section_byte_identical(
         self, tmp_path: Path
@@ -1046,7 +976,7 @@ class TestUpsertReviewed:
         """Mirrors append_day's
         prefix-collision regression test style: a two-machine {date}.md file
         must have machine b's section left byte-identical when machine a's
-        Reviewed: line is upserted."""
+        Reviewed: line is stripped."""
         date = "2026-02-01"
         week_dir = tmp_path / "state" / "week-changelog"
         week_dir.mkdir(parents=True)
@@ -1064,11 +994,6 @@ class TestUpsertReviewed:
         )
         changelog_file.write_text(section_a + "\n" + section_b, encoding="utf-8")
 
-        _write_review_record(
-            tmp_path, date, "120000-sid1",
-            sha_range="aaa1111..bbb2222", reviewer="patrik", verdict="pass", diff_loc=12,
-        )
-
         result = upsert_reviewed(worktree=tmp_path, date=date, machine="machine-a")
         assert result["action"] == "replaced"
 
@@ -1077,10 +1002,7 @@ class TestUpsertReviewed:
         assert section_b in content
         # machine-a's section was in fact changed.
         assert section_a not in content
-        assert (
-            "**Reviewed:** sha_range=aaa1111..bbb2222 reviewer=the Staff Engineer "
-            "verdict=pass diff_loc=12" in content
-        )
+        assert "**Reviewed:**" not in content.split(f"## {date} — machine-b")[0]
 
 
 def _backfilled_block(tmp_path, date, machine, commit_range, count=34):

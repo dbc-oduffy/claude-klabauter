@@ -657,7 +657,14 @@ def _normalize_one_text(
         summary_text = re.sub(r'\*([^*]+)\*', r'\1', summary_text)             # *italic* → italic
         summary_text = summary_text.strip()
         if len(summary_text) > _SUMMARY_MAX_CHARS:
+            backfill_original_len = len(summary_text)
             summary_text = summary_text[: _SUMMARY_MAX_CHARS - 1] + '…'
+            print(
+                f"handoff.normalize: WARNING — {file_path}: summary: (backfilled from "
+                f"H1/title) exceeded {_SUMMARY_MAX_CHARS} chars (was {backfill_original_len}); "
+                "truncated to fit the cap",
+                file=sys.stderr,
+            )
         if summary_text:
             if summary_is_placeholder:
                 fm_text = replace_fm_field(fm_text, 'summary', summary_text)

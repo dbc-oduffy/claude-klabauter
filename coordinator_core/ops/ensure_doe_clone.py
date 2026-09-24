@@ -119,9 +119,25 @@ def main(argv: List[str]) -> int:
 
     doe_clone = doe_clone.rstrip("/")
 
-    if os.path.isdir(os.path.join(doe_clone, ".git")):
+    has_git = os.path.isdir(os.path.join(doe_clone, ".git"))
+    has_coordinator = os.path.isdir(os.path.join(doe_clone, "coordinator"))
+
+    if has_git and has_coordinator:
         print(f"doe_clone: ready ({doe_clone})")
         return 0
+
+    if has_git and not has_coordinator:
+        # A git clone of SOMETHING, but not coordinator-claude -- not the
+        # clone path and not a silent failure. Do not fall through to
+        # `git clone` over an existing non-empty directory.
+        msg = (
+            f"doe_clone: failed ({doe_clone} is a git clone but has no coordinator/ "
+            f"-- not coordinator-claude; repoint repos.doe_claude at the correct clone "
+            f"or clone the right URL)"
+        )
+        print(msg, file=sys.stderr)
+        print(msg)
+        return 1
 
     if check_only:
         print(f"doe_clone: check failed: {doe_clone} absent (would clone)")

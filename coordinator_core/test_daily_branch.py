@@ -12,8 +12,10 @@ import pytest
 
 from coordinator_core.daily_branch import (
     format_span_suffix,
+    has_remote_prefix,
     is_allowed_branch,
     is_canonical_branch,
+    is_work_branch,
     parse_branch_span,
     read_configured_day_branch,
     record_day_branch_designation,
@@ -47,6 +49,52 @@ from coordinator_core.daily_branch import (
 )
 def test_sanitize_slug(raw, expected):
     assert sanitize_slug(raw) == expected
+
+
+# --- is_work_branch / has_remote_prefix --------------------------------------
+
+@pytest.mark.parametrize(
+    "name,expected",
+    [
+        ("work/x", True),
+        ("work/m/2026-09-22", True),
+        ("work/m/2026-09-22-2", True),
+        ("origin/work/m/2026-09-22", True),
+        ("main", False),
+        ("feature/foo", False),
+        ("origin/main", False),
+        ("origin/feature/foo", False),
+        ("origin/origin/work/x", False),
+        ("upstream/work/x", False),
+        ("Work/x", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_is_work_branch(name, expected):
+    assert is_work_branch(name) is expected
+
+
+@pytest.mark.parametrize(
+    "name,expected",
+    [
+        ("origin/work/m/2026-09-22", True),
+        ("work/x", False),
+        ("work/m/2026-09-22", False),
+        ("work/m/2026-09-22-2", False),
+        ("main", False),
+        ("feature/foo", False),
+        ("origin/main", False),
+        ("origin/feature/foo", False),
+        ("origin/origin/work/x", False),
+        ("upstream/work/x", False),
+        ("Work/x", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_has_remote_prefix(name, expected):
+    assert has_remote_prefix(name) is expected
 
 
 # --- parse_branch_span -------------------------------------------------------

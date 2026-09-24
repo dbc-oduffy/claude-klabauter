@@ -237,3 +237,73 @@ class TestCacheKeyExcludesLegId:
         )
 
         assert key_a != key_b
+
+
+class TestReplaceFmArrayFieldBlockSequence:
+    """Item 55: `_replace_fm_array_field` used to substitute only the `key:`
+    line via `_fm_key_line_pattern(key).sub(...)`, stranding a pre-existing
+    block-sequence's `- item` continuation lines below the new flow-sequence
+    line -- invalid YAML. It now routes through `_locate_nested_block` so
+    the whole span (key line + continuation block) is replaced as one."""
+
+    def test_block_sequence_continuation_lines_are_removed_not_stranded(self):
+        fm = "id: h1\nblocked_by:\n  - stub-a\n  - stub-b\nstatus: open\n"
+
+        result = ht._replace_fm_array_field(fm, "blocked_by", [])
+
+        assert result == "id: h1\nblocked_by: []\nstatus: open\n"
+        assert "- stub-a" not in result
+        assert "- stub-b" not in result
+
+    def test_block_sequence_at_end_of_file_no_trailing_newline(self):
+        fm = "id: h1\nblocked_by:\n  - stub-a\n  - stub-b"
+
+        result = ht._replace_fm_array_field(fm, "blocked_by", ["stub-c"])
+
+        assert result == "id: h1\nblocked_by: ['stub-c']"
+
+    def test_ordinary_single_line_field_unaffected(self):
+        fm = "id: h1\nblocked_by: ['stub-a']\nstatus: open\n"
+
+        result = ht._replace_fm_array_field(fm, "blocked_by", ["stub-b"])
+
+        assert result == "id: h1\nblocked_by: ['stub-b']\nstatus: open\n"
+
+    def test_crlf_document_keeps_crlf_line_endings(self):
+        fm = "id: h1\r\nblocked_by:\r\n  - stub-a\r\nstatus: open\r\n"
+
+        result = ht._replace_fm_array_field(fm, "blocked_by", [])
+
+        assert result == "id: h1\r\nblocked_by: []\r\nstatus: open\r\n"
+
+
+class TestInsertFmArrayFieldBlockSequence:
+    """Item 55 (second assumption): `_insert_fm_array_field` used to anchor on
+    `after_key`'s OWN line end (`_fm_key_line_pattern(after_key).search(fm).end()`),
+    landing the new line in the MIDDLE of `after_key`'s continuation block
+    when `after_key` itself is a legal block sequence on disk. It now anchors
+    on `_locate_nested_block(fm, after_key)`'s whole span."""
+
+    def test_insert_lands_after_anchors_whole_block_sequence_not_inside_it(self):
+        fm = "id: h1\nblocked_by:\n  - stub-a\n  - stub-b\nstatus: open\n"
+
+        result = ht._insert_fm_array_field(fm, "no_longer_blocked_by", ["stub-a"], "blocked_by")
+
+        assert result == (
+            "id: h1\nblocked_by:\n  - stub-a\n  - stub-b\n"
+            "no_longer_blocked_by: ['stub-a']\nstatus: open\n"
+        )
+
+    def test_insert_after_ordinary_single_line_anchor_unaffected(self):
+        fm = "id: h1\nblocked_by: []\nstatus: open\n"
+
+        result = ht._insert_fm_array_field(fm, "no_longer_blocked_by", ["stub-a"], "blocked_by")
+
+        assert result == "id: h1\nblocked_by: []\nno_longer_blocked_by: ['stub-a']\nstatus: open\n"
+
+    def test_insert_appends_when_anchor_absent(self):
+        fm = "id: h1\nstatus: open\n"
+
+        result = ht._insert_fm_array_field(fm, "no_longer_blocked_by", ["stub-a"], "blocked_by")
+
+        assert result == "id: h1\nstatus: open\nno_longer_blocked_by: ['stub-a']\n"

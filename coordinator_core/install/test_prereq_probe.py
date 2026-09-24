@@ -10,6 +10,7 @@ Port of: prereq_probe.sh (DoE 290997c7, 2026-07-22)
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from types import SimpleNamespace
 from unittest import mock
@@ -57,10 +58,15 @@ def test_probe_git_broken_stub():
 # ---------------------------------------------------------------------------
 # probe_python — delegates to manifest_reader.find_python (already-ported sibling)
 # ---------------------------------------------------------------------------
+_CLEAN_PATH = "/usr/local/bin:/usr/bin:/bin"
+
+
 def test_probe_python_pass():
     with mock.patch(
         "coordinator_core.install.manifest_reader.find_python", return_value="python3"
-    ), mock.patch.object(pp, "_run", return_value=_cp(0, "Python 3.12.1\n")):
+    ), mock.patch.object(pp, "_run", return_value=_cp(0, "Python 3.12.1\n")), mock.patch.object(
+        pp.shutil, "which", return_value="/usr/local/bin/python3"
+    ), mock.patch.dict("os.environ", {"PATH": _CLEAN_PATH}, clear=False):
         rec = _parse(pp.probe_python())
     assert rec["status"] == "pass"
     assert rec["severity"] == "hard"
@@ -78,6 +84,65 @@ def test_probe_python_fail():
     assert rec["status"] == "fail"
     assert rec["severity"] == "hard"
     assert "App execution alias" in rec["remediation"] or "App Execution alias" in rec["remediation"]
+
+
+# ---------------------------------------------------------------------------
+# probe_python — precedence assertion (C3 leg 2), both verdicts
+# ---------------------------------------------------------------------------
+def test_probe_python_precedence_clean_path_passes():
+    """A clean PATH — nothing ahead of the resolved interpreter matching any
+    of the four named stub classes — must still emit `pass`."""
+    with mock.patch(
+        "coordinator_core.install.manifest_reader.find_python", return_value="python3"
+    ), mock.patch.object(pp, "_run", return_value=_cp(0, "Python 3.12.1\n")), mock.patch.object(
+        pp.shutil, "which", return_value="/usr/local/bin/python3"
+    ), mock.patch.dict("os.environ", {"PATH": _CLEAN_PATH}, clear=False):
+        rec = _parse(pp.probe_python())
+    assert rec["status"] == "pass"
+
+
+def test_probe_python_precedence_appx_alias_fails_arm_b():
+    """Arm B (C1 recorded UNRUN): a live WindowsApps App Execution Alias
+    stub anywhere on PATH is a hard FAIL, regardless of order relative to
+    the resolved interpreter."""
+    alias_dir = r"C:\Users\op\AppData\Local\Microsoft\WindowsApps"  # abs-path-ok: fake fixture PATH entry, never resolved on disk
+    real_dir = r"C:\Python312"  # abs-path-ok: fake fixture PATH entry, never resolved on disk
+    # Literal ";" (Windows' real PATH separator) rather than os.pathsep --
+    # this test runs on a POSIX CI box (os.pathsep == ":"), which would
+    # collide with the "C:" drive-letter colon in these fixture paths.
+    fake_path = ";".join([real_dir, alias_dir])
+    with mock.patch(
+        "coordinator_core.install.manifest_reader.find_python", return_value="python3"
+    ), mock.patch.object(
+        pp.shutil, "which", return_value=os.path.join(real_dir, "python3.exe")
+    ), mock.patch.dict("os.environ", {"PATH": fake_path}, clear=False), mock.patch.object(
+        pp.os.path, "lexists", side_effect=lambda p: alias_dir.lower() in p.lower()
+    ), mock.patch.object(pp.os, "pathsep", ";"):
+        rec = _parse(pp.probe_python())
+    assert rec["status"] == "fail"
+    assert rec["severity"] == "hard"
+    assert "App Execution Alias" in rec["detail"]
+    assert "App execution alias" in rec["remediation"] or "App Execution alias" in rec["remediation"] \
+        or "App execution aliases" in rec["remediation"]
+
+
+def test_probe_python_precedence_shim_class_ahead_fails():
+    """A pyenv shim directory precedes the resolved interpreter on PATH —
+    must FAIL hard, never merely warn."""
+    shim_dir = "/home/op/.pyenv/shims"
+    real_dir = "/usr/local/bin"
+    fake_path = os.pathsep.join([shim_dir, real_dir])
+    with mock.patch(
+        "coordinator_core.install.manifest_reader.find_python", return_value="python3"
+    ), mock.patch.object(
+        pp.shutil, "which", return_value=os.path.join(real_dir, "python3")
+    ), mock.patch.dict("os.environ", {"PATH": fake_path}, clear=False), mock.patch.object(
+        pp.os.path, "lexists", side_effect=lambda p: shim_dir in p
+    ):
+        rec = _parse(pp.probe_python())
+    assert rec["status"] == "fail"
+    assert rec["severity"] == "hard"
+    assert "pyenv shim" in rec["detail"]
 
 
 # ---------------------------------------------------------------------------

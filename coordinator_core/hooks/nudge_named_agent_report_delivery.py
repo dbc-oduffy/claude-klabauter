@@ -81,7 +81,7 @@ from __future__ import annotations
 import re
 
 from coordinator_core.ipc import register_op
-from coordinator_core.hooks._envelope import allow_advisory, no_advisory
+from coordinator_core.hooks._envelope import allow_advisory, no_advisory, payload_of
 from coordinator_core.hooks._payload import field
 
 # A brief that already routes its report through SendMessage-to-main needs no advisory.
@@ -137,6 +137,7 @@ def _handler(params: dict, repo_root=None) -> dict:
 
     Never blocks and never rewrites: the dispatch proceeds as written in every branch.
     """
+    params = payload_of(params)
     if field(params, "tool_name") != "Agent":
         return no_advisory()
 

@@ -95,6 +95,7 @@ import threading
 from pathlib import Path
 from typing import Callable, Optional, cast
 
+from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
 from coordinator_core.ipc import register_op
 
 #: This file lives at `<engine_root>/coordinator_core/ops/invoke_from_argv.py`
@@ -276,27 +277,6 @@ def _resolve_entrypoint_script(entrypoint: str) -> Path:
 
 
 
-def _ensure_bin_dir_importable() -> None:
-    """Puts `coordinator/bin` on `sys.path` once, so a loaded entrypoint can
-    `from lib.<module> import ...`.
-
-    Why this exists: every bin CLI used to carry its own three-line
-    `sys.path.insert(0, <bin>/lib)` preamble, executed at module scope inside
-    this shared warm server — 273 entrypoints each mutating interpreter global
-    state on import, which is the AC20 impurity and the (b) warm-loadable
-    hazard the census exists to exclude. The bootstrap now lives in exactly one
-    place (`coordinator/bin/lib/__init__.py`) and this function is what makes
-    that package reachable on the warm path. On the CLI path nothing is needed:
-    a script's own directory is already `sys.path[0]`.
-
-    Idempotent and cheap — a membership test on every call after the first.
-    Negative-spec: this does NOT add `<bin>/lib` itself. That stays the lib
-    package's own job, so there is one bootstrap, not two competing ones.
-    """
-    bin_dir = str(_ENGINE_ROOT / "coordinator" / "bin")
-    if bin_dir not in sys.path:
-        sys.path.insert(0, bin_dir)
-
 def _load_entrypoint_main(script: Path, entrypoint: str) -> Callable[[Optional[list]], int]:
     """Loads `script` and returns its `main` callable. Must only be called
     from inside `_run_entrypoint`'s op-boundary `try`/`except` — the module
@@ -313,11 +293,26 @@ def _load_entrypoint_main(script: Path, entrypoint: str) -> Callable[[Optional[l
     manifest`/`_load_bin_templates_manifest`, the established precedent for
     this exact load shape in this codebase).
 
+    Calls `bin_lib_binding.ensure_bin_lib_bound` first, so a loaded
+    entrypoint's bare `import lib` resolves to `coordinator/bin/lib` — every
+    bin CLI used to carry its own three-line `sys.path.insert(0, <bin>/lib)`
+    preamble, executed at module scope inside this shared warm server — 273
+    entrypoints each mutating interpreter global state on import, which is
+    the AC20 impurity and the (b) warm-loadable hazard the census exists to
+    exclude. The bootstrap now lives in exactly one place
+    (`coordinator/bin/lib/__init__.py`); this call is what makes that
+    package reachable on the warm path. On the CLI path nothing is needed:
+    a script's own directory is already `sys.path[0]`. Idempotent and cheap
+    — this engine's own bin is always the bound root here, so the call is a
+    membership test on every call after the first. Negative-spec: this does
+    NOT add `<bin>/lib` itself. That stays the lib package's own job, so
+    there is one bootstrap, not two competing ones.
+
     Raises `ValueError` (never caught by this function itself) when the
     module cannot be loaded from `script`, or loads but defines no callable
     `main`.
     """
-    _ensure_bin_dir_importable()
+    ensure_bin_lib_bound(str(_ENGINE_ROOT / "coordinator" / "bin"))
     module_name = f"_invoke_from_argv_entrypoint_{entrypoint.replace('-', '_')}"
     spec = importlib.util.spec_from_file_location(module_name, script)
     if spec is None or spec.loader is None:

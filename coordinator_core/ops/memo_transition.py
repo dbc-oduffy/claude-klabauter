@@ -17,8 +17,9 @@ three JS-mirrored verbs.
 Spec backlink: pln-memo-transition-native-python--7e1dd0 (claim/action/release)
 Spec backlink: pln-give-the-memo-disposition-flip-e580c2 (resolve, C1)
 
-Verb contracts (mirrored from the JS spec, plus the native-only addition):
-  claim   — open → in_progress; writes picked_up_at + picked_up_by.
+Verb contracts (mirrored from the JS spec, plus the native-only additions):
+  claim   — open (or delivered, treated identically — see "delivered" note below)
+              → in_progress; writes picked_up_at + picked_up_by.
   action  — in_progress → actioned; writes decision/decision_note/realized_by
               OR actioned_note (consult/fyi shape) OR, when the receiving end
               holds a confirmed supersession, ``superseded_by`` (status →
@@ -47,12 +48,26 @@ Verb contracts (mirrored from the JS spec, plus the native-only addition):
               current truth first, superseded original as history beneath.
               See ``_handle_supersede`` / ``_apply_supersede_fields``.
   release — in_progress → open; removes picked_up_by + picked_up_at entirely.
-  resolve — open → actioned in ONE locked_rmw closure (native-only, no JS mirror).
-              Collapses claim+action into a single atomic write — no intermediate
-              in_progress state is ever visible on disk. This is the same two-step
-              ceremony (archive-stamp-cli claim-memo-stamp, then action-memo) that
+  resolve — open (or delivered) → actioned in ONE locked_rmw closure (native-only,
+              no JS mirror). Collapses claim+action into a single atomic write —
+              no intermediate in_progress state is ever visible on disk. This is
+              the same two-step ceremony (archive-stamp-cli claim-memo-stamp, then
+              action-memo) that
               state/lessons/2026-07-24-memo-terminal-flip-is-a-two-step-transit-147cc531ae68.yaml
               documents as already-established convention, collapsed into one call.
+  lift    — draft → open (native-only, no JS mirror). The one receiver-side move
+              a hand-delivered ``status: draft`` memo has no other way to reach —
+              see ``_lift``'s own docstring for the memo backlink.
+
+"delivered" status (claim/resolve): a sender-side path can stamp a delivered
+memo ``status: delivered`` rather than ``open`` — previously a lifecycle dead end
+(state/cross-repo/archive/2026-09-02-example-cockpit-repo-em-memo-status-delivered-is-
+a-lifecycle-dead-end-no-verb-accepts.md), since no verb accepted that value.
+claim and resolve now accept it everywhere they accept "open".
+
+``cwd`` (all verbs, optional): a relative ``memo`` anchors to it instead of this
+process's own cwd (state/cross-repo/archive/2026-09-05-claude-klabauter-engine-
+memo-transition-ignores-cwd-and-its-errors-misdirect.md). See ``_containment_check``.
 
 Dup-key guard (C5): ≥2 status: keys before any mutation → fail-loud no-write.
 Post-write self-verify: exactly 1 status: key must remain after write → INTERNAL ERROR.
@@ -175,16 +190,24 @@ _ALLOWED_SUBTREES = ("cross-repo", "state")
 _GIT_TIMEOUT_SECS = 30
 
 
-def _containment_check(memo: str) -> Path:
+def _containment_check(memo: str, cwd: str | None = None) -> tuple[Path, Path]:
     """Raise if the resolved memo path is not under a git repo's cross-repo/ or state/ subtree.
 
-    Returns the resolved git repository root on success — callers pass this as
-    ``repo_root`` to ``locked_rmw`` so the ``git_common_dir`` lru_cache is keyed
+    Returns ``(resolved_memo_path, git_root)`` on success. ``git_root`` is what callers
+    pass as ``repo_root`` to ``locked_rmw`` so the ``git_common_dir`` lru_cache is keyed
     on the repo root (not per-memo-directory, which would cause N subprocess calls
-    per distinct memo directory instead of 1 for the process lifetime).
+    per distinct memo directory instead of 1 for the process lifetime). The resolved
+    memo path is what callers use for every subsequent filesystem operation, instead
+    of re-deriving their own (inconsistent) resolution of ``memo``.
+
+    ``cwd`` (state/cross-repo/archive/2026-09-05-claude-klabauter-engine-memo-
+    transition-ignores-cwd-and-its-errors-misdirect.md): a RELATIVE ``memo`` is
+    anchored to ``cwd`` when supplied, before ``.resolve()`` runs — never left to
+    fall through to this process's own cwd (which, served warm, is the engine's
+    own root, not the caller's repo). An absolute ``memo`` ignores ``cwd`` entirely.
 
     Steps:
-        1. Resolve the absolute path of the memo.
+        1. Anchor a relative memo path to ``cwd`` (if given), then resolve to absolute.
         2. Find the git toplevel of its parent directory.
         3. Accept iff the resolved path is relative to <git-root>/cross-repo or <git-root>/state.
 
@@ -192,18 +215,23 @@ def _containment_check(memo: str) -> Path:
         ValueError — if the path fails any step of containment.
 
     Returns:
-        Path — the resolved git repository root (for use as locked_rmw repo_root).
+        tuple[Path, Path] — (resolved memo path, resolved git repository root).
     """
+    raw = Path(memo)
+    if cwd and not raw.is_absolute():
+        raw = Path(cwd) / raw
+
     # Return git_root so callers use it as repo_root
     # in locked_rmw, keying lru_cache on the stable repo root rather than the per-call
     # memo_path.parent, which would spawn a fresh git rev-parse per unique memo directory.
-    m = Path(memo).resolve()
+    m = raw.resolve()
 
     toplevel = _show_toplevel(cwd=str(m.parent))
     if not toplevel:
         raise ValueError(
             f"memo.transition: --memo outside containment (must be under a git repo "
-            f"cross-repo/ or state/ subtree): {memo!r} — could not determine git root"
+            f"cross-repo/ or state/ subtree): {memo!r} (resolved {m}) — could not "
+            f"determine git root"
         )
 
     # .resolve() makes symlink handling explicit and
@@ -211,7 +239,7 @@ def _containment_check(memo: str) -> Path:
     git_root = Path(toplevel).resolve()
     for subtree in _ALLOWED_SUBTREES:
         if m.is_relative_to(git_root / subtree):
-            return git_root
+            return m, git_root
 
     raise ValueError(
         f"memo.transition: --memo outside containment (must be under a git repo "
@@ -337,6 +365,7 @@ def _commit_terminal_write(
         try:
             Path(msg_path).unlink()
         except OSError:
+            # temp commit-message file already gone; nothing left to clean up
             pass
 
     if not commit_result.ok:
@@ -795,7 +824,7 @@ def _claim_stamp_fields(fm_text: str, session_id: str, at: str) -> str:
 # Port of claim() from DoE-claude coordinator/bin/memo-transition.js:230-307.
 # ---------------------------------------------------------------------------
 
-def _claim(memo: str, session_id: str, at: str) -> dict:
+def _claim(memo: str, session_id: str, at: str, cwd: str | None = None) -> dict:
     """Apply claim transition: open → in_progress, write picked_up_at + picked_up_by.
 
     Byte-faithful port of claim() from memo-transition.js:230-307.
@@ -821,7 +850,7 @@ def _claim(memo: str, session_id: str, at: str) -> dict:
     # Capture git_root for use as locked_rmw repo_root to avoid
     # lru_cache thrash (memo_path.parent varies per call; git_root is stable for the repo lifetime).
     try:
-        git_root = _containment_check(memo)
+        memo_path, git_root = _containment_check(memo, cwd)
     except ValueError as exc:
         return _err(str(exc))
     except subprocess.TimeoutExpired:
@@ -830,9 +859,12 @@ def _claim(memo: str, session_id: str, at: str) -> dict:
         # instead of letting it escape unhandled through asyncio.to_thread.
         return _err(f"claim: containment check timed out for --memo {memo!r}")
 
-    memo_path = Path(memo)
     if not memo_path.is_file():
-        return _err(f"memo not found: {memo}")
+        # Named resolved (absolute) path, not the raw caller-supplied string
+        # (state/cross-repo/archive/2026-09-05-claude-klabauter-engine-memo-
+        # transition-ignores-cwd-and-its-errors-misdirect.md, ask 2) — the
+        # resolved path is the fact that makes a cwd-resolution bug obvious.
+        return _err(f"memo not found: {memo_path}")
 
     _sid = session_id.strip()
     _at = at.strip()
@@ -874,10 +906,16 @@ def _claim(memo: str, session_id: str, at: str) -> dict:
                 "release it first or use a different session"
             )
 
-        # Unexpected terminal or unknown state.
+        # Unexpected terminal or unknown state. "delivered" is accepted alongside
+        # "open" (state/cross-repo/archive/2026-09-02-example-cockpit-repo-em-memo-
+        # status-delivered-is-a-lifecycle-dead-end-no-verb-accepts.md) — a memo
+        # stamped "delivered" by a sender-side path is the same "awaiting pickup"
+        # point in the lifecycle as "open"; claim treats the two identically.
         # Raises MutateAbort so locked_rmw releases the lock without writing.
-        if status not in ("open", None):
-            raise MutateAbort(f'unexpected current status "{status}" for claim — expected open')
+        if status not in ("open", "delivered", None):
+            raise MutateAbort(
+                f'unexpected current status "{status}" for claim — expected open or delivered'
+            )
 
         fm_text = split.fm_text
 
@@ -908,7 +946,7 @@ def _claim(memo: str, session_id: str, at: str) -> dict:
         # acquisition (TOCTOU window); locked_rmw raises FileNotFoundError. Without this
         # clause it escapes through asyncio.to_thread to the IPC dispatcher → -32603
         # INTERNAL_ERROR with no exit_code field (AC6/AC10 contract violation).
-        return _err(f"memo not found: {memo}")
+        return _err(f"memo not found: {memo_path}")
 
     # Idempotent no-op: mutate returned old_text unchanged; locked_rmw skipped the write.
     if _noop_result[0] is not None:
@@ -1506,7 +1544,7 @@ def _validate_superseded_by_exists(git_root: Path, superseded_by: str) -> dict |
 # Port of action() from DoE-claude coordinator/bin/memo-transition.js:311-438.
 # ---------------------------------------------------------------------------
 
-def _action(memo: str, params: dict) -> dict:
+def _action(memo: str, params: dict, cwd: str | None = None) -> dict:
     """Apply action transition: in_progress → actioned, write disposition fields.
 
     Byte-faithful port of action() from memo-transition.js:311-492.
@@ -1540,16 +1578,15 @@ def _action(memo: str, params: dict) -> dict:
     # Containment ValueError → _err() (AC6 contract).
     # Capture git_root for locked_rmw repo_root stability.
     try:
-        git_root = _containment_check(memo)
+        memo_path, git_root = _containment_check(memo, cwd)
     except ValueError as exc:
         return _err(str(exc))
     except subprocess.TimeoutExpired:
         # Same AC6 {exit_code:1} contract as ValueError.
         return _err(f"action: containment check timed out for --memo {memo!r}")
 
-    memo_path = Path(memo)
     if not memo_path.is_file():
-        return _err(f"memo not found: {memo}")
+        return _err(f"memo not found: {memo_path}")
 
     # superseded_by pointer validation — BEFORE any write, no partial state
     # (mirrors memo_send._validate_in_reply_to_exists). Normalizes to a bare
@@ -1641,7 +1678,7 @@ def _action(memo: str, params: dict) -> dict:
     except FileNotFoundError:
         # TOCTOU: memo deleted between is_file() and lock
         # acquire; locked_rmw raises FileNotFoundError → would escape as -32603 INTERNAL_ERROR.
-        return _err(f"memo not found: {memo}")
+        return _err(f"memo not found: {memo_path}")
 
     # Idempotent no-op: mutate returned old_text unchanged; locked_rmw skipped the write.
     if _noop_result[0] is not None:
@@ -1713,7 +1750,7 @@ def _action(memo: str, params: dict) -> dict:
 # Port of release() from DoE-claude coordinator/bin/memo-transition.js:442-496.
 # ---------------------------------------------------------------------------
 
-def _release(memo: str) -> dict:
+def _release(memo: str, cwd: str | None = None) -> dict:
     """Apply release transition: in_progress → open, remove picked_up_by + picked_up_at.
 
     Byte-faithful port of release() from memo-transition.js:442-496.
@@ -1725,16 +1762,15 @@ def _release(memo: str) -> dict:
     # Containment ValueError → _err() (AC6 contract).
     # Capture git_root for locked_rmw repo_root stability.
     try:
-        git_root = _containment_check(memo)
+        memo_path, git_root = _containment_check(memo, cwd)
     except ValueError as exc:
         return _err(str(exc))
     except subprocess.TimeoutExpired:
         # Same AC6 {exit_code:1} contract as ValueError.
         return _err(f"release: containment check timed out for --memo {memo!r}")
 
-    memo_path = Path(memo)
     if not memo_path.is_file():
-        return _err(f"memo not found: {memo}")
+        return _err(f"memo not found: {memo_path}")
 
     # Mutable container so the closure can signal an idempotent no-op without raising.
     _noop_result: list[dict | None] = [None]
@@ -1801,7 +1837,7 @@ def _release(memo: str) -> dict:
     except FileNotFoundError:
         # TOCTOU: memo deleted between is_file() and lock
         # acquire; locked_rmw raises FileNotFoundError → would escape as -32603 INTERNAL_ERROR.
-        return _err(f"memo not found: {memo}")
+        return _err(f"memo not found: {memo_path}")
 
     # Idempotent no-op: mutate returned old_text unchanged; locked_rmw skipped the write.
     if _noop_result[0] is not None:
@@ -1829,6 +1865,104 @@ def _release(memo: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# lift verb — draft -> open, the receiver-side leg a hand-delivered memo has
+# no other way to reach (state/cross-repo/archive/2026-09-02-doe-claude-em-
+# outbound-defects-batch.md § "A hand-delivered draft memo is unclosable by
+# its receiver"). A memo hand-delivered while memo.send was suspended lands
+# at status: draft — the sender-side value memo_draft.py stamps — and every
+# receiver-side verb here refuses it (claim/resolve want open/delivered,
+# action wants in_progress). lift is the one receiver-side move that gets
+# such a memo back onto the ordinary open -> in_progress -> actioned path.
+#
+# Negative-spec: does NOT stamp picked_up_at/picked_up_by (that is claim's
+# job, run afterward as a normal follow-up call) — lift only ever flips
+# status, mirroring release's shape (status-only write, no claim fields).
+# ---------------------------------------------------------------------------
+
+def _lift(memo: str, cwd: str | None = None) -> dict:
+    """Apply lift transition: draft → open, the receiver-side leg no other verb offers.
+
+    Idempotency: no-op when already open (mirrors ``_release``'s open no-op).
+    Unexpected status (anything other than "draft" or "open") fails loud, no write.
+    """
+    try:
+        memo_path, git_root = _containment_check(memo, cwd)
+    except ValueError as exc:
+        return _err(str(exc))
+    except subprocess.TimeoutExpired:
+        return _err(f"lift: containment check timed out for --memo {memo!r}")
+
+    if not memo_path.is_file():
+        return _err(f"memo not found: {memo_path}")
+
+    _noop_result: list[dict | None] = [None]
+
+    def _mutate(old_text: str) -> str:
+        split = split_frontmatter(old_text)
+        if split is None:
+            raise MutateAbort(f"no parseable YAML frontmatter in {memo}")
+
+        pre_dup_count = _count_status_keys(split.fm_text)
+        if pre_dup_count >= 2:
+            raise MutateAbort(
+                f"memo has {pre_dup_count} status: keys — hand-collapse the duplicate before retrying\n"
+                f"  (edit the frontmatter to leave exactly one status: line, then retry)"
+            )
+
+        status = read_fm_field(split.fm_text, "status")
+
+        if status == "open":
+            _noop_result[0] = _ok(False, f"{memo} already open — no-op")
+            return old_text
+
+        if status != "draft":
+            raise MutateAbort(
+                f'unexpected current status "{status or "(missing)"}" for lift — expected draft'
+            )
+
+        fm_text = replace_fm_field(split.fm_text, "status", "open", numeric_quoting=True)
+
+        fm_text = _normalize_oversize_summary(fm_text, memo)
+
+        errors = _validate_memo_fm(fm_text)
+        if errors:
+            details = format_validation_errors(errors)
+            raise MutateAbort(f"memo cross-field validation failed: {details}")
+
+        return rebuild(split, fm_text)
+
+    try:
+        new_text = locked_rmw(memo_path, _mutate, repo_root=git_root)
+    except MutateAbort as exc:
+        return _err(str(exc.args[0]) if exc.args else "lift: unknown mutation error")
+    except LockTimeout as exc:
+        return _err(str(exc))
+    except FileNotFoundError:
+        return _err(f"memo not found: {memo_path}")
+
+    if _noop_result[0] is not None:
+        resumed_reply = _resume_probe_and_commit(
+            memo_path, git_root, "lift", new_text,
+            f"{memo} already open — resumed a stranded uncommitted write and committed it",
+        )
+        if resumed_reply is not None:
+            return resumed_reply
+        return _noop_result[0]
+
+    written_split = split_frontmatter(new_text)
+    if written_split is None or _count_status_keys(written_split.fm_text) != 1:
+        return _err(
+            f"INTERNAL ERROR — post-write status key count ≠ 1. Inspect {memo} immediately."
+        )
+
+    commit_sha, commit_error = _commit_terminal_write(memo_path, git_root, "lift", new_text)
+    if commit_error is not None:
+        return _err(commit_error)
+
+    return _ok(True, f"lifted {memo} (status set to open)", commit_sha=commit_sha)
+
+
+# ---------------------------------------------------------------------------
 # close verb — actioned -> closed, the previously-unreachable terminal state
 # (DEFECT 1, 2026-08-12 inbox-blitz-dominant-verify-wave-b audit item 6§3 /
 # audit item 3): the memo status schema enum
@@ -1839,7 +1973,7 @@ def _release(memo: str) -> dict:
 # therefore never observe it via any sanctioned mutation path.
 # ---------------------------------------------------------------------------
 
-def _close(memo: str, at: str) -> dict:
+def _close(memo: str, at: str, cwd: str | None = None) -> dict:
     """Apply close transition: actioned → closed, stamping the companion
     fields ``schema_validate._memo_cf_closed_requires_companions`` requires
     (``closed_at``, ``action_taken_at``, ``decision``).
@@ -1858,7 +1992,7 @@ def _close(memo: str, at: str) -> dict:
     fails loud rather than closing without one.
     """
     try:
-        git_root = _containment_check(memo)
+        memo_path, git_root = _containment_check(memo, cwd)
     except ValueError as exc:
         return _err(str(exc))
     except subprocess.TimeoutExpired:
@@ -1868,9 +2002,8 @@ def _close(memo: str, at: str) -> dict:
         return _err("close requires --at <ISO timestamp>")
     _at = at.strip()
 
-    memo_path = Path(memo)
     if not memo_path.is_file():
-        return _err(f"memo not found: {memo}")
+        return _err(f"memo not found: {memo_path}")
 
     _noop_result: list[dict | None] = [None]
 
@@ -1941,7 +2074,7 @@ def _close(memo: str, at: str) -> dict:
     except LockTimeout as exc:
         return _err(str(exc))
     except FileNotFoundError:
-        return _err(f"memo not found: {memo}")
+        return _err(f"memo not found: {memo_path}")
 
     if _noop_result[0] is not None:
         resumed_reply = _resume_probe_and_commit(
@@ -1972,7 +2105,7 @@ def _close(memo: str, at: str) -> dict:
 # docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md.
 # ---------------------------------------------------------------------------
 
-def _resolve(memo: str, session_id: str, at: str, params: dict) -> dict:
+def _resolve(memo: str, session_id: str, at: str, params: dict, cwd: str | None = None) -> dict:
     """Apply resolve transition: open → actioned, in ONE ``locked_rmw`` closure.
 
     Collapses the two-call claim-then-action ceremony
@@ -2030,15 +2163,14 @@ def _resolve(memo: str, session_id: str, at: str, params: dict) -> dict:
 
     # Containment gate MUST fire before any frontmatter-primitive call.
     try:
-        git_root = _containment_check(memo)
+        memo_path, git_root = _containment_check(memo, cwd)
     except ValueError as exc:
         return _err(str(exc))
     except subprocess.TimeoutExpired:
         return _err(f"resolve: containment check timed out for --memo {memo!r}")
 
-    memo_path = Path(memo)
     if not memo_path.is_file():
-        return _err(f"memo not found: {memo}")
+        return _err(f"memo not found: {memo_path}")
 
     _sid = session_id.strip()
     _at = at.strip()
@@ -2081,9 +2213,13 @@ def _resolve(memo: str, session_id: str, at: str, params: dict) -> dict:
                     "release it first or use a different session"
                 )
 
-            # open, None, or in_progress-held-by-us are the only remaining legal states.
-            if status not in ("open", "in_progress", None):
-                raise MutateAbort(f'unexpected current status "{status}" for resolve — expected open')
+            # open, delivered, None, or in_progress-held-by-us are the only remaining
+            # legal states. "delivered" is treated identically to "open" (see _claim's
+            # matching comment) — same lifecycle point, different sender-side spelling.
+            if status not in ("open", "delivered", "in_progress", None):
+                raise MutateAbort(
+                    f'unexpected current status "{status}" for resolve — expected open or delivered'
+                )
 
             # Step 2: stamp picked_up_at/picked_up_by as _claim does. This is an in-memory
             # transition only — status briefly reads "in_progress" in fm_text here, but that
@@ -2124,7 +2260,7 @@ def _resolve(memo: str, session_id: str, at: str, params: dict) -> dict:
         return _err(str(exc))
     except FileNotFoundError:
         # TOCTOU: memo deleted between is_file() and lock acquire.
-        return _err(f"memo not found: {memo}")
+        return _err(f"memo not found: {memo_path}")
 
     # Idempotent no-op: mutate returned old_text unchanged; locked_rmw skipped the write.
     if _noop_result[0] is not None:
@@ -2179,12 +2315,20 @@ async def _handler(
     (DR-273) uses the git root ``_containment_check`` derives from the memo path itself,
     NOT this unused ``repo_root`` — the consumer-agnostic contract is unchanged.
 
+    ``cwd`` (optional, all verbs) — anchors a RELATIVE ``memo`` before resolution
+    (state/cross-repo/archive/2026-09-05-claude-klabauter-engine-memo-transition-
+    ignores-cwd-and-its-errors-misdirect.md). Previously accepted and silently
+    ignored, leaving a relative ``memo`` to resolve against this process's own cwd
+    (the engine root when served warm, not the caller's repo). An absolute
+    ``memo`` ignores ``cwd`` entirely. See ``_containment_check``.
+
     Required params:
-        verb (str) — one of: claim | action | release | resolve | close.
+        verb (str) — one of: claim | action | release | resolve | close | lift.
         memo (str) — path to the target memo file.
 
     Verb-specific required params:
-        claim  : session_id (str, required, non-empty), at (str, ISO timestamp)
+        claim  : session_id (str, required, non-empty), at (str, ISO timestamp).
+                 Accepts a memo at status "open" OR "delivered" (see below).
         action : exactly one of:
                    decision (str: accepted|partial|declined) + optional decision_note, realized_by
                    actioned_note (str)
@@ -2198,6 +2342,12 @@ async def _handler(
                  same disposition params as action — atomic open→actioned, no intermediate
                  in_progress write (native-only, no JS mirror — see module docstring; C1 of
                  docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md).
+                 Accepts a memo at status "open" OR "delivered" (see below).
+        lift   : (no additional params) — draft→open, the one receiver-side move a
+                 hand-delivered ``status: draft`` memo has no other way to reach
+                 (state/cross-repo/archive/2026-09-02-doe-claude-em-outbound-defects-
+                 batch.md § "A hand-delivered draft memo is unclosable by its
+                 receiver"). Idempotent no-op when already open.
         close  : at (str, ISO timestamp) — actioned→closed, the previously-unreachable
                  terminal status the schema enum has always permitted. Requires the memo
                  be "actioned" WITH a decision on record; stamps closed_at (+ action_taken_at
@@ -2222,6 +2372,13 @@ async def _handler(
         and when the memo is already superseded with a DIFFERENT supersede record
         (append-only — one reversal, not a rewrite target).
 
+    "delivered" status (claim/resolve only): treated identically to "open" — a memo
+    a sender-side path stamped ``status: delivered`` was previously a lifecycle dead
+    end (state/cross-repo/archive/2026-09-02-example-cockpit-repo-em-memo-status-
+    delivered-is-a-lifecycle-dead-end-no-verb-accepts.md): no verb accepted it, so it
+    could never leave the inbox. claim and resolve now accept it exactly where they
+    accept "open".
+
     Returns:
         {"exit_code": 0, "applied": bool,  "message": str, "commit_sha": str} on success
             (commit_sha additive, DR-273/C13 — present only when a real write landed)
@@ -2242,37 +2399,50 @@ async def _handler(
     """
     verb = (params.get("verb") or "").strip()
     if not verb:
-        return _err("memo.transition: 'verb' is required (claim | action | release | resolve | close)")
+        return _err(
+            "memo.transition: 'verb' is required (claim | action | release | resolve | close | lift)"
+        )
 
     memo = (params.get("memo") or "").strip()
     if not memo:
         return _err("memo.transition: 'memo' is required")
 
+    # Anchors a relative `memo` to the caller's cwd (see docstring and
+    # _containment_check) instead of leaving it to resolve against this
+    # process's own cwd. Absent/empty is a no-op — every verb's containment
+    # check falls back to Path(memo).resolve() unchanged.
+    cwd = (params.get("cwd") or "").strip() or None
+
     if verb == "claim":
         session_id = (params.get("session_id") or "").strip()
         at = (params.get("at") or "").strip()
         # asyncio.to_thread: blocking containment check + file I/O must not run on the event loop.
-        return await asyncio.to_thread(_claim, memo, session_id, at)
+        return await asyncio.to_thread(_claim, memo, session_id, at, cwd)
 
     if verb == "action":
         # asyncio.to_thread for DR-212 D3 async-loop mandate.
-        return await asyncio.to_thread(_action, memo, params)
+        return await asyncio.to_thread(_action, memo, params, cwd)
 
     if verb == "release":
         # asyncio.to_thread for DR-212 D3 async-loop mandate.
-        return await asyncio.to_thread(_release, memo)
+        return await asyncio.to_thread(_release, memo, cwd)
 
     if verb == "resolve":
         session_id = (params.get("session_id") or "").strip()
         at = (params.get("at") or "").strip()
         # asyncio.to_thread: blocking containment check + file I/O must not run on the event loop.
-        return await asyncio.to_thread(_resolve, memo, session_id, at, params)
+        return await asyncio.to_thread(_resolve, memo, session_id, at, params, cwd)
+
+    if verb == "lift":
+        # asyncio.to_thread for DR-212 D3 async-loop mandate.
+        return await asyncio.to_thread(_lift, memo, cwd)
 
     if verb == "close":
         at = (params.get("at") or "").strip()
         # asyncio.to_thread for DR-212 D3 async-loop mandate.
-        return await asyncio.to_thread(_close, memo, at)
+        return await asyncio.to_thread(_close, memo, at, cwd)
 
     return _err(
-        f"memo.transition: unknown verb {verb!r} — supported: claim, action, release, resolve, close"
+        f"memo.transition: unknown verb {verb!r} — supported: "
+        "claim, action, release, resolve, close, lift"
     )

@@ -536,6 +536,33 @@ def test_review_partition_scalar_value_refuses_by_name_not_a_raw_crash(
         wsc.brief(decisions={"review_partition": "by-concern"}, repo_root=tmp_path)
 
 
+def test_stage_paths_nested_disposition_shape_refuses_by_name_not_a_silent_noop(
+    monkeypatch, tmp_path
+):
+    """P143-T16: `decisions['stage_paths']` is a flat list of path strings
+    (the EM's own reviewed-and-narrowed file set), never a judgment-point-
+    shaped `{"disposition": [...]}` mapping. Every downstream consumer reads
+    it with `decisions.get("stage_paths") or []`/`or ()`, which is truthy for
+    a non-empty dict and would previously accept and silently ignore the
+    nested shape. `brief()` must refuse it by name instead."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    with pytest.raises(ValueError, match="stage_paths"):
+        wsc.brief(
+            decisions={"stage_paths": {"disposition": ["a.py"]}},
+            repo_root=tmp_path,
+        )
+
+
+def test_stage_paths_flat_list_still_accepted(monkeypatch, tmp_path):
+    """Negative-spec companion to the refusal test above: the flat shape the
+    refusal names as correct must still work unchanged."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    decision_object = wsc.brief(
+        decisions={"stage_paths": ["a.py", "b.py"]}, repo_root=tmp_path
+    )
+    assert decision_object["decisions"]["stage_paths"] == ["a.py", "b.py"]
+
+
 # ---------------------------------------------------------------------------
 # decide_review_scale wiring (2026-08-03-chain-end-review-scale-wiring.md,
 # chunk C4) -- AC2's deliverable and the regression pin for the whole defect
@@ -1273,6 +1300,28 @@ def test_the_verified_complete_arm_names_the_absent_ac_reconciliation_step(monke
     jp = next(j for j in decision_object["judgment_points"] if j["id"] == "jp-consumed-handoff-completeness")
     guidance = next(d for d in jp["dispositions"] if d["value"] == "verified-complete-proceed")["guidance"]
     assert "does not verify" in guidance
+
+
+def test_the_verified_complete_arm_states_the_computed_reason_instead_of_by_hand(
+    monkeypatch, tmp_path
+):
+    """P143-T39: the guidance used to tell the EM to check each criterion
+    "against HEAD by hand" without repeating what the gate already
+    computed. It must now embed the actual leg-A/leg-B reason(s) the gate
+    derived (the same text shown in the judgment point's own `question`),
+    so the guidance states a fact this module already knows rather than
+    asking the operator to re-derive it."""
+    _write_ac_handoff(tmp_path, "state/handoffs/x.md", "## Acceptance criteria\n\n- [x] one\n- [ ] two\n")
+    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=("state/handoffs/x.md",)))
+    _patch_leg_b(monkeypatch, {"exit_code": 1, "referenced": False})
+
+    decision_object = wsc.brief(decisions={"subject": "a commit subject"}, repo_root=tmp_path)
+
+    jp = next(j for j in decision_object["judgment_points"] if j["id"] == "jp-consumed-handoff-completeness")
+    guidance = next(d for d in jp["dispositions"] if d["value"] == "verified-complete-proceed")["guidance"]
+    assert "by hand" not in guidance
+    assert "state/handoffs/x.md" in guidance
+    assert "leg A" in guidance
 
 
 def test_consumed_handoff_completeness_leg_b_live_child_blocks_wsc_tail(monkeypatch, tmp_path):
@@ -3019,6 +3068,36 @@ def test_archived_consumed_handoff_still_resolves_governing_plan(monkeypatch, tm
     }
 
 
+def test_governing_plan_resolves_from_newest_consumed_handoff_not_oldest(monkeypatch, tmp_path):
+    # P143-T9: `_governing_plan_field_from_consumed_handoff` must read the
+    # chain HEAD (the last, newest entry of `consumed_handoff_paths`), not
+    # the chain root the scalar `consumed_handoff` names.
+    old_slug = "old-chain-root-plan"
+    new_slug = "new-chain-head-plan"
+    _write_plan(tmp_path, old_slug)
+    _write_plan(tmp_path, new_slug)
+    _write_handoff(tmp_path, "state/handoffs/2026-07-01-old.md", f"docs/plans/{old_slug}.md")
+    _write_handoff(tmp_path, "state/handoffs/2026-07-05-new.md", f"docs/plans/{new_slug}.md")
+    _patch_gate(
+        monkeypatch,
+        _gate(
+            "chain-terminal",
+            consumed_handoff="state/handoffs/2026-07-01-old.md",
+            consumed_handoff_paths=(
+                "state/handoffs/2026-07-01-old.md",
+                "state/handoffs/2026-07-05-new.md",
+            ),
+        ),
+    )
+
+    decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
+    assert decision_object["preflight"]["governing_plan_resolution"] == {
+        "source": "handoff_frontmatter",
+        "slug": new_slug,
+        "path": str(tmp_path / "docs" / "plans" / f"{new_slug}.md"),
+    }
+
+
 def test_no_claim_plan_directive_when_no_governing_plan_resolved(monkeypatch, tmp_path):
     _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=()))
     decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
@@ -4608,6 +4687,10 @@ def test_landed_reconciliation_gate_indeterminate_when_no_governing_plan(monkeyp
     assert gate["warn_text"] is None
     assert gate["verdict"] == "indeterminate"
     assert "INDETERMINATE" in gate["summary_line"]
+    # P143-T39: unknown here means unknown -- no landed status was ever
+    # established, so this arm must not claim one was "check[ed] by hand"
+    # either way.
+    assert "by hand" not in gate["summary_line"]
 
 
 def test_landed_reconciliation_gate_not_applicable_on_landed_plan_with_no_ac_heading(monkeypatch, tmp_path):
@@ -4785,6 +4868,12 @@ def test_landed_reconciliation_gate_indeterminate_blocks_the_implemented_stamp(m
         decisions={"governing_plan_slug": "headless-landed-plan", "subject": "x"}, repo_root=tmp_path
     )
     assert decision_object["gates"]["landed_reconciliation"]["verdict"] == "indeterminate"
+    # P143-T39: this arm already confirmed `status: landed` before it ever
+    # reaches the unreadable-row branch, so the summary states that fact
+    # instead of telling the operator to check it by hand.
+    landed_summary = decision_object["gates"]["landed_reconciliation"]["summary_line"]
+    assert "by hand" not in landed_summary
+    assert "confirmed status: landed" in landed_summary
 
     jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
     assert "jp-landed-reconciliation-block-stamp" in jp_ids

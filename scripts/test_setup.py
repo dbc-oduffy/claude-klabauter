@@ -944,7 +944,7 @@ def test_run_preflight_advisory_failure_still_exits_zero(setup_mod, monkeypatch)
     assert setup_mod.run_preflight() == 0
 
 
-def test_main_register_only_does_not_provision_dependencies(setup_mod, monkeypatch):
+def test_main_register_only_does_not_provision_dependencies(setup_mod, monkeypatch, tmp_path):
     """`--register-only` is registration + verification; PROVISIONING is neither.
 
     The box you reach for this flag on is the one where an install cannot complete —
@@ -960,6 +960,7 @@ def test_main_register_only_does_not_provision_dependencies(setup_mod, monkeypat
         calls.append("provision_deps")
         raise AssertionError("provision_deps ran under --register-only")
 
+    _stub_settings_home(setup_mod, monkeypatch, tmp_path)
     monkeypatch.setattr(setup_mod, "provision_deps", _boom)
     monkeypatch.setattr(setup_mod, "resolve_python", lambda: "/usr/bin/python3")
     monkeypatch.setattr(setup_mod, "derive_deps", lambda _p: (["dep==1"], ["dep"]))
@@ -980,7 +981,7 @@ def test_main_register_only_does_not_provision_dependencies(setup_mod, monkeypat
     assert calls == ["register", "verify"]
 
 
-def test_main_without_register_only_still_provisions(setup_mod, monkeypatch):
+def test_main_without_register_only_still_provisions(setup_mod, monkeypatch, tmp_path):
     """The skip is scoped to the flag — an ordinary run must still provision."""
     calls = []
     monkeypatch.setattr(
@@ -988,7 +989,7 @@ def test_main_without_register_only_still_provisions(setup_mod, monkeypatch):
         "provision_deps",
         lambda *a, **k: (calls.append("provision_deps"), (sys.executable, ["dep"]))[1],
     )
-    _stub_main_beyond_provisioning(setup_mod, monkeypatch)
+    _stub_main_beyond_provisioning(setup_mod, monkeypatch, tmp_path)
 
     assert setup_mod.main(["--i-am-agent"]) == 0
     assert calls == ["provision_deps"]
@@ -998,7 +999,7 @@ def test_main_without_register_only_still_provisions(setup_mod, monkeypatch):
     ("identity", "expected"),
     [("claude-klabauter", False), ("claude-klabauter", True), (None, False)],
 )
-def test_main_only_the_published_checkout_installs_the_engine(setup_mod, monkeypatch, identity, expected):
+def test_main_only_the_published_checkout_installs_the_engine(setup_mod, monkeypatch, identity, expected, tmp_path):
     """PM ruling, regressed repeatedly: a dev-tree run must never editable-
     install itself into the box's shared interpreters. Pins the identity ->
     `installs_engine` wiring at the one call site that decides it."""
@@ -1010,13 +1011,14 @@ def test_main_only_the_published_checkout_installs_the_engine(setup_mod, monkeyp
 
     monkeypatch.setattr(setup_mod, "provision_deps", _capture)
     monkeypatch.setattr(setup_mod, "resolve_repo_identity", lambda root: identity)
-    _stub_main_beyond_provisioning(setup_mod, monkeypatch)
+    _stub_main_beyond_provisioning(setup_mod, monkeypatch, tmp_path)
 
     assert setup_mod.main(["--i-am-agent"]) == 0
     assert seen["installs_engine"] is expected
 
 
-def _stub_main_beyond_provisioning(setup_mod, monkeypatch):
+def _stub_main_beyond_provisioning(setup_mod, monkeypatch, tmp_path):
+    _stub_settings_home(setup_mod, monkeypatch, tmp_path)
     # The ordinary path spawns `<py> --version` for real; a POSIX-only literal
     # here fails on Windows before provisioning is ever reached.
     monkeypatch.setattr(setup_mod, "resolve_python", lambda: sys.executable)
@@ -1179,6 +1181,194 @@ def test_resolve_claude_klabauter_root_repo_root_default(setup_mod, monkeypatch)
     root, source = setup_mod.resolve_claude_klabauter_root(Path("/repo"), args)
     assert root == Path("/repo")
     assert source == "git-root auto-discovery"
+
+
+# ---------------------------------------------------------------------------
+# write_registry_independent_root_pointer — the registry-independent cold
+# entry (plan C2). Every test below is scoped to a sandboxed settings home
+# via `_stub_settings_home`.
+# ---------------------------------------------------------------------------
+
+
+def _pointer_path(settings_home_dir):
+    return settings_home_dir / "machine-local" / ".claude-klabauter-live-root"
+
+
+def test_pointer_write_cold_seam_zero_spawns(setup_mod, monkeypatch, tmp_path):
+    """The cold case, which is the acceptance test: NO registry file, NO
+    `machine-local` reachable, root supplied via `--claude-klabauter-live-root` only. The
+    resolve+write pair performs ZERO subprocess spawns — that is a property
+    of the design, not an incidental — and the pointer lands with content
+    equal to the resolved root, readable back by `_resolve_claude_klabauter ::
+    _resolve_claude_klabauter_root`."""
+    settings_home_dir, _, _ = _stub_settings_home(setup_mod, monkeypatch, tmp_path)
+
+    def _boom(*a, **k):  # pragma: no cover - must never run
+        raise AssertionError("a spawn happened on the cold seam")
+
+    monkeypatch.setattr(setup_mod.subprocess, "run", _boom)
+    monkeypatch.setattr(setup_mod.subprocess, "Popen", _boom)
+
+    claude_klabauter_checkout = tmp_path / "claude-klabauter-checkout"
+    claude_klabauter_checkout.mkdir()
+    args = setup_mod.Args()
+    args.claude_klabauter_root = str(claude_klabauter_checkout)
+    root, source = setup_mod.resolve_claude_klabauter_root(Path("/repo"), args)
+    setup_mod.write_registry_independent_root_pointer(root, source)
+
+    pointer = _pointer_path(settings_home_dir)
+    assert pointer.is_file()
+    assert pointer.read_text(encoding="utf-8").rstrip("\r\n") == str(root)
+
+    import importlib.util as _ilu
+
+    resolve_claude_klabauter_spec = _ilu.spec_from_file_location(
+        "_resolve_claude_klabauter_under_test",
+        Path(__file__).resolve().parent.parent
+        / "coordinator"
+        / "lib"
+        / "resolve-claude-klabauter"
+        / "_resolve_claude_klabauter.py",
+    )
+    resolve_claude_klabauter_mod = _ilu.module_from_spec(resolve_claude_klabauter_spec)
+    resolve_claude_klabauter_spec.loader.exec_module(resolve_claude_klabauter_mod)
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
+    resolved = resolve_claude_klabauter_mod._resolve_claude_klabauter_root(pointer.parent)
+    assert resolved == str(root)
+
+
+def test_pointer_write_reached_at_cli_via_register_only(setup_mod, monkeypatch, tmp_path):
+    """`main([...--register-only...])` reaches the write — placement, not
+    spawn count: the pointer exists after a `--register-only` run, which
+    means the write sits ahead of `register_claude_klabauter_root` on that path."""
+    settings_home_dir, _, _ = _stub_settings_home(setup_mod, monkeypatch, tmp_path)
+    monkeypatch.setattr(setup_mod, "resolve_python", lambda: sys.executable)
+    monkeypatch.setattr(setup_mod, "derive_deps", lambda _p: (["dep==1"], ["dep"]))
+    monkeypatch.setattr(setup_mod, "register_claude_klabauter_root", lambda root, *a, **k: root)
+    monkeypatch.setattr(setup_mod, "offer_warm_opt_in", lambda *a, **k: None)
+    monkeypatch.setattr(setup_mod, "verify_coordinator_core_importable", lambda *a, **k: None)
+    monkeypatch.setattr(setup_mod, "check_dialect_guard_armed", lambda *a, **k: None)
+    monkeypatch.setattr(setup_mod, "run_health_probe", lambda *a, **k: False)
+
+    coordinator_root = tmp_path / "empty-coordinator-root"
+    coordinator_root.mkdir()
+    claude_klabauter_root = tmp_path / "claude-klabauter-checkout"
+    claude_klabauter_root.mkdir()
+    (claude_klabauter_root / "pyproject.toml").write_text('[project]\nname = "fixture"\n')
+
+    exit_code = setup_mod.main(
+        [
+            "--register-only",
+            "--i-am-agent",
+            "--skip-dep-check",
+            "--accept-missing-deps-risk",
+            "--claude-klabauter-live-root",
+            str(claude_klabauter_root),
+            "--coordinator-root",
+            str(coordinator_root),
+        ]
+    )
+    assert exit_code == 0
+    assert _pointer_path(settings_home_dir).is_file()
+
+
+def test_pointer_write_lands_before_register_exit_90(setup_mod, monkeypatch, tmp_path):
+    """The exit-90 case: same as above WITHOUT the override pair —
+    `register_claude_klabauter_root` exits 90 and the pointer has nonetheless already
+    landed, because the write is placed ahead of it in `main`."""
+    settings_home_dir, _, _ = _stub_settings_home(setup_mod, monkeypatch, tmp_path)
+    monkeypatch.setattr(setup_mod, "resolve_python", lambda: sys.executable)
+    monkeypatch.setattr(setup_mod, "derive_deps", lambda _p: (["dep==1"], ["dep"]))
+
+    def _exit_90(*a, **k):
+        sys.exit(setup_mod.EXIT_HARD_DEP_MISSING)
+
+    monkeypatch.setattr(setup_mod, "register_claude_klabauter_root", _exit_90)
+
+    claude_klabauter_root = tmp_path / "claude-klabauter-checkout"
+    claude_klabauter_root.mkdir()
+    (claude_klabauter_root / "pyproject.toml").write_text('[project]\nname = "fixture"\n')
+
+    with pytest.raises(SystemExit) as exc_info:
+        setup_mod.main(
+            [
+                "--register-only",
+                "--i-am-agent",
+                "--claude-klabauter-live-root",
+                str(claude_klabauter_root),
+            ]
+        )
+    assert exc_info.value.code == setup_mod.EXIT_HARD_DEP_MISSING
+    assert _pointer_path(settings_home_dir).is_file()
+
+
+def test_pointer_write_idempotent_second_run(setup_mod, monkeypatch, tmp_path, capsys):
+    """A second run with the same root rewrites nothing observable and still
+    reports."""
+    settings_home_dir, _, _ = _stub_settings_home(setup_mod, monkeypatch, tmp_path)
+    root = tmp_path / "claude-klabauter-checkout"
+    setup_mod.write_registry_independent_root_pointer(root, "--claude-klabauter-live-root flag")
+    pointer = _pointer_path(settings_home_dir)
+    first_mtime = pointer.stat().st_mtime_ns
+    capsys.readouterr()
+
+    setup_mod.write_registry_independent_root_pointer(root, "--claude-klabauter-live-root flag")
+    out = capsys.readouterr().out
+    assert pointer.stat().st_mtime_ns == first_mtime
+    assert "already" in out
+
+
+def test_pointer_write_stale_value_repaired_on_asserted_rung(setup_mod, monkeypatch, tmp_path):
+    """A pointer holding a different path is overwritten when the new root
+    came from `--claude-klabauter-live-root` or `COORDINATOR_ENGINE_ROOT`."""
+    settings_home_dir, _, _ = _stub_settings_home(setup_mod, monkeypatch, tmp_path)
+    pointer = _pointer_path(settings_home_dir)
+    pointer.parent.mkdir(parents=True, exist_ok=True)
+    pointer.write_text("/some/stale/root\n")
+
+    new_root = tmp_path / "fresh-claude-klabauter-checkout"
+    setup_mod.write_registry_independent_root_pointer(new_root, "COORDINATOR_ENGINE_ROOT env var")
+    assert pointer.read_text(encoding="utf-8").rstrip("\r\n") == str(new_root)
+
+
+@pytest.mark.parametrize("existing_pointer", [False, True])
+def test_pointer_write_rung_4_negative(setup_mod, monkeypatch, tmp_path, capsys, existing_pointer):
+    """The rung-4 negative: git-root auto-discovery writes NOTHING — with no
+    pointer present, none is created; with a pointer holding a different
+    path, it is left byte-identical. The reported line names the
+    auto-discovery source and points at `--claude-klabauter-live-root`."""
+    settings_home_dir, _, _ = _stub_settings_home(setup_mod, monkeypatch, tmp_path)
+    pointer = _pointer_path(settings_home_dir)
+    if existing_pointer:
+        pointer.parent.mkdir(parents=True, exist_ok=True)
+        pointer.write_text("/untouched/root\n")
+
+    setup_mod.write_registry_independent_root_pointer(Path("/repo"), "git-root auto-discovery")
+    out = capsys.readouterr().out
+
+    if existing_pointer:
+        assert pointer.read_text(encoding="utf-8") == "/untouched/root\n"
+    else:
+        assert not pointer.exists()
+    assert "--claude-klabauter-live-root" in out
+
+
+def test_pointer_write_degrades_advisory_on_unwritable_settings_home(
+    setup_mod, monkeypatch, tmp_path, capsys
+):
+    """An unwritable settings home warns and does not fail the install."""
+    settings_home_dir, _, _ = _stub_settings_home(setup_mod, monkeypatch, tmp_path)
+
+    def _boom_mkdir(*a, **k):
+        raise OSError("permission denied (simulated)")
+
+    monkeypatch.setattr(setup_mod.Path, "mkdir", _boom_mkdir)
+
+    # Should not raise.
+    setup_mod.write_registry_independent_root_pointer(tmp_path / "root", "--claude-klabauter-live-root flag")
+    err = capsys.readouterr().err
+    assert "ADVISORY" in err
+    assert not _pointer_path(settings_home_dir).exists()
 
 
 def test_resolve_coordinator_claude_root_flag_wins(setup_mod, monkeypatch):
@@ -2046,6 +2236,48 @@ def test_run_health_probe_missing_probe_file_returns_false(setup_mod, tmp_path):
     assert result is False
 
 
+def test_run_health_probe_passes_required_only_flag(setup_mod, tmp_path, monkeypatch, capsys):
+    """setup.py's argv to the probe contains --required-only (C4 spec)."""
+    probe = tmp_path / "bin" / "claude-klabauter-doctor-probe.py"
+    probe.parent.mkdir(parents=True)
+    probe.write_text("# fake probe\n")
+    captured_argv: list[str] = []
+
+    def _capture(argv, *a, **k):
+        captured_argv.extend(argv)
+        return _FakeCompletedProcess(
+            '{"name": "claude-klabauter.root.resolve", "status": "pass", "severity": "hard", "detail": "", "remediation": "—"}\n',
+            0,
+        )
+
+    monkeypatch.setattr(setup_mod.subprocess, "run", _capture)
+    setup_mod.run_health_probe(tmp_path, sys.executable, agent_mode=False)
+    assert "--required-only" in captured_argv
+    assert "--step-zero" in captured_argv
+
+
+def test_run_health_probe_names_the_triage_command_for_the_advisory_set(
+    setup_mod, tmp_path, monkeypatch, capsys
+):
+    """Output names the runnable --triage command for the advisory set this
+    narrowed run skips — a script invocation, not a slash command (cold path).
+    """
+    probe = tmp_path / "bin" / "claude-klabauter-doctor-probe.py"
+    probe.parent.mkdir(parents=True)
+    probe.write_text("# fake probe\n")
+    monkeypatch.setattr(
+        setup_mod.subprocess, "run",
+        _fake_probe_run(
+            ['{"name": "claude-klabauter.root.resolve", "status": "pass", "severity": "hard", "detail": "", "remediation": "—"}'],
+            0,
+        ),
+    )
+    setup_mod.run_health_probe(tmp_path, sys.executable, agent_mode=False)
+    out = capsys.readouterr().out
+    assert "--triage" in out
+    assert str(probe) in out
+
+
 # ---------------------------------------------------------------------------
 # resolve_repo_identity — this script is BOTH claude-klabauter's AND
 # claude-klabauter's standalone installer; register_claude_klabauter_root must know
@@ -2541,7 +2773,7 @@ _EXPECTED_CLAUDE_DOE_CHAIN_ORDER = (
 
 
 def test_claude_doe_chain_names_all_four_generators_in_dependency_order(setup_mod):
-    names = tuple(name for _, name, _ in setup_mod._CLAUDE_DOE_CHAIN_STEPS)
+    names = tuple(name for _, name, _, _ in setup_mod._CLAUDE_DOE_CHAIN_STEPS)
     assert names == _EXPECTED_CLAUDE_DOE_CHAIN_ORDER
 
 
@@ -2550,7 +2782,7 @@ def test_claude_doe_chain_generators_exist_on_disk(setup_mod):
     # coordinator/bin/ without updating the chain (or vice versa), this
     # fails loudly instead of silently install-chain-skipping it.
     repo_root = _SETUP_PY_PATH.parent.parent
-    for _, name, _ in setup_mod._CLAUDE_DOE_CHAIN_STEPS:
+    for _, name, _, _ in setup_mod._CLAUDE_DOE_CHAIN_STEPS:
         assert (repo_root / "coordinator" / "bin" / name).is_file(), (
             f"{name} is declared in _CLAUDE_DOE_CHAIN_STEPS but missing from "
             "coordinator/bin/ — the chain and the generator surface have drifted."
@@ -2602,13 +2834,13 @@ def test_install_claude_doe_launcher_chain_missing_generators_is_loud_advisory(
 
     called = {"n": 0}
     monkeypatch.setattr(
-        setup_mod.subprocess, "run", lambda *a, **k: called.__setitem__("n", called["n"] + 1)
+        setup_mod, "run_op_main", lambda *a, **k: called.__setitem__("n", called["n"] + 1)
     )
 
     args = setup_mod.Args()
     setup_mod.install_claude_doe_launcher_chain(repo_root, sys.executable, tmp_path, args)
 
-    assert called["n"] == 0  # never even attempted a subprocess for a missing file
+    assert called["n"] == 0  # never even attempted an in-process call for a missing file
     err = capsys.readouterr().err
     assert err.count("[ADVISORY]") >= len(setup_mod._CLAUDE_DOE_CHAIN_STEPS)
     assert "claude-doe launcher chain incomplete" in err
@@ -2621,18 +2853,20 @@ def test_install_claude_doe_launcher_chain_continues_past_a_mid_chain_failure(
     repo_root = tmp_path / "repo"
     bin_dir = repo_root / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
-    for _, name, _ in setup_mod._CLAUDE_DOE_CHAIN_STEPS:
+    for _, name, _, _ in setup_mod._CLAUDE_DOE_CHAIN_STEPS:
         (bin_dir / name).write_text("# stub\n")
 
-    calls: list[list[str]] = []
+    calls: list[str] = []
 
-    def _fake_run(argv, **kwargs):
-        calls.append(argv)
-        if "install-claude-doe-wrapper.py" in argv[1]:
-            return setup_mod.subprocess.CompletedProcess(argv, 1, stdout="boom", stderr="")
-        return setup_mod.subprocess.CompletedProcess(argv, 0, stdout="ok", stderr="")
+    def _fake_run_op_main(op_module, argv, cwd=None):
+        calls.append(op_module)
+        if op_module == "coordinator_core.ops.install_claude_doe_wrapper":
+            print("boom")
+            return 1
+        print("ok")
+        return 0
 
-    monkeypatch.setattr(setup_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(setup_mod, "run_op_main", _fake_run_op_main)
 
     args = setup_mod.Args()
     setup_mod.install_claude_doe_launcher_chain(repo_root, sys.executable, tmp_path, args)
@@ -2663,25 +2897,23 @@ def test_install_claude_doe_launcher_chain_unresolved_doe_root_is_not_applicable
     repo_root = tmp_path / "repo"
     bin_dir = repo_root / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
-    for _, name, _ in setup_mod._CLAUDE_DOE_CHAIN_STEPS:
+    for _, name, _, _ in setup_mod._CLAUDE_DOE_CHAIN_STEPS:
         (bin_dir / name).write_text("# stub\n")
 
     calls = []
 
-    def _fake_run(argv, **kwargs):
-        calls.append(argv[1])
-        if "gen-doe-root-pointer.py" in argv[1]:
-            return setup_mod.subprocess.CompletedProcess(
-                argv, 0,
-                stdout=(
-                    "doe_root_pointer: skipped (repos.doe_claude unset — "
-                    "machine-local set repos.doe_claude <path>  then /coordinator:install)"
-                ),
-                stderr="",
+    def _fake_run_op_main(op_module, argv, cwd=None):
+        calls.append(op_module)
+        if op_module == "coordinator_core.ops.gen_doe_root_pointer":
+            print(
+                "doe_root_pointer: skipped (repos.doe_claude unset — "
+                "machine-local set repos.doe_claude <path>  then /coordinator:install)"
             )
-        return setup_mod.subprocess.CompletedProcess(argv, 0, stdout="ok", stderr="")
+            return 0
+        print("ok")
+        return 0
 
-    monkeypatch.setattr(setup_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(setup_mod, "run_op_main", _fake_run_op_main)
 
     args = setup_mod.Args()
     args.agent_mode = True
@@ -2705,13 +2937,14 @@ def test_install_claude_doe_launcher_chain_all_pass_prints_no_incomplete_summary
     repo_root = tmp_path / "repo"
     bin_dir = repo_root / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
-    for _, name, _ in setup_mod._CLAUDE_DOE_CHAIN_STEPS:
+    for _, name, _, _ in setup_mod._CLAUDE_DOE_CHAIN_STEPS:
         (bin_dir / name).write_text("# stub\n")
 
-    monkeypatch.setattr(
-        setup_mod.subprocess, "run",
-        lambda argv, **k: setup_mod.subprocess.CompletedProcess(argv, 0, stdout="ok", stderr=""),
-    )
+    def _fake_run_op_main(op_module, argv, cwd=None):
+        print("ok")
+        return 0
+
+    monkeypatch.setattr(setup_mod, "run_op_main", _fake_run_op_main)
 
     args = setup_mod.Args()
     setup_mod.install_claude_doe_launcher_chain(repo_root, sys.executable, tmp_path, args)
@@ -2720,6 +2953,33 @@ def test_install_claude_doe_launcher_chain_all_pass_prints_no_incomplete_summary
     assert out_err.out.count("PASS [claude-doe-chain]") == len(setup_mod._CLAUDE_DOE_CHAIN_STEPS)
     assert "incomplete" not in out_err.err
     assert "[ADVISORY]" not in out_err.err
+
+
+def test_install_claude_doe_launcher_chain_never_spawns_subprocess(
+    setup_mod, tmp_path, monkeypatch, capsys
+):
+    """P175-C6: the chain runs its four generators in-process via
+    `run_op_main` (spike verdict call shape (b)) -- no `subprocess.run` on
+    this path at all, unlike the pre-C6 four-child-process shape."""
+    repo_root = tmp_path / "repo"
+    bin_dir = repo_root / "coordinator" / "bin"
+    bin_dir.mkdir(parents=True)
+    for _, name, _, _ in setup_mod._CLAUDE_DOE_CHAIN_STEPS:
+        (bin_dir / name).write_text("# stub\n")
+
+    def _boom(*a, **k):
+        raise AssertionError("install_claude_doe_launcher_chain must not call subprocess.run")
+
+    monkeypatch.setattr(setup_mod.subprocess, "run", _boom)
+    monkeypatch.setattr(
+        setup_mod, "run_op_main", lambda op_module, argv, cwd=None: (print("ok") or 0)
+    )
+
+    args = setup_mod.Args()
+    setup_mod.install_claude_doe_launcher_chain(repo_root, sys.executable, tmp_path, args)
+
+    out_err = capsys.readouterr()
+    assert out_err.out.count("PASS [claude-doe-chain]") == len(setup_mod._CLAUDE_DOE_CHAIN_STEPS)
 
 
 # ---------------------------------------------------------------------------

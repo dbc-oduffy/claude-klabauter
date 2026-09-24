@@ -89,6 +89,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.hooks._payload import field
@@ -354,6 +355,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     side-effect (mirrors `track_touched_files.py`'s "never blocks" contract);
     PreCompact output is ignored by Claude Code regardless.
     """
+    params = payload_of(params)
     session_id = field(params, "session_id")
     transcript_path = field(params, "transcript_path")
     raw = json.dumps({"session_id": session_id, "transcript_path": transcript_path})

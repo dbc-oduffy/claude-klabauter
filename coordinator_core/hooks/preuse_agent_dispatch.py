@@ -76,7 +76,7 @@ from __future__ import annotations
 import sys
 from typing import List
 
-from coordinator_core.hooks._envelope import no_advisory
+from coordinator_core.hooks._envelope import no_advisory, payload_of
 from coordinator_core.ipc import register_op
 
 def _is_deny(envelope) -> bool:
@@ -127,8 +127,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Agent) op: run the four-guard fan-in, first-deny-wins.
     See module docstring for registration order and isolation contract.
     """
-    if not isinstance(params, dict):
-        return no_advisory()
+    params = payload_of(params)
 
     skipped: List[str] = []
 
@@ -151,7 +150,7 @@ def _handler(params: dict, repo_root=None) -> dict:
                         file=sys.stderr,
                     )
                 except Exception:
-                    pass
+                    pass  # stderr write failed; the skip decision above still stands
             return out
 
     if skipped:
@@ -162,7 +161,7 @@ def _handler(params: dict, repo_root=None) -> dict:
                 file=sys.stderr,
             )
         except Exception:
-            pass
+            pass  # stderr write failed; the skip decision above still stands
 
     # Leg 4 — the sole updatedInput emitter, reached only once legs 1-3
     # have all declined to deny. NOT isolated — see module docstring.

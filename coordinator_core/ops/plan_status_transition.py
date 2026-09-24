@@ -12,11 +12,16 @@ Usage (argv, mirrors the node CLI verbatim):
     plan-status-transition stamp-implemented --plan <path> --override-reason "<why>"
     plan-status-transition stamp-superseded --plan <path> --by <successor-plan-path>
     plan-status-transition stamp-reopened --plan <path> --reason "<why>"
+    plan-status-transition stamp-blocked --plan <path> --reason "<why>"
+    plan-status-transition stamp-unblocked --plan <path>
 
 ``--override-reason`` (2026-08-10, cross-repo memo example-retrieval-repo-em-close-out-
 stamps-implemented-without-reading-the-ac-table.md): an explicit,
 self-documenting override of `stamp-implemented`'s own completeness verdict
-(the AC-open-rows advisory `_ac_open_rows_warning` prints) -- the sanctioned
+(the AC-open-rows advisory `_ac_open_rows_warning` prints -- advisory only,
+never a gate, per the binding contract at `state/cross-repo/archive/2026-
+08-27-doe-claude-em-ac-table-disposition.md`: "It reports and never
+blocks... The emission names the table's advisory standing") -- the sanctioned
 successor to two independently-invented, mutually-divergent frontmatter
 spellings (`status_stamped_by`/`status_stamped_reason` in one repo,
 `status_stamped_by_hand` in another) a hand-edit introduced when this op had
@@ -32,6 +37,16 @@ in full on this path -- the override only ever concerns the completeness
 verdict, never who may hold the write. Rejected outright on
 `stamp-superseded` (see `main()`): that verb asserts no completeness at all,
 so there is nothing there for the flag to override.
+
+Since P129-C1, this flag does NOT discharge the separate goal-falsifier
+refusal `_stamp_implemented` now evaluates before the flip (see that
+function's own docstring) -- that refusal's only escape is an existing
+`status_override_by`/`_reason`/`_at` attestation bound to the plan's
+current body sha (AC19, the same trio close-out's own gate reads). The two
+escapes share field names but never discharge each other: giving
+`--override-reason` on a plan that already carries that trio is itself
+refused (the second-override-trio refusal), because the flag's own write
+below has no collision check against fields it does not own.
 
 NOTE (schema declaration, out of this change's scope): `status_override_by`
 / `status_override_reason` / `status_override_at` are written here but NOT
@@ -277,6 +292,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core.frontmatter.primitives import (
+    canonical_body_sha,
     insert_fm_field,
     read_fm_field,
     read_fm_field_unquoted,
@@ -348,6 +364,11 @@ def _strip_unquoted_trailing_comment(raw: Optional[str]) -> Optional[str]:
 # Three defensible, independent answers to three different questions about a
 # plan's status, not a bug. Plan: 2026-07-27-plan-line-item-resolution-model.md § C8b.
 _FROZEN_STATUSES = frozenset({"implemented", "superseded", "abandoned", "deferred"})
+# `blocked` (C1, docs/plans/2026-09-23-plan-blocked-state.md) is deliberately
+# in NEITHER this set NOR `_FLIPPABLE_STATUSES` below: it is non-terminal (an
+# approved plan held by something outside it), and `stamp-unblocked` is its
+# only exit -- every other rung verb refuses it through the generic
+# "unexpected current status" branch each already has, with no new code.
 # Ordered list (not just a set) -- the error message below reproduces this exact
 # insertion order verbatim, matching the node oracle's `[...FLIPPABLE_STATUSES]`
 # (a JS Set iterates in insertion order; Python frozenset does not).
@@ -833,7 +854,7 @@ def _commit_plan_flip(
         try:
             Path(msg_path).unlink()
         except OSError:
-            pass
+            pass  # best-effort tempfile cleanup; a leaked temp commit-message file is harmless
 
 
 def _read_and_validate_resume_content(
@@ -937,14 +958,14 @@ def _find_governing_handoff_paths(root: Path, plan_path: Path, plan_deliverable_
     try:
         plan_resolved = plan_path.resolve()
     except OSError:
-        plan_resolved = plan_path
+        plan_resolved = plan_path  # unresolvable plan path degrades to the unresolved form; "Never raises" above
 
     matches: List[Path] = []
     for handoff_path in sorted(handoffs_dir.glob("*.md")):
         try:
             handoff_text = handoff_path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
-            continue
+            continue  # per-handoff loop; an unreadable/non-UTF-8 handoff is skipped, not fatal to the scan -- see docstring
         split = split_frontmatter(handoff_text)
         if split is None:
             continue
@@ -959,7 +980,7 @@ def _find_governing_handoff_paths(root: Path, plan_path: Path, plan_deliverable_
                     matches.append(handoff_path)
                     continue
             except OSError:
-                pass
+                pass  # unresolvable candidate path just skips the path-equality check below for canonical_plan_id
 
         if canonical_plan_id is not None:
             handoff_deliverable_id = read_fm_field_unquoted(split.fm_text, "deliverable_id")
@@ -1096,6 +1117,15 @@ def _ac_open_rows_warning(plan_path: str, plan_text: str) -> None:
     function's own broad `except Exception` is a second, redundant
     backstop on top of that one, not a substitute for it.
 
+    The emitted line speaks close-out's own binding advisory register
+    (P129-C2 -- docs/plans/2026-09-12-the-direct-stamp-verb-refuses-what-
+    close-out-refuses.md), built from the lifted `_ac_advisory_text`
+    helper close-out itself calls, per `state/cross-repo/archive/2026-08-
+    27-doe-claude-em-ac-table-disposition.md` (accepted): "The emission
+    names the table's advisory standing." No "WARNING" token, and no gate
+    -- see that memo's other binding constraint, quoted at this module's
+    own `--override-reason` paragraph.
+
     Coupling decision: reuses `close_out_and_stamp`'s existing AC-table
     parser (`_ac_table_desync_finding` and its own helpers) rather than
     hand-rolling a second, divergent AC oracle. Imported FUNCTION-LOCALLY,
@@ -1112,16 +1142,15 @@ def _ac_open_rows_warning(plan_path: str, plan_text: str) -> None:
     """
     try:
         from coordinator_core.execute_plan_assemble.close_out_and_stamp import (
+            _ac_advisory_text,
             _ac_table_desync_finding,
         )
 
         finding = _ac_table_desync_finding(plan_text, spine_fully_resolved=True)
         if finding is None:
             return
-        unresolved = ", ".join(finding.get("unresolved_ac_ids", []) or [])
         print(
-            f"{_PROG}: WARNING: {plan_path} was stamped implemented but its "
-            f"## Acceptance Criteria table still has open row(s): {unresolved}",
+            f"{_PROG}: {plan_path}{_ac_advisory_text(finding)}",
             file=sys.stderr,
         )
     except Exception:
@@ -1236,6 +1265,18 @@ def _stamp_implemented(opts: _Opts) -> int:
     "Commit ownership" section and `_commit_plan_flip`) -- the op takes ownership
     of committing its own terminal write rather than leaving it for a later
     archival sweep to find.
+
+    Goal-falsifier gate (P129-C1): before the flip, `mutate()` now evaluates
+    `close_out_and_stamp._evaluate_goal_falsifier_gate` against the plan's
+    own pre-flip text and refuses (`MutateAbort`, no write, no commit, no
+    cascade) whenever close-out would also refuse it. The two escapes are
+    kept deliberately separate and neither discharges the other: an
+    existing `status_override_by`/`_reason`/`_at` attestation (AC19, bound
+    to the plan's current body sha) suppresses the GOAL gate's own refusal,
+    while `--override-reason` suppresses only this verb's AC-open-rows
+    advisory (see "Completeness-verdict override" below) and is refused
+    outright when that trio is already present, so the two can never
+    collide into duplicate YAML keys.
     """
     if not opts.plan:
         print(f"{_PROG}: stamp-implemented requires --plan <path>", file=sys.stderr)
@@ -1403,6 +1444,63 @@ def _stamp_implemented(opts: _Opts) -> int:
                 f"{_PROG}: unexpected current status \"{status}\" for stamp-implemented — "
                 f"expected one of: {expected}"
             )
+
+        # Second-override-trio refusal (P129-C1, docs/plans/2026-09-12-the-
+        # direct-stamp-verb-refuses-what-close-out-refuses.md): `--override-
+        # reason` and the `status_override_*` attestation trio are two
+        # SEPARATE escapes that share field names (`plan.schema.json`
+        # declares one trio, and close-out's AC19 reads that same trio as
+        # its goal attestation) -- neither may discharge the other. A plan
+        # that already carries any of `status_override_by`/`_reason`/`_at`
+        # and is ALSO given `--override-reason` would otherwise silently
+        # write duplicate YAML keys (the flag's own insertion below has no
+        # collision check of its own). Refused before the goal gate below,
+        # and before any write, so this and the goal gate can never both
+        # fire on the same invocation.
+        if override_reason is not None and (
+            read_fm_field_unquoted(split.fm_text, "status_override_by")
+            or read_fm_field_unquoted(split.fm_text, "status_override_reason")
+            or read_fm_field_unquoted(split.fm_text, "status_override_at")
+        ):
+            raise MutateAbort(
+                f"{_PROG}: {opts.plan} already carries a status_override_by/"
+                "_reason/_at attestation -- the existing attestation stands; "
+                "drop --override-reason"
+            )
+
+        # Goal-falsifier gate (P129-C1): the direct verb is the second door
+        # into `status: implemented` (`/workstream-complete`'s `d-stamp-
+        # plan-implemented` -> `archive_stamp.cs_stamp_plan_implemented` ->
+        # this verb), and until now it never consulted the goal observation
+        # `close_out_and_stamp._evaluate_goal_falsifier_gate` already gates
+        # on -- see this module's own docstring "Design, pinned where an
+        # executor would otherwise choose" section. Function-local import:
+        # `close_out_and_stamp` imports THIS module at module scope, so a
+        # module-level import here would cycle (mirrors `_ac_open_rows_
+        # warning`'s identical avoidance immediately above in this file).
+        # Skipped entirely when `worktree_root is None` (close-out's own
+        # `--dry-run` scratch copy, or any plan outside a git worktree):
+        # close-out has already evaluated this exact text, and the gate's
+        # own helpers fail toward not refusing on anything they cannot read.
+        if worktree_root is not None:
+            from coordinator_core.execute_plan_assemble.close_out_and_stamp import (
+                _evaluate_goal_falsifier_gate,
+                _goal_refusal_next_move,
+            )
+
+            goal_gate = _evaluate_goal_falsifier_gate(text, worktree_root)
+            if goal_gate is not None and goal_gate.get("refused"):
+                body_sha = canonical_body_sha(text)
+                raise MutateAbort(
+                    f"{_PROG}: refusing to stamp implemented: {opts.plan}: prime "
+                    f"exit criterion goal observation refused "
+                    f"({goal_gate['reason']}): {goal_gate['detail']}. "
+                    f"{_goal_refusal_next_move(goal_gate['reason'])} To override, "
+                    "add a status_override_by/status_override_reason/"
+                    "status_override_at attestation whose reason names the "
+                    f"current body sha ({body_sha}); --override-reason does "
+                    "not discharge this refusal."
+                )
 
         fm_text = replace_fm_field(split.fm_text, "status", "implemented")
 
@@ -2125,7 +2223,7 @@ def _stamp_reopened(opts: _Opts) -> int:
             try:
                 handoff_text = handoff_path.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
-                continue
+                continue  # advisory-only cascade note; an unreadable governing handoff is skipped, never gates the reopen
             split = split_frontmatter(handoff_text)
             if split is None:
                 continue
@@ -2138,6 +2236,303 @@ def _stamp_reopened(opts: _Opts) -> int:
                 file=sys.stderr,
             )
 
+    return 0
+
+
+def _stamp_blocked(opts: _Opts) -> int:
+    """Perform the stamp-blocked verb (C1, docs/plans/2026-09-23-plan-blocked-
+    state.md); returns the exit code.
+
+    Records "this approved plan is held by something outside it, and why".
+    Accepts source `approved` only. A source already `blocked` with the SAME
+    `--reason` is a byte-identical no-op (idempotent re-run); a `blocked`
+    source with a DIFFERENT reason rewrites `status_reason` only, leaving
+    `status` untouched. Any other source raises `MutateAbort`, naming the
+    status and "expected: approved" -- `blocked` is deliberately in neither
+    `_FROZEN_STATUSES` nor `_FLIPPABLE_STATUSES` (see those definitions), so
+    this is the ONLY writer of `status: blocked`.
+
+    Uses the same shared machinery `_stamp_rung`'s docstring documents
+    (`_resolve_worktree_root_and_check_containment`, `_read_and_normalize_
+    status`, `locked_rmw` + `MutateAbort`, `_relpath_for_commit` /
+    `_head_resolves` / `_plan_tracked_in_head` / `_commit_plan_flip`) rather
+    than a fourth hand-copy.
+
+    Negative-spec: no `@register_op`, no sweep/cascade/ceremony caller --
+    typed by a human/EM only, mirroring `_stamp_reopened`'s identical
+    negative-spec. Never fires `_run_cascade` (specific to `stamp-
+    implemented`'s own semantics).
+    """
+    if not opts.plan:
+        print(f"{_PROG}: stamp-blocked requires --plan <path>", file=sys.stderr)
+        return 1
+    if not opts.reason or not opts.reason.strip():
+        print(
+            f"{_PROG}: stamp-blocked requires --reason \"<why>\" "
+            "(state WHY this plan is blocked -- no bare/blank reason)",
+            file=sys.stderr,
+        )
+        return 1
+    if not os.path.exists(opts.plan):
+        print(f"{_PROG}: plan not found: {opts.plan}", file=sys.stderr)
+        return 1
+
+    plan_path = Path(opts.plan)
+    plan_display: str = opts.plan
+
+    from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+
+    worktree_root, git_common_dir, refusal = _resolve_worktree_root_and_check_containment(
+        plan_path, plan_display
+    )
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
+        return 1
+
+    reason_value = opts.reason
+    _state: dict = {"flipped": False, "prior_status": None, "deliverable_id": None}
+
+    def mutate(old_text: str) -> str:
+        text = old_text.replace("\r\n", "\n")
+
+        split = split_frontmatter(text)
+        if split is None:
+            raise MutateAbort(f"{_PROG}: no parseable YAML frontmatter in {opts.plan}")
+
+        status = _read_and_normalize_status(split.fm_text, plan_display)
+        _state["deliverable_id"] = read_fm_field_unquoted(split.fm_text, "deliverable_id")
+        _state["prior_status"] = status
+
+        if status == "blocked":
+            existing_reason = read_fm_field_unquoted(split.fm_text, "status_reason")
+            if existing_reason == reason_value:
+                _state["flipped"] = False
+                return old_text  # byte-identical -> locked_rmw skips the write
+            fm_text = replace_fm_field(split.fm_text, "status_reason", reason_value)
+            _state["flipped"] = True
+            return rebuild(split, fm_text)
+
+        if status != "approved":
+            raise MutateAbort(
+                f"{_PROG}: {opts.plan} is at status \"{status}\" -- stamp-blocked refuses "
+                "a non-approved source, expected: approved"
+            )
+
+        fm_text = replace_fm_field(split.fm_text, "status", "blocked")
+        if read_fm_field(fm_text, "status_reason") is not None:
+            fm_text = replace_fm_field(fm_text, "status_reason", reason_value)
+        else:
+            fm_text = insert_fm_field(fm_text, "status_reason", reason_value, after_key="status")
+
+        _state["flipped"] = True
+        return rebuild(split, fm_text)
+
+    written_text: Optional[str] = None
+    if git_common_dir is not None:
+        try:
+            written_text = locked_rmw(plan_path, mutate, repo_root=git_common_dir)
+        except FileNotFoundError:
+            print(f"{_PROG}: plan not found: {opts.plan}", file=sys.stderr)
+            return 1
+        except LockTimeout as exc:
+            print(f"{_PROG}: timed out waiting for file lock on {opts.plan}: {exc}", file=sys.stderr)
+            return 1
+        except MutateAbort as exc:
+            print(exc.args[0] if exc.args else f"{_PROG}: mutation aborted", file=sys.stderr)
+            return 1
+    else:
+        with open(plan_path, "r", encoding="utf-8", newline="") as f:
+            old_text = f.read()
+        try:
+            new_text = mutate(old_text)
+        except MutateAbort as exc:
+            print(exc.args[0] if exc.args else f"{_PROG}: mutation aborted", file=sys.stderr)
+            return 1
+        if new_text != old_text:
+            with open(plan_path, "w", encoding="utf-8", newline="") as f:
+                f.write(new_text)
+        written_text = new_text
+
+    if not _state["flipped"]:
+        print(
+            f"{_PROG}: {opts.plan} status \"blocked\" already carries reason "
+            f"{reason_value!r} -- no-op"
+        )
+        return 0
+
+    if worktree_root is not None:
+        relpath, relpath_err = _relpath_for_commit(plan_path, worktree_root)
+        if relpath_err is not None:
+            print(
+                f"{_PROG}: {opts.plan} status flip succeeded but committing it failed: "
+                f"{relpath_err}",
+                file=sys.stderr,
+            )
+            return 1
+        untracked_reason: Optional[str] = None
+        if not _head_resolves(worktree_root):
+            untracked_reason = "in a git repo with no commits yet (HEAD does not resolve)"
+        elif not _plan_tracked_in_head(worktree_root, relpath):
+            untracked_reason = "not tracked in git (absent from HEAD)"
+
+        if untracked_reason is not None:
+            print(
+                f"{_PROG}: {opts.plan} is {untracked_reason} -- status flip landed on "
+                "disk but was left uncommitted (this op mutates an existing tracked "
+                "file in place; it does not first-commit a new one into git)",
+                file=sys.stderr,
+            )
+        else:
+            message = (
+                f"{_PROG}: stamp status \"{_state['prior_status']}\" -> blocked "
+                f"(reason: {reason_value}) on {relpath}\n"
+            )
+            commit_result = _commit_plan_flip(
+                worktree_root, relpath, message, written_text, _state["deliverable_id"],
+            )
+            if not commit_result.ok:
+                print(
+                    f"{_PROG}: {opts.plan} status flip succeeded but committing it failed: "
+                    f"{commit_result.stderr}",
+                    file=sys.stderr,
+                )
+                return 1
+
+    print(
+        f"{_PROG}: {opts.plan} status \"{_state['prior_status']}\" → blocked "
+        f"(reason: {reason_value})"
+    )
+    return 0
+
+
+def _stamp_unblocked(opts: _Opts) -> int:
+    """Perform the stamp-unblocked verb (C1, docs/plans/2026-09-23-plan-
+    blocked-state.md); returns the exit code.
+
+    The only exit from `status: blocked`, returning a plan to `approved`
+    and removing `status_reason` entirely. Accepts source `blocked` only --
+    any other source raises `MutateAbort`, naming the status and "expected:
+    blocked". Deliberately NOT wired as a `stamp-approved` re-entry source
+    (module Anti-scope): `stamp-approved` fires automatically from the
+    exec-auth stamp path, and accepting `blocked` there would silently
+    clear a hold as a side effect.
+
+    Same shared machinery as `_stamp_blocked` (see that function's
+    docstring) -- no fourth hand-copy.
+    """
+    if not opts.plan:
+        print(f"{_PROG}: stamp-unblocked requires --plan <path>", file=sys.stderr)
+        return 1
+    if not os.path.exists(opts.plan):
+        print(f"{_PROG}: plan not found: {opts.plan}", file=sys.stderr)
+        return 1
+
+    plan_path = Path(opts.plan)
+    plan_display: str = opts.plan
+
+    from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+
+    worktree_root, git_common_dir, refusal = _resolve_worktree_root_and_check_containment(
+        plan_path, plan_display
+    )
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
+        return 1
+
+    _state: dict = {"flipped": False, "prior_status": None, "deliverable_id": None}
+
+    def mutate(old_text: str) -> str:
+        text = old_text.replace("\r\n", "\n")
+
+        split = split_frontmatter(text)
+        if split is None:
+            raise MutateAbort(f"{_PROG}: no parseable YAML frontmatter in {opts.plan}")
+
+        status = _read_and_normalize_status(split.fm_text, plan_display)
+        _state["deliverable_id"] = read_fm_field_unquoted(split.fm_text, "deliverable_id")
+        _state["prior_status"] = status
+
+        if status != "blocked":
+            raise MutateAbort(
+                f"{_PROG}: {opts.plan} is at status \"{status}\" -- stamp-unblocked refuses "
+                "a non-blocked source, expected: blocked"
+            )
+
+        fm_text = replace_fm_field(split.fm_text, "status", "approved")
+        fm_text = remove_fm_field(fm_text, "status_reason")
+
+        _state["flipped"] = True
+        return rebuild(split, fm_text)
+
+    written_text: Optional[str] = None
+    if git_common_dir is not None:
+        try:
+            written_text = locked_rmw(plan_path, mutate, repo_root=git_common_dir)
+        except FileNotFoundError:
+            print(f"{_PROG}: plan not found: {opts.plan}", file=sys.stderr)
+            return 1
+        except LockTimeout as exc:
+            print(f"{_PROG}: timed out waiting for file lock on {opts.plan}: {exc}", file=sys.stderr)
+            return 1
+        except MutateAbort as exc:
+            print(exc.args[0] if exc.args else f"{_PROG}: mutation aborted", file=sys.stderr)
+            return 1
+    else:
+        with open(plan_path, "r", encoding="utf-8", newline="") as f:
+            old_text = f.read()
+        try:
+            new_text = mutate(old_text)
+        except MutateAbort as exc:
+            print(exc.args[0] if exc.args else f"{_PROG}: mutation aborted", file=sys.stderr)
+            return 1
+        if new_text != old_text:
+            with open(plan_path, "w", encoding="utf-8", newline="") as f:
+                f.write(new_text)
+        written_text = new_text
+
+    if not _state["flipped"]:
+        # Unreachable in practice (`mutate` either flips or raises MutateAbort
+        # above), kept only as a defensive mirror of the sibling verbs' shape.
+        return 1
+
+    if worktree_root is not None:
+        relpath, relpath_err = _relpath_for_commit(plan_path, worktree_root)
+        if relpath_err is not None:
+            print(
+                f"{_PROG}: {opts.plan} status flip succeeded but committing it failed: "
+                f"{relpath_err}",
+                file=sys.stderr,
+            )
+            return 1
+        untracked_reason: Optional[str] = None
+        if not _head_resolves(worktree_root):
+            untracked_reason = "in a git repo with no commits yet (HEAD does not resolve)"
+        elif not _plan_tracked_in_head(worktree_root, relpath):
+            untracked_reason = "not tracked in git (absent from HEAD)"
+
+        if untracked_reason is not None:
+            print(
+                f"{_PROG}: {opts.plan} is {untracked_reason} -- status flip landed on "
+                "disk but was left uncommitted (this op mutates an existing tracked "
+                "file in place; it does not first-commit a new one into git)",
+                file=sys.stderr,
+            )
+        else:
+            message = (
+                f"{_PROG}: stamp status \"blocked\" -> approved on {relpath}\n"
+            )
+            commit_result = _commit_plan_flip(
+                worktree_root, relpath, message, written_text, _state["deliverable_id"],
+            )
+            if not commit_result.ok:
+                print(
+                    f"{_PROG}: {opts.plan} status flip succeeded but committing it failed: "
+                    f"{commit_result.stderr}",
+                    file=sys.stderr,
+                )
+                return 1
+
+    print(f"{_PROG}: {opts.plan} status \"blocked\" → approved")
     return 0
 
 
@@ -2696,6 +3091,62 @@ def main(argv: List[str]) -> int:
             return 1
         return _stamp_reopened(opts)
 
+    if opts.verb == "stamp-blocked":
+        if opts.by is not None:
+            print(
+                f"{_PROG}: stamp-blocked does not accept --by "
+                "(it has no successor-plan judgment call to record -- use --reason)",
+                file=sys.stderr,
+            )
+            return 1
+        if opts.override_reason is not None:
+            print(
+                f"{_PROG}: stamp-blocked does not accept --override-reason "
+                "(it has no completeness verdict to override -- use --reason)",
+                file=sys.stderr,
+            )
+            return 1
+        if opts.findings is not None:
+            print(
+                f"{_PROG}: stamp-blocked does not accept --findings "
+                "(it has no review-trail attest to record -- use --reason)",
+                file=sys.stderr,
+            )
+            return 1
+        return _stamp_blocked(opts)
+
+    if opts.verb == "stamp-unblocked":
+        if opts.by is not None:
+            print(
+                f"{_PROG}: stamp-unblocked does not accept --by "
+                "(it has no successor-plan judgment call to record)",
+                file=sys.stderr,
+            )
+            return 1
+        if opts.override_reason is not None:
+            print(
+                f"{_PROG}: stamp-unblocked does not accept --override-reason "
+                "(it has no completeness verdict to override)",
+                file=sys.stderr,
+            )
+            return 1
+        if opts.reason is not None:
+            print(
+                f"{_PROG}: stamp-unblocked does not accept --reason "
+                "(the hold already cleared -- there is nothing left to record; "
+                "the original reason was on stamp-blocked)",
+                file=sys.stderr,
+            )
+            return 1
+        if opts.findings is not None:
+            print(
+                f"{_PROG}: stamp-unblocked does not accept --findings "
+                "(it has no review-trail attest to record)",
+                file=sys.stderr,
+            )
+            return 1
+        return _stamp_unblocked(opts)
+
     if opts.verb in ("stamp-reviewed", "stamp-approved", "stamp-executing"):
         # AC3: none of the three rung-advance verbs assert completeness, so
         # none may claim to override a completeness verdict -- symmetric
@@ -2749,7 +3200,7 @@ def main(argv: List[str]) -> int:
     print(
         f"{_PROG}: unknown verb: {opts.verb or '(none)'} — supported: stamp-implemented, "
         "stamp-superseded, stamp-reopened, stamp-reviewed, stamp-approved, stamp-executing, "
-        "stamp-review-verified",
+        "stamp-review-verified, stamp-blocked, stamp-unblocked",
         file=sys.stderr,
     )
     return 1

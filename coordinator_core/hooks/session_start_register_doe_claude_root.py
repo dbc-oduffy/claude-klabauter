@@ -48,8 +48,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Optional
 
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core._settings_home import home_dir, settings_home
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.ipc import register_op
@@ -119,7 +120,7 @@ def _scan_for_doe_clone(payload_cwd: "Optional[str]") -> "Optional[Path]":
                 if _is_genuine_doe_claude_repo(candidate):
                     return candidate
             except Exception:
-                continue
+                continue  # per-candidate probe; one unreadable candidate must not abort the scan
     return None
 
 
@@ -128,11 +129,11 @@ def _doe_root_pointer_paths() -> "list[Path]":
     try:
         paths.append(settings_home() / _DOE_ROOT_POINTER_BASENAME)
     except Exception:
-        pass
+        pass  # settings-home leg unresolvable; the other pointer path leg still covers it
     try:
         paths.append(home_dir() / ".claude" / _DOE_ROOT_POINTER_BASENAME)
     except Exception:
-        pass
+        pass  # home-dir leg unresolvable; the other pointer path leg still covers it
     return paths
 
 
@@ -148,7 +149,7 @@ def _write_doe_root_pointer(root_str: str) -> None:
             if pointer.is_file() and pointer.read_text(encoding="utf-8").strip() == root_str:
                 continue
         except Exception:
-            pass
+            pass  # existing-content check is best-effort; fall through and (re)write the pointer
         tmp = pointer.with_name(f"{pointer.name}.{os.getpid()}.tmp")
         try:
             pointer.parent.mkdir(parents=True, exist_ok=True)
@@ -158,7 +159,7 @@ def _write_doe_root_pointer(root_str: str) -> None:
             try:
                 tmp.unlink()
             except OSError:
-                pass
+                pass  # best-effort tmp-file cleanup; a leftover tmp file does not affect correctness
             continue
 
 
@@ -176,9 +177,7 @@ def _maybe_seed_repos_doe_claude(root_str: str) -> None:
 
 @register_op("hooks.session_start_register_doe_claude_root")
 def _handler(params: dict, repo_root=None) -> dict:
-    payload = params.get("payload")
-    if not isinstance(payload, Mapping):
-        payload = {}
+    payload = payload_of(params)
     cwd = payload.get("cwd")
     cwd = cwd if isinstance(cwd, str) and cwd else os.getcwd()
 
@@ -194,7 +193,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     try:
         _write_doe_root_pointer(root_str)
     except Exception:
-        pass
+        pass  # pointer write is best-effort; the registry write below still reports the root
 
     try:
         current = registry_get(_REGISTRY_KEY)
@@ -205,11 +204,11 @@ def _handler(params: dict, repo_root=None) -> dict:
         try:
             registry_set(_REGISTRY_KEY, root_str)
         except Exception:
-            pass
+            pass  # registry write is best-effort; the pointer files above still record the root
 
     try:
         _maybe_seed_repos_doe_claude(root_str)
     except Exception:
-        pass
+        pass  # seed-if-absent is best-effort; an operator-set registry value is never at risk here
 
     return no_advisory()

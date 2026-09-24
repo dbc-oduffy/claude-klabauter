@@ -312,19 +312,39 @@ def _ratchet_check(op_name: str, axis: str, measured: float, frozen: float) -> N
 # (pickup 3,067 opens under the old, under-counting instrument; baton
 # 941.4ms; workstream-complete 5,008 opens under the old instrument) — an
 # order of magnitude past any of the headroom figures below, so a real
-# regrowth still trips this ratchet immediately. Process-time constants are
-# untouched from this file's first landing — carried at 1/4 to 1/2 of the
-# DR-344 500ms brightline, still comfortably above every measured median
-# above, and not part of this correction (only the open-count axis's
-# INSTRUMENT changed; the process-time axis and its own headroom reasoning
-# were never wrong).
+# regrowth still trips this ratchet immediately.
+#
+# Process-time constants — LOWERED 2026-09-23 (C6,
+# docs/plans/2026-09-06-three-assembler-briefs-under-the-brightline.md).
+# These constants govern the IN-PROCESS `brief()` quantity ONLY —
+# `time.process_time()` deltas around a direct in-process call, excluding
+# interpreter start, import cost, and any subprocess CPU by construction.
+# They were never the bar the three assembler briefs' missed ACs were
+# stated on — that is the COLD CLI-boundary quantity, gated separately by
+# `test_assembler_cli_boundary_budget.py`'s `GATE_HARD_CEILING_MS` /
+# `HIGH_WATER_*_MS`. Re-measured here (median of `_MEASURE_REPEATS`,
+# n=10 repeat runs, this box, this session), quantile p90, headroom 20x
+# that p90 — never AT a measured p50/p90 (a ceiling there is a flaky
+# refusal in a suite whose whole value is that a refusal means something):
+#   baton-assemble brief:       p50 2.595ms, p90 2.745ms (n=10) -> 55.0ms
+#   workstream-complete brief:  p50 7.431ms, p90 7.942ms (n=10) -> 160.0ms
+#   pickup-assemble brief:      NOT RE-MEASURED. This module's own
+#     `pa.brief(...)` call (line ~403) raises `AttributeError`: module
+#     `coordinator_core.pickup_assemble` has no attribute `brief` (the
+#     computation lives at `coordinator_core/pickup_brief.py :: brief`
+#     per docs/research/2026-09-06-three-assembler-brief-requirements-and-
+#     dispositions.md's own citation) — a pre-existing defect in this test
+#     module unrelated to process time, present at this row's own
+#     merge-base, out of this row's scope (C6 lowers constants "where
+#     measurement permits"; it does not). Left at its prior 200.0ms
+#     value, unmeasured, not lowered. No constant here is ever raised.
 # ---------------------------------------------------------------------------
 
 FROZEN_HIGH_WATER_PICKUP_OPEN_COUNT: int = 30
 FROZEN_HIGH_WATER_PICKUP_PROCESS_TIME_MS: float = 200.0
 
 FROZEN_HIGH_WATER_BATON_OPEN_COUNT: int = 40
-FROZEN_HIGH_WATER_BATON_PROCESS_TIME_MS: float = 250.0
+FROZEN_HIGH_WATER_BATON_PROCESS_TIME_MS: float = 55.0
 
 #: WSC brief loads the frontmatter schema corpus exactly once per call
 #: (measured: one `load_schemas()` invocation, opening every file in
@@ -363,7 +383,7 @@ def _schema_corpus_open_allowance() -> int:
 
 
 FROZEN_HIGH_WATER_WSC_OWN_OPEN_COUNT: int = 20
-FROZEN_HIGH_WATER_WSC_PROCESS_TIME_MS: float = 600.0
+FROZEN_HIGH_WATER_WSC_PROCESS_TIME_MS: float = 160.0
 
 
 # ---------------------------------------------------------------------------

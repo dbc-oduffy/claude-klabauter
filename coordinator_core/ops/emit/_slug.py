@@ -1,8 +1,8 @@
 """
 coordinator_core.ops.emit._slug — shared hostname slug helper.
 
-Single source of truth for ``_machine_slug``, which both recorder.py
-(backlog.record) and goal_append.py (goal.append) must agree on.
+Single source of truth for ``_machine_slug``, which goal_append.py
+(goal.append) uses.
 
 Port of: append-goal-event.sh (DoE b5a4192c, 2026-07-20). Mirrors its slug algorithm
 exactly: lowercase → collapse every run of non-[a-z0-9] to '-' → strip leading/trailing '-'

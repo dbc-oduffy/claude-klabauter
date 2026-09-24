@@ -70,6 +70,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.ipc import register_op
@@ -102,7 +103,7 @@ def _selfheal_forwarders() -> None:
 
         self_heal_forwarders()
     except Exception:
-        pass
+        pass  # self-heal is best-effort background maintenance; boot must never block on it
 
 
 def _read_cache_head(repo_root: str) -> "Optional[str]":
@@ -172,7 +173,7 @@ def _selfheal_orientation_cache(repo_root: "Optional[str]") -> None:
             return
         write_cache(Path(output["cache_file"]), output["output"])
     except Exception:
-        pass
+        pass  # self-heal is best-effort background maintenance; boot must never block on it
 
 
 def _session_reap_due(repo_root: "Optional[str]") -> bool:
@@ -204,11 +205,12 @@ async def _reap_sessions(repo_root: "Optional[str]") -> None:
             common_dir = resolve_git_common_dir(repo_root)
         await _reap_handler({}, repo_root=common_dir)
     except Exception:
-        pass
+        pass  # self-heal is best-effort background maintenance; boot must never block on it
 
 
 @register_op("hooks.sweep_boot")
 async def _handler(params: dict, repo_root=None) -> dict:
+    params = payload_of(params)
     del params  # unused -- see module docstring
 
     _selfheal_forwarders()

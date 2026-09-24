@@ -131,6 +131,80 @@ def test_t3_hand_block_preserved_verbatim_on_regen(repo):
     assert sentinel in target.read_text(encoding="utf-8")
 
 
+def test_identity_skips_leading_hero_comment_and_image(repo):
+    """Fixture: claude-klabauter's own README.md (hero attribution comment plus
+    `![claude-klabauter](assets/hero.jpg)` immediately after the H1) — the
+    lead paragraph must be the real prose, not the comment/image lines."""
+    readme = repo / "README.md"
+    readme.write_text(
+        textwrap.dedent(
+            """\
+            # claude-klabauter
+
+            <!-- Hero art mirrored from example-store-repo; source: wallup.net. Third-party, rights reserved. -->
+            ![claude-klabauter](assets/hero.jpg)
+
+            **claude-klabauter is the control-plane engine for a fleet of repositories.** It exists to
+            answer one question.
+
+            ## Other section
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    target = repo / "docs" / "exec-summary.md"
+    rc = mod.main([])
+    assert rc == 0
+
+    content = target.read_text(encoding="utf-8")
+    assert "claude-klabauter is the control-plane engine" in content
+    assert "Hero art mirrored" not in content
+    assert "assets/hero.jpg" not in content
+
+
+def test_extract_lead_paragraph_skips_leading_comment_image_and_badge():
+    lines = [
+        "# Title",
+        "",
+        "<!-- a hero comment -->",
+        "![hero](assets/hero.jpg)",
+        "[![build badge](https://img.shields.io/badge.svg)](https://ci.example.com)",
+        "",
+        "The real lead paragraph starts here.",
+        "It has two lines.",
+        "",
+        "## Next section",
+    ]
+    assert mod._extract_lead_paragraph(lines) == (
+        "The real lead paragraph starts here.\nIt has two lines."
+    )
+
+
+def test_extract_lead_paragraph_skips_multiline_html_comment():
+    lines = [
+        "# Title",
+        "<!-- a hero comment",
+        "   spanning multiple lines",
+        "-->",
+        "![hero](assets/hero.jpg)",
+        "",
+        "Real prose paragraph.",
+    ]
+    assert mod._extract_lead_paragraph(lines) == "Real prose paragraph."
+
+
+def test_first_nonblank_after_h1_skips_leading_noise():
+    lines = [
+        "# Title",
+        "<!-- hero comment -->",
+        "![hero](assets/hero.jpg)",
+        "",
+        "First real line.",
+    ]
+    assert mod._first_nonblank_after_h1(lines) == "First real line."
+
+
 def test_t4_managed_identity_refreshed_on_regen(repo):
     target = repo / "docs" / "exec-summary.md"
     mod.main([])

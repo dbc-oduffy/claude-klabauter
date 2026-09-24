@@ -203,7 +203,7 @@ def census(
                 try:
                     entry = json.loads(line)
                 except (json.JSONDecodeError, ValueError):
-                    continue
+                    continue  # malformed log line; the line is skipped, not fatal to the census
                 if not isinstance(entry, dict):
                     continue
                 name = entry.get("name")
@@ -219,7 +219,7 @@ def census(
                     if rec["last_ts"] is None or ts > rec["last_ts"]:
                         rec["last_ts"] = ts
     except OSError:
-        pass
+        pass  # log file became unreadable mid-scan; the partial census accumulated so far is returned
     return result
 
 

@@ -121,9 +121,7 @@ from coordinator_core.engine_root import (
 )
 from coordinator_core.telemetry import op_latency
 import re
-import subprocess
-from coordinator_core.win_portability import no_console_creationflags, same_path
-import sys
+from coordinator_core.win_portability import same_path
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -134,7 +132,7 @@ from typing import Optional
 # already-hand-composed document, never to construct it.
 import yaml
 
-from coordinator_core._settings_home import settings_home
+from coordinator_core._claude_klabauter_root import _machine_local_get
 from coordinator_core.frontmatter import schema_validate
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._common import main_worktree_root
@@ -161,7 +159,6 @@ _SUBPROCESS_TIMEOUT_SECS = 15
 
 # Env var overrides for test isolation.
 _QUEUE_APPEND_OUTPUT_ROOT_ENV = "QUEUE_APPEND_OUTPUT_ROOT"
-_MACHINE_LOCAL_IMPL_ENV = "MACHINE_LOCAL_IMPL"
 _CLAUDE_HOME_ENV = "CLAUDE_HOME"
 
 
@@ -771,37 +768,6 @@ def _claude_home() -> str:
     return os.path.join(os.path.expanduser("~"), ".claude")
 
 
-def _machine_local_impl() -> str:
-    """Return the path to _machine_local.py, honouring MACHINE_LOCAL_IMPL for tests."""
-    # TODO(33cf462): de-dup _claude_home/_machine_local_impl into shared module
-    # (queued: state/improvement-queue/2026-07-06-claude-klabauter-live-root-shared-helper-extraction.yaml)
-    override = os.environ.get(_MACHINE_LOCAL_IMPL_ENV)
-    if override:
-        return override
-    settings_home_impl = os.path.join(settings_home(), "bin", "_machine_local.py")
-    if os.path.exists(settings_home_impl):
-        return settings_home_impl
-    return os.path.join(_claude_home(), "bin", "_machine_local.py")
-
-
-def _machine_local_get(key: str) -> Optional[str]:
-    """Call ``machine-local get <key>`` and return the value, or None on failure."""
-    impl = _machine_local_impl()
-    try:
-        result = subprocess.run(
-            [sys.executable, impl, "get", key],
-            capture_output=True,
-            text=True,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        print(f"skip: _machine_local_get: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
-    if result.returncode != 0 or not result.stdout.strip():
-        return None
-    return result.stdout.strip()
-
-
 def _claude_klabauter_root() -> Optional[str]:
     """Resolve the claude-klabauter repo root.
 
@@ -1123,7 +1089,7 @@ def _write_out_path_overwrite(out_path: str, content: str) -> str:
         try:
             os.unlink(tmp_path)
         except OSError:
-            pass
+            pass  # best-effort tempfile cleanup before re-raising the original failure below
         raise
     return out_path
 

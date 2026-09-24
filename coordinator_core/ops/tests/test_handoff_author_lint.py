@@ -20,7 +20,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from coordinator_core.ops.handoff_author_lint import _handler
+from coordinator_core.ops.handoff_author_lint import _handler, lint_text
 from coordinator_core.session_ledger.aggregate_chain_loe import unparseable_ledger_rows
 
 _LEDGER_HEADING = "## Session Ledger"
@@ -194,6 +194,51 @@ class LedgerGrammarOwnershipTest(unittest.TestCase):
 
     def test_content_outside_a_ledger_block_is_never_examined(self):
         self.assertEqual(unparseable_ledger_rows("## Anti-scope\n\n0.3d junk\n"), [])
+
+
+class LintTextSeamTest(unittest.TestCase):
+    """`lint_text` is the in-process entry point a PreToolUse guard calls on
+    a body it constructed itself, with no path resolution and no I/O — see
+    module docstring's Entry points section. These cases drive it directly,
+    one per finding code plus a clean body and a no-frontmatter body."""
+
+    def test_clean_body_is_clean(self):
+        self.assertEqual(lint_text(_doc()), [])
+
+    def test_summary_placeholder_code(self):
+        placeholder = (
+            "PLACEHOLDER — replace with one-line spinoff summary (≤140 chars)"
+        )
+        codes = [f["code"] for f in lint_text(_doc(summary=f'"{placeholder}"'))]
+        self.assertIn("SUMMARY_PLACEHOLDER", codes)
+
+    def test_summary_over_cap_code(self):
+        codes = [f["code"] for f in lint_text(_doc(summary="x" * 200))]
+        self.assertIn("SUMMARY_OVER_CAP", codes)
+
+    def test_ac_no_checkboxes_code(self):
+        codes = [f["code"] for f in lint_text(_doc(ac="- prose bullet"))]
+        self.assertIn("AC_NO_CHECKBOXES", codes)
+
+    def test_ledger_row_unparseable_code(self):
+        rows = "2026-08-19 | abc123 | S | 0.3d / 0o | Wrote a duration\n"
+        codes = [f["code"] for f in lint_text(_doc(ledger_rows=rows))]
+        self.assertIn("LEDGER_ROW_UNPARSEABLE", codes)
+
+    def test_body_with_no_frontmatter_still_runs_body_grammars(self):
+        """No `---` frontmatter block at all — the body grammars (checkbox,
+        ledger) still run against the whole text; only the summary grammar
+        has nothing to read."""
+        text = (
+            "## Acceptance criteria\n\n"
+            "- prose bullet\n\n"
+            "## Session Ledger\n\n"
+            "<!-- Format: YYYY-MM-DD | <sid6> | <tshirt> | <Nd / No> | <summary> -->\n"
+            "2026-08-19 | abc123 | S | 0.3d / 0o | Wrote a duration\n"
+        )
+        codes = [f["code"] for f in lint_text(text)]
+        self.assertIn("AC_NO_CHECKBOXES", codes)
+        self.assertIn("LEDGER_ROW_UNPARSEABLE", codes)
 
 
 if __name__ == "__main__":

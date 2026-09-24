@@ -522,12 +522,12 @@ def test_keying_missing_origin_worktree_for_common_dir_op():
 
 
 def test_emit_op_requires_origin_worktree(tmp_path, exercise_suspended_op):
-    """backlog.record is common_dir-scoped and REQUIRES _origin_worktree (2026-07-07 cutover).
+    """goal.append is common_dir-scoped and REQUIRES _origin_worktree (2026-07-07 cutover).
 
-    Prior to 2026-07-07, these per-repo writers (backlog.record, goal.append) were
-    "central"-scoped and silently ignored _origin_worktree. The per-repo-emission-cutover
-    plan (C3) reclassified them to "common_dir" — each caller MUST supply _origin_worktree
-    pointing to a valid git worktree, or dispatch returns INVALID_PARAMS (-32602).
+    Prior to 2026-07-07, this per-repo writer was "central"-scoped and silently ignored
+    _origin_worktree. The per-repo-emission-cutover plan (C3) reclassified it to
+    "common_dir" — the caller MUST supply _origin_worktree pointing to a valid git worktree,
+    or dispatch returns INVALID_PARAMS (-32602).
 
     This test asserts the fail-loud behaviour when _origin_worktree is absent:
     the old "bypassed_key=True" (repo_root=None) assertion is the exact regression we guard.
@@ -537,7 +537,7 @@ def test_emit_op_requires_origin_worktree(tmp_path, exercise_suspended_op):
     msg_no_worktree = {
         "jsonrpc": "2.0",
         "id": 21,
-        "method": "backlog.record",
+        "method": "goal.append",
         "params": {},
         # deliberately no "_origin_worktree"
     }
@@ -545,11 +545,11 @@ def test_emit_op_requires_origin_worktree(tmp_path, exercise_suspended_op):
     def _stub(params, ctx=None, repo_root=None):
         return {"repo_root": str(repo_root) if repo_root else None}
 
-    with _RegistryScope({"backlog.record": _stub}):
+    with _RegistryScope({"goal.append": _stub}):
         d = _run(dispatch_message(msg_no_worktree))
 
     assert "error" in d, (
-        f"backlog.record without _origin_worktree must fail loud (common_dir-scoped); "
+        f"goal.append without _origin_worktree must fail loud (common_dir-scoped); "
         f"got result: {d.get('result')}"
     )
     assert d["error"]["code"] == INVALID_PARAMS, (
@@ -560,19 +560,19 @@ def test_emit_op_requires_origin_worktree(tmp_path, exercise_suspended_op):
     msg_with_worktree = {
         "jsonrpc": "2.0",
         "id": 22,
-        "method": "backlog.record",
+        "method": "goal.append",
         "params": {},
         "_origin_worktree": str(Path(__file__).resolve().parent),
     }
 
-    with _RegistryScope({"backlog.record": _stub}):
+    with _RegistryScope({"goal.append": _stub}):
         d2 = _run(dispatch_message(msg_with_worktree))
 
     assert "result" in d2, (
-        f"backlog.record with _origin_worktree must succeed; got: {d2.get('error')}"
+        f"goal.append with _origin_worktree must succeed; got: {d2.get('error')}"
     )
     assert d2["result"]["repo_root"] is not None, (
-        "backlog.record handler must receive a non-None repo_root derived from _origin_worktree"
+        "goal.append handler must receive a non-None repo_root derived from _origin_worktree"
     )
 
 
@@ -652,9 +652,9 @@ def test_keying_unresolvable_key_fail_loud(tmp_path):
 def test_resolve_op_repo_key_emit_ops_require_worktree():
     """resolve_op_repo_key raises ValueError for emit ops when request_repo is None.
 
-    Prior to 2026-07-07, backlog.record / goal.append were "central"-scoped
+    Prior to 2026-07-07, goal.append was "central"-scoped
     and resolve_op_repo_key returned None (key bypassed). After the per-repo-emission-cutover
-    (C3), they are "common_dir"-scoped and a missing request_repo must fail loud (ValueError),
+    (C3), it is "common_dir"-scoped and a missing request_repo must fail loud (ValueError),
     which dispatch_message converts to INVALID_PARAMS (-32602).
 
     A regression here (ops silently returning None again) would re-introduce the hardlocked-
@@ -662,7 +662,7 @@ def test_resolve_op_repo_key_emit_ops_require_worktree():
     Spec: docs/plans/2026-07-07-per-repo-emission-cutover.md § C3 / AC1
     """
     import pytest
-    for op in ("backlog.record", "goal.append"):
+    for op in ("goal.append",):
         with pytest.raises(ValueError, match="_origin_worktree"):
             resolve_op_repo_key(op, None)
 

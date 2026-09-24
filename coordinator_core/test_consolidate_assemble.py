@@ -25,6 +25,17 @@ def _git(returncode=0, stdout="", stderr=""):
     return lambda args, cwd: SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
 
 
+def _refs(*shorts, email="me@x"):
+    """Mimics `ref_rows`' `for-each-ref` output: `refname<TAB>short<TAB>email`
+    per ref. An `origin/`-led short name is a remote-tracking ref; anything
+    else is a local branch."""
+    lines = []
+    for short in shorts:
+        refname = f"refs/remotes/{short}" if short.startswith("origin/") else f"refs/heads/{short}"
+        lines.append(f"{refname}\t{short}\t{email}\n")
+    return "".join(lines)
+
+
 def _show_stdout(shas):
     """Mimics `git show --stat <sha>...`: concatenated per-commit blocks, each
     opening with a column-0 `commit <sha>` line and carrying a four-space
@@ -68,6 +79,12 @@ class TestCategorizeBranch:
             consolidate_assemble.categorize_branch("b", "cur", "main", "other@x", "me@x") == "others"
         )
 
+    def test_cloud_session_when_tip_is_claude_noreply(self):
+        assert (
+            consolidate_assemble.categorize_branch("claude/x", "cur", "main", "noreply@anthropic.com", "me@x")
+            == "cloud-session"
+        )
+
 
 # ---------------------------------------------------------------------------
 # list_branches / list_worktrees parsing
@@ -76,13 +93,8 @@ class TestCategorizeBranch:
 class TestListBranches:
     def test_parses_local_and_remote_skips_head_alias(self):
         run_git = _git(
-            stdout=(
-                "* work/a\n"
-                "  main\n"
-                "  remotes/origin/main\n"
-                "  remotes/origin/HEAD -> origin/main\n"
-                "  remotes/origin/stale-remote\n"
-            )
+            stdout=_refs("work/a", "main", "origin/main", "origin/stale-remote")
+            + "refs/remotes/origin/HEAD\torigin\t\n"
         )
         out = consolidate_assemble.list_branches(run_git, Path("/repo"))
         names = {b["name"] for b in out}
@@ -139,8 +151,7 @@ class TestBrief:
                     if not line or "->" in line:
                         continue
                     names.append(line[len("remotes/"):] if line.startswith("remotes/") else line)
-                out = "\n".join(f"{name} {tip_author}" for name in names)
-                return SimpleNamespace(returncode=0, stdout=out + ("\n" if out else ""), stderr="")
+                return SimpleNamespace(returncode=0, stdout=_refs(*names, email=tip_author), stderr="")
             if args[0] == "branch" and args[1] == "--merged":
                 return SimpleNamespace(returncode=0, stdout="", stderr="")
             if args[0] == "log" and args[1] == "-1":
@@ -267,7 +278,7 @@ class TestBrief:
                     stderr="",
                 )
             if args[0] == "for-each-ref":
-                out = "current me@x\nmain me@x\nstale-a me@x\norigin/stale-b me@x\n"
+                out = _refs("current", "main", "stale-a", "origin/stale-b")
                 return SimpleNamespace(returncode=0, stdout=out, stderr="")
             if args[0] == "branch" and args[1] == "--merged":
                 return SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -357,9 +368,7 @@ class TestBrief:
                     stderr="",
                 )
             if args[0] == "for-each-ref":
-                out = (
-                    "current me@x\nmain me@x\nother-a me@x\nother-b me@x\nother-c me@x\n"
-                )
+                out = _refs("current", "main", "other-a", "other-b", "other-c")
                 return SimpleNamespace(returncode=0, stdout=out, stderr="")
             if args[0] == "branch" and args[1] == "--merged":
                 return SimpleNamespace(returncode=0, stdout="  other-a\n  other-b\n", stderr="")
@@ -415,6 +424,35 @@ class TestBrief:
         branch_report = next(b for b in do["gates"]["branches"] if b["name"] == "someone-elses")
         assert branch_report["category"] == "others"
 
+    def test_cloud_session_branch_with_commits_is_gated_by_absorb_judgment(self, monkeypatch, tmp_path):
+        run_git = self._stub(
+            monkeypatch,
+            branch_lines="* current\n  main\n  claude/cloud\n",
+            worktree_stdout=f"worktree {tmp_path}\nHEAD abc\nbranch refs/heads/current\n",
+            unique_commits=["abc123 a commit"],
+            tip_author="noreply@anthropic.com",
+        )
+        do = consolidate_assemble.brief(repo_root=tmp_path, run_git=run_git)
+        branch_report = next(b for b in do["gates"]["branches"] if b["name"] == "claude/cloud")
+        assert branch_report["category"] == "cloud-session"
+        assert branch_report["unique_commit_count"] == 1
+        assert "j-absorb-claude/cloud" in {j["id"] for j in do["judgment_points"]}
+        cloud = [d for d in do["directives"] if "claude/cloud" in d["args"]]
+        assert cloud and all(d["depends_on"] == "j-absorb-claude/cloud" for d in cloud)
+
+    def test_cloud_session_branch_without_commits_is_never_deleted_unconditionally(self, monkeypatch, tmp_path):
+        run_git = self._stub(
+            monkeypatch,
+            branch_lines="* current\n  main\n  claude/cloud\n",
+            worktree_stdout=f"worktree {tmp_path}\nHEAD abc\nbranch refs/heads/current\n",
+            tip_author="noreply@anthropic.com",
+        )
+        do = consolidate_assemble.brief(repo_root=tmp_path, run_git=run_git)
+        jp = next(j for j in do["judgment_points"] if j["id"] == "j-delete-claude/cloud")
+        assert {d["value"] for d in jp["dispositions"]} == {"delete", "keep"}
+        delete = next(d for d in do["directives"] if d["id"] == "d-delete-claude/cloud")
+        assert delete["depends_on"] == "j-delete-claude/cloud"
+
     def test_directives_are_well_formed_for_apply_base_ordering(self, monkeypatch, tmp_path):
         run_git = self._stub(
             monkeypatch,
@@ -443,7 +481,7 @@ class TestApplyDispatchTable:
                 ("rev-parse", "--verify"): SimpleNamespace(returncode=0, stdout="", stderr=""),
                 ("branch", "-a"): SimpleNamespace(returncode=0, stdout="* current\n  main\n  stale\n", stderr=""),
                 ("for-each-ref",): SimpleNamespace(
-                    returncode=0, stdout="current me@x\nmain me@x\nstale me@x\n", stderr=""
+                    returncode=0, stdout=_refs("current", "main", "stale"), stderr=""
                 ),
                 ("branch", "--merged"): SimpleNamespace(returncode=0, stdout="", stderr=""),
                 ("log", "-1"): SimpleNamespace(returncode=0, stdout="me@x\n", stderr=""),
@@ -479,7 +517,7 @@ class TestApplyDispatchTable:
                 ("rev-parse", "--abbrev-ref"): SimpleNamespace(returncode=0, stdout="current\n", stderr=""),
                 ("rev-parse", "--verify"): SimpleNamespace(returncode=1, stdout="", stderr=""),
                 ("branch", "-a"): SimpleNamespace(returncode=0, stdout="* current\n  stale\n", stderr=""),
-                ("for-each-ref",): SimpleNamespace(returncode=0, stdout="current me@x\nstale me@x\n", stderr=""),
+                ("for-each-ref",): SimpleNamespace(returncode=0, stdout=_refs("current", "stale"), stderr=""),
                 ("branch", "--merged"): SimpleNamespace(returncode=0, stdout="", stderr=""),
                 ("log", "-1"): SimpleNamespace(returncode=0, stdout="me@x\n", stderr=""),
                 ("log", "--oneline"): SimpleNamespace(returncode=0, stdout="", stderr=""),

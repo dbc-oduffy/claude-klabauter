@@ -11,8 +11,11 @@ single-regex `cat > FILE <<EOF` match, and the brief's 8-case test list
 naturally into either existing file's own per-guard convention.
 
 No git spawn anywhere in this file's fixtures: `git_root` is always a plain
-`tmp_path`, never a real repo checkout, mirroring the guard's own contract
+path string, never a real repo checkout, mirroring the guard's own contract
 that `git_root` is pure path arithmetic, not something it resolves itself.
+Most tests hand in `tmp_path` bare; `TestFires` and
+`TestAdvisoryNeverBlocking` use `fires_git_root` instead (see its own
+docstring) since a bare `tmp_path` would misclassify as scratch there.
 """
 from __future__ import annotations
 
@@ -41,24 +44,39 @@ def _heredoc(body: str) -> str:
     return "python3 - <<'PY'\n%s\nPY" % body
 
 
+@pytest.fixture
+def fires_git_root(tmp_path) -> str:
+    """A stand-in `git_root` for the "should fire" tests below, deliberately
+    NOT the bare `tmp_path` the other classes use: `_heredoc_write_target_is_scratch`
+    treats any path under a literal `/tmp` as scratch by design (mirroring a
+    Claude session's own `/tmp/claude-.../scratchpad` shape) -- and on
+    Linux/macOS `tmp_path` itself lives under `/tmp`, so a fires-test using it
+    bare would have its own `git_root` misclassify as scratch and silently
+    return `None` regardless of what the heredoc body writes (the bug this
+    fixture exists to route around: TF-20260923-bb-040). `tmp_path.name` is
+    folded in only to keep each test's root textually distinct; nothing here
+    ever touches disk, matching the guard's own pure-path-arithmetic contract."""
+    return "/fires-git-root-fixture/" + tmp_path.name
+
+
 def _hso(result):
     assert result is not None
     return result["hookSpecificOutput"]
 
 
 class TestFires:
-    def test_pathlib_write_text_under_git_root(self, tmp_path):
+    def test_pathlib_write_text_under_git_root(self, fires_git_root):
         cmd = _heredoc(
             'import pathlib\npathlib.Path("coordinator_core/x.py").write_text("hi")'
         )
-        result = dc.check_heredoc_repo_write_advise(cmd, "sess", None, str(tmp_path))
+        result = dc.check_heredoc_repo_write_advise(cmd, "sess", None, fires_git_root)
         hso = _hso(result)
         assert hso["permissionDecision"] == "allow"
         assert "coordinator_core/x.py" in hso["additionalContext"]
 
-    def test_open_write_mode_under_git_root(self, tmp_path):
+    def test_open_write_mode_under_git_root(self, fires_git_root):
         cmd = _heredoc('open("docs/foo.md", "w").write("hi")')
-        result = dc.check_heredoc_repo_write_advise(cmd, "sess", None, str(tmp_path))
+        result = dc.check_heredoc_repo_write_advise(cmd, "sess", None, fires_git_root)
         hso = _hso(result)
         assert hso["permissionDecision"] == "allow"
         assert "docs/foo.md" in hso["additionalContext"]
@@ -118,13 +136,13 @@ class TestSilent:
 
 
 class TestAdvisoryNeverBlocking:
-    def test_all_firing_cases_are_advisory_allow(self, tmp_path):
+    def test_all_firing_cases_are_advisory_allow(self, fires_git_root):
         cases = [
             _heredoc('import pathlib\npathlib.Path("coordinator_core/x.py").write_text("hi")'),
             _heredoc('open("docs/foo.md", "w").write("hi")'),
         ]
         for cmd in cases:
-            hso = _hso(dc.check_heredoc_repo_write_advise(cmd, "sess", None, str(tmp_path)))
+            hso = _hso(dc.check_heredoc_repo_write_advise(cmd, "sess", None, fires_git_root))
             assert hso["permissionDecision"] == "allow"
             assert "updatedInput" not in hso
 

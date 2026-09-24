@@ -56,6 +56,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core._settings_home import claude_config_dir, machine_local_dir
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.hooks._envelope import allow_advisory, no_advisory
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.ipc import register_op
@@ -293,8 +294,9 @@ def _handler(params: dict, repo_root=None) -> dict:
     live global CLAUDE.md/rules mirror and the in-plugin published copy from
     their tracked coordinator-claude-repo sources, when drifted and this
     process resolves a dev checkout (OSS-clobber gate, fail-closed)."""
+    params = payload_of(params)
     message = evaluate(params)
     if message is None:
         return no_advisory()
-    event_name = params.get("hook_event_name") if isinstance(params, dict) else None
+    event_name = params.get("hook_event_name")
     return allow_advisory(event_name if isinstance(event_name, str) and event_name else "PostToolUse", render(message))

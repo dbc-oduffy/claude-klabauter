@@ -17,6 +17,7 @@ import os
 
 import pytest
 
+from coordinator_core import _claude_klabauter_root as _claude_klabauter_root_mod
 from coordinator_core import resolve_coordinator_clone as rcc
 
 
@@ -372,7 +373,11 @@ def test_registry_live_path_resolves_without_subprocess(monkeypatch):
     def _fail_if_called(*args, **kwargs):  # pragma: no cover - only reached on regression
         raise AssertionError("subprocess.run must not be called when registry_get resolves the key")
 
-    monkeypatch.setattr(rcc.subprocess, "run", _fail_if_called)
+    # `_machine_local_get` (the CLI-fallback rung) is now the shared,
+    # R4-repointed helper in coordinator_core._claude_klabauter_root, not a local copy
+    # -- patch ITS subprocess reference, not rcc's (rcc no longer imports
+    # subprocess at all after the repoint).
+    monkeypatch.setattr(_claude_klabauter_root_mod.subprocess, "run", _fail_if_called)
 
     assert rcc._registry_live_path() == "/from-registry-toml"
 
@@ -410,7 +415,9 @@ def test_resolve_content_root_common_path_spawns_no_subprocess(monkeypatch, tmp_
     def _fail_if_called(*args, **kwargs):  # pragma: no cover - only reached on regression
         raise AssertionError("resolve_content_root must not spawn a subprocess on the common path")
 
-    monkeypatch.setattr(rcc.subprocess, "run", _fail_if_called)
+    # See test_registry_live_path_resolves_without_subprocess above: the
+    # fallback subprocess now lives in the shared _claude_klabauter_root helper.
+    monkeypatch.setattr(_claude_klabauter_root_mod.subprocess, "run", _fail_if_called)
 
     assert rcc.resolve_content_root() == str(live)
 

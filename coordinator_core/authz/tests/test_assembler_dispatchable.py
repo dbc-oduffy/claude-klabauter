@@ -141,6 +141,33 @@ class TestDefaultDenyControl:
         for assembler_name in ASSEMBLER_DISPATCHABLE:
             assert _is_dispatchable(assembler_name, "planted.op.not.a.real.op") is False
 
+    def test_planted_plugin_local_shaped_name_absent_from_the_set_is_not_dispatchable(
+        self,
+    ) -> None:
+        """A plugin-local-shaped bareword (unclaimed by the hand-literal
+        mapping) refuses default-deny exactly like any other unlisted name
+        — nothing about the two-root plugin-local model widens admission.
+        docs/plans/2026-09-07-directive-resolution-reaches-a-plugin-local-
+        cli.md, T5."""
+        assert _is_dispatchable("workstream_complete", "not-a-real-plugin-local-cli") is False
+
+
+class TestPluginLocalBarewordsPresent:
+    """docs/plans/2026-09-07-directive-resolution-reaches-a-plugin-local-
+    cli.md, T5: the two `workstream_complete.apply._PLUGIN_LOCAL_CLIS`
+    members are present in `ASSEMBLER_DISPATCHABLE["workstream_complete"]`,
+    the mapping stays a hand-literal set (unaffected by this pair's
+    presence), and default-deny still holds for everything else."""
+
+    def test_the_two_plugin_local_barewords_are_admitted(self) -> None:
+        for name in ("baton-chain-closure", "plan-reversibility-eligibility"):
+            assert _is_dispatchable("workstream_complete", name) is True
+
+    def test_mapping_stays_a_hand_literal_frozenset_per_assembler(self) -> None:
+        entry = ASSEMBLER_DISPATCHABLE["workstream_complete"]
+        assert isinstance(entry, frozenset)
+        assert {"baton-chain-closure", "plan-reversibility-eligibility"} <= set(entry)
+
 
 # The mixed-end-state discriminator (plan § The discriminator for the mixed end
 # state) is keyed by ASSEMBLER_DISPATCHABLE's assembler-name key, not by per-entry

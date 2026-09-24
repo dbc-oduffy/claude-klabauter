@@ -51,7 +51,7 @@ Three deltas over the lifted predicate:
    `__future__` or a stdlib module, on pain of a "module-scope non-stdlib
    import" finding. `lib.*` and `coordinator_core.*` are never stdlib, so
    this is what actually catches the forwarder-route hazard; the door route
-   survives non-stdlib imports today only because `_ensure_bin_dir_importable`
+   survives non-stdlib imports today only because `bin_lib_binding.ensure_bin_lib_bound`
    bootstraps `sys.path` for it first (see the origin plan's "Two load
    routes" table) — a bootstrap the forwarder does not share.
 
@@ -392,7 +392,7 @@ def _check_module_scope_import_purity(stmt: ast.Import | ast.ImportFrom, relpath
     predicate): a module-scope import must resolve to `__future__` or a
     stdlib module. `lib.*`, `coordinator_core.*`, and any third-party root
     (`yaml`, ...) fail this -- these are exactly the imports that resolve on
-    the bootstrapped warm-door route (`_ensure_bin_dir_importable` puts
+    the bootstrapped warm-door route (`bin_lib_binding.ensure_bin_lib_bound` puts
     `coordinator/bin` and its `lib/` on `sys.path` first) and raise
     `ModuleNotFoundError` on the un-bootstrapped settings-home forwarder
     route (`_resolve_claude_klabauter.py :: _run_target_in_process` -> `runpy.run_path`,

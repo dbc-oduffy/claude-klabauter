@@ -69,13 +69,10 @@ from __future__ import annotations
 
 import logging
 import os
-import subprocess
-from coordinator_core.win_portability import no_console_creationflags
-import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-from coordinator_core._settings_home import settings_home
+from coordinator_core._claude_klabauter_root import _machine_local_get
 from coordinator_core.dag import _parse_frontmatter, _read_meta
 from coordinator_core.engine_root import (
     coordinator_engine_root_env,
@@ -90,55 +87,9 @@ from coordinator_core.telemetry import op_latency
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Machine-local registry helpers (copied from queue_append.py by convention;
-# cross-module shared-helper extraction is out of scope — see improvement-queue).
+# Machine-local registry helpers — _machine_local_get is the shared,
+# process-memoized implementation in coordinator_core._claude_klabauter_root (R4).
 # ---------------------------------------------------------------------------
-
-_MACHINE_LOCAL_IMPL_ENV = "MACHINE_LOCAL_IMPL"
-_CLAUDE_HOME_ENV = "CLAUDE_HOME"
-# Subprocess timeout bound so a hung registry script
-# does not block the thread indefinitely (at most once per process; still bounded).
-_MACHINE_LOCAL_TIMEOUT = 5  # seconds
-
-
-def _claude_home() -> str:
-    """Return the ~/.claude root, honouring CLAUDE_HOME env var for test isolation."""
-    override = os.environ.get(_CLAUDE_HOME_ENV)
-    if override:
-        return override
-    return os.path.join(os.path.expanduser("~"), ".claude")
-
-
-def _machine_local_impl() -> str:
-    """Return the path to _machine_local.py, honouring MACHINE_LOCAL_IMPL for tests."""
-    # TODO(33cf462): de-dup _claude_home/_machine_local_impl into shared module
-    # (queued: state/improvement-queue/2026-07-06-claude-klabauter-live-root-shared-helper-extraction.yaml)
-    override = os.environ.get(_MACHINE_LOCAL_IMPL_ENV)
-    if override:
-        return override
-    settings_home_impl = os.path.join(settings_home(), "bin", "_machine_local.py")
-    if os.path.exists(settings_home_impl):
-        return settings_home_impl
-    return os.path.join(_claude_home(), "bin", "_machine_local.py")
-
-
-def _machine_local_get(key: str) -> Optional[str]:
-    """Call ``machine-local get <key>`` and return the value, or None on failure."""
-    impl = _machine_local_impl()
-    try:
-        result = subprocess.run(
-            [sys.executable, impl, "get", key],
-            capture_output=True,
-            text=True,
-            timeout=_MACHINE_LOCAL_TIMEOUT,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        print(f"skip: _machine_local_get: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
-    if result.returncode != 0 or not result.stdout.strip():
-        return None
-    return result.stdout.strip()
 
 
 def _refuse_published_mirror(root: str) -> Optional[str]:

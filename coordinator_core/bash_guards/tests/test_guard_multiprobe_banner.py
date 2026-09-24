@@ -723,3 +723,50 @@ class TestOverrideEscapeHatch:
     def test_override_env_suppresses_on_posix(self, monkeypatch):
         monkeypatch.setenv("COORDINATOR_OVERRIDE_MULTIPROBE_BANNER", "1")
         assert guard.check(_payload(_BANNER_CMD), host_is_windows=False) is None
+
+
+class TestTrimAttemptC8b:
+    """P120-C8b (pln-trim-the-remaining-over-cap-guard-b969d9): this guard's
+    OWN static prose (the lede words in `_outlet_from_seam_result`'s
+    seam-confirmed and fallback branches, plus the PowerShell-leg generic
+    summary) is the only text this row's footprint can trim -- the shared
+    `_platform_verdict` template and the `dispatch_checks.check_multiprobe_
+    banner_rewrite` script it renders inline both live in other modules,
+    out of this chunk's write set. These assertions pin the trimmed
+    wording so a future edit does not silently regrow it, and catch a
+    regression back to the pre-trim strings.
+    """
+
+    def test_seam_confirmed_lede_is_trimmed(self):
+        out = guard.check(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=False)
+        ctx = _ctx(out)
+        assert "this rewrite." not in ctx
+        assert "rewrite." in ctx
+
+    def test_powershell_generic_summary_is_trimmed(self):
+        assert "batching every probe" not in guard._POWERSHELL_BANNER_GENERIC_SUMMARY
+        assert "zero per-probe forks" in guard._POWERSHELL_BANNER_GENERIC_SUMMARY
+
+    def test_seam_confirmed_prose_bytes_do_not_regrow(self):
+        # Pins the CURRENT measured prose-byte count for the corpus's own
+        # `multiprobe-banner-fire` fixture (same command as `guard_message_
+        # exemptions.py`'s `_multiprobe_banner_fire_fixture`) so a future
+        # change to this guard's own strings is caught if it grows the
+        # message back up -- not an assertion that the cap (220) is met;
+        # per this row's own body, the bulk of the overage is owned by
+        # `_platform_verdict.py`/`dispatch_checks.py`, both out of footprint.
+        from coordinator_core.bash_guards._message_size import measure_envelope
+
+        out = guard.check(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=False)
+        envelope = {"hookSpecificOutput": out["hookSpecificOutput"]}
+        measurement = measure_envelope(envelope, band="platform-conditioned-deny")
+        assert measurement.over_cap is True
+        # Measured 1215 prose bytes post-trim (was 1220 pre-trim, C8b);
+        # allow a small drift margin for the unrelated resolved-interpreter
+        # path length (`_bt_python3_invocation()`), which is environment-
+        # dependent, not authored prose.
+        assert measurement.prose_bytes <= 1230, (
+            "this guard's own contributed prose grew back past the C8b trim "
+            "(measured %d bytes) -- see this class's own docstring"
+            % measurement.prose_bytes
+        )

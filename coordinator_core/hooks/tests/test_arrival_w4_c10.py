@@ -111,7 +111,7 @@ def test_guard_plane_check_op_reports_absence(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
     result = session_start_guard_plane_check._handler({})
     context = result["hookSpecificOutput"]["additionalContext"]
-    assert "NO registered coordinator hook" in context
+    assert "no hook registered this remote session" in context
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +121,9 @@ def test_guard_plane_check_op_reports_absence(tmp_path, monkeypatch):
 
 def test_announce_job_mode_reports_resolved_mode(monkeypatch):
     monkeypatch.setenv("COORDINATOR_JOB_MODE", "interactive")
-    result = session_start_announce_job_mode._handler({"payload": {"session_id": "sess-1"}})
+    result = session_start_announce_job_mode._handler(
+        {"payload": {"session_id": "sess-1"}}
+    )
     context = result["hookSpecificOutput"]["additionalContext"]
     assert "interactive" in context
     assert "asserted via COORDINATOR_JOB_MODE" in context
@@ -180,7 +182,9 @@ def test_doe_claude_wrong_repo_guard_accepts_exact_slug(tmp_path):
 
 
 def test_doe_claude_root_handler_no_op_when_nothing_confirmed(tmp_path):
-    result = session_start_register_doe_claude_root._handler({"payload": {"cwd": str(tmp_path)}})
+    result = session_start_register_doe_claude_root._handler(
+        {"payload": {"cwd": str(tmp_path)}}
+    )
     assert result == {}  # no_advisory() -- tmp_path carries no dev-repo sentinel
 
 

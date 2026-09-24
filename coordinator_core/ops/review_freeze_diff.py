@@ -117,9 +117,20 @@ from __future__ import annotations
 
 MUTATES = ["state/review-trail/diffs/*.diff", "state/review-trail/diffs/*.head.sha"]  # slice_id-keyed, data-dependent set
 
+from functools import partial
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from coordinator_core.git.commit import (
+    CommitRefused,
+    FilterUnsupported,
+    NothingToCommit,
+    commit_paths,
+    hash_worktree_blobs_via_spawn,
+)
+from coordinator_core.git.commit_trailers import apply_missing_trailers
+from coordinator_core.git.git_index import IndexParseError, parse_index_stat
+from coordinator_core.git.index_write import IndexStaleAfterCommit, IndexWriteError
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.git_native import _git
 from coordinator_core.session.declared_writes import declare_write
@@ -148,6 +159,9 @@ def _error(message: str, uncovered_paths: Optional[List[str]] = None) -> dict:
         "empty": None,
         "uncovered_paths": uncovered_paths,
         "error": message,
+        "committed": False,
+        "commit_sha": None,
+        "commit_error": None,
     }
 
 
@@ -391,11 +405,22 @@ def freeze_diff(
 
     Returns:
         On success: {"diff_path": str, "head_sha_path": str, "head_sha": str,
-                     "empty": bool, "uncovered_paths": [], "error": None}
+                     "empty": bool, "uncovered_paths": [], "error": None,
+                     "committed": bool, "commit_sha": str | None,
+                     "commit_error": str | None}
         On failure: {"diff_path": None, "head_sha_path": None, "head_sha": None,
-                     "empty": None, "uncovered_paths": list[str] | None, "error": str}
+                     "empty": None, "uncovered_paths": list[str] | None, "error": str,
+                     "committed": False, "commit_sha": None, "commit_error": None}
                     (`uncovered_paths` is the unmatched entries on a coverage
                     refusal, `None` on any other error.)
+
+        The commit outcome: `committed` is `True` once the write lands
+        durably in history OR the pair was already at HEAD (`NothingToCommit`
+        — a byte-identical re-freeze), and `False` when the write succeeded
+        but the commit itself was refused (`commit_error` names why). A
+        commit refusal never turns a written freeze into a failed one — see
+        `freeze_diffs_batch`'s own docstring for the batching and the
+        re-freeze rule that keeps `head_sha` pinned to freeze-time HEAD.
     """
     return freeze_diffs_batch(
         repo_root, [{"slice_id": slice_id, "range": range_, "paths": paths}]
@@ -436,6 +461,17 @@ def freeze_diffs_batch(
     request, SAME ORDER, SAME SHAPE as `freeze_diff`'s return value (a
     structured `_error(...)` dict on that request's own failure — never an
     exception for a per-request precondition, matching `freeze_diff`'s own
+
+    After the per-request write loop, every file pair WRITTEN in this call
+    (i.e. every request whose result is not an `_error(...)`) is committed
+    in exactly ONE `commit_paths` call, fail-soft: a commit refusal reports
+    `committed: False`/`commit_error: str(exc)` on every successful result
+    without raising, since the files are already on disk and the freeze
+    itself succeeded (see the plan's Result contract). `commit_paths` is
+    not called at all when every request in the batch failed. See
+    `freeze_diff`'s own docstring for the full contract shape, and the
+    module-level re-freeze rule for why a byte-identical, already-tracked
+    pair skips the `.head.sha` rewrite before reaching this commit step.
     fail-soft-per-call contract).
 
     Every request must share the SAME `paths` restriction (or all omit it) —
@@ -585,6 +621,26 @@ def freeze_diffs_batch(
     diffs_dir = repo_root / "state" / "review-trail" / "diffs"
     diffs_dir.mkdir(parents=True, exist_ok=True)
 
+    written_pairs: Dict[int, Tuple[Path, Path]] = {}
+
+    # Lazy, at-most-once-per-batch index read (module negative-spec's
+    # re-freeze rule) -- only paid when some request actually hits the
+    # byte-identical branch below. `IndexParseError` (including the v4
+    # subclass `IndexV4Unsupported`) reads as "treat every pair as
+    # untracked", the same posture the pre-commit-leg code always had.
+    _index_stat_cache: Dict[str, object] = {}
+    _index_stat_loaded = False
+
+    def _lazy_index_stat() -> Dict[str, object]:
+        nonlocal _index_stat_cache, _index_stat_loaded
+        if not _index_stat_loaded:
+            try:
+                _index_stat_cache = parse_index_stat(repo_root)
+            except IndexParseError:
+                _index_stat_cache = {}
+            _index_stat_loaded = True
+        return _index_stat_cache
+
     for i in pending_idx:
         slice_id = normalized[i]["slice_id"]
         range_ = normalized[i]["range"]
@@ -610,7 +666,8 @@ def freeze_diffs_batch(
         diff_path = diffs_dir / f"{slice_id}.diff"
         sha_path = diffs_dir / f"{slice_id}.head.sha"
 
-        if diff_path.exists() and diff_path.read_text(encoding="utf-8") != diff_text:
+        diff_unchanged = diff_path.exists() and diff_path.read_text(encoding="utf-8") == diff_text
+        if diff_path.exists() and not diff_unchanged:
             results[i] = _error(
                 f"slice_id '{slice_id}' already names a frozen diff at {diff_path} with "
                 "different content — a slice id is a filename, and a generic one collides "
@@ -619,19 +676,89 @@ def freeze_diffs_batch(
             )
             continue
 
-        diff_path.write_text(diff_text, encoding="utf-8", newline="\n")
-        sha_path.write_text(head_sha + "\n", encoding="utf-8", newline="\n")
-        declare_write(diff_path)
-        declare_write(sha_path)
+        # Re-freeze rule: a byte-identical, already-committed pair must not
+        # have its .head.sha rewritten to this call's HEAD -- once the batch
+        # commits, a later re-freeze's HEAD resolves to the freeze's OWN
+        # commit, and an unconditional rewrite would re-point head.sha at it
+        # and fire a spurious new commit. Both files must be tracked for this
+        # to apply: a byte-identical pair written but never committed
+        # (untracked) still rewrites and heals as an orphan (see module docstring).
+        result_head_sha = head_sha
+        skip_sha_rewrite = False
+        if diff_unchanged:
+            index_stat = _lazy_index_stat()
+            diff_key = diff_path.relative_to(repo_root).as_posix()
+            sha_key = sha_path.relative_to(repo_root).as_posix()
+            if diff_key in index_stat and sha_key in index_stat:
+                skip_sha_rewrite = True
+                result_head_sha = sha_path.read_text(encoding="utf-8").strip()
 
+        diff_path.write_text(diff_text, encoding="utf-8", newline="\n")
+        declare_write(diff_path)
+        if not skip_sha_rewrite:
+            sha_path.write_text(head_sha + "\n", encoding="utf-8", newline="\n")
+            declare_write(sha_path)
+
+        written_pairs[i] = (diff_path, sha_path)
         results[i] = {
             "diff_path": str(diff_path),
             "head_sha_path": str(sha_path),
-            "head_sha": head_sha,
+            "head_sha": result_head_sha,
             "empty": not diff_text.strip(),
             "uncovered_paths": [],
             "error": None,
+            "committed": False,
+            "commit_sha": None,
+            "commit_error": None,
         }
+
+    if written_pairs:
+        commit_paths_list: List[str] = []
+        for diff_path, sha_path in written_pairs.values():
+            commit_paths_list.append(diff_path.relative_to(repo_root).as_posix())
+            commit_paths_list.append(sha_path.relative_to(repo_root).as_posix())
+        slice_ids = [normalized[i]["slice_id"] for i in written_pairs]
+        message = apply_missing_trailers(
+            f"review.freeze_diff: freeze {', '.join(slice_ids)}\n", repo_root, commit_paths_list,
+        )
+        committed = False
+        commit_sha: Optional[str] = None
+        commit_error: Optional[str] = None
+        try:
+            outcome = commit_paths(
+                repo_root,
+                commit_paths_list,
+                message,
+                blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=repo_root),
+            )
+            committed = True
+            commit_sha = outcome.sha
+        except IndexStaleAfterCommit as exc:
+            # THE COMMIT LANDED; only the index is stale (see memo_send.py's
+            # sender-commit template, which this mirrors). This clause MUST
+            # precede the `IndexWriteError` clause below, since it is that
+            # class's own subclass and reaching the wrong clause would report
+            # a landed commit as uncommitted.
+            landed = getattr(exc, "outcome", None)
+            committed = True
+            commit_sha = getattr(landed, "sha", None)
+        except NothingToCommit:
+            # The pair was already committed and at HEAD -- a byte-identical
+            # re-freeze whose files are tracked. This is `CommitRefused`'s own
+            # subclass and MUST be caught here, before the general
+            # `CommitRefused` tuple below, or it would be reported as a
+            # refusal instead of the already-committed success it is.
+            committed = True
+            commit_sha = None
+        except (CommitRefused, FilterUnsupported, IndexWriteError) as exc:
+            committed = False
+            commit_sha = None
+            commit_error = str(exc)
+
+        for i in written_pairs:
+            results[i]["committed"] = committed
+            results[i]["commit_sha"] = commit_sha
+            results[i]["commit_error"] = commit_error
 
     return results  # type: ignore[return-value]
 

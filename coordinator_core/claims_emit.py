@@ -189,7 +189,7 @@ def _write_atomic_pair(
                 try:
                     os.unlink(backup)
                 except OSError:
-                    pass
+                    pass  # our own superseded backup; already gone is fine
         backup_claims = None
         backup_meta = None
     except Exception:
@@ -207,7 +207,7 @@ def _write_atomic_pair(
             try:
                 os.unlink(claims_path)
             except OSError:
-                pass
+                pass  # rollback cleanup of our own replaced claims file; already gone is fine
         if backup_meta is not None:
             os.replace(backup_meta, meta_path)
             backup_meta = None
@@ -215,13 +215,13 @@ def _write_atomic_pair(
             try:
                 os.unlink(meta_path)
             except OSError:
-                pass
+                pass  # rollback cleanup of our own replaced meta file; already gone is fine
         for tmp in (tmp_claims, tmp_meta):
             if tmp is not None:
                 try:
                     os.unlink(tmp)
                 except OSError:
-                    pass
+                    pass  # our own temp file; already gone is fine
         raise
 
 

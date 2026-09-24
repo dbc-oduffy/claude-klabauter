@@ -354,6 +354,14 @@ def test_row_prompt_forbids_bash_writes():
     assert "Write, Edit, MultiEdit or NotebookEdit" in prompt
 
 
+def test_row_prompt_names_the_resave_for_cli_written_files():
+    """A CLI a row runs (memo send, probe) writes unclaimed output; without the
+    re-save the committer withholds it and the lane halts."""
+    prompt = _row_prompt(_ROW, _PLAN)
+    assert "A file a CLI you run writes into your footprint is unclaimed" in prompt
+    assert "Write it back unchanged with the Write tool" in prompt
+
+
 def test_commit_prompt_does_not_carry_the_write_tool_rule():
     from coordinator_core.ops.dispatch_emit.emit import _commit_agent_call
 

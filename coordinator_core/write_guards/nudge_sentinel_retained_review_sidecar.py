@@ -38,8 +38,11 @@ else in ``check()``.
 
 Everything else — subagent scoping (``agent_id`` present -> allow), session
 resolution, sidecar-directory resolution, frontmatter ``agent_type``
-extraction, path normalization, and the ``_sidecar_covers_target`` coverage
-heuristic — is REUSED BY IMPORT from the sibling hard-deny module
+extraction, the ``_in_scope_agent_type``/``_LazyRoster`` agent_type-scope
+predicate (code-reviewer OR non-empty off-roster type; enumerated personas
+and empty/missing types stay out), path normalization, and the
+``_sidecar_covers_target`` coverage heuristic — is REUSED BY IMPORT from the
+sibling hard-deny module
 (``block_em_hand_edit_pending_review_integration``), not copied, so the
 warn population and the sibling's deny population can never silently drift
 apart from each other.
@@ -92,11 +95,13 @@ from coordinator_core.session import machinery_paths
 from coordinator_core.write_guards.block_em_hand_edit_pending_review_integration import (
     _DISPOSITIONS_HEADING,
     _FINDINGS_SENTINEL,
+    _LazyRoster,
     _REVIEWER_AGENT_TYPE,
     _UNSAFE_SEGMENT_RE,
     _OVERRIDE_ENV_VAR,
     _extract_file_path,
     _extract_frontmatter_agent_type,
+    _in_scope_agent_type,
     _normalize,
     _sidecar_covers_target,
 )
@@ -131,12 +136,15 @@ def _heading_present(text: str, heading: str) -> bool:
 
 
 def _find_sentinel_retained_sidecar(
-    sidecar_dir: Path, normalized_target: str, basename: str
+    sidecar_dir: Path, normalized_target: str, basename: str, lazy_roster: "_LazyRoster"
 ) -> Optional[Path]:
-    """Return the first sidecar in `sidecar_dir` that is a code-reviewer
-    findings sidecar retaining the unfilled-scaffold sentinel AND carrying
-    real findings content anyway, covering the target file. Or None. Every
-    per-file failure degrades to "skip this candidate", never a raise."""
+    """Return the first sidecar in `sidecar_dir` that is a
+    code-reviewer-or-off-roster findings sidecar retaining the
+    unfilled-scaffold sentinel AND carrying real findings content anyway,
+    covering the target file. Or None. Every per-file failure degrades to
+    "skip this candidate", never a raise. The agent_type leg runs LAST,
+    after every cheaper filter, mirroring the sibling guard (Design
+    decision, hot-path cost)."""
     from coordinator_core.ops.append_integrator_dispositions import (
         _extract_findings_section,
         _findings_section_is_empty,
@@ -153,8 +161,6 @@ def _find_sentinel_retained_sidecar(
         except OSError:
             continue
 
-        if _extract_frontmatter_agent_type(text) != _REVIEWER_AGENT_TYPE:
-            continue
         if not _heading_present(text, _FINDINGS_HEADING):
             continue
         if _heading_present(text, _DISPOSITIONS_HEADING):
@@ -168,8 +174,12 @@ def _find_sentinel_retained_sidecar(
         if _findings_section_is_empty(findings_section):
             continue  # genuinely pristine scaffold — nothing to warn about
 
-        if _sidecar_covers_target(text, normalized_target, basename):
-            return candidate
+        if not _sidecar_covers_target(text, normalized_target, basename):
+            continue
+        if not _in_scope_agent_type(_extract_frontmatter_agent_type(text), lazy_roster):
+            continue
+
+        return candidate
 
     return None
 
@@ -217,12 +227,13 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         normalized_target = _normalize(file_path)
         basename = normalized_target.rsplit("/", 1)[-1]
 
+        lazy_roster = _LazyRoster()
         found = None
         for sidecar_dir in candidate_dirs:
             if not sidecar_dir.is_dir():
                 continue
             found = _find_sentinel_retained_sidecar(
-                sidecar_dir, normalized_target, basename
+                sidecar_dir, normalized_target, basename, lazy_roster
             )
             if found is not None:
                 break

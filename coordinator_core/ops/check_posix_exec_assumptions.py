@@ -156,24 +156,25 @@ Tier B / blocking classes (ratcheted against a frozen baseline):
                             appears in the tree — the two are never
                             conflated.
 
-    NEITHER `posix_mode_bits` NOR `path_separator` fires inside a branch (a
-    nested `if os.name != "nt":` / `if sys.platform.startswith("win"):`
-    etc., an equivalent short-circuit `and`-chain, or a bare, `else:`-less
+    `posix_mode_bits` does NOT fire inside a branch (a nested
+    `if os.name != "nt":` / `if sys.platform.startswith("win"):` etc., an
+    equivalent short-circuit `and`-chain, or a bare, `else:`-less
     early-return guard clause) that structurally never runs on Windows —
     that is correct cross-platform code, not debt, and flagging it would
     train authors to route around the guard (`_is_windows_guarded`,
     precision fix 2026-07-28 after `retire-claude-bin.py:186` false-fired on
     the nested-`If` shape, widened 2026-08-13 to also recognize the bare
     early-return shape). This fix, plus positive-control fixtures proving it
-    doesn't blanket-suppress detection, is why both classes are BLOCKING
-    here rather than demoted: they were briefly report-only the same day,
-    then promoted back once the cause was fixed (see the CLASSES
-    declaration's own comment for the full history). A windows-test the
-    detector does not recognize as one (only os.name/sys.platform/
-    platform.system() forms are) is the residual gap — see that function's
-    own docstring for exactly what it does and doesn't see; hitting it
-    surfaces as an EXEMPTIONS-resolvable failure message, not a silent
-    trap.
+    doesn't blanket-suppress detection, is why the class is BLOCKING here
+    rather than demoted (see the CLASSES declaration's own comment for the
+    full demote/promote history). `path_separator` has no bearing on this
+    guard: it carries no detector at all (dropped outright 2026-08-14, see
+    the CLASSES declaration's own entry), so it has nothing to guard and
+    nothing to fire. A windows-test the detector does not recognize as one
+    (only os.name/sys.platform/platform.system() forms are) is the residual
+    gap — see that function's own docstring for exactly what it does and
+    doesn't see; hitting it surfaces as an EXEMPTIONS-resolvable failure
+    message, not a silent trap.
 
   - `unresolved_cross_path` — BLOCKING, zero-tolerance (no baseline, ever),
                             promoted 2026-08-13 from a WIDE, report-only

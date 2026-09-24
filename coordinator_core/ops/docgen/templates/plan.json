@@ -26,7 +26,7 @@
       {"kind": "literal", "line": "    <REPLACE: one falsifiable sentence naming what is true of the TREE when this plan"},
       {"kind": "literal", "line": "    has delivered — outcome-shaped, never a paraphrase of the task list.>"},
       {"kind": "literal", "line": "  derived_from: \"<REPLACE: state/sizings/<file>.yaml | <goal_id>#kr-<kr-id> — a LINK>\""},
-      {"kind": "literal", "line": "# falsifier: {how, baseline_output, baseline_ref, expected_when_true} — REQUIRED only"},
+      {"kind": "literal", "line": "# falsifier: {{how, baseline_output, baseline_ref, expected_when_true}} — REQUIRED only"},
       {"kind": "literal", "line": "#   when this plan's sizing_object resolves to estimate.tshirt M/L/XL. The criterion"},
       {"kind": "literal", "line": "#   above is owed at EVERY size; that size rule governs the falsifier, never it."},
       {"kind": "literal", "line": "#   falsifier:"},

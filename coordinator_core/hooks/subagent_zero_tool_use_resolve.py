@@ -63,6 +63,7 @@ import json
 import os
 from pathlib import Path
 
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._payload import field
 from coordinator_core.lifecycle import git_common_dir
@@ -122,7 +123,7 @@ def _resolve_store_sync(store_path: str, agent_id: str) -> dict:
         try:
             parsed = json.loads(line)
         except (json.JSONDecodeError, ValueError):
-            continue
+            continue  # per-line record parse; one malformed JSONL line must not abort the scan
         if not isinstance(parsed, dict):
             continue
         if parsed.get("kind") != _RECORD_KIND:
@@ -191,6 +192,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     envelope) — never raises; every failure path resolves to verdict "unknown" with
     a specific, actionable `reason` naming the path checked and the cause.
     """
+    params = payload_of(params)
     import asyncio
 
     session_id = field(params, "session_id")

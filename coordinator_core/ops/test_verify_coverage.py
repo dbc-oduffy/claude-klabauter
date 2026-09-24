@@ -666,6 +666,102 @@ def test_dispatch_reference_with_distant_marker_noun_still_flagged(tmp_path):
     assert "coordinator:totally-undocumented-worker" in refs
 
 
+# ---------------------------------------------------------------------------
+# T37 false-orphan legs -- line numbers, hard-wrapped hyphen, `fork` builtin
+# (docs/plans/2026-09-22-inbox-blitz-bundled-xs-s-fixes-2026-09-11.md T37)
+# ---------------------------------------------------------------------------
+
+
+def test_orphan_line_number_matches_original_file_across_frontmatter_and_fence(tmp_path):
+    # Frontmatter (2 lines incl. delimiters) + a fenced block (3 lines) precede
+    # the orphan ref -- prior to the T37 fix, strip_code_fences deleted both
+    # regions outright, so the reported line number was computed against a
+    # shrunken body and pointed at the wrong line in the real file.
+    root = _scaffold(
+        tmp_path,
+        {"coordinator": {"skills": ["plan"]}},
+        {
+            "coordinator/skills/plan/SKILL.md": (
+                "---\nname: plan\n---\n"
+                "# plan\n\n"
+                "```\nexample code\n```\n\n"
+                "See `coordinator:ghost-thing` here.\n"
+            )
+        },
+    )
+    r = _run(root, root)
+    assert r["exit"] == 1, r["json"]
+    assert len(r["json"]["violations"]) == 1
+    v = r["json"]["violations"][0]
+    assert v["ref"] == "coordinator:ghost-thing"
+    # Line 10 in the real file (1-indexed) is where "See `coordinator:..." lives.
+    content = (root / "coordinator" / "skills" / "plan" / "SKILL.md").read_text()
+    real_line = content.splitlines()[v["line"] - 1]
+    assert "coordinator:ghost-thing" in real_line, (v["line"], real_line)
+
+
+def test_hard_wrapped_hyphen_ref_resolves_not_orphaned(tmp_path):
+    # The skill name is hyphenated and the doc hard-wraps mid-name at the
+    # hyphen -- prior to the T37 fix, the regex stopped at the newline
+    # (not in the old `[a-z0-9\-]` class), truncating the ref to
+    # "coordinator:multi-" which never resolves: a false orphan.
+    root = _scaffold(
+        tmp_path,
+        {"coordinator": {"skills": ["multi-line-skill"]}},
+    )
+    _write(
+        root / "coordinator" / "docs" / "wiki" / "some-doc.md",
+        "# doc\n\nSee `coordinator:multi-\nline-skill` for details.\n",
+    )
+    r = _run(root, root)
+    assert r["exit"] == 0, r["json"]
+    assert r["json"]["summary"]["violations"] == 0
+
+
+def test_hard_wrapped_hyphen_ref_still_flagged_when_genuinely_orphaned(tmp_path):
+    # Same hard-wrap shape, but the joined name has no backing artifact --
+    # must still be reported as an orphan (joining must not swallow real gaps).
+    root = _scaffold(tmp_path, {"coordinator": {}})
+    _write(
+        root / "coordinator" / "docs" / "wiki" / "some-doc.md",
+        "# doc\n\nSee `coordinator:multi-\nline-ghost` for details.\n",
+    )
+    r = _run(root, root)
+    assert r["exit"] == 1, r["json"]
+    refs = {v["ref"] for v in r["json"]["violations"]}
+    assert "coordinator:multi-line-ghost" in refs
+
+
+def test_trailing_hyphen_allowlist_entry_still_matches_unchanged(tmp_path):
+    # Negative-spec regression: a plain trailing hyphen with no following
+    # newline+alnum (the documented truncated-glob allowlist shape) must
+    # still resolve via REF_ALLOWLIST, unaffected by the hard-wrap change.
+    root = _scaffold(tmp_path, {"coordinator": {}})
+    _write(
+        root / "coordinator" / "docs" / "wiki" / "some-doc.md",
+        "# doc\n\nSee the `coordinator:research-*` family.\n",
+    )
+    r = _run(root, root)
+    assert r["exit"] == 0, r["json"]
+    assert r["json"]["summary"]["violations"] == 0
+
+
+def test_fork_builtin_agent_type_resolves(tmp_path):
+    # `fork` is a harness-provided subagent_type with no on-disk artifact,
+    # same class as general-purpose/Explore/Plan/statusline-setup.
+    root = _scaffold(
+        tmp_path,
+        {"coordinator": {"skills": ["plan"]}},
+        {
+            "coordinator/skills/plan/SKILL.md": (
+                "# plan\n\nDispatch with `subagent_type: fork`.\n"
+            )
+        },
+    )
+    r = _run(root, root)
+    assert r["exit"] == 0, r["json"]
+
+
 def test_genuine_dispatch_reference_still_flagged(tmp_path):
     # Same token shape, same plugin prefix, but no marker noun anywhere on the
     # line -- a genuine orphaned dispatch reference must still be caught.

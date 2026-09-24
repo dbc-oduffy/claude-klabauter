@@ -192,6 +192,98 @@ def test_declared_empty_writes_passes(tmp_path):
     assert report["verdict"] == pg.PREPPED
 
 
+def test_a_glob_shaped_write_is_refused(tmp_path):
+    """`dispatch.emit`'s mint leg (`inventory_mint._refuse_if_glob`) raises on
+    a glob pathspec after this bar would otherwise certify it — refuse here,
+    before the stamp."""
+    spine = """- id: C1
+  title: Sweep
+  body: Touch every module under the package.
+  change_kind: code-edit
+  surface: coordinator_core/roadmap/prep_gate.py
+  writes: ["coordinator_core/roadmap/*.py"]
+  queue_scope: project
+  disposition: open
+"""
+    (tmp_path / "coordinator_core").mkdir(parents=True, exist_ok=True)
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
+    assert report["verdict"] == pg.NOT_PREPPED
+    spine_class = report["classes"]["SPINE"]
+    assert spine_class["kind"] == "writes-unreadable-at-emit"
+    assert "C1" in spine_class["detail"]
+    assert "glob" in spine_class["detail"]
+
+
+def test_a_trailing_slash_write_is_refused(tmp_path):
+    """`pathspec.py`'s `DirectoryShapedWriteError` (and `inventory_mint.py`'s
+    own directory rung) both refuse a trailing-separator `writes:` entry at
+    emit time — refused here first."""
+    spine = """- id: C1
+  title: Land the outbox
+  body: Write the outbox directory.
+  change_kind: code-edit
+  surface: coordinator_core/roadmap/prep_gate.py
+  writes: ["state/memo-outbox/sent/"]
+  queue_scope: project
+  disposition: open
+"""
+    (tmp_path / "coordinator_core").mkdir(parents=True, exist_ok=True)
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
+    assert report["verdict"] == pg.NOT_PREPPED
+    spine_class = report["classes"]["SPINE"]
+    assert spine_class["kind"] == "writes-unreadable-at-emit"
+    assert "C1" in spine_class["detail"]
+    assert "directory-shaped" in spine_class["detail"]
+
+
+def test_an_existing_directory_write_is_refused(tmp_path):
+    """No trailing separator, but the path names a real directory on disk at
+    gate time — `inventory_mint._refuse_if_directory_shaped`'s smaller rung
+    (coordinator-klabauter#45 class B)."""
+    (tmp_path / "coordinator_core" / "ops" / "tests").mkdir(parents=True, exist_ok=True)
+    spine = """- id: C1
+  title: Land tests
+  body: Add coverage under the existing tests directory.
+  change_kind: code-edit
+  surface: coordinator_core/roadmap/prep_gate.py
+  writes: ["coordinator_core/ops/tests"]
+  queue_scope: project
+  disposition: open
+"""
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
+    assert report["verdict"] == pg.NOT_PREPPED
+    spine_class = report["classes"]["SPINE"]
+    assert spine_class["kind"] == "writes-unreadable-at-emit"
+    assert "C1" in spine_class["detail"]
+    assert "directory-shaped" in spine_class["detail"]
+
+
+def test_a_concrete_file_write_passes_the_shape_check(tmp_path):
+    report = _gate(tmp_path, prepped_plan(tmp_path))
+    assert report["classes"]["SPINE"]["status"] == "PASS"
+    assert report["verdict"] == pg.PREPPED
+
+
+def test_a_closed_row_with_a_glob_write_is_not_refused(tmp_path):
+    """`read_spine` already excludes a closed-disposition row from scheduling
+    — its declared writes are never resolved by a driver, so a glob there is
+    moot, not defective, matching `_row_is_unschedulable`'s own reasoning for
+    EXTERNAL_DEPS."""
+    spine = _CLEAN_SPINE + """- id: C2
+  title: Retired sweep
+  body: Already handled elsewhere.
+  change_kind: code-edit
+  surface: coordinator_core/roadmap/prep_gate.py
+  writes: ["coordinator_core/roadmap/*.py"]
+  queue_scope: project
+  disposition: coded
+"""
+    (tmp_path / "coordinator_core").mkdir(parents=True, exist_ok=True)
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
+    assert report["classes"]["SPINE"]["status"] == "PASS"
+    assert report["verdict"] == pg.PREPPED
+
+
 def test_an_unreadable_spine_reports_the_reader_s_own_error_class(tmp_path):
     spine = """- id: C1
   title: Dangling
@@ -708,7 +800,17 @@ def test_a_new_root_level_entry_is_not_read_as_a_cross_repo_write(tmp_path):
         )
         report = _gate(tmp_path, _plan_with(tmp_path, spine, "root.md"))
         assert report["classes"]["EXTERNAL_DEPS"]["status"] == "PASS", value
-        assert report["verdict"] == pg.PREPPED, value
+        if value.endswith("/"):
+            # `brand-new-dir/` clears EXTERNAL_DEPS's created-roots exemption but
+            # is trailing-slash directory-shaped — SPINE's own emit-shape check
+            # (this module's writes-unreadable-at-emit) now refuses it before the
+            # stamp, the same shape `dispatch_emit.pathspec` refuses at emit time
+            # regardless of that exemption. Not a regression in this leg: the
+            # exemption's own PASS above is unaffected.
+            assert report["verdict"] == pg.NOT_PREPPED, value
+            assert report["classes"]["SPINE"]["kind"] == "writes-unreadable-at-emit"
+        else:
+            assert report["verdict"] == pg.PREPPED, value
 
 
 def test_the_exemption_does_not_weaken_the_nameless_cross_repo_catch(tmp_path):

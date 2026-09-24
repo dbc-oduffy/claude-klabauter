@@ -782,6 +782,119 @@ def test_read_liveness_carries_next_expected_by_when_stale(tmp_path):
     assert isinstance(liveness["seconds_overdue"], (int, float))
 
 
+# --- C3(a): ALIVE must not vouch for a no-op watch off declinations alone,
+# and must name what actually looked when the tick was an `entry` stamp.
+
+
+def test_declinations_alone_do_not_vouch_for_a_watch_covering_nobody(tmp_path):
+    """An entry tick's declinations alone used to gate the reassurance line
+    even with `subscribed_peers=0` -- declinations are not coverage."""
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="group-em-1",
+        declinations=[{"session_id": "p1", "name": None, "gate": "cooldown", "reason": "r"}],
+        interval_seconds=30.0, subscribed_peers=0, tick_source="entry",
+        writer_session_id="w1",
+    )
+    text = watch_heartbeat.human_verdict(watch_heartbeat.read_liveness(str(tmp_path)))
+    assert text.startswith("ALIVE")
+    assert "Quiet is the normal state" not in text
+    assert "0 subscribed peers and 1 declinations this tick" in text
+
+
+def test_an_entry_tick_says_it_was_stamped_not_that_it_checked_the_fleet(tmp_path):
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="group-em-1", declinations=[],
+        interval_seconds=30.0, subscribed_peers=3, tick_source="entry",
+        writer_session_id="w1",
+    )
+    text = watch_heartbeat.human_verdict(watch_heartbeat.read_liveness(str(tmp_path)))
+    assert "checked the fleet" not in text
+    assert "was stamped" in text
+
+
+def test_a_monitor_tick_still_says_it_checked_the_fleet(tmp_path):
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="group-em-1", declinations=[],
+        interval_seconds=30.0, subscribed_peers=3, tick_source="monitor",
+        writer_session_id="w1",
+    )
+    text = watch_heartbeat.human_verdict(watch_heartbeat.read_liveness(str(tmp_path)))
+    assert "checked the fleet" in text
+
+
+# --- C3(b): `next_expected_by` bases the deadline on the MEASURED cadence,
+# never the caller's declared interval alone, and never widens past what the
+# declared interval would have produced.
+
+
+def test_next_expected_by_falls_back_to_declared_on_the_first_tick():
+    """No observed delta exists yet -- the declared interval is the whole
+    basis, byte-identical to the pre-C3 behaviour."""
+    assert watch_heartbeat.next_expected_by(1_000_000.0, 300.0) == (
+        watch_heartbeat.next_expected_by(1_000_000.0, 300.0, None)
+    )
+
+
+def test_next_expected_by_uses_the_observed_delta_when_it_is_tighter():
+    """A monitor DECLARING 18s but OBSERVED at ~80s must not stamp a deadline
+    3.4x further ahead than the observed cadence actually earns -- the exact
+    measured mismatch this row exists to close."""
+    deadline_declared_only = calendar.timegm(time.strptime(
+        watch_heartbeat.next_expected_by(1_000_000.0, 80.0), _READER_TIMESTAMP_FORMAT
+    ))
+    deadline_observed = calendar.timegm(time.strptime(
+        watch_heartbeat.next_expected_by(1_000_000.0, 18.0, 18.0),
+        _READER_TIMESTAMP_FORMAT,
+    ))
+    # Declared 18s alone would floor at 60s (three ticks of 18s is 54s, below
+    # the floor); the observed delta must not exceed what the DECLARED
+    # interval basis (80s here, i.e. the caller's actual claim) would have
+    # produced.
+    assert deadline_observed <= deadline_declared_only
+
+
+def test_next_expected_by_caps_a_slower_observed_delta_at_the_declared_interval():
+    """The dangerous direction: an observed cadence SLOWER than declared must
+    never widen the deadline past what the declared interval alone would
+    have produced (the cap), or a monitor under-reporting its own slowness
+    lengthens every peer's lockout window by the mismatch factor."""
+    capped = watch_heartbeat.next_expected_by(1_000_000.0, 18.0, 80.0)
+    uncapped_declared_only = watch_heartbeat.next_expected_by(1_000_000.0, 18.0)
+    assert capped == uncapped_declared_only
+
+
+def test_stamp_derives_next_expected_by_from_the_measured_inter_tick_delta(tmp_path):
+    """`stamp` itself measures the gap off the record it is about to
+    replace and feeds it to `next_expected_by`, capped at the declared
+    interval -- not just `next_expected_by` in isolation."""
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="group-em-1", declinations=[],
+        interval_seconds=80.0, now_epoch=1_000_000.0, writer_session_id="w1",
+        tick_source="monitor",
+    )
+    # Observed delta is 18s here, tighter than the 80s declared.
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="group-em-1", declinations=[],
+        interval_seconds=80.0, now_epoch=1_000_018.0, writer_session_id="w1",
+        tick_source="monitor",
+    )
+    deadline = calendar.timegm(time.strptime(
+        _record(tmp_path)["next_expected_by"], _READER_TIMESTAMP_FORMAT
+    ))
+    expected = calendar.timegm(time.strptime(
+        watch_heartbeat.next_expected_by(1_000_018.0, 80.0, 18.0),
+        _READER_TIMESTAMP_FORMAT,
+    ))
+    assert deadline == expected
+    # And it must be strictly tighter than the declared-only basis would have
+    # produced (80.0 * 3 = 240s), which is the whole point of the measured
+    # basis.
+    declared_only = calendar.timegm(time.strptime(
+        watch_heartbeat.next_expected_by(1_000_018.0, 80.0), _READER_TIMESTAMP_FORMAT
+    ))
+    assert deadline < declared_only
+
+
 def test_read_liveness_carries_pid_fields_forward(tmp_path):
     watch_heartbeat.stamp(
         str(tmp_path), holder_session_id="group-em-1", declinations=[],
@@ -790,3 +903,109 @@ def test_read_liveness_carries_pid_fields_forward(tmp_path):
     liveness = watch_heartbeat.read_liveness(str(tmp_path))
     assert liveness["pid"] == os.getpid()
     assert liveness["pid_start_epoch"] is not None
+
+
+# P103-C2 -- the read-decide-write guard. `stamp` never gates (module
+# docstring): the loser of the guard NEVER blocks or retries, it declines the
+# tick and reports the contention, so these tests assert a False return plus
+# a POLL-ERROR line, never a hang.
+
+
+def _guard_lock_path(tmp_path):
+    path = watch_heartbeat._guard_lock_path(watch_heartbeat.watch_path(str(tmp_path)))
+    os.makedirs(os.path.dirname(str(path)), exist_ok=True)
+    return path
+
+
+def test_a_contended_guard_declines_and_reports_poll_error(tmp_path, capsys):
+    lock_path = _guard_lock_path(tmp_path)
+    # A LIVE holder (this very process) with a hold window far in the
+    # future -- a genuine peer mid-tick, not a crashed one.
+    lock_path.write_text(
+        json.dumps({"holder_pid": os.getpid(), "hold_until": time.time() + 60.0}),
+        encoding="utf-8",
+    )
+    wrote = watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="group-em-1", declinations=[],
+        interval_seconds=18.0, writer_session_id="w1",
+    )
+    assert wrote is False
+    err = capsys.readouterr().err
+    assert "POLL-ERROR" in err
+    # The contended tick never even reached the record -- no file written.
+    assert not os.path.exists(watch_heartbeat.watch_path(str(tmp_path)))
+    # The peer's own lock survives -- a decliner must never touch a lock it
+    # does not hold.
+    assert lock_path.exists()
+
+
+def test_a_stale_guard_is_taken_over_and_the_tick_still_writes(tmp_path):
+    lock_path = _guard_lock_path(tmp_path)
+    # A confirmed-dead holder (999_999_999, the fleet's own dead-pid
+    # convention -- coordinator_core/session/tests/test_day_branch_cut_lock.py)
+    # is taken over immediately, never made to wait out the grace window.
+    lock_path.write_text(
+        json.dumps({"holder_pid": 999_999_999, "hold_until": time.time() + 60.0}),
+        encoding="utf-8",
+    )
+    wrote = watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="group-em-1", declinations=[],
+        interval_seconds=18.0, writer_session_id="w1",
+    )
+    assert wrote is True
+    assert isinstance(_record(tmp_path), dict)
+
+
+def test_a_successful_stamp_releases_its_own_guard(tmp_path):
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="group-em-1", declinations=[],
+        interval_seconds=18.0, writer_session_id="w1",
+    )
+    assert not _guard_lock_path(tmp_path).exists()
+
+
+def test_a_declined_stamp_still_releases_its_own_guard(tmp_path):
+    # A fresh-and-foreign record declines before any write -- the guard it
+    # acquired to check that must still be released, or the NEXT tick (this
+    # same holder, ~18s later) would find a lock nobody is coming back for.
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="peer", declinations=[],
+        interval_seconds=18.0, writer_session_id="peer-w1",
+    )
+    wrote = watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="group-em-1", declinations=[],
+        interval_seconds=18.0, writer_session_id="w1",
+    )
+    assert wrote is False
+    assert not _guard_lock_path(tmp_path).exists()
+
+
+def test_guard_never_raises_on_a_fresh_unreadable_lock_file_and_declines(tmp_path):
+    # A FRESH unreadable lock (mtime just now) is NOT proof of absence -- it
+    # is indistinguishable from a legitimate holder caught mid-write
+    # (`_acquire_guard`'s own docstring note on the TOCTOU this guards
+    # against). Never raises; declines this tick rather than taking over.
+    lock_path = _guard_lock_path(tmp_path)
+    lock_path.write_text("not json", encoding="utf-8")
+    wrote = watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="group-em-1", declinations=[],
+        interval_seconds=18.0, writer_session_id="w1",
+    )
+    assert wrote is False
+    assert lock_path.exists()
+
+
+def test_guard_never_raises_on_a_stale_unreadable_lock_file_and_takes_over(tmp_path):
+    # An unreadable lock file whose mtime is long past the hold-plus-grace
+    # window (a genuinely corrupt leftover, e.g. a crash mid-write) is taken
+    # over -- otherwise a corrupt artifact would wedge every future tick
+    # forever, worse than the clobber the guard exists to prevent.
+    lock_path = _guard_lock_path(tmp_path)
+    lock_path.write_text("not json", encoding="utf-8")
+    old = time.time() - 3600.0
+    os.utime(lock_path, (old, old))
+    wrote = watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="group-em-1", declinations=[],
+        interval_seconds=18.0, writer_session_id="w1",
+    )
+    assert wrote is True

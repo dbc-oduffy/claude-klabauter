@@ -106,7 +106,7 @@ def _resolve_doe_root() -> "tuple[Optional[str], int]":
                 if proc.returncode == 0:
                     value = proc.stdout.strip()
             except (OSError, subprocess.TimeoutExpired):
-                pass
+                pass  # registry lookup failed; value stays unset and the "could not resolve" diagnostic below fires
     if not value:
         print(
             f"{_PROG}: could not resolve repos.doe_claude via the registry",

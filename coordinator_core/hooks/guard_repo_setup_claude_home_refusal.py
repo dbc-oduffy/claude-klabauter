@@ -109,7 +109,7 @@ def _resolve_claude_home(env: "dict[str, str]") -> "str | None":
         try:
             return _canonical(config_dir)
         except OSError:
-            pass
+            pass  # unresolvable CLAUDE_CONFIG_DIR; fall back to HOME/USERPROFILE below
     for key in ("HOME", "USERPROFILE"):
         val = env.get(key)
         if not val:
@@ -117,7 +117,7 @@ def _resolve_claude_home(env: "dict[str, str]") -> "str | None":
         try:
             return _canonical(_join_onto_cwd(".claude", val))
         except OSError:
-            continue
+            continue  # unresolvable candidate; try the next env var
     return None
 
 

@@ -130,15 +130,18 @@ emit = _emit
 # checks, because a producer bug there should raise. This one takes an object
 # re-read from `.git/coordinator-sessions/decisions/*.json`, where a malformed
 # entry is a data state rather than a producer bug, and it lives beside the
-# writer so a rename of `judgment_points` or a point's `id` moves one site
-# instead of silently starving one of its two readers (`resume` +
-# `pickup_assemble.apply`).
+# writer so a rename of `judgment_points` or a point's `id` moves the site
+# `pickup_assemble.apply` depends on rather than silently starving it.
 #
-# `legal_disposition_values` used to live
-# here too on the same two-readers argument, but it has exactly one
-# production caller (`resume.resume_decisions`, the file it was extracted
-# from); moved back to `resume.py` as `_legal_disposition_values`, private to
-# its sole reader.
+# GRAVESTONE (`decision_object/resume.py`, `resume_decisions`/`ResumeRefused`/
+# `_legal_disposition_values`): the resume-from-persisted-decision-object read
+# path for `--decisions` payloads (docs/plans/2026-09-02-the-loader-fires-the-
+# assembly-not-the-em.md, chunk C3). The free-prose judgment-point leg it
+# depended on never shipped, so it had zero non-test production callers at
+# removal (Item 67, docs/plans/2026-09-22-inbox-blitz-bundled-xs-s-fixes-
+# 2026-09-11.md); deleted whole rather than DR'd, matching Item 34's
+# precedent -- a DR for removing zero-caller dead code is ceremony out of
+# proportion to the cut.
 # ---------------------------------------------------------------------------
 
 def judgment_points_by_id(
@@ -148,10 +151,10 @@ def judgment_points_by_id(
 
     Pure extraction, no policy: a non-list `judgment_points`, a non-mapping
     entry, or an entry with a falsy `id` is skipped, and the caller keeps its
-    own register on top -- `resume.resume_decisions` refuses loudly on an
-    answer naming an id absent from the returned map, while
-    `pickup_assemble.apply._read_session_dispositions` reads an empty map as
-    "nothing to add". Neither register belongs here.
+    own register on top -- `pickup_assemble.apply._read_session_dispositions`
+    reads an empty map as "nothing to add". That register does not belong
+    here. (The `resume.resume_decisions` reader named here previously is
+    GRAVESTONED -- see the module-level notice above this function.)
 
     NOT `apply_base.judgment_points_by_id` -- that in-process sibling takes
     the `list` this process just built (not a persisted `Mapping`) and raises

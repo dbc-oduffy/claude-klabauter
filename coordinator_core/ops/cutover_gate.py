@@ -1107,6 +1107,7 @@ def _dedup_roots(repo_roots: Mapping[str, Path]) -> list[Path]:
         try:
             resolved = root.resolve()
         except OSError:
+            # root unreadable/gone; skip it
             continue
         if resolved not in seen:
             seen.add(resolved)

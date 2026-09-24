@@ -208,6 +208,93 @@ def test_repo_root_may_be_a_str(dest_repo):
     assert _mode(dest_repo, "hook.py") == "100755"
 
 
+def test_a_reconciled_path_joins_the_sink_and_reaches_head(dest_repo):
+    """AC3: a mirror stuck at 100644 (already committed, outside this
+    round's pathspec) must have its reconciled path added to a caller-
+    supplied sink, and a `commit_paths` commit over that sink must carry
+    the 100755 into HEAD's tree, not only the index."""
+    from coordinator_core.git.commit import commit_paths
+
+    (dest_repo / "bin/tool").parent.mkdir(parents=True, exist_ok=True)
+    (dest_repo / "bin/tool").write_text(_SHEBANG, encoding="utf-8")
+    _git(dest_repo, "add", "--", "bin/tool")
+    _git(dest_repo, "commit", "-q", "-m", "landed non-executable")
+    assert _mode(dest_repo, "bin/tool") == "100644"
+
+    (dest_repo / "unrelated.md").write_text("# doc", encoding="utf-8")
+    sink: "list[str]" = ["unrelated.md"]
+    count = _mod._stage_shebang_exec_bits(
+        dest_repo, ["unrelated.md"], reconciled_sink=sink
+    )
+    assert count == 1
+    assert sink == ["unrelated.md", "bin/tool"]
+
+    commit_paths(dest_repo, sink, "reconcile publish")
+    tree_mode = _git(dest_repo, "ls-tree", "HEAD", "bin/tool").stdout.split(" ", 1)[0]
+    assert tree_mode == "100755"
+
+
+def test_a_reconciled_path_already_in_the_sink_is_not_duplicated(dest_repo):
+    """AC3: no duplicate append if the reconciled path is already in the sink."""
+    (dest_repo / "stuck.py").write_text(_SHEBANG, encoding="utf-8")
+    _git(dest_repo, "add", "--", "stuck.py")
+    _git(dest_repo, "commit", "-q", "-m", "landed non-executable")
+
+    sink = ["stuck.py"]
+    _mod._stage_shebang_exec_bits(dest_repo, [], reconciled_sink=sink)
+    assert sink == ["stuck.py"]
+
+
+def test_the_sink_is_untouched_on_the_declined_path(dest_repo, capsys):
+    """AC4: `git add` declining leaves a passed sink exactly as given."""
+    (dest_repo / ".gitignore").write_text("ignored.py\n", encoding="utf-8")
+    (dest_repo / "ignored.py").write_text(_SHEBANG, encoding="utf-8")
+    sink: "list[str]" = []
+    assert _mod._stage_shebang_exec_bits(
+        dest_repo, ["ignored.py"], reconciled_sink=sink
+    ) == 0
+    assert sink == []
+    assert "executable bit" in capsys.readouterr().err
+
+
+def test_the_sink_is_untouched_on_the_raising_path(dest_repo, monkeypatch, capsys):
+    """AC4: an exception mid-step leaves a passed sink exactly as given."""
+    (dest_repo / "hook.py").write_text(_SHEBANG, encoding="utf-8")
+
+    def _explode(*_args, **_kwargs):
+        raise RuntimeError("git went missing")
+
+    monkeypatch.setattr(_mod.subprocess, "run", _explode)
+    sink: "list[str]" = []
+    assert _mod._stage_shebang_exec_bits(
+        dest_repo, ["hook.py"], reconciled_sink=sink
+    ) == 0
+    assert sink == []
+    assert "executable-bit step failed" in capsys.readouterr().err
+
+
+def test_omitting_the_sink_is_byte_identical_to_head(dest_repo):
+    """AC4: with `reconciled_sink` omitted, behaviour is unchanged -- the
+    contract every one of the 10 pre-existing tests above already pins by
+    calling the function with two positional arguments only."""
+    (dest_repo / "hook.py").write_text(_SHEBANG, encoding="utf-8")
+    assert _mod._stage_shebang_exec_bits(dest_repo, ["hook.py"]) == 1
+    assert _mode(dest_repo, "hook.py") == "100755"
+
+
+def test_an_in_pathspec_shebang_is_not_appended_to_the_sink(dest_repo):
+    """Only the reconcile set joins the sink -- an in-pathspec shebang is
+    already inside `present_paths` by construction, so appending it again
+    would be a duplicate the caller never asked for."""
+    (dest_repo / "hook.py").write_text(_SHEBANG, encoding="utf-8")
+    sink: "list[str]" = ["hook.py"]
+    count = _mod._stage_shebang_exec_bits(
+        dest_repo, ["hook.py"], reconciled_sink=sink
+    )
+    assert count == 1
+    assert sink == ["hook.py"]
+
+
 def test_an_unexpected_error_never_reaches_the_round(dest_repo, monkeypatch, capsys):
     """This step sits BETWEEN the pathspec derivation and the commit, so an
     exception escaping it leaves the dest synced with paths staged but

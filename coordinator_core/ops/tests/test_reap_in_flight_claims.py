@@ -199,8 +199,9 @@ def test_survey_over_whole_call_opens_at_most_once_per_corpus_file(tmp_path, mon
     result = mod.survey(tmp_path)
 
     assert len(opens) == 4  # one per corpus file, never re-opened
-    assert result.would_release == 1
+    assert result.would_release == 0
     assert result.would_reclaim == 0
+    assert result.would_undetermined == 1
 
 
 def _async_return(mapping):
@@ -341,8 +342,11 @@ def test_survey_spinoff_kind_is_exempt_from_governed_plan_precheck(tmp_path, mon
     monkeypatch.setattr(mod, "_build_completion_index", lambda repo_root: {})
 
     result = mod.survey(tmp_path)
-    assert result.would_release == 1
-    assert result.dispositions[-1].verdict == mod._VERDICT_RELEASE
+    # No completion entry for dead1 -- no candidate sha, no evidence either
+    # way, so the reap is undetermined rather than releasing on a guess.
+    assert result.would_release == 0
+    assert result.would_undetermined == 1
+    assert result.dispositions[-1].verdict == mod._VERDICT_UNDETERMINED
 
 
 def test_survey_spinoff_with_parents_shared_deliverable_id_ships_not_holds(tmp_path, monkeypatch):
@@ -424,7 +428,7 @@ def test_survey_ships_when_completion_commits_resolve_in_git_log(tmp_path, monke
     assert reclaim.sha == "sha-a1"
 
 
-def test_survey_dropped_candidate_sha_falls_through_to_release(tmp_path, monkeypatch):
+def test_survey_dropped_candidate_sha_falls_through_to_undetermined(tmp_path, monkeypatch):
     handoffs_dir = tmp_path / "state" / "handoffs"
     handoffs_dir.mkdir(parents=True)
     h1 = _write_handoff(handoffs_dir, "a.md", status="consumed", deployment_state="in_flight", consumed_by="dead1")
@@ -445,17 +449,26 @@ def test_survey_dropped_candidate_sha_falls_through_to_release(tmp_path, monkeyp
     monkeypatch.setattr(mod.subprocess, "run", lambda cmd, **kwargs: FakeResult())
 
     result = mod.survey(tmp_path)
-    assert result.would_release == 1
+    # A candidate sha existed but git could not resolve it -- still no
+    # confirmed evidence either way, so this is undetermined, not release.
+    assert result.would_release == 0
     assert result.would_reclaim == 0
+    assert result.would_undetermined == 1
+    assert result.dispositions[-1].verdict == mod._VERDICT_UNDETERMINED
 
 
-def test_survey_release_disposition_records_deciding_liveness_arm(tmp_path, monkeypatch):
+def test_survey_undetermined_disposition_names_deciding_liveness_arm_but_not_release(tmp_path, monkeypatch):
     """2026-08-22 backlog: a release carried only a bare park_note naming the
     (wrongly) dead holder, with no record of WHICH liveness arm decided dead
     -- so the false-dead diagnosis had to be reconstructed after the fact
-    from a reaping process that was already gone. The release `Disposition`
-    must name the deciding arm (`session_verdict`'s basis string), not just
-    that a dead-holder verdict was reached."""
+    from a reaping process that was already gone. That fix named the deciding
+    arm in `.detail`/`.liveness_basis`. This case -- zero completion entries,
+    no candidate sha -- no longer resolves to `_VERDICT_RELEASE` at all
+    (P143-T15): absence of shipped-commit evidence is not evidence of
+    absence, so it is `_VERDICT_UNDETERMINED` and the claim stays in place.
+    The deciding liveness arm is still named in `.detail` for a human reading
+    the report, but `.liveness_basis` stays unset -- that field is
+    `_VERDICT_RELEASE`-only, and this is not a release."""
     handoffs_dir = tmp_path / "state" / "handoffs"
     handoffs_dir.mkdir(parents=True)
     _write_handoff(handoffs_dir, "a.md", status="consumed", deployment_state="in_flight", consumed_by="dead1")
@@ -468,14 +481,12 @@ def test_survey_release_disposition_records_deciding_liveness_arm(tmp_path, monk
     monkeypatch.setattr(mod, "_build_completion_index", lambda repo_root: {})
 
     result = mod.survey(tmp_path)
-    assert result.would_release == 1
-    release = [d for d in result.dispositions if d.verdict == mod._VERDICT_RELEASE]
-    assert len(release) == 1
-    assert "recency-window" in release[0].detail
-    # Disk-persisted half of the fix: liveness_basis is what apply_dispositions
-    # threads into cs_unclaim_handoff's note= (-> park_note frontmatter) --
-    # .detail alone never survives the reaping process exiting.
-    assert release[0].liveness_basis == "recency-window"
+    assert result.would_release == 0
+    assert result.would_undetermined == 1
+    undetermined = [d for d in result.dispositions if d.verdict == mod._VERDICT_UNDETERMINED]
+    assert len(undetermined) == 1
+    assert "recency-window" in undetermined[0].detail
+    assert undetermined[0].liveness_basis is None
 
 
 def test_survey_batches_across_multiple_orphans_in_one_git_log_call(tmp_path, monkeypatch):
@@ -522,9 +533,11 @@ def test_survey_batches_across_multiple_orphans_in_one_git_log_call(tmp_path, mo
     assert b_reclaim.sha == "sha-b1"  # MAX committer timestamp, not positional-first
 
 
-def test_survey_ambiguous_holder_falls_through_to_release(tmp_path, monkeypatch):
+def test_survey_ambiguous_holder_falls_through_to_undetermined(tmp_path, monkeypatch):
     """P2: a holder claiming two in-flight handoffs at once cannot be
-    disambiguated by a completion entry -- both fall through to release."""
+    disambiguated by a completion entry -- both fall through to undetermined
+    (P143-T15), not release: the ambiguity is exactly "no resolvable
+    evidence", not "confirmed unshipped"."""
     handoffs_dir = tmp_path / "state" / "handoffs"
     handoffs_dir.mkdir(parents=True)
     h1 = _write_handoff(handoffs_dir, "a.md", status="consumed", deployment_state="in_flight", consumed_by="dead1")
@@ -545,8 +558,9 @@ def test_survey_ambiguous_holder_falls_through_to_release(tmp_path, monkeypatch)
         AssertionError("ambiguous holders must never reach git-log")))
 
     result = mod.survey(tmp_path)
-    assert result.would_release == 2
+    assert result.would_release == 0
     assert result.would_reclaim == 0
+    assert result.would_undetermined == 2
 
 
 # ===========================================================================

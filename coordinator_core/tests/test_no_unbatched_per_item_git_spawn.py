@@ -765,6 +765,23 @@ _EXEMPT_SITES: frozenset[tuple[str, str, str, int]] = frozenset(
         # different plan author, run through a named POSIX shell -- never shell=True/cmd.exe).
         # Relocating the call only moves the flag.
         ("coordinator/bin/mise-census-revalidate.py", "revalidate", "run_entry", 0),
+        # 2026-09-24 -- # class: retained-fallback. C1's B-git classification
+        # (`state/tasks/2026-09-11-b-git-site-classification.json`) dispositions this site
+        # `justified-single-use`; it is the one B-git survivor the collector still flags after
+        # C2/C3 (docs/plans/2026-09-11-the-88-git-spawns-across-37-clis-held-to.md, P095-C4).
+        # `coordinator-safe-commit.py::_first_invalid_pathspec` runs ONE batched
+        # `git ls-files -- <all pathspecs>` first (N -> 1 on the common all-valid path); the
+        # per-item `_validate_pathspec` loop this key names fires only when that batch call
+        # returns non-zero, to identify WHICH pathspec is malformed for the existing
+        # fail-on-first-bad-entry error message. The batch cannot itself report which entry is
+        # invalid, so the fallback is structural, not a missed batching opportunity. Same shape
+        # as the register's other retained-fallback entries above.
+        (
+            "coordinator/bin/coordinator-safe-commit.py",
+            "_first_invalid_pathspec",
+            "_validate_pathspec",
+            0,
+        ),
     }
 )
 

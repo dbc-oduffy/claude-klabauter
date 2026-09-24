@@ -186,6 +186,7 @@ import time
 import uuid
 from typing import Any, Mapping, Optional
 
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.git.git_dir import resolve_git_dir
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.hooks._envelope import allow_advisory, deny, no_advisory
@@ -301,7 +302,7 @@ def _read_records(repo_root: str, session_id: str) -> list:
                 try:
                     record = json.loads(line)
                 except Exception:
-                    continue
+                    continue  # per-line ledger parse; one malformed JSONL line must not abort the read
                 if isinstance(record, dict):
                     records.append(record)
     except OSError:
@@ -328,7 +329,7 @@ def _write_records(repo_root: str, session_id: str, records: list) -> bool:
                 try:
                     os.close(tmp_fd)
                 except OSError:
-                    pass
+                    pass  # best-effort fd cleanup on the already-failing open path
                 raise
             with handle:
                 for record in records:
@@ -341,7 +342,7 @@ def _write_records(repo_root: str, session_id: str, records: list) -> bool:
                 try:
                     os.remove(tmp_path)
                 except OSError:
-                    pass
+                    pass  # best-effort tmp-file cleanup; a leftover tmp file does not affect correctness
     except (OSError, TypeError, ValueError):
         return False
     return True
@@ -509,7 +510,7 @@ def _drain_intake(repo_root: str, session_id: str) -> None:
             try:
                 row = json.loads(line)
             except Exception:
-                continue
+                continue  # per-line intake-row parse; one malformed JSONL line must not abort the drain
             if _validate_intake_row(row, session_id) is not None:
                 continue
             outcome = _apply_intake_row(repo_root, session_id, row)
@@ -529,7 +530,7 @@ def _drain_intake(repo_root: str, session_id: str) -> None:
     try:
         os.remove(path)
     except OSError:
-        pass
+        pass  # all rows already committed; a leftover intake file just gets re-drained next Stop
 
 
 # ---------------------------------------------------------------------------
@@ -556,35 +557,25 @@ def _touch_record_jsonl_paths(session_dir: str) -> list:
                 try:
                     row = json.loads(line)
                 except Exception:
-                    continue
+                    continue  # per-line touch-record parse; one malformed JSONL line must not abort the scan
                 if not isinstance(row, dict):
                     continue
                 rel = row.get("path")
                 if isinstance(rel, str) and rel:
                     paths.append(rel)
     except OSError:
-        pass
+        pass  # touch-record.jsonl is optional; absence just yields no paths from this leg
     return paths
 
 
 def _touched_txt_paths(session_dir: str) -> list:
-    paths = []
-    try:
-        with open(
-            os.path.join(session_dir, "touched.txt"), "r", encoding="utf-8", errors="replace"
-        ) as fh:
-            for raw_line in fh:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                parts = line.split()
-                if len(parts) >= 3 and parts[0] in ("T", "R"):
-                    paths.append(parts[-1])
-                else:
-                    paths.append(line)
-    except OSError:
-        pass
-    return paths
+    """Sibling leg to `_touch_record_jsonl_paths`, kept as a separate call site
+    for `_newest_touched_sizing_path`'s source-then-recency fallback shape but
+    no longer reading the retired `touched.txt` — no non-test writer of that
+    file exists, so a raw open here always found nothing and every session's
+    own edits fell through to this leg reading as foreign. Reads the same
+    `touch-record.jsonl` this session actually writes."""
+    return _touch_record_jsonl_paths(session_dir)
 
 
 def _newest_touched_sizing_path(git_dir: str, session_id: str) -> Optional[str]:
@@ -820,7 +811,7 @@ def _handle_stop(payload: Mapping) -> dict:
     try:
         _drain_intake(repo_root, session_id)
     except Exception:
-        pass
+        pass  # drain is best-effort; an undrained intake file is retried on the next Stop call
 
     record = _find_undischarged_unfired(repo_root, session_id)
     if record is None:
@@ -841,8 +832,11 @@ def _handle_stop(payload: Mapping) -> dict:
     if not _mark_fired(repo_root, session_id, obligation_id):
         return no_advisory()
 
+    env = payload.get("env")
+    if not isinstance(env, Mapping):
+        env = {}
     try:
-        posture = _resolve_posture_for_cwd(payload.get("cwd") or "")
+        posture = _resolve_posture_for_cwd(payload.get("cwd") or "", env)
     except Exception:
         posture = "precision"
 
@@ -872,11 +866,8 @@ def _handler(params: dict, repo_root=None) -> dict:
     hooks.* op in this family (`nudge_autonomous_askuserquestion`,
     `sessionend_archive_session`).
     """
+    payload = payload_of(params)
     try:
-        payload = params.get("payload")
-        if not isinstance(payload, Mapping):
-            payload = {}
-
         tool_name = payload.get("tool_name")
         if isinstance(tool_name, str):
             _handle_post_tool_use(payload)

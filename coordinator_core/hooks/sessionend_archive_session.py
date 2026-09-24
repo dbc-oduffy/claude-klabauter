@@ -46,8 +46,7 @@ SessionEnd row).
 
 from __future__ import annotations
 
-from typing import Mapping
-
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.session.scope import archive
@@ -65,9 +64,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     advisory text and never blocks, matching the source script's own always-
     exit-0 contract.
     """
-    payload = params.get("payload")
-    if not isinstance(payload, Mapping):
-        payload = {}
+    payload = payload_of(params)
 
     session_id = payload.get("session_id") or ""
     if not isinstance(session_id, str) or not session_id:

@@ -621,9 +621,11 @@ def test_stamp_implemented_warns_on_open_ac_rows(tmp_path, capsys):
     rc = main(["stamp-implemented", "--plan", str(p)])
     assert rc == 0
     err = capsys.readouterr().err
-    assert "WARNING" in err
+    assert "advisory AC cell(s) unticked" in err
+    assert "not a gate" in err
+    assert "WARNING" not in err
     assert "AC-2" in err
-    assert "AC-1" not in err.split("WARNING")[1].split("\n")[0].replace("AC-2", "")
+    assert "AC-1" not in err.split("unticked")[1].split("\n")[0].replace("AC-2", "")
 
 
 def test_stamp_implemented_silent_when_ac_table_resolved(tmp_path, capsys):
@@ -633,6 +635,7 @@ def test_stamp_implemented_silent_when_ac_table_resolved(tmp_path, capsys):
     assert rc == 0
     err = capsys.readouterr().err
     assert "WARNING" not in err
+    assert "unticked" not in err
 
 
 def test_stamp_implemented_silent_when_no_ac_heading(tmp_path, capsys):
@@ -641,6 +644,7 @@ def test_stamp_implemented_silent_when_no_ac_heading(tmp_path, capsys):
     assert rc == 0
     err = capsys.readouterr().err
     assert "WARNING" not in err
+    assert "unticked" not in err
 
 
 def test_stamp_implemented_silent_on_malformed_ac_table(tmp_path, capsys):
@@ -650,6 +654,7 @@ def test_stamp_implemented_silent_on_malformed_ac_table(tmp_path, capsys):
     assert rc == 0
     err = capsys.readouterr().err
     assert "WARNING" not in err
+    assert "unticked" not in err
 
 
 def test_stamp_implemented_ac_warning_never_changes_exit_code_or_write(tmp_path, capsys):
@@ -671,6 +676,7 @@ def test_stamp_implemented_no_ac_warning_on_terminal_no_op(tmp_path, capsys):
     assert rc == 0
     err = capsys.readouterr().err
     assert "WARNING" not in err
+    assert "unticked" not in err
 
 
 # ---------------------------------------------------------------------------
@@ -793,7 +799,9 @@ def test_override_reason_ac_warning_still_fires(tmp_path, capsys):
     )
     assert rc == 0
     err = capsys.readouterr().err
-    assert "WARNING" in err
+    assert "advisory AC cell(s) unticked" in err
+    assert "not a gate" in err
+    assert "WARNING" not in err
     assert "AC-2" in err
 
 

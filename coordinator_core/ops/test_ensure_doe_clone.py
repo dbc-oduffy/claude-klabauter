@@ -88,6 +88,7 @@ def _isolated_env(monkeypatch, tmp_path):
 def test_env_override_ready_when_git_dir_present(tmp_path, monkeypatch, capsys):
     clone = tmp_path / "doe-clone"
     (clone / ".git").mkdir(parents=True)
+    (clone / "coordinator").mkdir(parents=True)
     monkeypatch.setenv("REPO_DOE_CLAUDE", str(clone))
 
     rc = main([])
@@ -163,6 +164,7 @@ def test_live_clone_succeeds_with_resolved_url(tmp_path, monkeypatch, capsys, _f
 def test_registry_tier_resolves_clone_path(tmp_path, monkeypatch, capsys):
     clone = tmp_path / "doe-clone"
     (clone / ".git").mkdir(parents=True)
+    (clone / "coordinator").mkdir(parents=True)
     _seed_registry(tmp_path, **{"repos.doe_claude": str(clone)})
 
     rc = main([])
@@ -174,9 +176,29 @@ def test_registry_tier_resolves_clone_path(tmp_path, monkeypatch, capsys):
 def test_trailing_slash_stripped(tmp_path, monkeypatch, capsys):
     clone = tmp_path / "doe-clone"
     (clone / ".git").mkdir(parents=True)
+    (clone / "coordinator").mkdir(parents=True)
     monkeypatch.setenv("REPO_DOE_CLAUDE", str(clone) + "/")
 
     rc = main([])
 
     assert rc == 0
     assert f"doe_clone: ready ({clone})" in capsys.readouterr().out
+
+
+def test_git_dir_without_coordinator_reports_distinct_failure(tmp_path, monkeypatch, capsys):
+    """A `.git` clone of something that is NOT coordinator-claude (no
+    `coordinator/` subdir) must not be reported ready, and must not fall
+    through to `git clone` over the existing non-empty directory."""
+    clone = tmp_path / "doe-clone"
+    (clone / ".git").mkdir(parents=True)
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(clone))
+
+    rc = main([])
+
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "doe_clone: failed" in out
+    assert "coordinator/" in out
+    assert "not coordinator-claude" in out
+    # Must not have attempted a clone over the existing directory.
+    assert list(clone.iterdir()) == [clone / ".git"]

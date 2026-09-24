@@ -87,7 +87,7 @@ import re
 from pathlib import Path
 from typing import Mapping, Optional
 
-from coordinator_core._hook_envelope import context_only, deny, no_advisory
+from coordinator_core._hook_envelope import context_only, deny, no_advisory, payload_of
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.ipc import register_op
@@ -602,6 +602,7 @@ def _compose_partial_modeled_context(
 def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Workflow) op: gate an Opus-session Workflow launch whose
     `agent()` calls carry no `model:`/rostered `agentType:` cost signal."""
+    params = payload_of(params)
     env = params.get("env")
     if _env_value(env, "COORDINATOR_OVERRIDE_WORKFLOW_MODEL_GUARD") == "1":
         return no_advisory()

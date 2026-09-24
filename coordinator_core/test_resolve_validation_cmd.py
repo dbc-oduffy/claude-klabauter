@@ -18,8 +18,10 @@ from coordinator_core.resolve_validation_cmd import (
     FAST_TEST_CMD_ENV,
     FULL_TEST_CMD_ENV,
     SUPPRESS_METACHAR_WARN_ENV,
+    InterpreterMissing,
     NoPythonInterpreterError,
     ResolvedCommand,
+    _normalize_python_token,
     cs_read_local_md_key,
     cs_resolve_fast_test_cmd,
     cs_resolve_full_test_cmd,
@@ -192,6 +194,60 @@ def test_normalize_python_token_raises_when_no_interpreter(monkeypatch, capsys):
     )
     with pytest.raises(NoPythonInterpreterError):
         normalize_python_token("python foo.py")
+    assert "no python3/python on PATH" in capsys.readouterr().err
+
+
+def test_underscore_normalize_python_token_bare_python_no_args(monkeypatch):
+    monkeypatch.setattr(
+        "coordinator_core.resolve_validation_cmd._resolve_python_interp",
+        lambda repo_root=None: "python3",
+    )
+    assert _normalize_python_token("python") == "python3"
+
+
+def test_underscore_normalize_python_token_bare_python3_no_args(monkeypatch):
+    """Item 17b: the bin-shape sibling ALSO normalizes bare `python3` (venv-
+    first resolution can differ from a bare `python3` on PATH), unlike the
+    module-level `normalize_python_token` which passes `python3` through by
+    design."""
+    monkeypatch.setattr(
+        "coordinator_core.resolve_validation_cmd._resolve_python_interp",
+        lambda repo_root=None: "/repo/.venv/bin/python3",
+    )
+    assert _normalize_python_token("python3") == "/repo/.venv/bin/python3"
+
+
+def test_underscore_normalize_python_token_bare_python3_with_args(monkeypatch):
+    monkeypatch.setattr(
+        "coordinator_core.resolve_validation_cmd._resolve_python_interp",
+        lambda repo_root=None: "/repo/.venv/bin/python3",
+    )
+    assert (
+        _normalize_python_token("python3 -m pytest")
+        == "/repo/.venv/bin/python3 -m pytest"
+    )
+
+
+def test_underscore_normalize_python_token_does_not_match_python2():
+    assert _normalize_python_token("python2 foo.py") == "python2 foo.py"
+
+
+def test_underscore_normalize_python_token_does_not_match_explicit_path():
+    assert (
+        _normalize_python_token("/usr/bin/python3 foo.py")
+        == "/usr/bin/python3 foo.py"
+    )
+
+
+def test_underscore_normalize_python_token_raises_when_no_interpreter_for_python3(
+    monkeypatch, capsys
+):
+    monkeypatch.setattr(
+        "coordinator_core.resolve_validation_cmd._resolve_python_interp",
+        lambda repo_root=None: None,
+    )
+    with pytest.raises(InterpreterMissing):
+        _normalize_python_token("python3 foo.py")
     assert "no python3/python on PATH" in capsys.readouterr().err
 
 

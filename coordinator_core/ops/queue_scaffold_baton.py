@@ -273,7 +273,7 @@ def _class_context_for_items(
         try:
             normalize_family(family)
         except UnknownQueueFamilyError:
-            continue
+            continue  # per-family loop; an unrecognized queue family is skipped, not fatal to the scan
         records = load_family_records(family, worktree_root)
         by_name = {Path(rec["path"]).name: rec.get("frontmatter") or {} for rec in records}
         field_table = fields_for_family(family)

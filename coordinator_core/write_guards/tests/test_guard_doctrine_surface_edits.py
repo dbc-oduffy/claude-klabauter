@@ -558,6 +558,71 @@ def test_per_repo_surfaces_still_anchor_on_the_session_repo(two_roots, name):
     )
 
 
+# ---------------------------------------------------------------------------
+# C3 (docs/plans/2026-09-23-guard-dispatch-residuals.md): the EM-audience
+# override-keys-doc pointer names an approval route (create the sentinel at
+# its owning root) that a cloud session cannot reach -- the operator who
+# grants approval must do so from a workstation session. Only the
+# resolves_em_audience branch, only under CLAUDE_CODE_REMOTE=="true" (the
+# same read as hooks/repin_cloud_engine_root.py's REMOTE_ENV_VAR), swaps the
+# doc pointer for one fact plus one terse alternative. Subagent/unresolved
+# audience text must stay byte-identical under both venues.
+# ---------------------------------------------------------------------------
+
+
+def test_em_audience_remote_true_names_the_venue_not_the_doc(monkeypatch):
+    monkeypatch.setattr(guard, "resolves_em_audience", lambda payload, root: True)
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    reason = guard._deny_reason("CLAUDE.md", payload={})
+    assert "cannot be granted from a cloud session" in reason
+    assert "workstation session" in reason
+    assert "guard-override-keys.md" not in reason
+    assert guard._SENTINEL_NAME not in reason
+
+
+def test_em_audience_remote_unset_keeps_todays_doc_pointer(monkeypatch):
+    monkeypatch.setattr(guard, "resolves_em_audience", lambda payload, root: True)
+    monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)
+    reason = guard._deny_reason("CLAUDE.md", payload={})
+    assert "guard-override-keys.md" in reason
+    assert "cloud session" not in reason
+    assert guard._SENTINEL_NAME not in reason
+
+
+@pytest.mark.parametrize("remote", ["true", None])
+def test_subagent_audience_text_is_byte_identical_across_venue(monkeypatch, remote):
+    monkeypatch.setattr(guard, "resolves_em_audience", lambda payload, root: False)
+    if remote is None:
+        monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)
+    else:
+        monkeypatch.setenv("CLAUDE_CODE_REMOTE", remote)
+    reason = guard._deny_reason("CLAUDE.md", payload={})
+    assert "cloud session" not in reason
+    assert "guard-override-keys.md" not in reason
+    assert guard._SENTINEL_NAME not in reason
+
+
+def test_subagent_audience_unchanged_regardless_of_remote_env(monkeypatch):
+    """Pin byte-identity directly, not just absence of the new strings."""
+    monkeypatch.setattr(guard, "resolves_em_audience", lambda payload, root: False)
+    monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)
+    without_remote = guard._deny_reason("CLAUDE.md", payload={})
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    with_remote = guard._deny_reason("CLAUDE.md", payload={})
+    assert without_remote == with_remote
+
+
+def test_in_cloud_session_reads_the_same_env_var_as_repin_cloud_engine_root(monkeypatch):
+    from coordinator_core.hooks import repin_cloud_engine_root as venue
+
+    monkeypatch.setenv(venue.REMOTE_ENV_VAR, venue.REMOTE_ENV_TRUE)
+    assert guard._in_cloud_session() is True
+    monkeypatch.setenv(venue.REMOTE_ENV_VAR, "false")
+    assert guard._in_cloud_session() is False
+    monkeypatch.delenv(venue.REMOTE_ENV_VAR, raising=False)
+    assert guard._in_cloud_session() is False
+
+
 def test_doe_root_is_resolved_once_per_process(two_roots, monkeypatch):
     """The resolver runs on the PreToolUse path for every Write/Edit. The memo
     is what keeps a registry read plus two file reads off that path per call.

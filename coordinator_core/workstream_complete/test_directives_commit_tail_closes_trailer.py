@@ -157,29 +157,12 @@ def test_a_real_close_never_pushes_and_never_touches_a_remote(tmp_path):
     assert result.push_status == PUSH_STATUS_NOT_ATTEMPTED
 
 
-def test_close_commit_carries_co_authored_by(tmp_path, monkeypatch):
+def test_close_commit_carries_co_authored_by(tmp_path):
     """`apply_missing_trailers` is wired into `run_close_commit`'s own
     `commit_paths` call (state/cross-repo/inbox/2026-09-23-example-game-repo-em-
     commit-trailers-owned-by-engine.md) -- pinned end-to-end against a real
-    commit, using `session_id` (a UUID here, so the attribution resolver's
-    override actually validates) to locate a fake transcript."""
-    import json
-
-    from coordinator_core.git import commit_trailers as ct
-
-    ct._ATTRIBUTION_TRANSCRIPT_MEMO.clear()
-    ct._ATTRIBUTION_VALUE_MEMO.clear()
-
+    commit."""
     sid = "45454545-4545-4545-8545-454545454545"
-    claude_home = tmp_path / "fake-claude-home"
-    proj = claude_home / ".claude" / "projects" / "p"
-    proj.mkdir(parents=True)
-    (proj / f"{sid}.jsonl").write_text(
-        json.dumps({"type": "assistant", "message": {"model": "claude-sonnet-5"}})
-        + "\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
     repo = _init_repo(tmp_path)
     (repo / "workstream_note4.md").write_text("content", encoding="utf-8")
@@ -194,7 +177,4 @@ def test_close_commit_carries_co_authored_by(tmp_path, monkeypatch):
 
     assert result.commit_failed is False, result.diagnostics
     message = _commit_message(repo)
-    assert "Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>" in message
-
-    ct._ATTRIBUTION_TRANSCRIPT_MEMO.clear()
-    ct._ATTRIBUTION_VALUE_MEMO.clear()
+    assert "Co-Authored-By: Claude <noreply@anthropic.com>" in message

@@ -47,21 +47,19 @@ def test_preuse_bash_dispatch_registers_op():
 def test_preuse_bash_dispatch_fails_open_on_non_dict():
     from coordinator_core.hooks.preuse_bash_dispatch import _handler
 
-    assert _run(_handler(None)) == {}
+    assert _handler(None) == {}
 
 
 def test_preuse_bash_dispatch_allows_ordinary_command():
     from coordinator_core.hooks.preuse_bash_dispatch import _handler
 
-    out = _run(
-        _handler(
-            {
-                "tool_name": "Bash",
-                "tool_input": {"command": "echo hi"},
-                "cwd": "/tmp",
-                "session_id": "s",
-            }
-        )
+    out = _handler(
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": "echo hi"},
+            "cwd": "/tmp",
+            "session_id": "s",
+        }
     )
     assert isinstance(out, dict)
     hso = out.get("hookSpecificOutput")
@@ -70,6 +68,14 @@ def test_preuse_bash_dispatch_allows_ordinary_command():
 
 
 def test_preuse_bash_dispatch_fails_open_when_chain_raises(monkeypatch):
+    """Fail-open, but VISIBLY: a chain failure must surface as an allow
+    carrying additionalContext naming the failure, never a bare `{}` —
+    `{}` is what a guard that ran clean and had nothing to say also looks
+    like, and this was the case: `state/bug-backlog/2026-09-23-pretooluse-
+    bash-guard-fails-to-evaluate-0abe3f44d9d8.yaml` records the "Missing
+    required routing key ... requires _origin_worktree" chain failure being
+    swallowed into exactly this indistinguishable-from-a-pass shape.
+    """
     from coordinator_core.hooks import preuse_bash_dispatch as mod
 
     def _boom(*a, **kw):
@@ -78,8 +84,41 @@ def test_preuse_bash_dispatch_fails_open_when_chain_raises(monkeypatch):
     import coordinator_core.bash_guards.dispatch as dispatch_mod
 
     monkeypatch.setattr(dispatch_mod, "evaluate_payload_json", _boom)
-    out = _run(mod._handler({"tool_name": "Bash", "tool_input": {"command": "x"}}))
-    assert out == {}
+    out = mod._handler({"tool_name": "Bash", "tool_input": {"command": "x"}})
+    assert out != {}
+    hso = out.get("hookSpecificOutput") or {}
+    assert hso.get("permissionDecision") == "allow"
+    context = hso.get("additionalContext") or ""
+    assert "could not be evaluated" in context
+    assert "did not pass -- it did not run" in context
+    assert "boom" in context
+
+
+def test_preuse_bash_dispatch_missing_origin_worktree_surfaces_visibly(monkeypatch):
+    """The exact real-world shape: a Bash call whose cwd resolves outside every
+    registered worktree makes `evaluate_payload_json` raise on the missing
+    `_origin_worktree` routing key (`ipc.py`'s ValueError). That must reach the
+    caller as a visibly-unevaluated advisory, never a silent `no_advisory()`.
+    """
+    from coordinator_core.hooks import preuse_bash_dispatch as mod
+
+    def _raise_missing_routing_key(*a, **kw):
+        raise ValueError(
+            "op 'hooks.preuse_bash_dispatch' (scope='repo') requires "
+            "_origin_worktree but it was absent or not a valid string."
+        )
+
+    import coordinator_core.bash_guards.dispatch as dispatch_mod
+
+    monkeypatch.setattr(
+        dispatch_mod, "evaluate_payload_json", _raise_missing_routing_key
+    )
+    out = mod._handler(
+        {"tool_name": "Bash", "tool_input": {"command": "cd repo && git commit"}}
+    )
+    hso = out.get("hookSpecificOutput") or {}
+    assert hso.get("permissionDecision") == "allow"
+    assert "_origin_worktree" in (hso.get("additionalContext") or "")
 
 
 #: A command the chain denies from its own rule table, with no plugin-root
@@ -135,7 +174,7 @@ def test_preuse_bash_dispatch_denies_through_the_envelope_the_doors_send(tmp_pat
     """
     from coordinator_core.hooks.preuse_bash_dispatch import _handler
 
-    assert _decision(_run(_handler(_wire_params(tmp_path, _banned_command(tmp_path))))) == "deny"
+    assert _decision(_handler(_wire_params(tmp_path, _banned_command(tmp_path)))) == "deny"
 
 
 def test_preuse_bash_dispatch_deny_and_allow_are_distinguishable(tmp_path):
@@ -144,8 +183,8 @@ def test_preuse_bash_dispatch_deny_and_allow_are_distinguishable(tmp_path):
     class, including a future fail-open that keeps the deny leg working."""
     from coordinator_core.hooks.preuse_bash_dispatch import _handler
 
-    denied = _run(_handler(_wire_params(tmp_path, _banned_command(tmp_path))))
-    allowed = _run(_handler(_wire_params(tmp_path, "echo hi")))
+    denied = _handler(_wire_params(tmp_path, _banned_command(tmp_path)))
+    allowed = _handler(_wire_params(tmp_path, "echo hi"))
     assert denied != allowed
     assert _decision(allowed) != "deny"
 
@@ -157,7 +196,7 @@ def test_preuse_bash_dispatch_still_reads_a_flat_payload(tmp_path):
     from coordinator_core.hooks.preuse_bash_dispatch import _handler
 
     flat = _wire_params(tmp_path, _banned_command(tmp_path))["payload"]
-    assert _decision(_run(_handler(flat))) == "deny"
+    assert _decision(_handler(flat)) == "deny"
 
 
 # ---------------------------------------------------------------------------
@@ -171,13 +210,13 @@ def test_bash_ban_op_registers_and_reaches_check():
 
     assert "hooks.guard_host_subagent_bash_ban" in _REGISTRY
     # No agent_id -> EM, out of scope -> no_advisory.
-    assert _run(_handler({"tool_name": "Bash", "cwd": "/tmp"})) == {}
+    assert _handler({"tool_name": "Bash", "cwd": "/tmp"}) == {}
 
 
 def test_bash_ban_op_fails_open_on_non_dict():
     from coordinator_core.hooks.guard_host_subagent_bash_ban import _handler
 
-    assert _run(_handler(None)) == {}
+    assert _handler(None) == {}
 
 
 def test_bash_ban_op_denies_under_deny_policy(tmp_path):
@@ -186,14 +225,12 @@ def test_bash_ban_op_denies_under_deny_policy(tmp_path):
     (tmp_path / "coordinator.local.md").write_text(
         "---\nsubagent_bash_policy: deny\n---\nbody\n", encoding="utf-8"
     )
-    out = _run(
-        _handler(
-            {
-                "tool_name": "Bash",
-                "cwd": str(tmp_path),
-                "agent_id": "some-agent",
-            }
-        )
+    out = _handler(
+        {
+            "tool_name": "Bash",
+            "cwd": str(tmp_path),
+            "agent_id": "some-agent",
+        }
     )
     hso = out.get("hookSpecificOutput")
     assert hso is not None
@@ -205,7 +242,7 @@ def test_bash_spawn_shapes_op_registers_and_fails_open_on_non_dict():
     from coordinator_core.hooks.guard_host_subagent_bash_spawn_shapes import _handler
 
     assert "hooks.guard_host_subagent_bash_spawn_shapes" in _REGISTRY
-    assert _run(_handler(None)) == {}
+    assert _handler(None) == {}
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +260,7 @@ def test_block_unenumerated_agent_type_op_registers():
 def test_block_unenumerated_agent_type_op_no_op_for_non_agent():
     from coordinator_core.hooks.block_unenumerated_agent_type import _handler
 
-    assert _run(_handler({"tool_name": "Bash"})) == {}
+    assert _handler({"tool_name": "Bash"}) == {}
 
 
 # ---------------------------------------------------------------------------
@@ -241,17 +278,15 @@ def test_named_dispatch_restriction_op_registers():
 def test_named_dispatch_restriction_strips_named_explore():
     from coordinator_core.hooks.guard_named_dispatch_tool_restriction import _handler
 
-    out = _run(
-        _handler(
-            {
-                "tool_name": "Agent",
-                "tool_input": {
-                    "subagent_type": "Explore",
-                    "name": "foo",
-                    "prompt": "p",
-                },
-            }
-        )
+    out = _handler(
+        {
+            "tool_name": "Agent",
+            "tool_input": {
+                "subagent_type": "Explore",
+                "name": "foo",
+                "prompt": "p",
+            },
+        }
     )
     hso = out["hookSpecificOutput"]
     assert "name" not in hso["updatedInput"]
@@ -261,13 +296,11 @@ def test_named_dispatch_restriction_strips_named_explore():
 def test_named_dispatch_restriction_passes_unnamed_ordinary_type():
     from coordinator_core.hooks.guard_named_dispatch_tool_restriction import _handler
 
-    out = _run(
-        _handler(
-            {
-                "tool_name": "Agent",
-                "tool_input": {"subagent_type": "coordinator:executor", "prompt": "p"},
-            }
-        )
+    out = _handler(
+        {
+            "tool_name": "Agent",
+            "tool_input": {"subagent_type": "coordinator:executor", "prompt": "p"},
+        }
     )
     assert out == {}
 
@@ -280,20 +313,18 @@ def test_named_dispatch_restriction_denies_through_the_wrapped_envelope():
     `block_worktree_tool`."""
     from coordinator_core.hooks.guard_named_dispatch_tool_restriction import _handler
 
-    out = _run(
-        _handler(
-            {
-                "payload": {
-                    "tool_name": "Agent",
-                    "tool_input": {
-                        "subagent_type": "Explore",
-                        "name": "foo",
-                        "prompt": "p",
-                        "unrecognised_key": "x",
-                    },
-                }
+    out = _handler(
+        {
+            "payload": {
+                "tool_name": "Agent",
+                "tool_input": {
+                    "subagent_type": "Explore",
+                    "name": "foo",
+                    "prompt": "p",
+                    "unrecognised_key": "x",
+                },
             }
-        )
+        }
     )
     hso = out["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"
@@ -314,19 +345,17 @@ def test_enforce_agent_dispatch_mode_registers():
 def test_enforce_agent_dispatch_mode_no_op_on_empty_payload():
     from coordinator_core.hooks.enforce_agent_dispatch_mode import _handler
 
-    assert _run(_handler({})) == {}
+    assert _handler({}) == {}
 
 
 def test_enforce_agent_dispatch_mode_elevates_mode():
     from coordinator_core.hooks.enforce_agent_dispatch_mode import _handler
 
-    out = _run(
-        _handler(
-            {
-                "permission_mode": "bypassPermissions",
-                "tool_input": {"subagent_type": "coordinator:executor", "prompt": "p"},
-            }
-        )
+    out = _handler(
+        {
+            "permission_mode": "bypassPermissions",
+            "tool_input": {"subagent_type": "coordinator:executor", "prompt": "p"},
+        }
     )
     hso = out["hookSpecificOutput"]
     assert hso["updatedInput"]["mode"] == "bypassPermissions"
@@ -335,16 +364,14 @@ def test_enforce_agent_dispatch_mode_elevates_mode():
 def test_enforce_agent_dispatch_mode_teammate_name_path_segment_denied():
     from coordinator_core.hooks.enforce_agent_dispatch_mode import _handler
 
-    out = _run(
-        _handler(
-            {
-                "tool_input": {
-                    "subagent_type": "coordinator:executor",
-                    "name": "feature/auth-review",
-                    "prompt": "p",
-                }
+    out = _handler(
+        {
+            "tool_input": {
+                "subagent_type": "coordinator:executor",
+                "name": "feature/auth-review",
+                "prompt": "p",
             }
-        )
+        }
     )
     hso = out["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"
@@ -354,13 +381,11 @@ def test_enforce_agent_dispatch_mode_mode_escape_hatch(monkeypatch):
     from coordinator_core.hooks.enforce_agent_dispatch_mode import _handler
 
     monkeypatch.setenv("COORDINATOR_AGENT_MODE_OK", "1")
-    out = _run(
-        _handler(
-            {
-                "permission_mode": "bypassPermissions",
-                "tool_input": {"subagent_type": "coordinator:executor", "prompt": "p"},
-            }
-        )
+    out = _handler(
+        {
+            "permission_mode": "bypassPermissions",
+            "tool_input": {"subagent_type": "coordinator:executor", "prompt": "p"},
+        }
     )
     assert out == {}
 
@@ -380,7 +405,7 @@ def test_preuse_agent_dispatch_registers():
 def test_preuse_agent_dispatch_no_op_on_non_dict():
     from coordinator_core.hooks.preuse_agent_dispatch import _handler
 
-    assert _run(_handler(None)) == {}
+    assert _handler(None) == {}
 
 
 def test_preuse_agent_dispatch_skips_absent_suite_invocation_leg_and_reaches_leg4():
@@ -389,13 +414,11 @@ def test_preuse_agent_dispatch_skips_absent_suite_invocation_leg_and_reaches_leg
     the fan-in must still reach leg 4's own decision rather than raising."""
     from coordinator_core.hooks.preuse_agent_dispatch import _handler
 
-    out = _run(
-        _handler(
-            {
-                "permission_mode": "bypassPermissions",
-                "tool_input": {"subagent_type": "coordinator:executor", "prompt": "p"},
-            }
-        )
+    out = _handler(
+        {
+            "permission_mode": "bypassPermissions",
+            "tool_input": {"subagent_type": "coordinator:executor", "prompt": "p"},
+        }
     )
     hso = out["hookSpecificOutput"]
     assert hso["updatedInput"]["mode"] == "bypassPermissions"
@@ -406,17 +429,15 @@ def test_preuse_agent_dispatch_first_deny_wins_over_leg4():
     subagent_type before leg 4 (enforce_agent_dispatch_mode) ever runs."""
     from coordinator_core.hooks.preuse_agent_dispatch import _handler
 
-    out = _run(
-        _handler(
-            {
-                "tool_name": "Agent",
-                "permission_mode": "bypassPermissions",
-                "tool_input": {
-                    "subagent_type": "totally-unenumerated-probe-type",
-                    "prompt": "p",
-                },
-            }
-        )
+    out = _handler(
+        {
+            "tool_name": "Agent",
+            "permission_mode": "bypassPermissions",
+            "tool_input": {
+                "subagent_type": "totally-unenumerated-probe-type",
+                "prompt": "p",
+            },
+        }
     )
     hso = out.get("hookSpecificOutput")
     assert hso is not None

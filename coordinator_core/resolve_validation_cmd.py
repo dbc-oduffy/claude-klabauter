@@ -832,22 +832,30 @@ def _normalize_python_token(cmd: str, repo_root: Optional[str] = None) -> str:
     `_resolve_python_interp` for venv-first resolution.
 
     Raises InterpreterMissing (not NoPythonInterpreterError) when the token
-    is bare `python` and no interpreter exists — callers of THIS function
-    map that to exit 127.
-    """
-    if cmd == "python" or cmd.startswith("python "):
-        interp = _resolve_python_interp(repo_root)
-        if interp is None:
-            print(
-                f"[cs_resolve] no python3/python on PATH — cannot run '{cmd}' "
-                "(refusing to skip; fail loud)",
-                file=sys.stderr,
-            )
-            raise InterpreterMissing(cmd)
-        print(f"[cs_resolve] step=interp bare `python` token -> {interp}", file=sys.stderr)
-        import shlex
+    is bare `python`/`python3` and no interpreter exists — callers of THIS
+    function map that to exit 127.
 
-        return shlex.quote(interp) + cmd[len("python"):]
+    Unlike `normalize_python_token` above (which deliberately passes
+    `python3` through untouched — see its docstring), this bin-shape sibling
+    ALSO normalizes a bare `python3` token: venv-first resolution here can
+    resolve to a different (repo-local `.venv`) interpreter than a bare
+    `python3` on PATH would, so leaving `python3` unnormalized would skip the
+    venv-first preference this function exists to provide.
+    """
+    for bare in ("python", "python3"):
+        if cmd == bare or cmd.startswith(bare + " "):
+            interp = _resolve_python_interp(repo_root)
+            if interp is None:
+                print(
+                    f"[cs_resolve] no python3/python on PATH — cannot run '{cmd}' "
+                    "(refusing to skip; fail loud)",
+                    file=sys.stderr,
+                )
+                raise InterpreterMissing(cmd)
+            print(f"[cs_resolve] step=interp bare `{bare}` token -> {interp}", file=sys.stderr)
+            import shlex
+
+            return shlex.quote(interp) + cmd[len(bare):]
     return cmd
 
 

@@ -862,6 +862,41 @@ relative to the 500ms brightline (module docstring) because this measures
 an arbitrary caller-supplied `cmd`, not just brightline-scoped ops."""
 
 
+def _write_report_and_exit(write_fd: int, rc: int, spawn_count: int, real_os_exit) -> None:
+    """Writes the `{process_time_ms, procs, rc}` payload for this measured
+    child and terminates it via `real_os_exit` -- the single place both the
+    normal fall-through path and the `os._exit`-interception path
+    (`_linux_run_measured_child`'s `_report_and_real_exit`) land, so there is
+    exactly one payload-write/exit sequence to reason about rather than two
+    that could drift apart. Never returns.
+
+    Review: reviewer (F5) -- os.write can itself raise (e.g. BrokenPipeError
+    if the parent's read end is already gone), and that exception must not
+    skip the real exit -- guarded so this child always terminates no matter
+    what the payload write does.
+    """
+    try:
+        import resource
+
+        ru_self = resource.getrusage(resource.RUSAGE_SELF)
+        ru_children = resource.getrusage(resource.RUSAGE_CHILDREN)
+        process_time_ms = (
+            ru_self.ru_utime + ru_self.ru_stime + ru_children.ru_utime + ru_children.ru_stime
+        ) * 1000.0
+        payload = json.dumps(
+            {"process_time_ms": process_time_ms, "procs": spawn_count + 1, "rc": int(rc)}
+        ).encode("utf-8")
+        os.write(write_fd, payload)
+    except BaseException:
+        traceback.print_exc()
+    finally:
+        try:
+            os.close(write_fd)
+        except OSError:
+            pass
+        real_os_exit(0)
+
+
 def _linux_run_measured_child(
     cmd: Sequence[str], env: Optional[dict], cwd: Optional[str], write_fd: int
 ) -> None:
@@ -890,14 +925,47 @@ def _linux_run_measured_child(
     code itself does.
     """
     spawn_count = 0
+    reported = False
+    real_os_exit = os._exit
+    root_pid = os.getpid()
 
     def _hook(event: str, args) -> None:
         nonlocal spawn_count
         if event in _LINUX_AUDIT_SPAWN_EVENTS:
             spawn_count += 1
 
+    def _report_and_real_exit(code) -> None:
+        # Some measured Python roots (e.g. `python -m coordinator_core.invoke`,
+        # whose own `main()` ends in a bare `os._exit(exit_code)` by design --
+        # the real subprocess contract every non-measured invocation relies
+        # on) terminate via `os._exit` directly, which bypasses Python-level
+        # exception handling (SystemExit) entirely -- the `except SystemExit`
+        # branches above never run, and this child would vanish without ever
+        # reaching its own reporting `finally` block below, indistinguishable
+        # from a crash (`_linux_one_invocation`'s "exited without reporting a
+        # result" RuntimeError). `os._exit` is patched to THIS function for
+        # the duration of running the measured code, so the exit is caught
+        # here, the payload is written exactly as the normal path below would,
+        # and only THEN does the real os._exit actually terminate the child.
+        nonlocal reported
+        if reported or os.getpid() != root_pid:
+            # A descendant this root itself forked/spawned (e.g. a raw
+            # os.fork() grandchild) inherits this patched os._exit by COW
+            # memory copy, not by choice -- it must exit through the REAL
+            # os._exit untouched, or its own call here would write a second,
+            # corrupting payload onto the one pipe this root owns (reproduced:
+            # concatenated JSON, "Extra data" on decode).
+            real_os_exit(code if isinstance(code, int) else 1)
+            return
+        reported = True
+        os._exit = real_os_exit
+        _write_report_and_exit(
+            write_fd, code if isinstance(code, int) else 1, spawn_count, real_os_exit
+        )
+
     rc = 0
     try:
+        os._exit = _report_and_real_exit
         if cwd is not None:
             os.chdir(cwd)
         if env is not None:
@@ -912,6 +980,25 @@ def _linux_run_measured_child(
             sys.argv = ["-c", *cmd[3:]]
             try:
                 exec(compile(code, "<batched_process_time_ms -c>", "exec"), {"__name__": "__main__"})
+            except SystemExit as exc:
+                rc = exc.code if isinstance(exc.code, int) else (1 if exc.code else 0)
+        elif is_python_root and len(cmd) >= 2 and cmd[1] == "-m":
+            # `python -m <module> ...` (the shape `timer._build_argv` builds
+            # for `coordinator_core.invoke`) previously fell through to the
+            # runpy.run_path(cmd[1], ...) branch below, which treats "-m"
+            # itself as a file path and raises FileNotFoundError inside this
+            # child every time -- silently reported as a timing figure by
+            # `batched_process_time_ms` before its rc check was added.
+            import runpy
+
+            if len(cmd) < 3:
+                raise ValueError(
+                    f"process_time: malformed cmd {cmd!r} -- '-m' requires a module name"
+                )
+            module_name = cmd[2]
+            sys.argv = [module_name, *cmd[3:]]
+            try:
+                runpy.run_module(module_name, run_name="__main__", alter_sys=True)
             except SystemExit as exc:
                 rc = exc.code if isinstance(exc.code, int) else (1 if exc.code else 0)
         elif is_python_root and len(cmd) >= 2:
@@ -948,33 +1035,13 @@ def _linux_run_measured_child(
         traceback.print_exc()
         rc = 1
     finally:
-        # Review: reviewer (F5) -- os.write can itself raise (e.g.
-        # BrokenPipeError if the parent's read end is already gone), and that
-        # exception was previously unguarded here, skipping os._exit(0) and
-        # letting the forked child fall through into a full unhandled-exception
-        # unwind of the copied parent process. Guard the write/close so this
-        # child always terminates via os._exit no matter what the payload
-        # write does.
-        try:
-            import resource
-
-            ru_self = resource.getrusage(resource.RUSAGE_SELF)
-            ru_children = resource.getrusage(resource.RUSAGE_CHILDREN)
-            process_time_ms = (
-                ru_self.ru_utime + ru_self.ru_stime + ru_children.ru_utime + ru_children.ru_stime
-            ) * 1000.0
-            payload = json.dumps(
-                {"process_time_ms": process_time_ms, "procs": spawn_count + 1, "rc": int(rc)}
-            ).encode("utf-8")
-            os.write(write_fd, payload)
-        except BaseException:
-            traceback.print_exc()
-        finally:
-            try:
-                os.close(write_fd)
-            except OSError:
-                pass
-            os._exit(0)
+        os._exit = real_os_exit
+        if not reported:
+            reported = True
+            _write_report_and_exit(write_fd, rc, spawn_count, real_os_exit)
+        # Unreachable: _write_report_and_exit always terminates via
+        # real_os_exit. No further code runs past this point in either
+        # branch (patched-exit or normal fall-through).
 
 
 def _linux_one_invocation(cmd: Sequence[str], env: Optional[dict], cwd: Optional[str]) -> dict:
@@ -1076,11 +1143,21 @@ def _linux_batched_process_time_ms(
     total_procs = 0
     rc = 0
     t0 = time.perf_counter()
-    for _ in range(k):
+    for i in range(k):
         result = _linux_one_invocation(cmd, env, cwd)
+        rc = result["rc"]
+        if rc != 0:
+            # A failed invocation's fork/unwind cost is not the op's process
+            # time -- reporting it as one is the exact defect this instrument
+            # exists to avoid (module docstring). Fail loud, never average it
+            # into a figure the caller has no reason to distrust.
+            raise RuntimeError(
+                f"process_time: measured child exited rc={rc} on invocation "
+                f"{i + 1}/{k} for cmd={cmd!r} -- refusing to report a process "
+                "time figure for a failed run"
+            )
         total_process_time_ms += result["process_time_ms"]
         total_procs += result["procs"]
-        rc = result["rc"]
     wall_ms = (time.perf_counter() - t0) * 1000.0 / k
 
     return {

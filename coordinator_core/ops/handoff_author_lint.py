@@ -55,6 +55,16 @@ Returns:
                         `docs/wiki/guard-messaging.md` § Register: one fact,
                         once, plus a terse alternative.
 
+Entry points:
+    `lint_text(text)` is the entry point for IN-PROCESS callers that already
+    hold the text they want linted (a PreToolUse write-guard, which runs
+    before the write lands and so cannot read a resolved-on-disk file for
+    it). It reads nothing and resolves nothing — no path, no I/O, no
+    envelope — and returns the findings list only. `_handler` (the
+    `handoff.author_lint` op) is the entry point for a resolved on-disk
+    path: it keeps every path/read/envelope concern and calls `lint_text`
+    on the text it reads.
+
 Self-registration: importing this module fires
 @register_op("handoff.author_lint") as a side-effect. Added to
 coordinator_core/ops/__init__.py to trigger registration at start_server() time.
@@ -201,6 +211,23 @@ def _ledger_findings(body: str) -> list[dict]:
     ]
 
 
+def lint_text(text: str) -> list[dict]:
+    """The in-process entry point: findings for an already-in-hand body of
+    text, with no path resolution and no I/O. See module docstring's Entry
+    points section — this exists because a PreToolUse guard runs BEFORE the
+    write lands, so it cannot read a resolved on-disk file the way
+    `_handler` does; it has only the post-write text it can construct
+    itself, and must hand that text here directly."""
+    split = split_frontmatter(text)
+    fm_text = split.fm_text if split is not None else ""
+    body = split.body_with_leading_newline if split is not None else text
+    return (
+        _summary_findings(fm_text)
+        + _acceptance_criteria_findings(body)
+        + _ledger_findings(body)
+    )
+
+
 def _resolve_read_path(handoff_path: str, repo_root: Path) -> "tuple[Optional[Path], Optional[str]]":
     """Resolve a repo-relative handoff path to a readable file, following the
     live -> archive fallback every other handoff-body op uses (a handoff picked
@@ -277,14 +304,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # because the frontmatter is malformed would hand the author a second
     # silent pass. The frontmatter's own malformation is the schema gate's
     # finding to report, not this op's.
-    split = split_frontmatter(text)
-    fm_text = split.fm_text if split is not None else ""
-    body = split.body_with_leading_newline if split is not None else text
-    findings = (
-        _summary_findings(fm_text)
-        + _acceptance_criteria_findings(body)
-        + _ledger_findings(body)
-    )
+    findings = lint_text(text)
     return {
         "exit_code": 1 if findings else 0,
         "clean": not findings,

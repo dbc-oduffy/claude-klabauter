@@ -7,8 +7,8 @@ cannot pin: the eight-surface wire registration (an op missing one of them ships
 present-but-dead, or silently degrades to `repo_root=None`), and the op's own
 refusal-to-write.
 
-The handler is now a plain sync `def` (dispatch offloads it via
-`asyncio.to_thread`); tests call it directly.
+The handler is synchronous (`03ed46b0e4` moved hook `_handler`s off `async def`) and
+is called directly — this repo carries no pytest-asyncio dependency.
 
 Zero spawns. `locked_rmw` never runs on this path and no case needs a real git
 repo, so every fixture is a bare `tmp_path` tree with a `.git` DIRECTORY and no
@@ -30,12 +30,8 @@ from coordinator_core.roadmap import prep_gate as pg
 OP_KEY = "plan.prep_gate"
 
 
-def _run(result):
-    return result
-
-
 def _gate(params: dict, repo_root: Path) -> dict:
-    return _run(mod._handler(params, repo_root))
+    return mod._handler(params, repo_root)
 
 
 def _repo(tmp_path: Path) -> Path:
@@ -127,7 +123,7 @@ def test_absent_repo_root_refuses_rather_than_falling_back_to_cwd(tmp_path):
     """Deriving a root from the process cwd would make the answer depend on where
     the caller happened to stand."""
     with pytest.raises(ValueError, match="requires a resolved repo_root"):
-        _run(mod._handler({"plan": "docs/plans/x.md"}, None))
+        mod._handler({"plan": "docs/plans/x.md"}, None)
 
 
 @pytest.mark.parametrize("bad", [None, "", "   ", 7, ["a"]])

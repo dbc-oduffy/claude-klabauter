@@ -158,6 +158,7 @@ def _delete_autorun() -> None:
         ) as key:
             winreg.DeleteValue(key, _AUTORUN_VALUE_NAME)
     except FileNotFoundError:
+        # value already absent is the desired end state
         pass
 
 

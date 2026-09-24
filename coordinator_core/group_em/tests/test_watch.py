@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import pathlib
 import sys
 import time
@@ -1847,6 +1848,82 @@ def test_arming_proceeds_against_no_record_at_all(tmp_path):
             max_iterations=1,
         )
     assert any(line.startswith("ARMED") for line in armed_lines)
+
+
+# --- C3(b) HARD CONSTRAINT: a behavioural pin at the SHARED arm-time call
+# site (`_refuse_if_already_armed`, which reads `is_fresh_and_foreign`
+# through the same record `stamp` writes). `next_expected_by`'s basis change
+# from the declared interval to the measured cadence must never lengthen a
+# peer-crown lockout past what the declared interval's own grace would have
+# produced, and must never lock a same-crown holder out of its own record --
+# driven at the 18s/~80s and 23min cadences the plan row names.
+
+
+def test_arm_time_refusal_self_holder_never_locked_out_at_measured_cadences(tmp_path):
+    """No self-lockout: a same-holder/same-writer record, restamped at the
+    18s, ~80s, and 23min cadences the row names, must never trip
+    `_refuse_if_already_armed` for its own holder."""
+    from coordinator_core.group_em import watch_heartbeat
+
+    now = 1_000_000.0
+    for interval in (18.0, 80.0, 23 * 60.0):
+        watch_heartbeat.stamp(
+            str(tmp_path), holder_session_id="me", declinations=[],
+            interval_seconds=interval, now_epoch=now, writer_session_id="me",
+            tick_source="monitor",
+        )
+        # Immediately after the stamp -- well inside any deadline this
+        # basis could produce -- re-arming as the SAME holder must not
+        # refuse.
+        watch._refuse_if_already_armed(str(tmp_path), "me", "me", now_epoch=now + 1.0)
+
+
+def test_arm_time_refusal_peer_lockout_never_exceeds_the_declared_grace(tmp_path):
+    """A peer crown's lockout window, sized off the MEASURED cadence, must
+    never outlast what the DECLARED interval's own grace would have
+    produced -- the capped basis is the fix; an uncapped one would run the
+    dangerous direction (a slow observed delta widening the window)."""
+    from coordinator_core.group_em import watch_heartbeat
+
+    for declared_interval, observed_gap in ((18.0, 80.0), (80.0, 18.0), (23 * 60.0, 80.0)):
+        now = 1_000_000.0
+        # First tick: no observed delta exists yet, basis is declared only.
+        watch_heartbeat.stamp(
+            str(tmp_path), holder_session_id="crown-A", declinations=[],
+            interval_seconds=declared_interval, now_epoch=now,
+            writer_session_id="crown-A-writer", tick_source="monitor",
+        )
+        # Second tick, same crown, `observed_gap` seconds later -- this is
+        # the delta `stamp` will measure and feed to `next_expected_by`.
+        second_now = now + observed_gap
+        watch_heartbeat.stamp(
+            str(tmp_path), holder_session_id="crown-A", declinations=[],
+            interval_seconds=declared_interval, now_epoch=second_now,
+            writer_session_id="crown-A-writer", tick_source="monitor",
+        )
+        declared_only_grace = max(
+            watch_heartbeat._GRACE_FLOOR_SECONDS,
+            declared_interval * watch_heartbeat._GRACE_TICKS,
+        )
+        declared_only_deadline = second_now + declared_only_grace
+
+        # A foreign holder probing right at (or just past) the
+        # declared-only deadline must not still be refused: the measured
+        # basis is capped at the declared interval, so it can only be
+        # tighter than -- never wider than -- `declared_only_deadline`.
+        try:
+            watch._refuse_if_already_armed(
+                str(tmp_path), "foreign-holder", "foreign-writer",
+                now_epoch=declared_only_deadline + 1.0,
+            )
+        except watch.WatchAlreadyHeldError:
+            raise AssertionError(
+                f"peer lockout outlasted the declared interval's own grace "
+                f"(declared={declared_interval}, observed_gap={observed_gap})"
+            )
+
+        # Clean up so the next cadence in the loop starts from no record.
+        os.remove(watch_heartbeat.watch_path(str(tmp_path)))
 
 
 def test_cli_exits_nonzero_and_names_the_holder_on_a_refused_arm(tmp_path, capsys):

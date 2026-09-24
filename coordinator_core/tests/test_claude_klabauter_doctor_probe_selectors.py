@@ -5,6 +5,8 @@ Covers the selector surface of bin/claude-klabauter-doctor-probe.py:
   --triage         returns exactly the manifest's triage=true probe ids
   --cluster NAME   returns cluster-member probes (registry|install|dispatch)
   --probe <id>     returns exactly one probe by manifest id
+  --required-only  narrows to manifest ids with required=true; intersects with a
+                    selector or narrows the default run; never writes the sentinel
   default          returns every manifest probe
   --step-zero      emits one NDJSON line per manifest probe; exits 0 or 1 (depends on probe outcomes)
   invalid --probe  exits nonzero (exit 2)
@@ -676,6 +678,202 @@ class TestDoctorProbeSelectors:
         assert result.returncode == 2, (
             f"claude-klabauter.core.uds.ping was deleted under DR-215; "
             f"expected exit 2 (argparse/manifest rejection), got {result.returncode}"
+        )
+
+
+# Manifest ids with required=true, derived (never hardcoded) — same negative
+# spec as _IMPLEMENTED_IDS/_TRIAGE_IDS above.
+_REQUIRED_IDS = frozenset(p["id"] for p in _manifest_probes() if p.get("required", True))
+
+
+class TestRequiredOnlySelector:
+    """--required-only narrows the run to manifest ids with required=true.
+
+    Spec: docs/plans/2026-09-23-klabauter-installer-performance.md (C4).
+    """
+
+    def test_step_zero_required_only_emits_exactly_the_required_ids(self) -> None:
+        """--step-zero --required-only emits exactly the required=true ids."""
+        if not _BIN_PROBE.exists():
+            pytest.skip("bin/claude-klabauter-doctor-probe.py not on disk")
+
+        result = _run("--step-zero", "--required-only")
+
+        assert result.returncode in {0, 1}, (
+            f"--step-zero --required-only must exit 0 or 1, got {result.returncode}; "
+            f"stderr: {result.stderr[:300]}"
+        )
+
+        lines = [ln for ln in result.stdout.strip().splitlines() if ln.strip()]
+        emitted_ids = {json.loads(ln)["name"] for ln in lines}
+        assert emitted_ids == _REQUIRED_IDS, (
+            f"Expected exactly {_REQUIRED_IDS!r}, got {emitted_ids!r}"
+        )
+
+    def test_required_only_selection_runs_no_other_probe_body(self) -> None:
+        """--required-only narrows run_probes' `selected` to the required id set —
+        proven by spying on run_probes rather than inferring it from output shape.
+        """
+        mod = _load_probe_module()
+        if mod is None:
+            pytest.skip("bin/claude-klabauter-doctor-probe.py not on disk or not importable")
+
+        captured: dict[str, object] = {}
+        real_run_probes = mod.run_probes
+
+        def _spy(*args, **kwargs):
+            captured["selected"] = kwargs.get("selected")
+            return real_run_probes(*args, **kwargs)
+
+        mod.run_probes = _spy
+
+        old_argv = sys.argv
+        old_stdout = sys.stdout
+        sys.argv = ["claude-klabauter-doctor-probe", "--step-zero", "--required-only"]
+        sys.stdout = io.StringIO()
+        env_backup = os.environ.get("COORDINATOR_ENGINE_ROOT")
+        os.environ["COORDINATOR_ENGINE_ROOT"] = str(_REPO_ROOT)
+        try:
+            mod.main()
+        except SystemExit:
+            pass
+        finally:
+            sys.stdout = old_stdout
+            sys.argv = old_argv
+            mod.run_probes = real_run_probes
+            if env_backup is None:
+                os.environ.pop("COORDINATOR_ENGINE_ROOT", None)
+            else:
+                os.environ["COORDINATOR_ENGINE_ROOT"] = env_backup
+
+        assert captured.get("selected") == set(_REQUIRED_IDS), (
+            f"run_probes was called with selected={captured.get('selected')!r}, "
+            f"expected exactly {_REQUIRED_IDS!r}"
+        )
+
+    def test_required_only_alone_writes_no_sentinel(self) -> None:
+        """--required-only without --step-zero is a scalpel run: no sentinel write.
+
+        is_full_run must read False whenever --required-only is set, mirroring
+        --triage/--cluster/--probe (main()'s is_full_run guard).
+        """
+        mod = _load_probe_module()
+        if mod is None:
+            pytest.skip("bin/claude-klabauter-doctor-probe.py not on disk or not importable")
+
+        sentinel_calls = {"n": 0}
+        real_write = mod._write_doctor_sentinel
+
+        def _spy(*args, **kwargs):
+            sentinel_calls["n"] += 1
+            return real_write(*args, **kwargs)
+
+        mod._write_doctor_sentinel = _spy
+
+        old_argv = sys.argv
+        old_stdout = sys.stdout
+        sys.argv = ["claude-klabauter-doctor-probe", "--required-only"]
+        sys.stdout = io.StringIO()
+        env_backup = os.environ.get("COORDINATOR_ENGINE_ROOT")
+        os.environ["COORDINATOR_ENGINE_ROOT"] = str(_REPO_ROOT)
+        try:
+            mod.main()
+        except SystemExit:
+            pass
+        finally:
+            sys.stdout = old_stdout
+            sys.argv = old_argv
+            mod._write_doctor_sentinel = real_write
+            if env_backup is None:
+                os.environ.pop("COORDINATOR_ENGINE_ROOT", None)
+            else:
+                os.environ["COORDINATOR_ENGINE_ROOT"] = env_backup
+
+        assert sentinel_calls["n"] == 0, (
+            "--required-only (no --step-zero) must not write the doctor sentinel; "
+            f"_write_doctor_sentinel was called {sentinel_calls['n']} time(s)"
+        )
+
+    def test_required_only_with_triage_also_writes_no_sentinel(self) -> None:
+        """--required-only --triage writes no sentinel: is_full_run is False whenever
+        --triage is set, independent of --required-only — combination gets its own
+        assertion per the chunk brief (not just the bare --required-only flag).
+        """
+        mod = _load_probe_module()
+        if mod is None:
+            pytest.skip("bin/claude-klabauter-doctor-probe.py not on disk or not importable")
+
+        sentinel_calls = {"n": 0}
+        real_write = mod._write_doctor_sentinel
+
+        def _spy(*args, **kwargs):
+            sentinel_calls["n"] += 1
+            return real_write(*args, **kwargs)
+
+        mod._write_doctor_sentinel = _spy
+
+        old_argv = sys.argv
+        old_stdout = sys.stdout
+        sys.argv = ["claude-klabauter-doctor-probe", "--triage", "--required-only"]
+        sys.stdout = io.StringIO()
+        env_backup = os.environ.get("COORDINATOR_ENGINE_ROOT")
+        os.environ["COORDINATOR_ENGINE_ROOT"] = str(_REPO_ROOT)
+        try:
+            mod.main()
+        except SystemExit:
+            pass
+        finally:
+            sys.stdout = old_stdout
+            sys.argv = old_argv
+            mod._write_doctor_sentinel = real_write
+            if env_backup is None:
+                os.environ.pop("COORDINATOR_ENGINE_ROOT", None)
+            else:
+                os.environ["COORDINATOR_ENGINE_ROOT"] = env_backup
+
+        assert sentinel_calls["n"] == 0, (
+            "--required-only --triage must not write the doctor sentinel; "
+            f"_write_doctor_sentinel was called {sentinel_calls['n']} time(s)"
+        )
+
+    def test_step_zero_without_flag_behaves_byte_for_byte_as_today(self) -> None:
+        """--step-zero without --required-only still emits every manifest probe id
+        (unchanged default selection) — the negative half of this chunk's spec.
+        """
+        if not _BIN_PROBE.exists():
+            pytest.skip("bin/claude-klabauter-doctor-probe.py not on disk")
+
+        result = _run("--step-zero")
+
+        assert result.returncode in {0, 1}
+        lines = [ln for ln in result.stdout.strip().splitlines() if ln.strip()]
+        emitted_ids = {json.loads(ln)["name"] for ln in lines}
+        assert emitted_ids == _IMPLEMENTED_IDS, (
+            f"--step-zero without --required-only must still emit every manifest id; "
+            f"missing={_IMPLEMENTED_IDS - emitted_ids!r}, unexpected={emitted_ids - _IMPLEMENTED_IDS!r}"
+        )
+
+    def test_required_only_intersects_with_cluster_selector(self) -> None:
+        """--required-only combined with --cluster intersects, per the chunk brief."""
+        if not _BIN_PROBE.exists():
+            pytest.skip("bin/claude-klabauter-doctor-probe.py not on disk")
+
+        result = _run("--cluster", "install", "--required-only")
+
+        assert result.returncode == 0, (
+            f"--cluster install --required-only exited {result.returncode}; "
+            f"stderr: {result.stderr[:400]}"
+        )
+
+        envelope = json.loads(result.stdout)
+        probe_ids = {p["probe"] for p in envelope["probes"]}
+        install_required = {
+            p["id"] for p in _manifest_probes()
+            if p.get("cluster") == "install" and p.get("required", True)
+        }
+        assert probe_ids == install_required, (
+            f"Expected exactly the install cluster's required ids {install_required!r}, "
+            f"got {probe_ids!r}"
         )
 
 

@@ -186,6 +186,7 @@ def scan(root) -> List[Violation]:
         try:
             src = abspath.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
+            # unreadable/non-UTF-8 file cannot be scanned; skip it
             continue
         for lineno, kind in scan_source(src):
             violations.append(Violation(relpath, lineno, kind))

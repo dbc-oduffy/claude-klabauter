@@ -168,6 +168,7 @@ def _guarded_project_roots() -> "List[Path]":
     try:
         homes.append(str(Path.home()))
     except Exception:
+        # no resolvable home directory on this platform; env vars above still apply
         pass
 
     roots: "List[Path]" = []
@@ -175,6 +176,7 @@ def _guarded_project_roots() -> "List[Path]":
         try:
             roots.append(Path(home) / _CLAUDE_DIRNAME / _PROJECTS_DIRNAME)
         except Exception:
+            # malformed home string cannot become a Path; skip this candidate
             continue
 
     claude_home = os.environ.get("CLAUDE_HOME", "")
@@ -182,6 +184,7 @@ def _guarded_project_roots() -> "List[Path]":
         try:
             roots.append(Path(claude_home.strip()) / _PROJECTS_DIRNAME)
         except Exception:
+            # malformed CLAUDE_HOME cannot become a Path; other roots still apply
             pass
 
     seen: "set[str]" = set()
@@ -294,6 +297,7 @@ def _own_index_rows(memory_dir: Path, self_sid: str) -> "List[tuple[str, Path]]"
             if not target_path.is_file():
                 continue
         except OSError:
+            # target path unreadable (permissions, race); treat as not a live memory target
             continue
         if _body_origin_session_id(target_path) == self_sid:
             rows.append((line, target_path))

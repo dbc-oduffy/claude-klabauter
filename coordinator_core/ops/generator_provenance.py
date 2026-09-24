@@ -1475,6 +1475,7 @@ def _eval_declaration(node, table: dict) -> object:
     try:
         return ast.literal_eval(node)
     except (ValueError, SyntaxError):
+        # not a literal-evaluable node; fall through to the structural reader below
         pass
     if isinstance(node, (ast.List, ast.Tuple)):
         out = []
@@ -1827,6 +1828,7 @@ def discover_generators(
             try:
                 dir_entries = list(os.scandir(stack.pop()))
             except OSError:
+                # directory unreadable/gone mid-walk; skip it
                 continue
             for entry in dir_entries:
                 try:
@@ -1844,6 +1846,7 @@ def discover_generators(
                         continue
                     file_stat = entry.stat()
                 except OSError:
+                    # entry removed/unreadable between listing and stat; skip it
                     continue
                 if not stat_module.S_ISREG(file_stat.st_mode):
                     continue

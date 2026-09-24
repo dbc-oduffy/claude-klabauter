@@ -1456,7 +1456,7 @@ def resolve_target(
                     if re.match(r'^\d{4}-\d{2}$', entry):
                         tier3_extra.append(f'archive/handoffs/{entry}/{basename}')
             except OSError:
-                pass
+                pass  # archive dir unreadable; skip the extra tier3 candidates it would add
         for cand_abs in candidates:
             if cand_abs.startswith(norm_root_rel):
                 cand_rel = cand_abs[len(norm_root_rel):].lstrip('/\\')
@@ -1678,7 +1678,7 @@ def _scan_handoff_corpus_paths(repo_root: str) -> List[str]:
                     if os.path.isfile(full):
                         paths.append(full)
         except OSError:
-            pass
+            pass  # handoffs dir unreadable; skip the paths it would add
     archive_dir = os.path.join(repo_root, 'archive', 'handoffs')
     if os.path.isdir(archive_dir):
         for dirpath, _dirnames, filenames in os.walk(archive_dir, onerror=lambda _exc: None):

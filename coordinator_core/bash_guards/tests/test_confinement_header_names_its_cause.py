@@ -134,16 +134,6 @@ def test_the_real_findings_agent_keeps_its_header(wire) -> None:
     assert _header(_payload("coordinator:code-reviewer")) == guard._DEFAULT_HEADER_LINE
 
 
-def test_an_explicit_per_type_header_still_wins(wire, unreadable_roster) -> None:
-    """A type carrying its own `_DENY_MESSAGE_STANZA_OVERRIDES` header has an
-    identity that DID resolve, so leg 3 is not why it is here and the
-    type-specific prose stays. Pinned because the cause check runs on every
-    denial, not only the leg-3 ones."""
-    wire("coordinator:executor")
-    header = _header(_payload("coordinator:executor"))
-    assert header == guard._EXECUTOR_HEADER_LINE
-
-
 class TestConfinementCause:
     """`_confinement_cause` mirrors `_is_confined_type`'s leg ORDER, so the
     cause reported is the one a reader re-deriving the verdict by hand finds

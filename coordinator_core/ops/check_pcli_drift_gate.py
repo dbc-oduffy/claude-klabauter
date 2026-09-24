@@ -139,7 +139,7 @@ Negative-spec (deliberately NOT covered here):
       proof it fired this time; no static read can do better, which is why
       this leg stays a hard FAIL rather than deferring to theirs.
 
-Exit codes (`main`), matching `coordinator/bin/schema-drift-gate`'s
+Exit codes (`main`), matching `coordinator/bin/check-machine-path-leak`'s
 three-way contract — a gate that cannot run must never read as a gate that
 ran clean:
     0   PASS  — all three legs clean.

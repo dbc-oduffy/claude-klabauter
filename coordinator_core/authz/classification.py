@@ -150,12 +150,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # substrate — read-only, same as the rest of this module."
     # Spec: docs/plans/2026-08-02-roadmap-baton-supersession-hazard.md § C1 (PIN-1)
     "handoff.blocked_by_dependents": OpClass.COMPUTE_ONLY,
-    # backlog.record — MUTATING: appends backlog-depth rows to the per-machine JSONL shard
-    # <central_state_root>/backlog-snapshots.<machine>.jsonl (an on-disk state write). Writes
-    # coordinator substrate ONLY, never rag's relational store (dual-write ban, DR-208 /
-    # tri-plane DD#1). Registered in ops/__init__.py (emit.recorder) in the same chunk.
-    # Spec: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § C4.
-    "backlog.record": OpClass.MUTATING,
     # hooks.nudge_foreground_agent_dispatch — MUTATING (reclassified 2026-07-29; was
     # COMPUTE_ONLY under the affirmation below, which no longer holds for this op).
     #
@@ -1688,7 +1682,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # CORRECTION (2026-07-21 review, Finding 1 of the memo-clean-split-op-coverage
     # slice review): this entry was previously classified COMPUTE_ONLY despite its
     # own Q1 answer being YES — a self-contradicting entry that also inverted its
-    # own cited precedent (queue.append/backlog.record are BOTH classified MUTATING
+    # own cited precedent (queue.append is classified MUTATING
     # elsewhere in this file, not COMPUTE_ONLY as the prior comment claimed). Per
     # DR-208's fail-closed rule ("ambiguous cases classify MUTATING"), and because
     # this case is not even ambiguous (both handlers unambiguously open a path for
@@ -1713,8 +1707,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?   YES.
     #      The written draft file is read by the same repo's subsequent
     #      memo.list_outbox/memo.compose/memo.send invocations.
-    # Narrower-privilege carve-out NOTE (own-tree-confined, mirrors queue.append/
-    # backlog.record's confinement documentation): the write is bounded to the
+    # Narrower-privilege carve-out NOTE (own-tree-confined, mirrors queue.append's
+    # confinement documentation): the write is bounded to the
     # CALLING repo's own cross-repo/outbox/ tree — never a receiver's inbox, and
     # never rag's relational store. This confinement is why memo.draft/memo.compose
     # do not carry the DR-214-send-class cross-tree D2 seven-bound (that applies
@@ -2002,8 +1996,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?     YES.
     #      Frozen diff/sha files are read by a later-dispatched reviewer/synthesizer
     #      process, not just the writer.
-    # Same-slice_id re-freeze overwrites the prior pair (last-write-wins, matching
-    # review_trail.write's DR-216 D2(i) posture) — never rotated/deleted here.
+    # After the per-request write loop, every file pair this call WROTE is committed in one
+    # `commit_paths` call, fail-soft (P157-C1): a commit refusal never turns a written freeze
+    # into a failed one, it is reported as `committed: false`. Same-slice_id re-freeze with
+    # DIFFERING content is a refused collision, never last-write-wins — never rotated/deleted here.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "review.freeze_diff": OpClass.MUTATING,
     # ---------------------------------------------------------------------------
@@ -2207,6 +2203,17 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?     No.
     #      Returns {"outcome", "session_id", "address", "candidates"} only.
     "session.resolve_address": OpClass.COMPUTE_ONLY,
+    # session.whoami_live — COMPUTE_ONLY: composes core.resolve_session_id
+    # (env-var reads only) and liveness.session_live (a pure meta.json /
+    # harness-registry read through the single shared liveness key).
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #   5. Persistent state changes observable across process boundaries?     No.
+    #      Returns {"session_id", "live"} only.
+    "session.whoami_live": OpClass.COMPUTE_ONLY,
     # session.peer_roster — COMPUTE_ONLY: cwd-filtered live peer roster, built
     # over the same harness_registry.snapshot() as session.resolve_address just
     # above, plus reachability.resolve_candidates() (both pure parsers/readers).
@@ -3209,6 +3216,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "ceremony.update_docs_scan": OpClass.COMPUTE_ONLY,
     "deliverable.cascade_retract": OpClass.MUTATING,
     "deliverable.cascade_backstop_sweep": OpClass.COMPUTE_ONLY,
+    "deliverable.cascade_divergence_report": OpClass.COMPUTE_ONLY,
     # ceremony.chunk_commits — COMPUTE_ONLY: pure git-log read (resolve_chunk_commits
     # composes git_native.log_diff_filter + a range `git log` call; no write_text/
     # locked_rmw/unlink anywhere in coordinator_core/ops/ceremony/chunk_commits.py,
@@ -3847,8 +3855,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   research.verify_scout_inventory_completeness —
     #     ops/verify_scout_inventory_completeness.py: read-only inventory
     #     completeness check, no write.
-    #   schema.drift_gate — ops/schema_drift_gate.py: read-only schema-drift
-    #     comparison, no write.
     #   session.resolve_chain_terminal_disposition —
     #     ops/session/resolve_chain_terminal_disposition.py: `git` read-only
     #     query via subprocess.run, no write.
@@ -3893,7 +3899,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "plan.list_stale_executing": OpClass.COMPUTE_ONLY,
     "repo_setup.validate_target_root": OpClass.COMPUTE_ONLY,
     "research.verify_scout_inventory_completeness": OpClass.COMPUTE_ONLY,
-    "schema.drift_gate": OpClass.COMPUTE_ONLY,
     "session.resolve_chain_terminal_disposition": OpClass.COMPUTE_ONLY,
     "update_docs.probe_fresh_repo_noop": OpClass.COMPUTE_ONLY,
     "workday.surface_auto_push_failure_stats": OpClass.COMPUTE_ONLY,
@@ -4460,6 +4465,12 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # path.
     "baton.carry_forward": OpClass.MUTATING,
     "baton.carry_forward_read": OpClass.COMPUTE_ONLY,
+
+    # warm.request_status — COMPUTE_ONLY (D5, docs/plans/2026-09-23-warm-
+    # dispatch-reconcile.md § C4): a pure poll read of the accept process's
+    # in-memory AckStore (or, on this registered handler's own cold/pool
+    # path, a fixed unknowable(no-resident-engine) answer). Writes nothing.
+    "warm.request_status": OpClass.COMPUTE_ONLY,
 })
 
 

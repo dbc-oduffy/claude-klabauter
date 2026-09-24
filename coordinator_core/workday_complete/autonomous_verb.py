@@ -48,6 +48,16 @@ __all__ = [
 ENABLE = "enable"
 DISABLE = "disable"
 
+#: CPython's own `Py_FinalizeEx() < 0` exit status (a stdout/stderr flush
+#: failure at interpreter finalization) -- reserved by the interpreter, not
+#: by this module. A failure here that happened to relay 120 verbatim was
+#: indistinguishable from "this process itself hit that CPython condition",
+#: so any exit this wrapper reports as 120 is remapped to this sentinel
+#: instead (memo ask 1: "on any failure, exit non-120"). The stderr
+#: diagnostic naming the real underlying code/detail is unaffected by the
+#: remap -- only the numeric exit status changes.
+_REMAPPED_120_EXIT = 4
+
 _CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _SUBPROCESS_TIMEOUT = 20
 
@@ -94,16 +104,49 @@ def _run_sentinel_cli(args: List[str]) -> int:
     # Delegate on both platforms rather than carrying a second, drift-prone
     # answer to the same question.
     argv = [*resolve_launchable(script), *args]
+    # CAPTURED, never inherited. This function runs both cold (this process's
+    # own real stdout is the caller's) AND warm, in-process inside the server,
+    # under `ops.invoke_from_argv._run_entrypoint`'s `contextlib.redirect_stdout`
+    # -- which retargets the Python-level `sys.stdout` object, not this
+    # process's OS-level fd 1/stderr. A bare `subprocess.run(argv, ...)` with no
+    # stdout/stderr given inherits that untouched OS handle, so on the warm leg
+    # the child's own stdout/stderr silently miss the redirect and land wherever
+    # the warm server's real stdio was pointed at boot (typically DEVNULL) --
+    # invisible to the actual caller on the other end of the pipe. Capturing
+    # here and re-emitting through `print()` below routes the bytes through
+    # whichever `sys.stdout`/`sys.stderr` is live in THIS call, cold or warm
+    # alike, so the child's sentinel-path confirmation
+    # (`misc-session-and-guards.py autonomous-sentinel enable`'s own
+    # `print(str(_sentinel_path(...)))`) actually reaches the skill relaying it.
     try:
         result = subprocess.run(
             argv,
             timeout=_SUBPROCESS_TIMEOUT,
             stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             creationflags=_CREATIONFLAGS,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"autonomous_verb: misc-session-and-guards invocation failed: {exc}", file=sys.stderr)
         return 3
+    stdout_text = result.stdout.decode("utf-8", errors="replace") if result.stdout else ""
+    stderr_text = result.stderr.decode("utf-8", errors="replace") if result.stderr else ""
+    if stdout_text:
+        print(stdout_text, end="" if stdout_text.endswith("\n") else "\n")
+    if result.returncode != 0:
+        # Fail LOUD (memo ask 1): a bare relayed exit code with nothing on
+        # stderr is indistinguishable from a hang or a silently-swallowed
+        # crash -- exactly what let a child's CPython exit 120 (stdout-flush
+        # failure at interpreter finalization, `Py_FinalizeEx` < 0) pass
+        # through this wrapper with no diagnostic at all. Every nonzero exit
+        # now names the underlying command, its own exit code, and relays
+        # whatever the child DID manage to write to stderr.
+        detail = stderr_text.strip() or "(child wrote nothing to stderr)"
+        print(
+            f"autonomous_verb: {' '.join(argv)} exited {result.returncode}: {detail}",
+            file=sys.stderr,
+        )
     return result.returncode
 
 
@@ -144,12 +187,21 @@ def main(argv: List[str]) -> int:
                 "informational-only messages (no /handoff nudge). Use "
                 "`/autonomous off` to restore normal behavior."
             )
-        return rc
+        return _reported_exit(rc)
 
     rc = disable()
     if rc == 0:
         print("Autonomous mode disabled — context pressure hook will resume normal /handoff nudges.")
-    return rc
+    return _reported_exit(rc)
+
+
+def _reported_exit(rc: int) -> int:
+    """Remap `rc` for this process's own exit status (see `_REMAPPED_120_EXIT`).
+
+    `_run_sentinel_cli` has already printed the stderr diagnostic naming the
+    real underlying code by the time this runs; this only prevents THIS
+    wrapper's own exit status from colliding with CPython's reserved 120."""
+    return _REMAPPED_120_EXIT if rc == 120 else rc
 
 
 if __name__ == "__main__":

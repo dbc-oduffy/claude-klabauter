@@ -45,6 +45,7 @@ from coordinator_core.ops.memo_transition import (
     _claim,
     _closure_stamp,
     _containment_check,
+    _lift,
     _normalize_oversize_summary,
     _release,
     _resolve,
@@ -1924,3 +1925,205 @@ class TestClosureStampUnit:
 
     def test_non_str_at_falls_back_to_now_stamp(self):
         assert _RFC3339_RE.match(_closure_stamp({"at": 12345}))
+
+
+# ---------------------------------------------------------------------------
+# P143-T3 — three memo-transition-verb problems (docs/plans/2026-09-22-
+# inbox-blitz-bundled-xs-s-fixes-2026-09-11.md, T3):
+#   (a) "delivered" was a lifecycle dead end — no verb accepted it.
+#   (b) a hand-delivered "draft" memo could never be lifted to "open".
+#   (c) --memo resolved against this process's own cwd, ignoring a supplied
+#       cwd param, and the "not found" error printed the raw relative path.
+# ---------------------------------------------------------------------------
+
+def _init_repo_with_memo(tmp_path: Path, content: str, *, subdir: str = "cross-repo/inbox") -> tuple[Path, Path]:
+    """Create a git repo + memo under ``subdir``, tracked in HEAD. Returns (repo, memo_path)."""
+    repo = tmp_path / "repo"
+    _git_init(repo)
+    target_dir = repo
+    for part in subdir.split("/"):
+        target_dir = target_dir / part
+    target_dir.mkdir(parents=True)
+    memo = target_dir / "memo.md"
+    memo.write_text(content, encoding="utf-8")
+    _git_track(repo, memo)
+    return repo, memo
+
+
+class TestDeliveredStatusAcceptedByClaimAndResolve:
+    """(a) A memo at status: delivered is no longer a lifecycle dead end.
+
+    Backlink: state/cross-repo/archive/2026-09-02-example-cockpit-repo-em-memo-
+    status-delivered-is-a-lifecycle-dead-end-no-verb-accepts.md
+    """
+
+    _DELIVERED_FIXTURE = """\
+---
+kind: fyi
+status: delivered
+from: sender-session
+summary: A test memo.
+created: 2026-06-01
+---
+"""
+
+    def test_claim_accepts_delivered_and_moves_to_in_progress(self, tmp_path):
+        _, memo = _init_repo_with_memo(tmp_path, self._DELIVERED_FIXTURE)
+        result = _claim(str(memo), "sess-1", "2026-09-23T00:00:00Z")
+        assert result["exit_code"] == 0
+        assert result["applied"] is True
+
+        fm = _fm_dict(memo)
+        assert fm["status"] == "in_progress"
+        assert fm["picked_up_by"] == "sess-1"
+
+    def test_resolve_accepts_delivered_and_moves_to_actioned(self, tmp_path):
+        _, memo = _init_repo_with_memo(tmp_path, self._DELIVERED_FIXTURE)
+        result = _resolve(
+            str(memo), "sess-1", "2026-09-23T00:00:00Z",
+            {"decision": "accepted", "realized_by": "abc1234"},
+        )
+        assert result["exit_code"] == 0
+        assert result["applied"] is True
+
+        fm = _fm_dict(memo)
+        assert fm["status"] == "actioned"
+        assert fm["decision"] == "accepted"
+
+    def test_action_still_refuses_delivered_expected_in_progress(self, tmp_path):
+        """action's own precondition is untouched — "delivered" is a claim/resolve
+        starting point only, never an action starting point."""
+        _, memo = _init_repo_with_memo(tmp_path, self._DELIVERED_FIXTURE)
+        before = Path(memo).read_text(encoding="utf-8")
+        result = _action(str(memo), {"decision": "accepted", "realized_by": "abc1234"})
+        assert result["exit_code"] == 1
+        assert result["applied"] is False
+        assert "expected in_progress" in result["error"]
+        assert Path(memo).read_text(encoding="utf-8") == before
+
+
+class TestLiftVerb:
+    """(b) lift: draft -> open, the one receiver-side move for a hand-delivered draft.
+
+    Backlink: state/cross-repo/archive/2026-09-02-doe-claude-em-outbound-defects-
+    batch.md § "A hand-delivered draft memo is unclosable by its receiver".
+    """
+
+    _DRAFT_FIXTURE = """\
+---
+kind: fyi
+status: draft
+from: sender-session
+summary: A test memo.
+created: 2026-06-01
+---
+"""
+    _OPEN_FIXTURE = """\
+---
+kind: fyi
+status: open
+from: sender-session
+summary: A test memo.
+created: 2026-06-01
+---
+"""
+
+    def test_draft_lifted_to_open(self, tmp_path):
+        _, memo = _init_repo_with_memo(tmp_path, self._DRAFT_FIXTURE)
+        result = _lift(str(memo))
+        assert result["exit_code"] == 0
+        assert result["applied"] is True
+
+        fm = _fm_dict(memo)
+        assert fm["status"] == "open"
+        assert validate_memo_cross_fields(fm) == []
+
+    def test_already_open_is_idempotent_noop(self, tmp_path):
+        _, memo = _init_repo_with_memo(tmp_path, self._OPEN_FIXTURE)
+        result = _lift(str(memo))
+        assert result["exit_code"] == 0
+        assert result["applied"] is False
+
+    def test_unexpected_status_fails_loud_with_no_write(self, tmp_path):
+        in_progress_fixture = self._DRAFT_FIXTURE.replace("status: draft", "status: in_progress")
+        _, memo = _init_repo_with_memo(tmp_path, in_progress_fixture)
+        before = Path(memo).read_text(encoding="utf-8")
+        result = _lift(str(memo))
+        assert result["exit_code"] == 1
+        assert result["applied"] is False
+        assert "expected draft" in result["error"]
+        assert Path(memo).read_text(encoding="utf-8") == before
+
+    def test_lifted_memo_can_then_be_claimed(self, tmp_path):
+        """The point of lift: it re-joins the ordinary claim/resolve path."""
+        _, memo = _init_repo_with_memo(tmp_path, self._DRAFT_FIXTURE)
+        lift_result = _lift(str(memo))
+        assert lift_result["exit_code"] == 0
+
+        claim_result = _claim(str(memo), "sess-1", "2026-09-23T00:00:00Z")
+        assert claim_result["exit_code"] == 0
+        assert claim_result["applied"] is True
+        assert _fm_dict(memo)["status"] == "in_progress"
+
+
+class TestCwdResolution:
+    """(c) A relative --memo anchors to a supplied cwd, not this process's own cwd.
+
+    Backlink: state/cross-repo/archive/2026-09-05-claude-klabauter-engine-memo-
+    transition-ignores-cwd-and-its-errors-misdirect.md
+    """
+
+    _OPEN_FIXTURE = """\
+---
+kind: fyi
+status: open
+from: sender-session
+summary: A test memo.
+created: 2026-06-01
+---
+"""
+
+    def test_containment_check_anchors_relative_memo_to_cwd(self, tmp_path):
+        repo, memo = _init_repo_with_memo(tmp_path, self._OPEN_FIXTURE)
+        rel = "cross-repo/inbox/memo.md"
+        resolved_path, git_root = _containment_check(rel, str(repo))
+        assert resolved_path == memo.resolve()
+        assert git_root == repo.resolve()
+
+    def test_containment_check_ignores_cwd_for_an_absolute_memo(self, tmp_path):
+        repo, memo = _init_repo_with_memo(tmp_path, self._OPEN_FIXTURE)
+        resolved_path, git_root = _containment_check(str(memo), "/some/unrelated/dir")
+        assert resolved_path == memo.resolve()
+        assert git_root == repo.resolve()
+
+    def test_containment_check_with_no_cwd_resolves_against_process_cwd(self, tmp_path, monkeypatch):
+        """Negative case, pinning the pre-fix behaviour absent cwd: a relative
+        memo with no cwd supplied still resolves against THIS process's cwd —
+        cwd is additive, not a mandatory param."""
+        repo, memo = _init_repo_with_memo(tmp_path, self._OPEN_FIXTURE)
+        monkeypatch.chdir(repo)
+        resolved_path, git_root = _containment_check("cross-repo/inbox/memo.md")
+        assert resolved_path == memo.resolve()
+        assert git_root == repo.resolve()
+
+    def test_claim_resolves_relative_memo_against_supplied_cwd(self, tmp_path):
+        """End-to-end through _claim: a relative memo + cwd claims the right file."""
+        repo, memo = _init_repo_with_memo(tmp_path, self._OPEN_FIXTURE)
+        rel = "cross-repo/inbox/memo.md"
+        result = _claim(rel, "sess-1", "2026-09-23T00:00:00Z", str(repo))
+        assert result["exit_code"] == 0
+        assert result["applied"] is True
+        assert _fm_dict(memo)["status"] == "in_progress"
+
+    def test_memo_not_found_error_names_the_resolved_absolute_path(self, tmp_path):
+        """The 'not found' error must name the RESOLVED path (state/cross-repo/
+        archive/2026-09-05-...misdirect.md ask 2) — the raw relative string is
+        the misdirection this fixes; the resolved absolute path is the fact
+        that makes a cwd-resolution bug obvious."""
+        repo, _memo = _init_repo_with_memo(tmp_path, self._OPEN_FIXTURE)
+        rel = "cross-repo/inbox/does-not-exist.md"
+        result = _claim(rel, "sess-1", "2026-09-23T00:00:00Z", str(repo))
+        assert result["exit_code"] == 1
+        expected_resolved = str((repo / rel).resolve())
+        assert expected_resolved in result["error"]
+        assert rel not in result["error"] or expected_resolved in result["error"]

@@ -77,7 +77,7 @@ def test_reconcile_recovers_the_sha_of_a_commit_that_landed_despite_failure(tmp_
     landed_sha = _seed_commit_with_token(repo, token, "notes/alpha.md")
 
     found = commit_reconcile_mod._reconcile_landed_despite_failure(
-        repo, f"Commit-Token: {token}", pre_sha, ["notes/alpha.md"]
+        repo, f"Commit-Token: {token}", pre_sha
     )
     assert found.sha == landed_sha
     assert found.decline == ""
@@ -98,7 +98,7 @@ def test_reconcile_never_adopts_a_peer_commit_in_the_same_window(tmp_path):
     _seed_commit_with_token(repo, "peertokenaaaaaaaaaaaaaaaaaaaaaaa", "notes/peer.md")
 
     found = commit_reconcile_mod._reconcile_landed_despite_failure(
-        repo, "Commit-Token: ourtokenbbbbbbbbbbbbbbbbbbbbbbbb", pre_sha, ["notes/peer.md"]
+        repo, "Commit-Token: ourtokenbbbbbbbbbbbbbbbbbbbbbbbb", pre_sha
     )
     assert found.sha is None
     assert found.decline == "no-candidate"
@@ -114,7 +114,7 @@ def test_reconcile_returns_none_when_nothing_landed(tmp_path):
     pre_sha = _rev_parse_head(repo)
 
     found = commit_reconcile_mod._reconcile_landed_despite_failure(
-        repo, "Commit-Token: ourtokencccccccccccccccccccccc", pre_sha, ["README.md"]
+        repo, "Commit-Token: ourtokencccccccccccccccccccccc", pre_sha
     )
     assert found.sha is None
     assert found.decline == "no-candidate"
@@ -137,7 +137,7 @@ def test_reconcile_falls_back_to_a_bounded_window_without_a_pre_sha(tmp_path):
     landed_sha = _seed_commit_with_token(repo, token, "notes/alpha.md")
 
     found = commit_reconcile_mod._reconcile_landed_despite_failure(
-        repo, f"Commit-Token: {token}", None, ["notes/alpha.md"]
+        repo, f"Commit-Token: {token}", None
     )
     assert found.sha == landed_sha
     assert found.decline == ""
@@ -156,7 +156,7 @@ def test_reconcile_fallback_window_still_never_adopts_a_peer_commit(tmp_path):
     _seed_commit_with_token(repo, "peertokeneeeeeeeeeeeeeeeeeeeeeee", "notes/peer.md")
 
     found = commit_reconcile_mod._reconcile_landed_despite_failure(
-        repo, "Commit-Token: ourtokenffffffffffffffffffffffff", None, ["notes/peer.md"]
+        repo, "Commit-Token: ourtokenffffffffffffffffffffffff", None
     )
     assert found.sha is None
     assert found.decline == "no-candidate"
@@ -185,7 +185,7 @@ def test_reconcile_fallback_resolves_a_real_bounded_base_when_history_exceeds_th
     landed_sha = _seed_commit_with_token(repo, token, "notes/alpha.md")
 
     found = commit_reconcile_mod._reconcile_landed_despite_failure(
-        repo, f"Commit-Token: {token}", None, ["notes/alpha.md"]
+        repo, f"Commit-Token: {token}", None
     )
     assert found.sha == landed_sha
     assert found.decline == ""
@@ -243,10 +243,43 @@ def test_reconcile_fallback_ignores_a_token_merely_quoted_in_a_message_body(tmp_
     )
 
     found = commit_reconcile_mod._reconcile_landed_despite_failure(
-        repo, f"Commit-Token: {token}", None, ["notes/quoter.md"]
+        repo, f"Commit-Token: {token}", None
     )
     assert found.sha is None
     assert found.decline == "no-candidate"
+
+
+def test_reconcile_finds_our_commit_even_when_the_caller_named_an_untouched_path(tmp_path):
+    """Pins the C2 fix (`docs/plans/2026-09-11-the-publisher-refuse-to-push-
+    defect-re-verified.md`): the live production consumer
+    (`coordinator-safe-commit.py :: _reconcile_after_indeterminate`) passes
+    `args.paths` -- the operator's raw CLI pathspec -- which is NOT
+    guaranteed to be the set of paths the commit actually touched (unchanged,
+    gitignored, or a directory pathspec covering an untouched file all reach
+    this call). Before the fix, the search was narrowed to a `git log --
+    <pathspec>` filter derived from that untrustworthy path list, so naming
+    only a path the commit never wrote made a genuinely-landed commit under
+    a DIFFERENT path invisible, reported as `no-candidate` for a commit that
+    in fact exists in history. The fix drops the pathspec/`commit_paths`
+    parameter entirely -- the `Commit-Token:` trailer alone already bounds
+    correctness (see the function's own SAFETY paragraph), so there is no
+    longer any path argument for a caller to get wrong."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    pre_sha = _rev_parse_head(repo)
+
+    token = "aaaa1111aaaa1111aaaa1111aaaa1111"
+    landed_sha = _seed_commit_with_token(repo, token, "notes/actually-touched.md")
+
+    found = commit_reconcile_mod._reconcile_landed_despite_failure(
+        repo,
+        f"Commit-Token: {token}",
+        pre_sha,
+    )
+    assert found.sha == landed_sha
+    assert found.decline == ""
 
 
 def test_reconcile_regression_pre_sha_path_issues_exactly_one_git_log(tmp_path, monkeypatch):
@@ -274,7 +307,7 @@ def test_reconcile_regression_pre_sha_path_issues_exactly_one_git_log(tmp_path, 
     monkeypatch.setattr(git_native, "log_grep", _spy)
 
     found = commit_reconcile_mod._reconcile_landed_despite_failure(
-        repo, "Commit-Token: nevercommittedaaaaaaaaaaaaaaaaaaaa", pre_sha, ["README.md"]
+        repo, "Commit-Token: nevercommittedaaaaaaaaaaaaaaaaaaaa", pre_sha
     )
     assert found.sha is None
     assert found.decline == "no-candidate"

@@ -505,7 +505,7 @@ def _commit_delivery(
         try:
             temp_index.unlink()
         except OSError:
-            pass
+            pass  # best-effort tempfile cleanup; a leaked temp git index is harmless
 
     subject = f"handoff.propagate: deliver into {rel_path}"
     message = (

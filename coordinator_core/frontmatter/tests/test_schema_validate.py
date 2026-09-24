@@ -52,6 +52,7 @@ from coordinator_core.frontmatter.schema_validate import (
     _plan_tasks_schema_without_pm_approved_required,
     _PLAN_TASKS_SCHEMA,
     _PLAN_TASKS_SCHEMA_DICT,
+    _PLAN_TASKS_SCHEMA_GOVERNED_DICT,
     _SCHEMAS_DIR as _CLAUDE_KLABAUTER_SCHEMAS_DIR,
     _validate_json_schema_node,
     _validate_legacy_field,
@@ -1329,6 +1330,28 @@ class TestHandoffPhaseKindGate:
         assert any(e['field'] == 'handoff_phase' for e in errors)
 
 
+class TestRetiredSuccessorlessKind:
+    """`spike-result` was retired outright (DEC-3a) with no D1 successor to
+    alias onto — unlike `spinoff-roadmap`/`spinoff-goal`/`spinoff-roadmap-creator`,
+    which are retired-but-renamed. A pre-existing on-disk record still carrying
+    `kind: spike-result` must pass post-mutation (read-side) validation."""
+
+    def test_spike_result_kind_enum_error_tolerated(self):
+        fm = _valid_handoff(kind='spike-result', predecessor=None)
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert not any(
+            e['field'] == 'kind' and 'invalid enum value' in e['error'] for e in errors
+        )
+
+    def test_other_unknown_kind_still_rejected(self):
+        """The widen names one retired, successor-less value — not the axis."""
+        fm = _valid_handoff(kind='not-a-real-kind', predecessor=None)
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert any(
+            e['field'] == 'kind' and 'invalid enum value' in e['error'] for e in errors
+        )
+
+
 # ---------------------------------------------------------------------------
 # Cross-field rules — supersedes / forked_from kind-gate
 # ---------------------------------------------------------------------------
@@ -2592,6 +2615,23 @@ class TestPlanTasksDispositionShape:
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert any(e['field'] == 'disposition' and 'disposition_detail' in e['error'] for e in errors)
 
+    def test_legacy_deferred_true_pm_approved_false_rejected(self):
+        """allOf[0] on a LEGACY plan: `deferred: true` + `pm_approved: false`
+        is HARD-REJECTED at the schema layer, not merely flagged by DoE's
+        plan-coverage-checker (P119-C1's tightening — truthiness, not
+        presence)."""
+        row = _valid_plan_task_row(deferred=True, pm_approved=False)
+        errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
+        assert any(e['field'] == 'pm_approved' for e in errors)
+
+    def test_legacy_deferred_true_pm_approved_true_still_validates(self):
+        """The other verdict on the same leg: a properly-ratified legacy
+        deferral still passes — the tightening narrows, it does not
+        newly reject the correct shape."""
+        row = _valid_plan_task_row(deferred=True, pm_approved=True)
+        errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
+        assert not any(e['field'] == 'pm_approved' for e in errors)
+
 
 class TestPlanTasksWritesDeclared:
     """`_cf_plan_tasks_writes_declared` (sibling to
@@ -2836,6 +2876,47 @@ class TestPlanTasksCaseAgainstShape:
         error = _cf_plan_tasks_disposition_shape(row, governed=True)
         assert error is not None
         assert error['field'] == 'case_against'
+
+
+class TestPlanTasksGovernedSchemaStillStripsAllOf0:
+    """Regression census row 2 (P119-C1's strip trap): `allOf[0]`'s `then`
+    grew a `pm_approved` `const: true` alongside its `required: [pm_approved]`
+    (shape (a) of the two the plan named, the smaller diff). Confirms the
+    predicate `_plan_tasks_schema_without_pm_approved_required` strips
+    branches on still matches allOf[0] after that edit — if the `required`
+    list had been dropped in favour of the `const` alone, allOf[0] would
+    silently SURVIVE into the governed schema and begin rejecting governed
+    rows that carry no `pm_approved` key at all. This is the only way that
+    trap gets caught by a test rather than by a peer."""
+
+    def test_governed_schema_still_lacks_allof0(self):
+        legacy_required_branches = [
+            b for b in _PLAN_TASKS_SCHEMA_DICT['allOf']
+            if 'pm_approved' in b.get('then', {}).get('required', [])
+        ]
+        governed_required_branches = [
+            b for b in _PLAN_TASKS_SCHEMA_GOVERNED_DICT['allOf']
+            if 'pm_approved' in b.get('then', {}).get('required', [])
+        ]
+        assert legacy_required_branches, (
+            "sanity: the legacy schema must still carry pm_approved-required "
+            "branches for this test to mean anything"
+        )
+        assert governed_required_branches == []
+
+    def test_governed_closed_row_with_no_pm_approved_key_still_passes(self):
+        """A governed closed row (backlogged, detailed) with NO `pm_approved`
+        key at all must still validate against the governed schema — the
+        strip trap's actual failure mode."""
+        row = _valid_plan_task_row(
+            disposition='backlogged',
+            disposition_ref='docs/plans/x.md',
+            disposition_detail='because',
+        )
+        errors = _validate_json_schema_node(
+            row, _PLAN_TASKS_SCHEMA_GOVERNED_DICT, _PLAN_TASKS_SCHEMA_GOVERNED_DICT
+        )
+        assert not any(e['field'] == 'pm_approved' for e in errors)
 
 
 class TestPlanTasksSchemaWithoutPmApprovedRequiredIsNonMutating:
@@ -3307,6 +3388,14 @@ class TestPlansIndexRoutingExclusion:
         resolved = match_schema('docs/plans/2026-01-01-a-real-plan.md', None, schemas)
         assert resolved is not None
         assert resolved['schemaName'] == 'plan'
+
+    def test_problems_index_md_no_frontmatter_resolves_to_none(self):
+        """`_RECORD_DIR_INDEX_PREFIXES` also covers `docs/problems/` — an
+        INDEX.md there with no declared `kind:` is routing-excluded the same
+        way as docs/plans/ and docs/decisions/."""
+        schemas = load_schemas(_CLAUDE_KLABAUTER_SCHEMAS_DIR)
+        resolved = match_schema('docs/problems/INDEX.md', None, schemas)
+        assert resolved is None
 
     def test_index_md_with_declared_kind_still_routes_via_kind(self):
         """Kind-gate: a docs/plans/INDEX.md that DOES declare a `kind:`

@@ -1249,6 +1249,15 @@ def test_real_run_report_sidecar_provisioned_and_marker_present(tmp_path: Path) 
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
 
     policy_file = Path(DOE_ROOT) / "coordinator" / "subagent-sandbox-policy.yaml"
+    if not policy_file.is_file():
+        # Flat plugin-mirror layout: `DOE_ROOT` itself IS the plugin content
+        # root (no nested `coordinator/` subdir) -- the same two-shape
+        # ambiguity `provision_report.resolve_plugin_root()` already probes
+        # for (dev-clone source repo vs marketplace/OSS-mirror clone, see
+        # that resolver's own docstring). `doe_root.py`'s own negative-spec
+        # says a caller applies its own site-specific existence gate rather
+        # than assuming one on-disk shape -- this is that gate.
+        policy_file = Path(DOE_ROOT) / "subagent-sandbox-policy.yaml"
     import os
 
     os.environ["SUBAGENT_SANDBOX_POLICY"] = str(policy_file)
@@ -1580,18 +1589,26 @@ def test_dispatch_with_no_agent_id_gets_a_miss_sentinel_on_disk(
     assert f"\nagent_type: {ELIGIBLE_TYPE}\n" in text
 
 
-def test_no_agent_id_sentinel_puts_the_kira_guard_on_the_ran_but_unstamped_branch(
+def test_no_agent_id_sentinel_is_legible_but_does_not_suppress_the_owed_route(
     git_repo: Path, monkeypatch: pytest.MonkeyPatch, integrator_policy_env: None
 ) -> None:
     """The branch, end to end -- not the file's existence.
 
-    `stop_dispatch :: _guard_kira_verdict_routed` scans the session share
-    directory and splits on whether any sibling carries an
-    `integrator_receipt`: with one, an integrator demonstrably ran and the
-    guard says do NOT re-dispatch it; with none, it advises `Owed route:
-    review-integrator` and a discharged integration gets redone. An
-    integrator dispatched with no `agent_id` and a provisioning miss used to
-    land on the second branch."""
+    `stop_dispatch :: _guard_kira_verdict_routed` counts a sibling's
+    spawn-time `integrator_receipt` as an FYI only, never as routing
+    evidence for THIS verdict (`_kira_unstamped_integrators`'s own
+    docstring; ratified at
+    `docs/plans/2026-09-11-review-receipt-records-completion-not-dispatch.md`
+    Anti-scope: "claude-klabauter's `hooks/stop_dispatch.py` reads it as 'dispatched'
+    together with `integrated_from`, which is correct") -- a receipt with no
+    `integrated_from` naming this verdict is spawn evidence, not routed
+    evidence; treating it otherwise is exactly klabauter#47's false
+    "already handled" verdict from a misfiled sidecar. An integrator
+    dispatched with no `agent_id` and a provisioning miss still gets a
+    sentinel whose `integrator_receipt` the guard can see and surfaces as a
+    count -- but the guard still denies and still names `Owed route:
+    review-integrator`, because nothing ties that receipt to THIS Kira
+    verdict."""
     from coordinator_core.hooks import stop_dispatch
 
     session_id = "session-no-agent-id-guard-1"
@@ -1616,11 +1633,14 @@ def test_no_agent_id_sentinel_puts_the_kira_guard_on_the_ran_but_unstamped_branc
     )
 
     rendered = repr(verdict)
-    assert "do NOT re-dispatch it" in rendered, (
-        "the integrator's sentinel must carry an integrator_receipt the guard "
-        f"can see -- got {rendered}"
+    assert "Owed route: review-integrator" in rendered, (
+        "a spawn-time integrator_receipt with no integrated_from naming this "
+        f"verdict must not suppress the owed-route remedy -- got {rendered}"
     )
-    assert "Owed route: review-integrator" not in rendered
+    assert "spawn-time integrator_receipt" in rendered, (
+        "the miss-sentinel's own integrator_receipt must still be legible to "
+        f"the guard as a counted FYI -- got {rendered}"
+    )
 
 
 def test_no_agent_id_sentinels_never_collide_across_same_type_dispatches(

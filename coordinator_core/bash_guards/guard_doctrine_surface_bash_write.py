@@ -527,6 +527,56 @@ def _strip_heredoc_bodies(text: str) -> str:
     return "\n".join(out)
 
 
+def _strip_data_heredoc_bodies(text: str) -> str:
+    """``text`` with the body of every DATA heredoc stripped, exactly like
+    ``_strip_heredoc_bodies``, EXCEPT a heredoc whose introducing line makes
+    stdin the PROGRAM (``_STDIN_PROGRAM_RE``) keeps its body inline -- that
+    body is executed code, not inert data, and the main deny loop below
+    (``is_denied_bash_write``) needs its lines to stay analysable so a
+    direct literal write inside it (``python3 <<PY\\nopen(<gov>,'w')...``)
+    is still caught.
+
+    THE OVER-FIRE THIS CLOSES: a DATA heredoc -- body text redirected
+    verbatim into an ungoverned file (``cat > script.py <<'EOF' ...``) --
+    denied whenever that body merely CONTAINED write-shaped text mentioning
+    a governed surface, even though nothing in the command executes it.
+    Quoting the delimiter does not change this: quoting only controls
+    whether the shell expands the body, never whether the body is data or
+    code, which is why the discriminant here is the INTRO line
+    (``_STDIN_PROGRAM_RE``), not the delimiter's quoting. Measured
+    2026-09-23: ``cat > state/scratch.py <<'EOF'\\nopen(<gov>,'w')...\\nEOF``
+    denied with no path to the governed surface at all. See P143-T10."""
+    lines = text.split("\n")
+    out: "list[str]" = []
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx]
+        match = _HEREDOC_START_RE.search(line)
+        idx += 1
+        if not match:
+            out.append(line)
+            continue
+        terminator = match.group(2)
+        scan = idx
+        while scan < len(lines) and lines[scan].strip() != terminator:
+            scan += 1
+        if scan < len(lines):
+            out.append(line)
+            if _STDIN_PROGRAM_RE.search(line[: match.start()] + " "):
+                out.extend(lines[idx:scan])
+            out.append(lines[scan])
+            idx = scan + 1
+            continue
+        term_token_re = re.compile(r"(?<!\S)" + re.escape(terminator) + r"(?!\S)")
+        term_match = term_token_re.search(line, match.end())
+        if term_match is None:
+            out.append(line)
+            continue
+        out.append(line[: match.end()])
+        out.append(line[term_match.start():])
+    return "\n".join(out)
+
+
 #: A heredoc whose delimiter is QUOTED (``<<'PY'``, ``<<"PY"``). The quoting is
 #: the whole point: the shell performs NO expansion inside such a body -- no
 #: parameter expansion, no command substitution -- so a ``$(`` or a backtick
@@ -590,6 +640,20 @@ _STDIN_PROGRAM_RE = re.compile(
     r"(?:^|[;&|]|\s)(?:python3?|perl|ruby|node)\s+-(?=\s|$)"
     r"|(?:^|[;&|]|\s)(?:bash|sh)\s+-s(?=\s|$)"
     r"|(?:^|[;&|]|\s)(?:bash|sh)\s*(?=<<)"
+    # A python3/perl/ruby/node token with NO `-` flag at all, immediately
+    # followed by a heredoc, is stdin-as-program too -- exactly the same
+    # shell contract already carved out for bash/sh above one line up.
+    # Measured miss 2026-09-23: `python3 <<'PY' ... PY` denied nothing
+    # because this regex required the `-` flag that real `python3` does
+    # NOT require to read a heredoc as its script. See P143-T10.
+    #
+    # Anchored on END-OF-STRING (`\s*$`), not a `(?=<<)` lookahead: every
+    # caller here matches this against `line[:match.start()] + " "` --
+    # the text BEFORE the heredoc token, with the `<<` itself already cut
+    # off -- so a lookahead for `<<` can never fire (the bash/sh third
+    # alternative one line up shares this same call shape and is exactly
+    # as unreachable via that path; left as-is, out of this item's scope).
+    r"|(?:^|[;&|]|\s)(?:python3?|perl|ruby|node)\s*$"
 )
 
 
@@ -1264,7 +1328,15 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
     if _has_xargs_pipe_indirection(segments, identifiers_lower):
         return True
 
-    for segment in segments:
+    # DATA heredoc bodies (redirected into a file, never executed) are
+    # stripped before the per-segment sink classification below -- see
+    # `_strip_data_heredoc_bodies`'s own docstring for the over-fire this
+    # closes. A PROGRAM heredoc's body (`python3 <<PY ... PY`) stays live,
+    # unaffected, so a direct literal write inside it still denies below.
+    data_stripped_segments = _split_top_level_segments(
+        _strip_data_heredoc_bodies(cmd)
+    )
+    for segment in data_stripped_segments:
         if not _mentions_governed_identifier(segment, identifiers_lower):
             continue
         if _is_git_content_mutation(segment):

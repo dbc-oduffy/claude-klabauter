@@ -51,8 +51,7 @@ DoE source: coordinator/hooks/scripts/sessionend-auto-commit.py
 
 from __future__ import annotations
 
-from typing import Mapping
-
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.ipc import register_op
 
@@ -64,9 +63,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     docstring). Nothing dials this op today; it exists so re-arming is a
     hooks.json edit alone.
     """
-    payload = params.get("payload")
-    if not isinstance(payload, Mapping):
-        payload = {}
+    payload = payload_of(params)
 
     session_id = payload.get("session_id") or ""
     if not isinstance(session_id, str) or not session_id:

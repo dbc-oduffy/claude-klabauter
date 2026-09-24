@@ -122,8 +122,9 @@ def test_compute_parallelism_cap_rejects_bad_input():
 #: A live MUTATING op, used as the specimen for the refusal tests below. Held in
 #: one place and pinned by the premise test that follows, so that retiring it
 #: fails loudly here rather than silently turning these tests into duplicates of
-#: the unknown-op case. Was `artifact.emit` until the PM cut that op 2026-08-22.
-_MUTATING_SPECIMEN = "backlog.record"
+#: the unknown-op case. Was `artifact.emit` until the PM cut that op 2026-08-22,
+#: then the readerless backlog-depth recorder until it too was retired.
+_MUTATING_SPECIMEN = "goal.append"
 
 
 def test_refuse_if_not_compute_only_allows_ping():

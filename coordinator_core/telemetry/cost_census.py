@@ -79,7 +79,7 @@ the 50-70-concurrent-session load norm (docs/wiki/machine-load-norm.md):
 
 Where the series lives: `state/cost-census.jsonl`, one JSON line per run,
 newest appended last — the same flat-JSONL-with-date convention already
-established by `state/backlog-snapshots.*.jsonl` (reused deliberately,
+established by `state/goals-log.<machine>.jsonl` (reused deliberately,
 per the brief's "reuse a convention rather than inventing one"), not a
 Markdown table like `state/code-stats-history.md` (that shape suits a
 human-authored weekly narrative; this is a machine-appended series a

@@ -1548,6 +1548,12 @@ def resolve_session_id(cwd: Optional[str] = None) -> str:
     Tiers 1-3 (env vars) are byte-for-byte unchanged. Always returns
     successfully (empty string signals "unresolvable", never an
     exception) — callers gate on empty.
+
+    For "who am I, and is that id live" in one call, see the
+    ``session.whoami_live`` op (``coordinator_core/ops/session_whoami_live.py``),
+    which composes this with ``session.liveness.session_live``. It cannot
+    live here: ``liveness.py`` imports this module, so the reverse import
+    would be circular.
     """
     override = _SESSION_ID_OVERRIDE.get()
     if override:

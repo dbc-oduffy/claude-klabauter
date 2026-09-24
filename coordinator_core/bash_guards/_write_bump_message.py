@@ -180,7 +180,7 @@ Negative-spec:
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any, Dict, Optional
 
 from coordinator_core.subagent_sandbox.engine import resolve_effective_types
@@ -258,36 +258,71 @@ _CLASSIFICATION_DEFECT_BACKLOG_ENTRY = (
 )
 
 
+def _target_is_contained_in_session(target_repo: str, session_repo: str) -> bool:
+    """True when `target_repo` names the same repo as `session_repo`, OR
+    names a path NESTED inside it -- in-repo build output (`.next/
+    standalone` and the like) resolving to its own apparent "repo" root
+    without ever leaving the session's own tree.
+
+    Pure string/`PurePath` containment, never filesystem resolution (no
+    `.resolve()`, no `.exists()`) -- deliberately, so this stays consistent
+    with `_classification_defect_notice`'s pre-existing equality check,
+    which this suite's own tests exercise with non-existent placeholder
+    names (see `test_write_bump_message.py`'s `_SAME_REPO` comment: "never
+    resolves either as a real path"). `PurePath.relative_to` raises
+    `ValueError` on a genuine sibling/foreign path (no shared prefix), which
+    this function reads as NOT contained.
+    """
+    if not target_repo or not session_repo:
+        return False
+    if target_repo == session_repo:
+        return True
+    try:
+        PurePath(target_repo).relative_to(PurePath(session_repo))
+    except ValueError:
+        return False
+    return True
+
+
 def _classification_defect_notice(target_repo: str, session_repo: str, report_to: str) -> Optional[str]:
     r"""FOREIGN-class contrast-form guard, shared by `render_em_message` and
     `render_subagent_message`.
 
     NEGATIVE SPEC: the FOREIGN-class contrast form `(not `{session_repo}`)`
-    is correct ONLY when `target_repo != session_repo` -- that inequality is
-    an INVARIANT this module has always assumed, never checked, of its own
-    two independent parameters (module docstring, "CALLERS RESOLVE THE
-    INPUTS"). A caller that violates it (dispatches a SAME-repo write to
-    this FOREIGN-class renderer) is a CLASSIFICATION DEFECT in the caller,
-    not a message-wording edge case -- see
-    `state/bug-backlog/2026-08-21-foreign-write-deny-names-the-same-repo-on-
-    both-sides.yaml`, filed off a live observed render where both slots of
-    `(not \`X\`)` named the identical path and the "what to do instead" leg
-    carried no information. Cosmetically hiding the degenerate contrast (as
-    a prior draft of this fix did) would make a wrong refusal read cleanly
-    instead of loudly -- worse, because it destroys the only visible
-    evidence that the upstream classifier misfired while the legitimate
-    write stays denied. This function instead renders a DISTINCT
+    is correct ONLY when `target_repo` neither equals NOR is contained
+    inside `session_repo` -- that is an INVARIANT this module has always
+    assumed, never checked, of its own two independent parameters (module
+    docstring, "CALLERS RESOLVE THE INPUTS"). A caller that violates it
+    (dispatches a SAME-repo write, or a write to in-repo build output that
+    resolved to its own apparent repo root, to this FOREIGN-class renderer)
+    is a CLASSIFICATION DEFECT in the caller, not a message-wording edge
+    case -- see `state/bug-backlog/2026-08-21-foreign-write-deny-names-the-
+    same-repo-on-both-sides.yaml`, filed off a live observed render where
+    both slots of `(not \`X\`)` named the identical path and the "what to
+    do instead" leg carried no information; the containment leg widens the
+    same defect class to the in-repo-build-output case (build output inside
+    the repo, e.g. `.next/standalone`, being classified as a foreign repo --
+    `_classification_defect_notice` previously only caught the exact-equal
+    case, missing this nested one). Cosmetically hiding the degenerate
+    contrast (as a prior draft of this fix did) would make a wrong refusal
+    read cleanly instead of loudly -- worse, because it destroys the only
+    visible evidence that the upstream classifier misfired while the
+    legitimate write stays denied. This function instead renders a DISTINCT
     defect-attribution message naming the mismatch and pointing at the
     backlog entry, so the render is loud and the next engineer knows where
     to look, per `docs/wiki/guard-messaging.md` § Register (one fact, once,
     plus a terse imperative -- no self-legitimacy, apology, or reassurance
     wrapper). Returns `None` (render normally) when the invariant holds.
     """
-    if not target_repo or target_repo != session_repo:
+    if not _target_is_contained_in_session(target_repo, session_repo):
         return None
+    if target_repo == session_repo:
+        contrast = f"target equals session repo, `{target_repo}`"
+    else:
+        contrast = f"`{target_repo}` is inside session repo `{session_repo}`"
     return (
         "Coordinator guard — instead: this deny is a classification defect "
-        f"(target equals session repo, `{target_repo}`) — report to {report_to}; "
+        f"({contrast}) — report to {report_to}; "
         f"see `{_CLASSIFICATION_DEFECT_BACKLOG_ENTRY}`."
     )
 

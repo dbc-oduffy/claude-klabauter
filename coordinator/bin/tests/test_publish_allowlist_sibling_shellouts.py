@@ -55,7 +55,6 @@ _EXPECTED_CALL_SITES = {
         "check-description-length.py",
         "check-multi-event-hook-hardcoded-event.py",
         "check-pcli-drift-gate.py",
-        "schema-drift-gate.py",
         "verify-no-console-flash.py",
     },
 }

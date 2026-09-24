@@ -137,7 +137,7 @@ def test_check_claude_md_size_bootstrap_admission_denies_growth(tmp_path):
     assert result is not None
     message, channel = result
     assert channel == ccms._CHANNEL_DENY
-    assert "bootstrap disposition" in message.prose
+    assert "has no ledger yet" in message.prose
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +160,7 @@ def test_derive_global_doctrine_live_copy_session_start_derives(tmp_path, monkey
 
     result = dgdlc.evaluate({"hook_event_name": "SessionStart"})
     assert result is not None
-    assert "re-derived" in result.prose
+    assert "OK" in result.prose
     assert (tmp_path / "home" / ".claude" / "CLAUDE.md").read_text(encoding="utf-8") == (
         "tracked content"
     )

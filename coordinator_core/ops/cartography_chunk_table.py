@@ -281,6 +281,7 @@ def write_chunk_table(target_root: Path, run_id: str, artifact: dict[str, Any]) 
             try:
                 os.unlink(tmp_path)
             except OSError:
+                # tmp file already gone (or the replace above already consumed it)
                 pass
     return target
 

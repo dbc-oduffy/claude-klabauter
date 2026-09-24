@@ -139,12 +139,12 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from coordinator_core._settings_home import machine_local_dir, settings_home
+from coordinator_core._claude_klabauter_root import _machine_local_get
+from coordinator_core._settings_home import machine_local_dir
 from coordinator_core.engine_root import coordinator_engine_root_env
 from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
 from coordinator_core.git.repo_root import show_toplevel
@@ -195,40 +195,6 @@ def _claude_home() -> str:
     if override:
         return override
     return os.path.join(os.path.expanduser("~"), ".claude")
-
-
-def _machine_local_impl() -> str:
-    """Resolve `_machine_local.py`: MACHINE_LOCAL_IMPL override, then the
-    settings-home copy, then the legacy ~/.claude/bin fallback. Mirrors
-    coordinator_core.pyresolve._machine_local_impl's settings-home-first
-    ordering."""
-    override = os.environ.get("MACHINE_LOCAL_IMPL")
-    if override:
-        return override
-
-    settings_home_impl = os.path.join(str(settings_home()), "bin", "_machine_local.py")
-    if os.path.exists(settings_home_impl):
-        return settings_home_impl
-
-    return os.path.join(_claude_home(), "bin", "_machine_local.py")
-
-
-def _machine_local_get(key: str) -> Optional[str]:
-    impl = _machine_local_impl()
-    if not os.path.exists(impl):
-        return None
-    try:
-        result = subprocess.run(
-            [sys.executable, impl, "get", key],
-            capture_output=True,
-            text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except OSError:
-        return None
-    if result.returncode != 0 or not result.stdout.strip():
-        return None
-    return result.stdout.strip()
 
 
 def _claude_klabauter_root_pointer_file() -> Optional[str]:

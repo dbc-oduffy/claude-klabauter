@@ -183,7 +183,7 @@ def _lint_files(repo_root: Path, rel_paths: List[str], deadline: float) -> List[
             try:
                 raw = abs_path.read_text(encoding="utf-8", errors="replace")
             except OSError:
-                continue
+                continue  # per-file loop; one unreadable file is skipped, not fatal to the sweep
 
             normalized = raw.replace("\r", "")
             with tempfile.NamedTemporaryFile(

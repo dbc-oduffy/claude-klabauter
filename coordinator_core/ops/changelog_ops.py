@@ -71,7 +71,6 @@ from coordinator_core.machine_resolver import compute_machine
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.ops.fleet._common import main_worktree_root, parse_frontmatter_status
-from coordinator_core.review_trail.records import _collect as _collect_review_trail_files
 from coordinator_core.ops.records_query import (
     _RecordsCollectError,
     _collect_type_records,
@@ -161,27 +160,6 @@ def _get_hostname() -> str:
 # ===========================================================================
 
 
-def _reviewed_block_lines(reviewed_lines: List[str], has_non_trivial: bool) -> List[str]:
-    """Render the **Reviewed:** line-block for a surgical single-field upsert.
-
-    Used only by `changelog.upsert_reviewed` (Step 7/18 consumers), which
-    re-derives `reviewed_lines` itself from the review trail on demand.
-    `_compose_block` (the day/week exit gate's whole-section recompose) no
-    longer calls this — queue:
-    2026-09-06-unreviewed-commits-check-gates-on-ephemeral-review-trail
-    retired that read as gated on ephemeral state.
-
-    Rule: present (one line per record) when reviewed_lines is non-empty;
-    the "none — flag..." sentinel when empty but has_non_trivial; omitted
-    entirely (empty list) otherwise.
-    """
-    if reviewed_lines:
-        return [f"**Reviewed:** {rline}" for rline in reviewed_lines]
-    if has_non_trivial:
-        return ["**Reviewed:** none — flag for /workweek-complete Step 7"]
-    return []
-
-
 def _compose_block(
     date: str,
     machine: str,
@@ -233,14 +211,10 @@ def _compose_block(
         f"**Blockers:** {blockers}",
         f"**Validation:** validate={rc_validate} plugin-suite={rc_plugin_suite}",
     ]
-    # No **Reviewed:** line in this exit-gate compose: its input read state/review-trail/ + archive/review-trail/, but the
-    # writer lands in the gitignored .coordinator-local/review-trail/, so the
-    # read was always empty and rendered a false "none" fallback. Tripwires
-    # A-GATE-MAY-NOT-DEPEND-ON-EPHEMERAL-STATE /
-    # AN-EMPTY-READ-RENDERS-UNKNOWN-NEVER-NONE. `_reviewed_block_lines` stays
-    # live for `changelog.upsert_reviewed` (Step 7/18 consumers), which
-    # re-derives from the same trail on a surgical single-field path this
-    # exit gate no longer takes.
+    # No **Reviewed:** line in this exit-gate compose. DR-374 gravestoned the
+    # review-trail store outright (writer + CLIs deleted; the directory is
+    # permanently empty — 9c199a3ce3), so `changelog.upsert_reviewed` no
+    # longer re-derives or renders this block either — see its docstring.
     # Backfilled provenance line — omit-by-default (only rendered when True).
     if is_backfill:
         lines.append("**Backfilled:** yes")
@@ -869,20 +843,19 @@ async def _backfill_gaps_handler(
 # changelog.compute_day_fields
 # ===========================================================================
 #
-# COMPUTE_ONLY sibling of changelog.append_day: derives the git-log/handoff/
-# review-trail field bundle append_day's params expect, so a caller (the
-# step9 ceremony facade) no longer hand-computes them in bash. Reuses
+# COMPUTE_ONLY sibling of changelog.append_day: derives the git-log/handoff
+# field bundle append_day's params expect, so a caller (the step9 ceremony
+# facade) no longer hand-computes them in bash. Reuses
 # workday_complete_backfill_scan._run_git for the actual subprocess
 # invocation (same bounded-timeout / closed-stdin / CREATE_NO_WINDOW
-# discipline) and list_review_trail_records._collect for review-trail file
-# enumeration, rather than re-deriving either.
+# discipline).
 #
 # Port of: workday-complete-step9-append-changelog.sh (DoE 6fb5fb37, 2026-07-22)
 #   (commit collection, TRIVIAL_PATTERN/SELF_COMMIT_REGEX, plans-touched,
 #   handoffs enumeration, Decisions:/Blockers: extraction — BOTH the
-#   python3 YAML-aware primary path and the grep -E fallback path — and the
-#   Reviewed: review-trail record parsing — BOTH the python3 JSON primary
-#   path and the grep -oE fallback path).
+#   python3 YAML-aware primary path and the grep -E fallback path. The
+#   oracle's Reviewed: review-trail record parsing was retired 2026-09-24 —
+#   see `changelog.upsert_reviewed`, DR-374).
 #
 # Negative-spec:
 #   - Read-only. No write of any kind (matches workday_complete_backfill_scan).
@@ -1353,139 +1326,51 @@ def extract_field_from_handoffs(
     return _cap_joined_value(_extract_field_fallback(field, handoff_paths))
 
 
-# ---------------------------------------------------------------------------
-# Reviewed: review-trail record lines — BOTH paths ported (python3 json
-# primary + grep -oE fallback in the oracle).
-# ---------------------------------------------------------------------------
-
-
-def _parse_review_record_primary(record_path: Path) -> str:
-    """json.load parse — mirrors the oracle's inline python3 -c JSON reader."""
-    with record_path.open(encoding="utf-8", errors="replace") as f:
-        d = json.load(f)
-    sha = d.get("sha_range", d.get("commit_range", "unknown"))
-    rev = d.get("reviewer", "unknown")
-    ver = d.get("verdict", "unknown")
-    loc = d.get("diff_loc", d.get("diff_lines", "unknown"))
-    return f"sha_range={sha} reviewer={rev} verdict={ver} diff_loc={loc}"
-
-
-def _parse_review_record_fallback(record_path: Path) -> str:
-    """grep -oE fallback: independent per-field regex extraction over raw text."""
-    try:
-        text = record_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        text = ""
-
-    def _field(name: str) -> str:
-        m = re.search(r'"' + name + r'"\s*:\s*"([^"]*)"', text)
-        return m.group(1) if m else "unknown"
-
-    sha_val = _field("sha_range")
-    rev_val = _field("reviewer")
-    ver_val = _field("verdict")
-    loc_val = _field("diff_loc")
-    return f"sha_range={sha_val} reviewer={rev_val} verdict={ver_val} diff_loc={loc_val}"
-
-
-def parse_review_record(record_path: Path, *, force_fallback: bool = False) -> str:
-    """Parse one review-trail JSON record into the oracle's Reviewed: line shape.
-
-    Public (unprefixed) — both extraction paths independently unit-tested.
-    """
-    if not force_fallback:
-        try:
-            return _parse_review_record_primary(record_path)
-        except Exception:  # noqa: BLE001 - any parse failure degrades to fallback
-            pass
-    return _parse_review_record_fallback(record_path)
-
-
-def _reviewed_lines_for_date(worktree: Path, date: str) -> List[str]:
-    """Enumerate + parse review-trail records for `date` (live + archive union).
-
-    Reuses list_review_trail_records._collect for file enumeration (same live
-    `state/review-trail/` + `archive/review-trail/` union, basename-sorted).
-    """
-    live_dir = worktree / "state" / "review-trail"
-    archive_dir = worktree / "archive" / "review-trail"
-    try:
-        records = _collect_review_trail_files(str(live_dir)) + _collect_review_trail_files(str(archive_dir))
-    except OSError:
-        print(f"skip: _reviewed_lines_for_date: records = _collect_review_trail_files(str(live_dir)) + _collect_review failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return []
-    records = [r for r in records if r[0].startswith(date)]
-    records.sort(key=lambda r: r[0])
-    return [parse_review_record(Path(fullpath)) for _basename, fullpath in records]
-
-
-def _has_non_trivial_for_date(worktree: Path, date: str) -> bool:
-    """Return whether `date`'s commit window contains any non-trivial commit.
-
-    Reuses `_collect_commits`/`_TRIVIAL_PATTERN` — the SAME date-window,
-    no-machine-filter derivation `compute_day_fields` already uses for
-    `has_non_trivial`. Not machine-scoped, by design: see module note at
-    `upsert_reviewed` for why (review-trail records carry no machine field).
-    """
-    commits = _collect_commits(worktree, date)
-    return any(not _TRIVIAL_PATTERN.search(subject) for _sha, subject in commits)
-
-
 # ===========================================================================
 # changelog.upsert_reviewed
 # ===========================================================================
 #
-# Surgical single-field upsert of the **Reviewed:** line-block for a given
-# (date, machine). Curation-preserving counterpart to changelog.append_day:
-# append_day recomposes an ENTIRE machine section from caller-supplied
-# fields, which would clobber any human-curated Scope:/Commits:/etc content
-# on that day's block. This op touches ONLY the **Reviewed:** line(s),
-# leaving every other line of the section byte-identical.
-#
-# Machine-scoping note: review-trail JSON records carry NO machine field
-# (verified against the live schema — sha_range/reviewer/scope/scope_kind/
-# verdict/diff_loc/session_id/workstream only). `_reviewed_lines_for_date`
-# (reused here, same helper `_compose_block`'s whole-section path calls via
-# `compute_day_fields`) is therefore a DATE-scoped derivation, not a
-# (date, machine) filter — `machine` in this op's signature selects WHICH
-# section of the file to touch, not a filter on what gets rendered into it.
-# This mirrors the pre-existing behavior of `changelog.append_day` /
-# `changelog.compute_day_fields`, which already render the same Reviewed:
-# value into every machine's section for a given date; this op does not
-# change that convention, only the write mechanics (surgical vs. whole-
-# section recompose).
+# RETIRED EMITTER (2026-09-24): this op used to re-derive a **Reviewed:**
+# line-block from `state/review-trail/` + `archive/review-trail/` records and
+# surgically upsert it into a day's machine section, leaving every other
+# curated line byte-identical. DR-374 gravestoned the review-trail store
+# outright — writer and CLIs deleted, the directory permanently empty — and
+# 9c199a3ce3 measured that `archive/review-trail/` stops at 2026-08-10 and the
+# live directory is empty, so the read this op made could never again return
+# a record. The op keeps its name/registration (op_scopes.py/classification.py/
+# _registry_map.py callers are out of this task's footprint) but no longer
+# reads review-trail or emits a **Reviewed:** value: it only strips a
+# pre-existing, contiguous managed block down to nothing, so any changelog day
+# still carrying the retired line converges to clean on the next call. It
+# never re-derives, never re-inserts.
 #
 # Spec backlink: cross-repo/inbox/2026-07-21-claude-central-em-reviewed-line-surgical-upsert.md
-# DR authority: docs/decisions/DR-216-changelog-completion-reviewtrail-write-carveout.md § D2
-#   (same state/week-changelog/ reserved-noun carve-out changelog.append_day
-#   is sanctioned under — this op writes the identical noun, no new surface).
+# DR authority: docs/decisions/DR-374-the-retired-review-trail-surface-is-gravestoned.md
 
 
 _REVIEWED_LINE_RE = re.compile(r"^\*\*Reviewed:\*\*.*$")
-_VALIDATION_LINE_RE = re.compile(r"^\*\*Validation:\*\*.*$")
-_LINKS_LINE_RE = re.compile(r"^\*\*Links:\*\*.*$")
 
 
 def upsert_reviewed(*, worktree: Path, date: str, machine: str) -> dict:
-    """Re-derive and upsert ONLY the **Reviewed:** line for (date, machine).
+    """Strip the retired **Reviewed:** line-block from (date, machine), if present.
 
     Leaves the rest of the `## {date} — {machine}` section BYTE-IDENTICAL —
-    unlike `append_day`, which recomposes the whole section from supplied
-    fields and would clobber human-curated Scope:/Commits: content. Re-
-    derives the Reviewed value itself from review-trail records for `date`
-    (never trusts a caller-supplied snapshot — trusting a stale snapshot is
-    what created the `Reviewed: none` staleness bug this op fixes).
+    same curation-preserving contract as before retirement. No longer reads
+    `state/review-trail/` (DR-374 gravestoned that store; it is permanently
+    empty) and never re-inserts a Reviewed: line — this op only removes what
+    an earlier `changelog.append_day`/`changelog.upsert_reviewed` call wrote.
 
     Write behaviour:
       - No `state/week-changelog/{date}.md` file yet → no-op ("no_match").
       - File exists but has no `## {date} — {machine}` section → no-op
         ("no_match"). Both are legitimate probes (the DoE-side caller scans
         many (date, machine) pairs at /workweek-complete), NOT errors.
-      - Section exists, derived Reviewed: block already matches what is on
-        disk → no-op ("unchanged") — idempotent re-run.
-      - Section exists, derived Reviewed: block differs (including the
-        insert-where-none-existed and remove-down-to-none cases) → in-place
-        replace via the same atomic read-modify-write `append_day` uses.
+      - Section exists, no contiguous **Reviewed:** block found → no-op
+        ("unchanged") — a non-contiguous stray line (hand-curated, matching
+        the line prefix by coincidence) is also left untouched.
+      - Section exists, contiguous **Reviewed:** block found → stripped,
+        in-place replace via the same atomic read-modify-write `append_day`
+        uses.
 
     Returns:
         {out_path: str, action: "replaced" | "unchanged" | "no_match"}
@@ -1507,45 +1392,17 @@ def upsert_reviewed(*, worktree: Path, date: str, machine: str) -> dict:
     section = _extract_section(existing, section_header)
     section_lines = section.split("\n")
 
-    reviewed_lines = _reviewed_lines_for_date(worktree, date)
-    has_non_trivial = _has_non_trivial_for_date(worktree, date)
-    new_reviewed_block = _reviewed_block_lines(reviewed_lines, has_non_trivial)
-
     old_indices = [i for i, ln in enumerate(section_lines) if _REVIEWED_LINE_RE.match(ln)]
-    # old_indices is the contiguous run
-    # compose_block always emits together for machine-generated sections, but
-    # this op's premise is that the section may carry human curation. A
-    # curator-added, non-contiguous line elsewhere in the section that happens
-    # to start with "**Reviewed:**" would make old_indices non-contiguous; the
-    # strip-then-reinsert below would then relocate/collapse that stray
-    # content. Treat non-contiguous matches as "no managed block found" and
-    # fall through to the fresh-insertion path, leaving the stray line alone.
+    # Only a CONTIGUOUS run is the managed block compose_block/upsert_reviewed
+    # always emitted together. A curator-added, non-contiguous line elsewhere
+    # in the section that happens to start with "**Reviewed:**" is left
+    # alone — never stripped or relocated.
     is_contiguous = old_indices == list(range(old_indices[0], old_indices[0] + len(old_indices))) if old_indices else False
 
-    if old_indices and is_contiguous:
-        # old_indices is the contiguous run compose_block always emits
-        # together — everything before it is untouched, so its count (and
-        # therefore the correct re-insertion point) is unchanged by removal.
-        insert_pos = old_indices[0]
-        kept_lines = [ln for i, ln in enumerate(section_lines) if i not in old_indices]
-        new_section_lines = kept_lines[:insert_pos] + new_reviewed_block + kept_lines[insert_pos:]
-    else:
-        # Never had a Reviewed: block — anchor the insert on **Validation:**
-        # (compose_block's fixed position, immediately before Reviewed:),
-        # falling back to immediately before **Links:**, then end-of-section,
-        # for a hand-curated section that dropped/renamed either anchor line.
-        validation_idx = next(
-            (i for i, ln in enumerate(section_lines) if _VALIDATION_LINE_RE.match(ln)), None
-        )
-        if validation_idx is not None:
-            insert_pos = validation_idx + 1
-        else:
-            links_idx = next(
-                (i for i, ln in enumerate(section_lines) if _LINKS_LINE_RE.match(ln)), None
-            )
-            insert_pos = links_idx if links_idx is not None else len(section_lines)
-        new_section_lines = section_lines[:insert_pos] + new_reviewed_block + section_lines[insert_pos:]
+    if not (old_indices and is_contiguous):
+        return {"out_path": str(changelog_file), "action": "unchanged"}
 
+    new_section_lines = [ln for i, ln in enumerate(section_lines) if i not in old_indices]
     new_section = "\n".join(new_section_lines)
 
     if new_section == section:
@@ -1562,11 +1419,12 @@ async def _upsert_reviewed_handler(
 ) -> dict:
     """JSON-RPC changelog.upsert_reviewed handler.
 
-    MUTATING (surgically rewrites the **Reviewed:** line(s) inside
-    state/week-changelog/{date}.md's `## {date} — {machine}` section; every
-    other line of that section, and every other section in the file, is
-    left byte-identical). DOES NOT git-commit (DR-216 D2(v)): caller/EM
-    retains commit responsibility — same discipline as changelog.append_day.
+    RETIRED EMITTER (see `upsert_reviewed` docstring, DR-374): strips any
+    pre-existing **Reviewed:** line(s) from state/week-changelog/{date}.md's
+    `## {date} — {machine}` section; every other line of that section, and
+    every other section in the file, is left byte-identical. Never re-derives
+    or re-inserts. DOES NOT git-commit (DR-216 D2(v)): caller/EM retains
+    commit responsibility — same discipline as changelog.append_day.
 
     Required params:
         date (str, YYYY-MM-DD) — the changelog day to correct.
@@ -2445,11 +2303,10 @@ def compute_day_fields(
     handoffs_list, handoff_paths = _handoffs_for_date(worktree, date)
     decisions = extract_field_from_handoffs("Decisions", handoff_paths)
     blockers = extract_field_from_handoffs("Blockers", handoff_paths)
-    # The exit gate does not read the review trail:
-    # `_reviewed_lines_for_date` stays live for `changelog.upsert_reviewed`
-    # (Step 7/18 consumers); this compose path no longer renders the field
-    # (see `_compose_block`), so the read is dropped rather than performed
-    # and discarded. Key kept in the return bundle for caller compatibility.
+    # The exit gate does not read the review trail: DR-374 gravestoned that
+    # store (permanently empty) and `changelog.upsert_reviewed` no longer
+    # reads it either (see its docstring). Key kept in the return bundle
+    # for caller compatibility; always empty now.
     reviewed_lines: List[str] = []
     staleness = _header_staleness(worktree, resolved_local_today)
 

@@ -153,6 +153,24 @@ def test_chmod_non_recursive_allows():
     assert guard.check(payload) is None
 
 
+def test_generic_branch_deny_message_trimmed_below_prior_measurement():
+    # C8a trim attempt (docs/plans/2026-09-11-trim-the-remaining-over-cap-
+    # guard-messages.md): the intro/tail prose was shortened without
+    # dropping the `Denied:`/`Command:` diagnostic lines, the "not a
+    # capability boundary" disclaimer (pinned above), or the "No
+    # subagent-reachable ... override exists" override-withholding fact.
+    # Still over `MESSAGE_PROSE_CAP_BYTES` (220) -- the static skeleton
+    # plus the mandatory `Guard:` tag exceeds it before any command text
+    # is appended; see `guard_message_exemptions.py`'s manifest entry for
+    # this cell for why no further cut is possible without reopening a
+    # fixed defect or losing what-was-denied information.
+    payload = _payload("git rebase -i HEAD~3", agent_type="coordinator:executor")
+    result = guard.check(payload)
+    assert result is not None
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert len(reason.encode("utf-8")) < 278, "generic-branch deny message regressed above its trimmed size"
+
+
 def test_generic_branch_deny_message_does_not_advise_a_sandbox_scoping_that_does_not_exist():
     # The generic
     # git/rm/chmod-chown-R fallback branch of `_build_reason` had the same

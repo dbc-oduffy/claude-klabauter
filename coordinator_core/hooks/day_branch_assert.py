@@ -268,13 +268,19 @@ def case_b_verdict(repo_root: str, branch: str) -> DayBranchAssertResult:
 
       - ``branch_gate`` (``work/*`` only): a branch that does NOT start with
         ``work/`` gets no auto-push at all, so no crash insurance.
-    Compliant = ``work/*`` shape. A detached HEAD is always non-compliant and
-    always warns.
+    Compliant = ``is_work_branch`` (``work/*``, verbatim or behind exactly one
+    leading ``origin/``). A detached HEAD is always non-compliant and always
+    warns. A branch that is a work branch only because of a leading
+    ``origin/`` still warns, once and non-escalating (informational line, not
+    the banner) — it is compliant enough not to skip auto-push, but the name
+    itself is malformed and should be renamed.
 
     Negative-spec — do not reintroduce a pending-push-record leg here. See the
     gravestone above ``case_b_verdict``: the record has no writer post-C8, so
     reading it can only produce a false RED.
     """
+    from coordinator_core.daily_branch import has_remote_prefix, is_work_branch
+
     if not branch:
         return DayBranchAssertResult(
             WARN,
@@ -289,7 +295,18 @@ def case_b_verdict(repo_root: str, branch: str) -> DayBranchAssertResult:
             ),
         )
 
-    if not branch.startswith("work/"):
+    if has_remote_prefix(branch):
+        rename_target = branch[len("origin/"):]
+        return DayBranchAssertResult(
+            WARN,
+            branch,
+            (
+                f"day-branch: {branch} carries a remote prefix (origin/); "
+                f"rename with `git branch -m {branch} {rename_target}`."
+            ),
+        )
+
+    if not is_work_branch(branch):
         if branch.startswith(_RECOGNIZED_LONG_LIVED):
             return DayBranchAssertResult(
                 WARN,

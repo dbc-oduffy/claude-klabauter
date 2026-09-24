@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from typing import Optional
 
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.hooks._envelope import allow_advisory, no_advisory
 from coordinator_core.hooks.derive_global_doctrine_live_copy import (
     _display_path,
@@ -243,6 +244,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     """PostToolUse(Write|Edit|MultiEdit) op: re-derive a canonical
     `setup/`-tree write's paired install-template copy, or warn on a write
     landing directly on a derived copy."""
+    params = payload_of(params)
     message = evaluate(params)
     if message is None:
         return no_advisory()

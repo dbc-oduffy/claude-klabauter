@@ -27,6 +27,12 @@ Profile:
   - edge targets are graph nodes, universal hand-back types, or the
     profile's own ``hand_back_types`` (DR-404 § 3), which must be disjoint
     from both;
+  - a ``refute-close`` node's ``refuted`` outcome (edge, else ``on_fail``)
+    resolves to a ``fix``-kind node or a hand-back type, never anywhere
+    else — an unrevived refuted closure strands a live defect;
+  - a ``fix`` node's ``NOT_REPRODUCED`` outcome (edge, else ``on_fail``)
+    resolves to a hand-back type, never to a node — a fixer's "already
+    gone" may not close a row on its own word;
   - the floor: no path reaches a commit without having passed through
     ``refute-close`` or a ``fix``, and no ``fix``-carrying path reaches
     commit without a ``verify`` pass downstream of the LAST fix on that
@@ -150,7 +156,8 @@ class ProfileError(ValueError):
     ``triage_verdict_totality``, ``graph_cycle``, ``graph_on_fail_traversal``,
     ``verify_floor``, ``closing_floor``, ``closure_block``,
     ``closure_branch_missing``, ``unknown_appetite_preset``,
-    ``unoverridable_knob``, ``hand_back_type_collision``).
+    ``unoverridable_knob``, ``hand_back_type_collision``,
+    ``refuted_not_revived``, ``not_reproduced_not_handed_back``).
     ``node`` is the offending node/knob id when the rule is node-shaped,
     ``None`` for a profile-wide or path-shaped rule
     (the path itself is folded into ``detail``). ``detail`` is the
@@ -396,6 +403,8 @@ def validate_graph(profile: Profile) -> None:
     _check_outcome_membership(profile)
     _check_verify_nodes(profile)
     _check_edge_targets(profile)
+    _check_refuted_revives(profile)
+    _check_not_reproduced_hands_back(profile)
     _check_acyclic(profile)
     _check_paths(profile)
 
@@ -500,6 +509,44 @@ def _check_edge_targets(profile: Profile) -> None:
                 node=node_id,
                 detail=f"['on_fail']: on_fail targets triage node {node.on_fail!r} -- the composer never "
                 "routes on_fail to a triage node, it makes no progress and loops forever",
+            )
+
+
+def _check_refuted_revives(profile: Profile) -> None:
+    """Design item 1: every ``refute-close`` node's ``refuted`` outcome must
+    resolve -- edge if present, else ``on_fail`` (``_check_outcome_membership``
+    already guarantees one or the other names it) -- to a `fix`-kind node or
+    a hand-back type. A refuted proposal that settles anywhere else (a
+    non-fix node, or straight to ``commit``) is the KEPT_OPEN stranding the
+    2026-09-21 grind handoff measured: nothing re-queues it."""
+    for node_id, node in profile.graph.items():
+        if node.kind != "refute-close":
+            continue
+        target = node.edges.get("refuted", node.on_fail)
+        if target in profile.graph and profile.graph[target].kind != "fix":
+            raise ProfileError(
+                "refuted_not_revived",
+                node=node_id,
+                detail=f"'refuted' resolves to {target!r} (kind {profile.graph[target].kind!r}), "
+                "not a fix node or a hand-back type",
+            )
+
+
+def _check_not_reproduced_hands_back(profile: Profile) -> None:
+    """Design item 1: every ``fix`` node's ``NOT_REPRODUCED`` outcome must
+    resolve -- edge if present, else ``on_fail`` -- to a hand-back type,
+    never to a node. A fixer's "already gone at HEAD" was wrong 59.1% of
+    the time in the 2026-09-21 grind; nothing may close a row on that one
+    agent's word alone."""
+    for node_id, node in profile.graph.items():
+        if node.kind != "fix":
+            continue
+        target = node.edges.get("NOT_REPRODUCED", node.on_fail)
+        if target in profile.graph:
+            raise ProfileError(
+                "not_reproduced_not_handed_back",
+                node=node_id,
+                detail=f"'NOT_REPRODUCED' resolves to node {target!r}, must hand back to a person",
             )
 
 

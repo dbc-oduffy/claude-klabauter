@@ -217,6 +217,61 @@ class TestLegacyUnchanged:
         assert _cf_plan_tasks_disposition_shape(row, governed=True) is not None
 
 
+class TestGovernedRefusesDeferredFlagOutright:
+    """P119-C1's governed leg: a governed plan has no live authoring path
+    for `deferred` at all — deferral there is `disposition: backlogged`
+    under an approved `defer` grouping. `deferred: true` is refused
+    outright, independent of `pm_approved`, through the combined
+    source-scoped door (`check_plan_tasks_source`), which is the only
+    caller that both resolves `governed` from the plan's own frontmatter
+    and forwards it to the cross-field rules."""
+
+    @pytest.mark.parametrize('pm_approved_kwargs', [
+        {'pm_approved': False},
+        {},
+        {'pm_approved': True},
+    ])
+    def test_deferred_row_refused_regardless_of_pm_approved(self, pm_approved_kwargs):
+        pm_approved_line = (
+            f"  pm_approved: {str(pm_approved_kwargs['pm_approved']).lower()}\n"
+            if 'pm_approved' in pm_approved_kwargs else ''
+        )
+        tasks = (
+            "- id: C1\n"
+            "  title: still a harvest candidate\n"
+            "  change_kind: code-edit\n"
+            "  surface: some/path.py\n"
+            "  deferred: true\n"
+            f"{pm_approved_line}"
+        )
+        source = _plan(tasks, frontmatter="grouping_approvals: {}\n")
+        error = check_plan_tasks_source(source)
+        assert error is not None
+        assert error['field'] == 'deferred'
+
+    def test_correctly_deferred_governed_row_still_passes(self):
+        """The positive path: a governed plan, `defer` grouping approved
+        with a fresh matching digest, and the row deferred the CORRECT way
+        (`disposition: backlogged`, no `deferred` flag at all) still
+        validates end to end."""
+        tasks = (
+            "- id: C1\n"
+            "  title: live\n"
+            "  change_kind: code-edit\n"
+            "  surface: some/path.py\n"
+            "- id: C2\n"
+            "  title: cut\n"
+            "  change_kind: code-edit\n"
+            "  surface: some/path.py\n"
+            "  disposition: backlogged\n"
+            "  disposition_detail: PM said this belongs in its own plan\n"
+            "  disposition_ref: docs/plans/2026-07-29-other.md\n"
+            "  case_against: not worth the cycles right now\n"
+        )
+        source = _plan(tasks, frontmatter=_governed_fm(digest=_defer_digest(tasks)))
+        assert check_plan_tasks_source(source) is None
+
+
 class TestPredicate:
     def test_approved_with_fresh_digest_admits(self):
         source = _plan(_ONE_DEFER, frontmatter=_governed_fm())

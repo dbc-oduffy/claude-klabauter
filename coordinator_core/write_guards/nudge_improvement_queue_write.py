@@ -85,9 +85,18 @@ Negative-spec:
     cannot drift into two.
   - Never raises: any unexpected input shape returns ``None`` (ALLOW/no-op).
 
+2026-09-22 fixes (P143-T56): the ``_FIVE_QUESTIONS_DOC`` citation in the deny
+text is engine-relative and does not resolve when the write it is nudging is
+happening in a consumer repo's own checkout — the citation now names the
+Claude-klabauter engine repo explicitly instead of a bare path. And
+``_extract_justification`` used to judge a YAML block-scalar
+(``justification: |-``) justification "trivial" because the regex only
+captured the header line, never the indented content lines that follow it —
+it now parses the block-scalar shape and gathers those lines as the value.
+
 Spec backlink: docs/wiki/coordinator-tripwires.md (improvement-queue admission rule)
-Five-question detail: docs/reference/queue-admission-five-questions.md
-Override-key reference: docs/reference/guard-override-keys.md
+Five-question detail: docs/reference/queue-admission-five-questions.md (claude-klabauter engine repo)
+Override-key reference: docs/reference/guard-override-keys.md (claude-klabauter engine repo)
 """
 
 from __future__ import annotations
@@ -138,13 +147,30 @@ _QUEUE_LABEL = "improvement queue"
 #: optional leading bullet marker for the prose form. When more than one
 #: match is present (e.g. a MultiEdit touching several lines), the LAST
 #: match wins — the most recently written value is what will actually land.
-_JUSTIFICATION_RE = re.compile(r"(?im)^\s*(?:[-*]\s*)?justification:\s*(.+?)\s*$")
+#: Captures the indent of the `justification:` key itself so a YAML
+#: block-scalar value (`|`, `|-`, `|+`, `>`, `>-`, `>+`) can be told apart
+#: from an inline scalar and its continuation lines gathered separately —
+#: see `_extract_justification`.
+_JUSTIFICATION_LINE_RE = re.compile(
+    r"^(?P<indent>[ \t]*)(?:[-*]\s*)?justification:\s*(?P<value>.*?)\s*$",
+    re.IGNORECASE,
+)
+
+#: A bare YAML block-scalar header with no inline content, e.g. `|`, `|-`,
+#: `>+`. When `_JUSTIFICATION_LINE_RE`'s captured value is one of these, the
+#: real justification text lives on the following more-indented lines, not
+#: in the header itself.
+_BLOCK_SCALAR_HEADER_RE = re.compile(r"^[|>][+-]?\d*$")
 
 #: Full five-question self-check + hard-forbidden-writes rule, relocated out
 #: of the inline deny text (2026-07-30 cut) so the deny message itself stays
 #: short. The content there is otherwise unchanged from what used to render
 #: inline.
-_FIVE_QUESTIONS_DOC = "docs/reference/queue-admission-five-questions.md"
+_FIVE_QUESTIONS_DOC = (
+    "docs/reference/queue-admission-five-questions.md (claude-klabauter engine repo — "
+    "this path is engine-relative and will not resolve in a consumer repo's "
+    "own checkout)"
+)
 
 _TRIVIAL_JUSTIFICATION_HINT = """
 [hook] Found a `justification:` line but its value was trivial ("1", "ok",
@@ -200,11 +226,37 @@ def _strip_wrapping_quotes(value: str) -> str:
 
 def _extract_justification(text: str) -> str:
     """Return the last ``justification:`` value found in ``text``, or ``""``
-    if none is present. Reads the RAW WRITE PAYLOAD text — no disk I/O."""
-    matches = _JUSTIFICATION_RE.findall(text or "")
-    if not matches:
-        return ""
-    return _strip_wrapping_quotes(matches[-1].strip())
+    if none is present. Reads the RAW WRITE PAYLOAD text — no disk I/O.
+
+    A YAML block-scalar value (``justification: |-`` etc.) has no inline
+    text after the header — the real content lives on the following
+    more-indented lines. Treating the bare header as the value would judge
+    a real, non-trivial justification "trivial" on nothing but its own
+    punctuation. When the captured value is a block-scalar header, the
+    following lines (each stripped, deeper-indented than the key) are
+    gathered and joined instead."""
+    lines = (text or "").splitlines()
+    last_value = ""
+    for i, line in enumerate(lines):
+        match = _JUSTIFICATION_LINE_RE.match(line)
+        if not match:
+            continue
+        value = match.group("value").strip()
+        if _BLOCK_SCALAR_HEADER_RE.match(value):
+            key_indent = len(match.group("indent"))
+            block_lines = []
+            for next_line in lines[i + 1 :]:
+                if next_line.strip() == "":
+                    block_lines.append("")
+                    continue
+                next_indent = len(next_line) - len(next_line.lstrip(" \t"))
+                if next_indent <= key_indent:
+                    break
+                block_lines.append(next_line.strip())
+            last_value = " ".join(part for part in block_lines if part).strip()
+        else:
+            last_value = _strip_wrapping_quotes(value)
+    return last_value
 
 
 def _gather_new_content(tool_name: str, tool_input: Dict[str, Any]) -> str:

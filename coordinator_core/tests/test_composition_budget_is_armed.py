@@ -1,6 +1,8 @@
 """AST regression pin (chunk C2, docs/plans/2026-08-18-arm-the-composition-
-budget.md): the five `apply_base.execute_directives` callers this chunk arms
-must each construct and thread a real `composition_budget`, and must flush
+budget.md; row added for `execute_plan_assemble/apply.py` per
+docs/plans/2026-09-11-the-execute-plan-pre-execution-chain-emi.md, chunk C2):
+every `apply_base.execute_directives` caller this file names
+must construct and thread a real `composition_budget`, and must flush
 its record in a `finally` covering the same call -- never silently regress
 to `execute_directives`'s own `composition_budget=None` default.
 
@@ -16,7 +18,7 @@ body with a `composition_budget` keyword whose value is not a literal
 `None`, and a call to `flush_composition_record` must appear in that SAME
 `Try` node's `finalbody`.
 
-Source only -- this module never imports any of the five apply modules or
+Source only -- this module never imports any of the named apply modules or
 `coordinator_core.telemetry.composition_record`, so it passes whether or not
 C1's `composition_record.py` has landed yet (its own factory functions are
 not invoked here, only cited by name in the AST).
@@ -40,6 +42,7 @@ _SITES: tuple[tuple[str, str], ...] = (
     ("coordinator_core/merge_assemble/apply.py", "execute_directives"),
     ("coordinator_core/baton_assemble/apply.py", "_execute_directives"),
     ("coordinator_core/pickup_assemble/apply.py", "_execute_directives"),
+    ("coordinator_core/execute_plan_assemble/apply.py", "execute_directives"),
 )
 
 

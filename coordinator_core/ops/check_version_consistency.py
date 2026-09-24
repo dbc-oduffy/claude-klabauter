@@ -22,31 +22,53 @@ Layout-agnostic: resolves every path RELATIVE TO marketplace.json, so it runs
 unchanged in the meta-repo source layout (plugins/coordinator-claude/...) and in
 the flat OSS publish-repo layout (repo root). Auto-discovers the bundle root.
 
+Caller identity (P124-C1): with no `--root`, this gate no longer assumes its
+caller HOLDS the coordinator-claude bundle just because a marketplace.json
+happens to sit somewhere under it — example-retrieval-repo's own root marketplace.json
+(name "example-retrieval-repo") is not the subject. `--repo-root <dir>` names the repo
+being closed (default: the caller's cwd, via git toplevel, same as before);
+every non-`--root` discovery rung is rooted at THAT value only, never cwd
+directly, and accepts a candidate marketplace.json only when its `name` is
+literally `"coordinator-claude"`. A repo whose root carries no such candidate,
+or none whose name matches, is genuinely NOT the gate's subject: the gate
+prints a stated not-applicable line and exits 0, rather than failing a caller
+on a fact it cannot act on. This is a DELIBERATE departure from the retired
+bash oracle, which exited 1 from every repo on the box (no caller ever exits 0
+having "checked nothing" any more; see docs/decisions/ for the claude-klabauter DR this
+implements). An explicit `--root` is unaffected: it stays fail-loud, exactly
+as it always has, because the release callers (DoE's own ceremony step,
+`publish.py`) depend on that behaviour.
+
 Exit codes (parity-critical — the trampoline and callers branch on these):
-  0 — all surfaces agree (or --help)
+  0 — all surfaces agree, or a stated not-applicable (no `--root`, no
+      coordinator-claude bundle in `--repo-root`), or --help
   1 — mismatch, OR a required surface missing/unparseable (fail-loud)
   2 — unrecognised CLI argument
 
 Port of: check-version-consistency.sh (DoE 894d4bc6, 2026-07-22)
 Spec backlink: docs/wiki/versioning-convention.md (DoE-claude)
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
+Caller-identity backlink: docs/plans/2026-09-12-ceremony-gates-read-their-caller-before-they-fail-it.md (C1)
 
 Negative-spec:
     - `fail()` in the bash oracle always exits 1, even for "not found" /
       "unparseable" errors that read like usage mistakes — this module
       REPRODUCES that (does not "upgrade" those paths to exit 2), matching the
       oracle's own convention that only a genuinely unrecognised CLI flag is
-      exit 2.
+      exit 2. This still holds for an explicit `--root`.
     - --check-tag is advisory ONLY: a tag/plugin.json mismatch prints a NOTE to
       stderr but never flips the exit code away from 0 (when surfaces
       otherwise agree). `--sort=-v:refname` failures (git <2.0) are silently
       swallowed exactly as the bash oracle's `2>/dev/null` does.
     - --quiet suppresses only the trailing "OK — all surfaces at X" line;
-      failures always print regardless of --quiet (matches oracle comment).
+      failures always print regardless of --quiet, and so does the stated
+      not-applicable line (matches oracle comment on failures; extended here
+      to N/A on purpose — N/A is the fail-loud half of "checked nothing").
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -60,12 +82,19 @@ from coordinator_core.git.repo_root import show_toplevel
 _PROG = "check-version-consistency"
 
 _USAGE = """\
-check-version-consistency.sh [--root <dir>] [--check-tag] [--quiet]
-  --root <dir>   bundle root containing .claude-plugin/marketplace.json
-                 (default: auto-discover from cwd / git root)
-  --check-tag    additionally compare the latest v* git tag (advisory: a
-                 mismatch WARNs, does not fail — source_is_live repos never tag)
-  --quiet        suppress the OK line (failures always print)
+check-version-consistency.sh [--root <dir>] [--repo-root <dir>] [--check-tag] [--quiet]
+  --root <dir>       bundle root containing .claude-plugin/marketplace.json
+                      (fail-loud if missing; no identity check, no N/A branch)
+  --repo-root <dir>  the repo being closed (default: cwd's git toplevel).
+                      Ignored when --root is given. Auto-discovery is rooted
+                      at this value only (never cwd) and only recognises a
+                      marketplace.json whose "name" is "coordinator-claude" —
+                      a repo with no such candidate exits 0 with a stated
+                      not-applicable line, rather than failing.
+  --check-tag        additionally compare the latest v* git tag (advisory: a
+                      mismatch WARNs, does not fail — source_is_live repos
+                      never tag)
+  --quiet            suppress the OK line (failures and N/A always print)
 """
 
 _VERSION_RE = re.compile(r'[ \t]*"version"[ \t]*:[ \t]*"([^"]*)".*')
@@ -93,7 +122,7 @@ def _git_toplevel(start: Optional[str] = None) -> Optional[str]:
 
 
 def _discover_root(root_arg: str) -> str:
-    """Mirrors discover_root() in the bash oracle, in the same rung order.
+    """The explicit `--root` branch ONLY (item 4: unchanged, fail-loud).
 
     NEGATIVE-SPEC (reproduced bug, not fixed): in the bash oracle,
     `BUNDLE_ROOT="$(discover_root)"` runs discover_root in a command-substitution
@@ -103,43 +132,79 @@ def _discover_root(root_arg: str) -> str:
     the fail() message went to stderr and printed anyway) and falls through to
     the CHANGELOG-file resolution using empty-root-relative paths, which always
     fails too, emitting a SECOND stderr message before the real top-level exit
-    1. This module reproduces the two-message-then-continue sequence exactly:
-    each rung prints its own failure message immediately (matching bash echo
-    timing) but returns "" instead of stopping the whole run, so the caller
-    falls through to the CHANGELOG check exactly as the oracle does.
+    1. This module reproduces that two-message-then-continue sequence exactly
+    for `--root`: it prints its own failure message immediately (matching bash
+    echo timing) but returns "" instead of stopping the whole run, so the
+    caller falls through to the CHANGELOG check exactly as the oracle does.
+
+    The no-`--root` auto-discovery path is a DELIBERATE departure from the
+    oracle (see the module docstring's Caller identity section) and lives in
+    `_discover_bundle_for_repo_root`, never here — it never reproduces this
+    subshell bug, because its failure mode is a stated not-applicable, not a
+    second stderr message.
     """
-    # 1. Explicit --root.
-    if root_arg:
-        if not os.path.isfile(os.path.join(root_arg, ".claude-plugin", "marketplace.json")):
-            print(
-                f"{_PROG}: no .claude-plugin/marketplace.json under --root '{root_arg}'",
-                file=sys.stderr,
-            )
-            return ""
-        return root_arg
+    if not os.path.isfile(os.path.join(root_arg, ".claude-plugin", "marketplace.json")):
+        print(
+            f"{_PROG}: no .claude-plugin/marketplace.json under --root '{root_arg}'",
+            file=sys.stderr,
+        )
+        return ""
+    return root_arg
 
-    git_root = _git_toplevel()
 
-    # 2. Flat publish-repo layout: marketplace.json at git root.
-    if git_root and os.path.isfile(os.path.join(git_root, ".claude-plugin", "marketplace.json")):
-        return git_root
+def _resolve_effective_repo_root(repo_root_arg: str) -> str:
+    """The repo being closed: `--repo-root` if given, else cwd — normalized
+    through `show_toplevel`, exactly as the pre-C1 cwd-derived rungs were, so
+    a caller naming a path NESTED under a bundle holder's own worktree still
+    resolves to that holder's root, and a caller naming a path that is not a
+    git repo at all falls back to that path verbatim (discovered as N/A,
+    naming the path the caller gave — never cwd)."""
+    base = repo_root_arg or os.getcwd()
+    top = _git_toplevel(base)
+    return top or base
 
-    # 3. Meta-repo source layout: the bundle lives under plugins/coordinator-claude/.
-    if git_root and os.path.isfile(
-        os.path.join(git_root, "plugins", "coordinator-claude", ".claude-plugin", "marketplace.json")
+
+def _read_bundle_name(path: str) -> str:
+    """Parses `path` (a marketplace.json candidate) as JSON and returns its
+    top-level "name". Fails loud — exit 1, one stderr line naming the file —
+    if the file exists but is not valid JSON or carries no string "name": a
+    corrupt bundle-holder file must never be silently read as "not the
+    bundle", which would turn a real defect into a green not-applicable."""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        _fail(f"unparseable marketplace manifest: {path} ({exc})")
+        raise AssertionError("unreachable")  # pragma: no cover
+    name = data.get("name") if isinstance(data, dict) else None
+    if not isinstance(name, str):
+        _fail(f'unparseable marketplace manifest: {path} (no string "name")')
+        raise AssertionError("unreachable")  # pragma: no cover
+    return name
+
+
+def _discover_bundle_for_repo_root(repo_root: str) -> Optional[str]:
+    """Auto-discovery for the no-`--root` path. Three rungs, each rooted at
+    `repo_root` ONLY — never cwd, never `_git_toplevel()` re-derived per rung
+    — flat publish/source layout, DoE-claude's v3 source layout (the bundle
+    lives under `coordinator/.claude-plugin/`), and the older nested
+    meta-repo layout (`plugins/coordinator-claude/.claude-plugin/`). A
+    candidate file that exists is identity-checked via `_read_bundle_name`
+    before being accepted — a `example-retrieval-repo`-named marketplace.json is not
+    mistaken for the coordinator-claude bundle, and a corrupt candidate fails
+    loud rather than falling through. Returns the matching bundle root, or
+    None when no rung has a coordinator-claude candidate at all (the
+    not-applicable case, handled by the caller)."""
+    for candidate in (
+        f"{repo_root}/.claude-plugin/marketplace.json",
+        f"{repo_root}/coordinator/.claude-plugin/marketplace.json",
+        f"{repo_root}/plugins/coordinator-claude/.claude-plugin/marketplace.json",
     ):
-        return os.path.join(git_root, "plugins", "coordinator-claude")
-
-    # 4. cwd fallback — require BOTH anchor files so an unrelated dir that merely
-    #    contains a marketplace.json can't be mistaken for the coordinator bundle.
-    cwd = os.getcwd()
-    if os.path.isfile(os.path.join(cwd, ".claude-plugin", "marketplace.json")) and os.path.isfile(
-        os.path.join(cwd, "coordinator", ".claude-plugin", "plugin.json")
-    ):
-        return cwd
-
-    print(f"{_PROG}: could not locate .claude-plugin/marketplace.json (pass --root)", file=sys.stderr)
-    return ""
+        if not os.path.isfile(candidate):
+            continue
+        if _read_bundle_name(candidate) == "coordinator-claude":
+            return candidate[: -len("/.claude-plugin/marketplace.json")]
+    return None
 
 
 def _resolve_plugin_json(bundle_root: str) -> str:
@@ -241,8 +306,23 @@ def _latest_v_tag(bundle_root: str) -> Optional[str]:
     return lines[0] if lines else None
 
 
-def _run(root_arg: str, check_tag: bool, quiet: bool) -> int:
-    bundle_root = _discover_root(root_arg)
+def _run(root_arg: str, repo_root_arg: str, check_tag: bool, quiet: bool) -> int:
+    if root_arg:
+        bundle_root = _discover_root(root_arg)
+    else:
+        repo_root = _resolve_effective_repo_root(repo_root_arg)
+        discovered = _discover_bundle_for_repo_root(repo_root)
+        if discovered is None:
+            # Stated not-applicable — always printed, even under --quiet
+            # (module docstring, Caller identity): a reader must be able to
+            # tell "not-applicable" apart from "checked and green".
+            print(
+                f"{_PROG}: N/A — {repo_root} holds no coordinator-claude bundle "
+                "(looked for .claude-plugin/ and coordinator/.claude-plugin/)"
+            )
+            return 0
+        bundle_root = discovered
+
     marketplace = f"{bundle_root}/.claude-plugin/marketplace.json"
     plugin_json = _resolve_plugin_json(bundle_root)
     changelog = _resolve_changelog(bundle_root)
@@ -299,12 +379,17 @@ def main(argv: List[str]) -> int:
     check_tag = False
     quiet = False
     root_arg = ""
+    repo_root_arg = ""
 
     i = 0
     while i < len(argv):
         arg = argv[i]
         if arg == "--root":
             root_arg = argv[i + 1] if i + 1 < len(argv) else ""
+            i += 2
+            continue
+        if arg == "--repo-root":
+            repo_root_arg = argv[i + 1] if i + 1 < len(argv) else ""
             i += 2
             continue
         if arg == "--check-tag":
@@ -322,9 +407,12 @@ def main(argv: List[str]) -> int:
         return 2
 
     try:
-        return _run(root_arg, check_tag, quiet)
+        return _run(root_arg, repo_root_arg, check_tag, quiet)
     except _GateFailure:
-        print(f"skip: main: return _run(root_arg, check_tag, quiet) failed: {sys.exc_info()[1]}", file=sys.stderr)
+        print(
+            f"skip: main: return _run(root_arg, repo_root_arg, check_tag, quiet) failed: {sys.exc_info()[1]}",
+            file=sys.stderr,
+        )
         return 1
 
 

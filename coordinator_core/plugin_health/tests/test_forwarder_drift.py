@@ -778,3 +778,10 @@ def test_shape_w_citation_trailing_period_is_stripped(tmp_path: Path, two_bin_di
     result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=doe_root)
 
     assert set(result.extension_mismatch.keys()) == {"workweek-complete-brief.cmd"}
+
+
+def test_remedy_no_longer_names_install_substrate():
+    # install.substrate's sweep deleted 31 live forwarders (71-73 spin-off
+    # record); the remedy must not point an operator at that command again.
+    assert "install.substrate" not in fd._REMEDY
+    assert "setup.py --i-am-agent" in fd._REMEDY

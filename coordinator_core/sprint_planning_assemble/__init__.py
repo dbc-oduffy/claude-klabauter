@@ -579,8 +579,10 @@ def main(argv: list[str]) -> int:
         print(f"{prog}: {exc}", file=sys.stderr)
         return EXIT_USAGE
     except Exception as exc:  # noqa: BLE001 - structural backstop, mirrors sizing_assemble
+        # Transport failure: compute never ran, so nothing goes on stdout —
+        # the exit code is the only evidence (completion-evidence contract,
+        # DR-442). Matches `backlog_grind_assemble.main`'s shape.
         print(f"{prog}: unexpected failure: {exc}", file=sys.stderr)
-        print(json.dumps({"error": str(exc), "transport_failure": True}))
         return EXIT_TRANSPORT_FAIL
 
     print(json.dumps(decision, indent=2, sort_keys=True))

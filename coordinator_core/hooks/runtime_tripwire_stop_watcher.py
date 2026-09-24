@@ -294,8 +294,8 @@ def _main_impl() -> int:
 
     try:
         lock_dir.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
+    except Exception as exc:
+        sys.stderr.write(f"RUNTIME TRIPWIRE: lock dir creation failed ({lock_dir}): {exc}\n")
 
     if lock.is_file():
         try:
@@ -315,7 +315,7 @@ def _main_impl() -> int:
         try:
             lock.unlink(missing_ok=True)
         except Exception:
-            pass
+            pass  # best-effort lock cleanup; a stale lock is resolved by the next run's staleness check
         return 0
 
     max_track_minutes = int(os.environ.get("RUNTIME_TRIPWIRE_MAX_TRACK_MIN", "90"))
@@ -350,7 +350,7 @@ def _main_impl() -> int:
         try:
             lock.unlink(missing_ok=True)
         except Exception:
-            pass
+            pass  # best-effort lock cleanup; a stale lock is resolved by the next run's staleness check
         return 0
 
     # --- Step 7: compute SLEEP_SEC ---
@@ -378,8 +378,8 @@ def _main_impl() -> int:
     if child_pid is not None:
         try:
             lock.write_text(str(child_pid), encoding="utf-8", newline="\n")
-        except Exception:
-            pass
+        except Exception as exc:
+            sys.stderr.write(f"RUNTIME TRIPWIRE: lock write failed ({lock}): {exc}\n")
     # else: launch failed -- fail-open, leave any prior (already-checked-stale)
     # lock content in place rather than risk writing a garbage PID; the next
     # Stop event will re-attempt (stale lock still reaps cleanly next time).
@@ -502,7 +502,7 @@ def _rm_lock(lock: Path) -> None:
     try:
         lock.unlink(missing_ok=True)
     except Exception:
-        pass
+        pass  # teardown helper; a lock left behind is resolved by the next run's staleness check
 
 
 if __name__ == "__main__":

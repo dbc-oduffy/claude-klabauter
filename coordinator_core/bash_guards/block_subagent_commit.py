@@ -1188,6 +1188,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import posixpath
 import re
 import string
@@ -5932,8 +5933,38 @@ def _resolve_git_commit_agent_pathspec(cmd: str) -> Optional[Tuple[List[str], bo
 _SWEEPING_FLAG_TOKENS = frozenset({"-A", "-a", "--all"})
 
 #: Characters that make a pathspec element a glob rather than a literal
-#: path -- AC14 rejects "any glob pattern".
+#: path -- AC14 rejects "any glob pattern". ``[`` alone is special-cased in
+#: `_pathspec_element_is_sweeping` via `_bracket_candidate_exists_literally`:
+#: a literal on-disk name containing `[` (e.g. Next.js `[slug]`) is a path,
+#: not a glob, when the filesystem confirms it.
 _GLOB_CHARS = frozenset("*?[")
+
+
+def _bracket_candidate_exists_literally(candidate: str, git_root: str) -> bool:
+    """True if ``candidate`` (containing a literal ``[``, e.g. a Next.js
+    ``[slug]`` path segment) names a real, existing filesystem entry when
+    resolved against ``git_root``. Checked with ``os.path.exists`` -- a
+    literal existence probe, never ``glob()`` -- so ``[`` in a real file or
+    directory name is not misread as bracket-expression glob syntax.
+
+    Existence-only, not a resolution authority: this does not replace
+    ``_pathspec_element_is_sweeping``'s own lexical resolution below, and a
+    literal path that passes this check still goes through every other AC14
+    leg (root/ancestor, ownership-scope) unchanged.
+    """
+    if not git_root:
+        return False
+    candidate_posix = candidate.replace("\\", "/")
+    if posixpath.isabs(candidate_posix) or _DRIVE_ABSOLUTE_PATHSPEC_RE.match(
+        candidate_posix
+    ):
+        fs_path = candidate
+    else:
+        fs_path = os.path.join(git_root, candidate)
+    try:
+        return os.path.exists(fs_path)
+    except OSError:
+        return False
 
 
 def _pathspec_element_is_sweeping(path: Any, git_root: str) -> bool:
@@ -6011,7 +6042,13 @@ def _pathspec_element_is_sweeping(path: Any, git_root: str) -> bool:
     if candidate in _SWEEPING_FLAG_TOKENS:
         return True
     if any(ch in candidate for ch in _GLOB_CHARS):
-        return True
+        if not (
+            "[" in candidate
+            and "*" not in candidate
+            and "?" not in candidate
+            and _bracket_candidate_exists_literally(candidate, git_root)
+        ):
+            return True
     if not git_root:
         return True
     root = posixpath.normpath(git_root.replace("\\", "/"))

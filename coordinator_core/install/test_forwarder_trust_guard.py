@@ -637,16 +637,17 @@ def test_derive_agent_helper_target_map_extensionless_and_py_twin_prefers_py(
     assert "foo.py" in warning
 
 
-def test_derive_agent_helper_target_map_non_py_suffix_does_not_collide(tmp_path: Path):
-    """`foo.py` and `foo.sh` do NOT collide -- `.sh` is not `.py`, so its
-    installed name is its own literal filename (`"foo.sh"`), never the
-    stripped stem `"foo"`. Documents the boundary of the collision guard:
-    given this map's key derivation (`.py`-suffix stem-strips, every other
-    suffix keeps the literal name), the *only* two on-disk filenames that
-    can ever derive the same installed name are an exact `<X>` / `<X>.py`
-    pair -- so the fatal branch in the scan loop, while real defense-in-
-    depth against a future change to that derivation, has no other
-    currently-reachable trigger shape to assert against."""
+def test_derive_agent_helper_target_map_non_allowlisted_suffix_excluded_not_collided(tmp_path: Path):
+    """`foo.py` and `foo.sh` do NOT collide -- `.sh` is outside the C5
+    allowlist (`.py` or extensionless only), so `foo.sh` is excluded from
+    the map entirely rather than surviving under its own literal name.
+    Documents the boundary of the collision guard: given this map's key
+    derivation (`.py`-suffix stem-strips, extensionless keeps the literal
+    name, everything else is excluded upfront), the *only* two on-disk
+    filenames that can ever derive the same installed name are an exact
+    `<X>` / `<X>.py` pair -- so the fatal branch in the scan loop, while
+    real defense-in-depth against a future change to that derivation, has
+    no other currently-reachable trigger shape to assert against."""
     agent_bin = tmp_path / "coordinator" / "bin"
     _touch(agent_bin / "foo.py")
     _touch(agent_bin / "foo.sh")
@@ -654,7 +655,49 @@ def test_derive_agent_helper_target_map_non_py_suffix_does_not_collide(tmp_path:
     mapping = _derive_agent_helper_target_map(agent_bin)
 
     assert mapping["foo"] == "foo.py"
-    assert mapping["foo.sh"] == "foo.sh"
+    assert "foo.sh" not in mapping
+
+
+def test_derive_agent_helper_target_map_allowlists_py_and_extensionless_only(tmp_path: Path):
+    """C5 (docs/plans/2026-09-23-install-windows-forwarder-hygiene.md): the
+    scan admits an entry as a CLI only when its suffix is `.py` or empty
+    (extensionless) -- everything else (editor residue, doc/data files) is
+    skipped silently, replacing the former denylist of known-junk suffixes.
+    `polyglot-cli` proves "extensionless" still means "extensionless", not
+    "extensionless Python-only" -- the allowlist admits a non-Python
+    extensionless shell unchanged."""
+    agent_bin = tmp_path / "coordinator" / "bin"
+    _touch(agent_bin / "real-cli.py")
+    _touch(agent_bin / "polyglot-cli")
+    _touch(agent_bin / "x.py.your-wip.1.bak")
+    _touch(agent_bin / "notes.orig")
+    _touch(agent_bin / "x.py~")
+    _touch(agent_bin / "README.md")
+
+    mapping = _derive_agent_helper_target_map(agent_bin)
+
+    assert mapping == {"real-cli": "real-cli.py", "polyglot-cli": "polyglot-cli"}
+
+
+def test_derive_agent_helper_target_map_census_row_7_replay_only_cli_names(tmp_path: Path):
+    """Negative control replaying census row 7's probe verbatim (same file
+    names, extended with one extensionless CLI). Before this fix the probe
+    derived `['coordinator-safe-commit.py.your-wip.573859.bak', 'notes.orig',
+    'real-cli', 'x.py~']` -- every stray suffix admitted as a CLI name. It
+    must now print only the genuine CLI names."""
+    agent_bin = tmp_path / "coordinator" / "bin"
+    for n in [
+        "real-cli.py",
+        "polyglot-cli",
+        "coordinator-safe-commit.py.your-wip.573859.bak",
+        "notes.orig",
+        "x.py~",
+    ]:
+        _touch(agent_bin / n)
+
+    mapping = _derive_agent_helper_target_map(agent_bin)
+
+    assert sorted(mapping) == ["polyglot-cli", "real-cli"]
 
 
 def test_derive_agent_helper_target_map_real_live_tree_succeeds():
@@ -1190,6 +1233,31 @@ def test_sweep_is_idempotent(tmp_path: Path, capsys: pytest.CaptureFixture):
     _sweep_orphaned_agent_helpers(tmp_path, {}, {}, False)
     out = capsys.readouterr().out
     assert "removed orphaned agent-helper forwarder" not in out
+
+
+def test_sweep_removes_forwarder_generated_for_now_excluded_bak_name(tmp_path: Path):
+    """Reconcile end to end (C5 body): a forwarder previously generated for a
+    stray `.bak` name -- back when the old denylist admitted it as a CLI --
+    is no longer in the current derived map once the allowlist excludes it,
+    so the sweep must remove it. This is not a new mechanism; once a stray
+    file stops being derived, its already-installed forwarder falls out of
+    this run's write set and the existing sweep removes it because the body
+    still matches `_AGENT_FORWARDER_MARKER_RE`."""
+    bak_name = "x.py.your-wip.1.bak"
+    orphan = tmp_path / bak_name
+    _write_agent_forwarder(bak_name, orphan, False, target=bak_name)
+    assert orphan.is_file()
+
+    agent_bin = tmp_path / "coordinator" / "bin"
+    _touch(agent_bin / "real-cli.py")
+    _touch(agent_bin / bak_name)
+
+    mapping = _derive_agent_helper_target_map(agent_bin)
+    assert bak_name not in mapping
+
+    _sweep_orphaned_agent_helpers(tmp_path, mapping, {}, False)
+
+    assert not orphan.exists()
 
 
 def test_sweep_leaves_currently_installed_names_alone(tmp_path: Path):

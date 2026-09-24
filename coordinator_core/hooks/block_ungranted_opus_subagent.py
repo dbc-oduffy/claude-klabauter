@@ -66,9 +66,7 @@ record's `message.model` field -- same bounded chunked-read shape as
 chunks, capped at 32 chunks / ~256KiB from EOF), generalized to scan up to
 `transcript_tail`'s bounded window of trailing lines newest-first rather than only the
 literal last line, because the last on-disk record is not reliably an
-assistant turn (it may be a tool_result/user record). The reader is shared
-with `git.commit_trailers`, which resolves the attribution trailer from the
-same record.
+assistant turn (it may be a tool_result/user record).
 
 FAIL-CLOSED WHEN THE PARENT MODEL CANNOT BE DETERMINED. No transcript, an
 unreadable transcript, or a tail with no assistant record carrying a

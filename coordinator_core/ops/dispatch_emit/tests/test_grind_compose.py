@@ -20,10 +20,12 @@ per-row routing driven through the profile's own graph.
 from __future__ import annotations
 
 import re
+import tempfile
 from collections import Counter
 from pathlib import Path
 
 import pytest
+import yaml
 
 from coordinator_core.ops import _workflow_contract as wc
 from coordinator_core.ops.dispatch_emit import grind_compose as gc
@@ -518,6 +520,101 @@ def test_close_confirmed_routed_straight_to_handback_commits_inline_and_settles(
     assert any(h["row"] == "r0" and h["type"] == "settled-direct" for h in result["handed_back"])
 
 
+# ---------------------------------------------------------------------------
+# P145-C2: refuted rows reach the fixer with the refuter's reason, and
+# refute verdicts are counted by proposal origin.
+# ---------------------------------------------------------------------------
+
+
+def test_refuted_row_reaches_fix_and_by_refute_origin_counts_confirmed_and_refuted():
+    verdicts = _all_close_batches(["r0", "r1"])
+    triage = _triage_script(verdicts)
+    fix_calls = []
+
+    def close_stub(bid):
+        return {
+            "confirmed": [{"row": "r0", "new_path": "archive/r0.yaml"}],
+            "refuted": [{"row": "r1", "reason": "still reproduces at HEAD"}],
+        }
+
+    def fix_stub(rid):
+        fix_calls.append(rid)
+        return {"outcome": "NEEDS_PLAN"}
+
+    script_by_kind = {
+        "triage": lambda bid: triage(bid, ["r0", "r1"]),
+        "refute-close": close_stub,
+        "fix": fix_stub,
+        "commit": lambda rid: {"outcome": "committed", "sha": "abc"},
+    }
+    result, _budget = _run([("b0", ["r0", "r1"])], script_by_kind, batch_size=2)
+
+    # r1's refute-close `refuted` edge routes to `fix` (fixture profile) --
+    # the refuted row reaches the fixer, never dead-ends at refute-close.
+    assert fix_calls == ["r1"]
+    assert result["by_refute_origin"] == {
+        "triage:not-reproduced": {"confirmed": 1, "refuted": 1},
+    }
+    # Design item 2's last bullet: a row revived after a refuted close
+    # proposal that later hands back gives, in its reason, the origin of
+    # that refuted proposal and the refuter's reason verbatim.
+    handback = next(h for h in result["handed_back"] if h["row"] == "r1")
+    assert handback["type"] == "baton"
+    assert "still reproduces at HEAD" in handback["reason"]
+    assert "triage:not-reproduced" in handback["reason"]
+
+
+def test_by_refute_origin_keys_by_origin_not_batch_id():
+    verdicts = _all_close_batches(["r0", "r1"])
+    triage = _triage_script(verdicts)
+
+    def close_stub(bid):
+        return {
+            "confirmed": [{"row": "r0", "new_path": "archive/r0.yaml"}, {"row": "r1", "new_path": "archive/r1.yaml"}],
+            "refuted": [],
+        }
+
+    script_by_kind = {
+        "triage": lambda bid: triage(bid, ["r0", "r1"]),
+        "refute-close": close_stub,
+        "commit": lambda rid: {"outcome": "committed", "sha": "abc"},
+    }
+    result, _budget = _run([("b0", ["r0", "r1"])], script_by_kind, batch_size=2)
+    # Both rows carry the same origin (`triage:not-reproduced`) though they
+    # came through the same batch -- the origin key is derived from the
+    # row's own triage verdict, never the batch id.
+    assert result["by_refute_origin"] == {"triage:not-reproduced": {"confirmed": 2, "refuted": 0}}
+
+
+def test_composed_fix_call_interpolates_the_refuters_reason_verbatim():
+    """The JS renderer's `_fixCall` interpolates `row.refuteNote` -- the
+    same string `_closeBatch` set verbatim from the refute-close agent's
+    own `refuted[].reason` -- into the composed fix prompt."""
+    script = _compose()
+    fix_fn = script[script.index("async function _fixCall"): script.index("async function _verifyCall")]
+    assert "row.refuteNote" in fix_fn
+    close_fn = script[script.index("async function _closeBatch"): script.index("async function _fixStage")]
+    assert "row.refuteNote = entry.reason || '';" in close_fn
+
+
+def test_counts_expose_by_refute_origin_from_the_rendered_script():
+    script = _compose()
+    assert "by_refute_origin: _byRefuteOrigin" in script
+    assert "function _bumpRefuteOrigin(origin, key)" in script
+
+
+def test_triage_sets_row_origin_from_its_own_verdict_not_batch_id():
+    script = _compose()
+    triage_fn = script[script.index("async function _triageBatch"): script.index("async function _closeBatch")]
+    assert "row.origin = `triage:${rec.verdict}`;" in triage_fn
+
+
+def test_close_proposals_carry_their_own_origin_field():
+    script = _compose()
+    close_fn = script[script.index("async function _closeBatch"): script.index("async function _fixStage")]
+    assert "origin: row.origin" in close_fn
+
+
 def test_widen_release_reacquire_exactly_once_then_widen_exhausted():
     calls = {"fix": 0}
     verdicts = _all_fix_batches(["r0"])
@@ -550,6 +647,9 @@ def test_row_sized_m_or_above_routes_to_baton_never_fix():
     fix_calls = {"n": 0}
     script_by_kind = {
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
+        # Design item 4 (P145-C3): the size-floor baton now goes through one
+        # read-only resize call first; a `plan-weight` answer confirms it.
+        "resize": lambda bid: {"answers": [{"row": "r0", "answer": "plan-weight", "design_question": "needs a plan"}]},
         "fix": lambda rid: (fix_calls.__setitem__("n", fix_calls["n"] + 1), {"outcome": "done"})[1],
     }
     result, _budget = _run([("b0", ["r0"])], script_by_kind, batch_size=1)
@@ -595,18 +695,22 @@ def test_each_stage_runs_exactly_once_per_row_in_call_log():
         assert counts[("commit", rid)] == 1
 
 
-def test_refute_close_confirmed_and_refuted_both_route_via_profile_edges():
+def test_refute_close_confirmed_routes_to_commit_refuted_revives_to_fix():
     verdicts = _all_close_batches(["r0", "r1"])
     script_by_kind = {
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0", "r1"]),
         "refute-close": lambda bid: {"confirmed": [{"row": "r0", "new_path": "archive/r0.yaml"}], "refuted": [{"row": "r1", "reason": "still broken"}]},
+        "fix": lambda rid: {"outcome": "done"},
+        "verify": lambda rid: {"outcome": "pass"},
         "commit": lambda rid: {"outcome": "committed", "sha": "x"},
     }
     result, _budget = _run([("b0", ["r0", "r1"])], script_by_kind, batch_size=2)
     settled_rows = {s["row"] for s in result["settled"]}
-    # the fixture profile's refute_close node routes BOTH confirmed and
-    # refuted to `commit` -- both rows settle, per the profile's own graph.
+    # the fixture profile's refute_close node routes `confirmed` to commit
+    # directly, but `refuted` REVIVES to `fix` per the new refusal -- both
+    # rows still settle, but r1 only after a fresh fix/verify pass.
     assert settled_rows == {"r0", "r1"}
+    assert ("fix", "r1") in result["call_log"]
 
 
 # ---------------------------------------------------------------------------
@@ -687,6 +791,8 @@ def test_refute_close_stale_row_hands_back_manifest_stale():
             "refuted": [{"row": "r1", "reason": "still broken"}],
             "stale": ["r0"],
         },
+        "fix": lambda rid: {"outcome": "done"},
+        "verify": lambda rid: {"outcome": "pass"},
         "commit": lambda rid: {"outcome": "committed", "sha": "x"},
     }
     result, _budget = _run([("b0", ["r0", "r1"])], script_by_kind, batch_size=2)
@@ -891,14 +997,25 @@ def test_finding5_cross_batch_triage_record_is_ignored_python_model():
     assert any(h["row"] == "r0" and h["type"] == "stage-dead" for h in result["handed_back"])
 
 
-def test_finding9_refuted_to_commit_edge_left_alone_by_design():
-    """The fixture profile's refute_close `refuted -> commit` edge is a
-    fixture-authoring choice (both confirmed and refuted proposals settle
-    via commit in this profile), not the break-class defect the review
-    flagged elsewhere -- left unchanged; see grind_profile._check_verify_nodes
-    docstring for the verify-on_fail disposition made instead."""
+def test_finding9_refuted_to_commit_edge_now_refused():
+    """The predecessor plan's fixture-authoring choice -- refute_close's
+    `refuted -> commit` edge, settling both confirmed and refuted proposals
+    via commit -- is exactly the KEPT_OPEN stranding the 2026-09-21 grind
+    handoff measured (fourteen confirmed defects stranded); no DoE profile
+    relied on it (census row 1). The fixture now routes `refuted` to `fix`,
+    and `validate_graph` refuses the old routing outright."""
     profile = _fixture_profile()
-    assert profile.graph["refute_close"].edges["refuted"] == "commit"
+    assert profile.graph["refute_close"].edges["refuted"] == "fix"
+
+    doc = yaml.safe_load((_FIXTURE_PROFILE_DIR / "fixture.yaml").read_text(encoding="utf-8"))
+    doc["graph"]["refute_close"]["edges"]["refuted"] = "commit"
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        (tmp_path / "reverted.yaml").write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+        reverted = gp.load_profile("reverted", tmp_path)
+        with pytest.raises(gp.ProfileError) as exc_info:
+            gp.validate_graph(reverted)
+        assert exc_info.value.rule == "refuted_not_revived"
 
 
 # ---------------------------------------------------------------------------
@@ -1030,3 +1147,173 @@ def test_no_row_can_stay_non_done_forever_for_the_fixture_graph_under_every_outc
         )
         settled_or_handed_back = {s["row"] for s in result["settled"]} | {h["row"] for h in result["handed_back"]}
         assert "r0" in settled_or_handed_back, (close_shape, result)
+
+
+# ---------------------------------------------------------------------------
+# P145-C3: one read-only resize per triage batch before any baton hand-back
+# ---------------------------------------------------------------------------
+
+
+def test_resize_batch_with_two_baton_rows_makes_exactly_one_resize_call():
+    routing, triage_node = _fixture_routing()
+
+    def triage(batch_id):
+        return [{"row": rid, "verdict": "confirmed-bug", "tshirt_size": "M", "tradeoff": ""} for rid in ("r0", "r1")]
+
+    def resize(batch_id):
+        return {"answers": [
+            {"row": "r0", "answer": "plan-weight", "design_question": "does this need a design?"},
+            {"row": "r1", "answer": "plan-weight", "design_question": "does this need a design?"},
+        ]}
+
+    result, _ = _run([("b0", ["r0", "r1"])], {"triage": triage, "resize": resize})
+    assert result["spend"]["agent_calls_by_stage_kind"].get("resize") == 1
+
+
+def test_resize_plan_weight_hands_back_baton_with_the_design_question_as_reason():
+    routing, triage_node = _fixture_routing()
+
+    def triage(batch_id):
+        return [{"row": "r0", "verdict": "confirmed-bug", "tshirt_size": "M", "tradeoff": ""}]
+
+    def resize(batch_id):
+        return {"answers": [{"row": "r0", "answer": "plan-weight", "design_question": "does this need a design?"}]}
+
+    result, _ = _run([("b0", ["r0"])], {"triage": triage, "resize": resize})
+    hand = next(h for h in result["handed_back"] if h["row"] == "r0")
+    assert hand["type"] == "baton"
+    assert hand["reason"] == "does this need a design?"
+
+
+def test_resize_focused_fix_reaches_the_fix_node():
+    routing, triage_node = _fixture_routing()
+
+    def triage(batch_id):
+        return [{"row": "r0", "verdict": "confirmed-bug", "tshirt_size": "M", "tradeoff": ""}]
+
+    def resize(batch_id):
+        return {"answers": [{"row": "r0", "answer": "focused-fix"}]}
+
+    def fix(row_id):
+        return {"outcome": "NEEDS_PLAN", "has_tradeoff": False}
+
+    result, _ = _run([("b0", ["r0"])], {"triage": triage, "resize": resize, "fix": fix})
+    assert ("fix", "r0") in result["call_log"]
+
+
+def test_resize_not_reproduced_reaches_refute_close_in_the_batchs_single_close_call_with_origin():
+    routing, triage_node = _fixture_routing()
+
+    def triage(batch_id):
+        return [
+            {"row": "r0", "verdict": "confirmed-bug", "tshirt_size": "M", "tradeoff": ""},
+            {"row": "r1", "verdict": "not-reproduced", "tshirt_size": "S", "tradeoff": ""},
+        ]
+
+    def resize(batch_id):
+        return {"answers": [{"row": "r0", "answer": "not-reproduced"}]}
+
+    def close(batch_id):
+        return {"confirmed": [], "refuted": [{"row": "r0", "reason": "not live"}, {"row": "r1", "reason": "not live"}]}
+
+    def fix(row_id):
+        return {"outcome": "NEEDS_PLAN", "has_tradeoff": False}
+
+    result, _ = _run(
+        [("b0", ["r0", "r1"])], {"triage": triage, "resize": resize, "refute-close": close, "fix": fix},
+    )
+    assert result["spend"]["agent_calls_by_stage_kind"].get("refute-close") == 1
+    assert result["by_refute_origin"].get("resize:not-reproduced") == {"confirmed": 0, "refuted": 1}
+
+
+def test_resize_batch_with_no_baton_row_makes_zero_resize_calls():
+    routing, triage_node = _fixture_routing()
+
+    def triage(batch_id):
+        return [{"row": rid, "verdict": "not-reproduced", "tshirt_size": "S", "tradeoff": ""} for rid in ("r0", "r1")]
+
+    def close(batch_id):
+        return {"confirmed": [], "refuted": [{"row": rid, "reason": "n/a"} for rid in ("r0", "r1")]}
+
+    def fix(row_id):
+        return {"outcome": "NEEDS_PLAN", "has_tradeoff": False}
+
+    result, _ = _run([("b0", ["r0", "r1"])], {"triage": triage, "refute-close": close, "fix": fix})
+    assert result["spend"]["agent_calls_by_stage_kind"].get("resize", 0) == 0
+
+
+def test_resize_two_fix_kind_triage_targets_hands_focused_fix_back_as_baton():
+    """`resize_verdict_map` refuses to pick a fix node when triage's own
+    edges reach TWO fix-kind targets -- ambiguous, never guessed."""
+    routing = {
+        "triage": {"kind": "triage", "edges": {"v1": "fixA", "v2": "fixB"}, "on_fail": None},
+        "fixA": {"kind": "fix", "edges": {}, "on_fail": None},
+        "fixB": {"kind": "fix", "edges": {}, "on_fail": None},
+    }
+    fix_verdict, close_verdict = gc.resize_verdict_map(routing, "triage")
+    assert fix_verdict is None
+    assert close_verdict is None
+
+    def triage(batch_id):
+        return [{"row": "r0", "verdict": "v1", "tshirt_size": "M", "tradeoff": ""}]
+
+    def resize(batch_id):
+        return {"answers": [{"row": "r0", "answer": "focused-fix"}]}
+
+    budget = _StubBudgetSpender()
+    agent_fn = _agent_stub({"triage": triage, "resize": resize}, budget)
+    result = gc.run_admission(
+        [("b0", ["r0"])], routing, "triage", reserve=gc.batch_reserve(1), budget=budget, agent=agent_fn,
+    )
+    hand = next(h for h in result["handed_back"] if h["row"] == "r0")
+    assert hand["type"] == "baton"
+
+
+def test_resize_verdict_map_resolves_distinct_verdicts_for_fix_and_close_kinds():
+    routing = {
+        "triage": {"kind": "triage", "edges": {"confirmed-bug": "fix", "not-reproduced": "refute_close"}, "on_fail": None},
+        "fix": {"kind": "fix", "edges": {}, "on_fail": None},
+        "refute_close": {"kind": "refute-close", "edges": {}, "on_fail": None},
+    }
+    fix_verdict, close_verdict = gc.resize_verdict_map(routing, "triage")
+    assert fix_verdict == "confirmed-bug"
+    assert close_verdict == "not-reproduced"
+
+
+def test_every_outcome_a_stage_triage_ledger_line_can_carry_is_a_declared_triage_verdict():
+    """New test (P145-C3 acceptance): every `--outcome` value the triage and
+    resize prompts can instruct on a `--stage triage` ledger line is a
+    member of the profile's own declared triage verdict set -- covers the
+    triage prompt itself (its `--outcome <its verdict>` is always one of
+    `verdicts`) and every entry of the resize prompt's answer-to-verdict
+    map, over the fixture profile and over a graph whose `focused-fix` and
+    `not-reproduced` targets are reached by different verdicts."""
+    profile = _fixture_profile()
+    routing = gc.build_routing_table(profile)
+    triage_node = gc._triage_node_id(profile)
+    fix_verdict, close_verdict = gc.resize_verdict_map(routing, triage_node)
+    for verdict in (fix_verdict, close_verdict):
+        if verdict is not None:
+            assert verdict in profile.verdicts
+
+    other_routing = {
+        "triage": {"kind": "triage", "edges": {"a": "fixnode", "b": "closenode"}, "on_fail": None},
+        "fixnode": {"kind": "fix", "edges": {}, "on_fail": None},
+        "closenode": {"kind": "refute-close", "edges": {}, "on_fail": None},
+    }
+    other_verdicts = ["a", "b"]
+    other_fix_verdict, other_close_verdict = gc.resize_verdict_map(other_routing, "triage")
+    assert other_fix_verdict == "a"
+    assert other_close_verdict == "b"
+    for verdict in (other_fix_verdict, other_close_verdict):
+        assert verdict in other_verdicts
+
+
+def test_golden_resize_call_site_ordered_before_first_dispatch_row_call():
+    """The rendered golden's triage exit shows the resize `agent(` call
+    site ordered before the first `_dispatchRow` call for that batch --
+    a positional assertion over the golden text (eng-director F7)."""
+    script = _compose()
+    resize_agent_idx = script.index("label: 'resize'")
+    dispatch_row_call_idx = script.index("await _dispatchRow(")
+    assert resize_agent_idx < dispatch_row_call_idx

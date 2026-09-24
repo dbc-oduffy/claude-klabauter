@@ -67,6 +67,7 @@ from __future__ import annotations
 
 import sys
 
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.ipc import register_op
 from coordinator_core.write_guards.engine import evaluate
@@ -100,6 +101,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     the runtime-visible half of the silent-import-failure fix `evaluate()`'s
     own docstring describes (`skipped_out`).
     """
+    params = payload_of(params)
     skipped: list[str] = []
     try:
         out = evaluate(params, skipped_out=skipped)
@@ -110,7 +112,7 @@ def _handler(params: dict, repo_root=None) -> dict:
         if skipped:
             print(_compose_skipped_guard_breadcrumb(skipped), file=sys.stderr)
     except Exception:
-        pass
+        pass  # stderr write failed; the evaluated result above still returns
 
     if out is None:
         return no_advisory()

@@ -168,6 +168,17 @@ _VERIFIED_RESOLVES_FREE = frozenset(
         # emits a `resolves` anywhere in its source.
         "plan_assemble",
         "quick_wrap_assemble",
+        # Landed after 2026-07-27 and never registered, same as the pair
+        # above (TF-20260923-bb-091). `execute_plan_assemble.brief()` returns
+        # `{"directives": [...]}` with no `judgment_points` key at all;
+        # `goals.brief()` and `plugin_health.brief()` likewise never build a
+        # disposition with a `resolves` entry. Verified via the static
+        # source scan (`_assert_package_source_never_resolves`), not a
+        # dynamic call: none of the three has a cheap, fixture-free `brief()`
+        # invocation the way `orient_assemble`/`learn_lessons_assemble` do.
+        "execute_plan_assemble",
+        "goals",
+        "plugin_health",
     }
 )
 
@@ -225,7 +236,10 @@ def test_learn_lessons_assemble_verified_resolves_free(tmp_path) -> None:
     _verify_learn_lessons_assemble_never_resolves(tmp_path)
 
 
-@pytest.mark.parametrize("package_name", ["plan_assemble", "quick_wrap_assemble"])
+@pytest.mark.parametrize(
+    "package_name",
+    ["plan_assemble", "quick_wrap_assemble", "execute_plan_assemble", "goals", "plugin_health"],
+)
 def test_source_verified_resolves_free(package_name: str) -> None:
     _assert_package_source_never_resolves(package_name)
 

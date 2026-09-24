@@ -47,7 +47,7 @@ import pytest
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-from coordinator_core.ops import records_query
+from coordinator_core.ops import record_history, records_query
 from coordinator_core.ops.record_history import (
     UnsupportedRecordTypeError,
     derive_across_roots,
@@ -507,3 +507,179 @@ class TestDeriveAcrossRoots:
         assert result["roots_walked"] == []
         assert len(result["roots_skipped"]) == 2
         assert result["repos"] == {}
+
+
+def _build_two_type_corpus(repo: Path) -> None:
+    """One `decision` and one `sizing-object` record, each with a real
+    `status` transition, for the multi-type widening tests (P083-C4)."""
+    _init_repo(repo)
+    decision = repo / "docs" / "decisions" / "dr-1.md"
+    decision.parent.mkdir(parents=True)
+    decision.write_text(_decision_body("draft"), encoding="utf-8")
+    sizing = repo / "state" / "sizings" / "sz-1.yaml"
+    sizing.parent.mkdir(parents=True)
+    sizing.write_text("status: draft\n", encoding="utf-8")
+    _commit(repo, "add dr-1 and sz-1", "2026-01-01T00:00:00+00:00")
+
+    decision.write_text(_decision_body("accepted"), encoding="utf-8")
+    sizing.write_text("status: sized\n", encoding="utf-8")
+    _commit(repo, "advance both", "2026-01-02T00:00:00+00:00")
+
+
+class TestDeriveTypeHistoryMultiType:
+    """P083-C4: one `records.history`-shaped call for several types."""
+
+    def test_single_type_call_keeps_existing_shape_byte_for_byte(self, tmp_path: Path):
+        """R3 backward compatibility: a bare string keeps the singular shape
+        -- no `record_type` key on each record."""
+        repo = tmp_path / "repo"
+        _build_two_type_corpus(repo)
+
+        history = derive_type_history(repo, "decision")
+
+        assert all("record_type" not in entry for entry in history)
+        entry = next(e for e in history if e["path"] == "docs/decisions/dr-1.md")
+        assert entry["events"][0]["changes"]["status"] == {"from": "draft", "to": "accepted"}
+
+    def test_sequence_call_returns_both_types_with_per_record_attribution(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        _build_two_type_corpus(repo)
+
+        history = derive_type_history(repo, ["decision", "sizing-object"])
+        by_path = {e["path"]: e for e in history}
+
+        assert by_path["docs/decisions/dr-1.md"]["record_type"] == "decision"
+        assert by_path["state/sizings/sz-1.yaml"]["record_type"] == "sizing-object"
+        assert by_path["docs/decisions/dr-1.md"]["events"][0]["changes"]["status"] == {
+            "from": "draft", "to": "accepted",
+        }
+        assert by_path["state/sizings/sz-1.yaml"]["events"][0]["changes"]["status"] == {
+            "from": "draft", "to": "sized",
+        }
+
+    def test_field_policy_applied_per_owning_type_not_once_for_the_call(self, tmp_path: Path):
+        """`_FIELD_POLICY` gates on the file's OWN type, never the call's
+        first type -- a `decision`-only field change must not be dropped by
+        `sizing-object`'s policy tuple or vice versa (both share `status`
+        here, so this proves attribution stays correct even where the
+        tracked field name collides)."""
+        repo = tmp_path / "repo"
+        _build_two_type_corpus(repo)
+
+        history = derive_type_history(repo, ["decision", "sizing-object"])
+        by_path = {e["path"]: e for e in history}
+
+        assert by_path["docs/decisions/dr-1.md"]["events"]
+        assert by_path["state/sizings/sz-1.yaml"]["events"]
+
+    def test_unsupported_member_names_supported_set(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+
+        with pytest.raises(UnsupportedRecordTypeError) as exc_info:
+            derive_type_history(repo, ["decision", "not-a-real-type"])
+        assert "not-a-real-type" in str(exc_info.value)
+        assert "decision" in exc_info.value.supported
+
+    def test_single_git_spawn_for_two_types(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """The point of the ask (C4 body): a two-type call costs ONE walk,
+        not one per type -- measured, not asserted, against the baseline of
+        two single-type calls."""
+        repo = tmp_path / "repo"
+        _build_two_type_corpus(repo)
+
+        spawn_count = 0
+        real_run = subprocess.run
+
+        def _counting_run(*args, **kwargs):
+            nonlocal spawn_count
+            spawn_count += 1
+            return real_run(*args, **kwargs)
+
+        monkeypatch.setattr(subprocess, "run", _counting_run)
+
+        derive_type_history(repo, ["decision", "sizing-object"])
+
+        assert spawn_count == 1
+
+        # Baseline: two single-type calls cost two spawns -- the widened
+        # call must be strictly cheaper, never merely "also small".
+        spawn_count = 0
+        derive_type_history(repo, "decision")
+        derive_type_history(repo, "sizing-object")
+        assert spawn_count == 2
+
+
+class TestDeriveTypeHistorySince:
+    """P083-C4 R2: `since` bounds EVENTS only, never the walk or
+    `created_at`/`untracked` classification."""
+
+    def test_since_excludes_pre_window_event_but_keeps_created_at(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        record = repo / "docs" / "decisions" / "dr-1.md"
+        record.parent.mkdir(parents=True)
+
+        record.write_text(_decision_body("draft"), encoding="utf-8")
+        _commit(repo, "add dr-1", "2026-01-01T00:00:00+00:00")
+
+        record.write_text(_decision_body("accepted"), encoding="utf-8")
+        _commit(repo, "advance", "2026-01-02T00:00:00+00:00")
+
+        history = derive_type_history(repo, "decision", since="2026-01-05")
+        entry = next(e for e in history if e["path"] == "docs/decisions/dr-1.md")
+
+        # The event predates the window -- excluded.
+        assert entry["events"] == []
+        # But created_at is a whole-history fact -- NOT bounded by `since`,
+        # and NOT nulled the way a truncated walk would null it.
+        assert entry["created_at"].startswith("2026-01-01")
+
+    def test_since_keeps_in_window_event(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        record = repo / "docs" / "decisions" / "dr-1.md"
+        record.parent.mkdir(parents=True)
+
+        record.write_text(_decision_body("draft"), encoding="utf-8")
+        _commit(repo, "add dr-1", "2026-01-01T00:00:00+00:00")
+
+        record.write_text(_decision_body("accepted"), encoding="utf-8")
+        _commit(repo, "advance", "2026-01-10T00:00:00+00:00")
+
+        history = derive_type_history(repo, "decision", since="2026-01-05")
+        entry = next(e for e in history if e["path"] == "docs/decisions/dr-1.md")
+
+        assert len(entry["events"]) == 1
+        assert entry["events"][0]["changes"]["status"] == {"from": "draft", "to": "accepted"}
+
+
+class TestRecordsHistoryOp:
+    """`records.history`'s envelope shape, both arms (P083-C4)."""
+
+    def test_single_type_envelope_unchanged(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        _build_two_type_corpus(repo)
+
+        result = record_history._records_history({"record_type": "decision", "root": str(repo)})
+
+        assert result["record_type"] == "decision"
+        assert isinstance(result["untracked"], list)
+        assert all("record_type" not in r for r in result["records"])
+
+    def test_multi_type_envelope_groups_untracked_per_type(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        _build_two_type_corpus(repo)
+        # An untracked (uncommitted) sizing-object record.
+        untracked_file = repo / "state" / "sizings" / "sz-untracked.yaml"
+        untracked_file.write_text("status: draft\n", encoding="utf-8")
+
+        result = record_history._records_history(
+            {"record_type": ["decision", "sizing-object"], "root": str(repo)},
+        )
+
+        assert result["record_type"] == ["decision", "sizing-object"]
+        assert set(result["untracked"]) == {"decision", "sizing-object"}
+        assert result["untracked"]["decision"] == []
+        assert "state/sizings/sz-untracked.yaml" in result["untracked"]["sizing-object"]
+        assert {r["record_type"] for r in result["records"]} == {"decision", "sizing-object"}

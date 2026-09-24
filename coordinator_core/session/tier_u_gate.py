@@ -456,7 +456,9 @@ def enforce_tier_u_gate(
             "there is no declaration-based exemption for Tier F.\n\n"
             f"{remediation}\n\n"
             "Ask the PM for a grant, then run: "
-            "tier-u-grant-cli grant pm \"<verbatim PM utterance>\""
+            "tier-u-grant-cli grant pm \"<verbatim PM utterance>\"\n\n"
+            "Unsure which session this is, or whether it is still live? "
+            "session.whoami_live answers both in one call."
         )
         return TierUGateResult(proceed=False, refusal_message=message)
 
@@ -494,6 +496,8 @@ def enforce_tier_u_gate(
         "(b) declare fast_tier_unscoped_reason in coordinator.local.md with "
         "a prose rationale (covers only the literal resolved fast_test_cmd "
         "string -- see DR-088 R6), or (c) run the suite through a granted "
-        "ceremony."
+        "ceremony.\n\n"
+        "Unsure which session this is, or whether it is still live? "
+        "session.whoami_live answers both in one call."
     )
     return TierUGateResult(proceed=False, refusal_message=message)

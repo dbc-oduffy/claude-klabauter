@@ -24,6 +24,15 @@ parsing/construction half:
   cs_rename_target      -> rename_target
   cs_should_prompt_rename-> should_prompt_rename
 
+is_work_branch / has_remote_prefix (2026-09-22, docs/plans/2026-09-22-work-branch-
+predicates-read-an-origin-prefixed-name.md) are the WORK-BRANCH oracle, distinct
+from is_allowed_branch/is_canonical_branch above: they answer "is this under
+work/, verbatim or behind exactly one leading origin/?", not "is this a
+well-formed work/{machine}/{date} shape?". is_allowed_branch/is_canonical_branch
+stay narrow on purpose — widening them to accept origin/-prefixed or -N
+collision names would drop real work branches from auto-push (see that plan's
+gated_exit_criteria, right-not-merely-working (a)).
+
 INTENTIONALLY ABSENT (do not re-add):
   cs_compute_active_daily_lc / cs_compute_today_daily_lc — redundant,
   concurrency-hostile "today" oracles. Policy oracle is is_allowed_branch.
@@ -65,6 +74,11 @@ _SPAN_SUFFIX_RE = re.compile(r"to[0-9]{2}$")
 _NON_SLUG_RE = re.compile(r"[^a-z0-9-]")
 
 _HOURS_48_SECONDS = 48 * 3600
+
+#: The single accepted remote prefix for is_work_branch/has_remote_prefix. Only
+#: this exact literal is stripped, once, and never resolved against a repo's
+#: actual configured remotes.
+_ORIGIN_PREFIX = "origin/"
 
 
 def sanitize_slug(raw: str) -> str:
@@ -219,6 +233,37 @@ def record_day_branch_designation(repo_root, branch: str) -> bool:
         return True
     except Exception:  # noqa: BLE001 - best-effort; caller falls back to lazy re-resolve
         return False
+
+
+def is_work_branch(name: Optional[str]) -> bool:
+    """The work-branch oracle: is <name> under work/, verbatim or behind exactly
+    one leading origin/?
+
+    Negative spec: NOT a shape oracle (does not check work/{machine}/{date} —
+    use is_allowed_branch/is_canonical_branch for that), does NOT case-fold
+    (case-sensitive, unlike is_allowed_branch), strips at most one leading
+    origin/ (origin/origin/work/x is not a work branch), and does NOT resolve
+    or validate against a repo's actual configured remotes — origin/ is the
+    only literal accepted, per the malformation this oracle exists to read.
+    None returns False.
+    """
+    if name is None:
+        return False
+    if name.startswith(_ORIGIN_PREFIX):
+        name = name[len(_ORIGIN_PREFIX):]
+    return name.startswith("work/")
+
+
+def has_remote_prefix(name: Optional[str]) -> bool:
+    """True iff <name> is a work branch (per is_work_branch) only because of a
+    leading origin/ — i.e. it is not itself a bare work/... name.
+
+    Same negative spec as is_work_branch: one prefix only, case-sensitive, no
+    remote resolution. None returns False.
+    """
+    if name is None:
+        return False
+    return name.startswith(_ORIGIN_PREFIX) and is_work_branch(name)
 
 
 def is_allowed_branch(name: str, configured_day_branch: Optional[str] = None) -> bool:

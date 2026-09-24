@@ -1102,6 +1102,56 @@ def _is_standalone_plugin_clone(doe_clone: str) -> bool:
     )
 
 
+def install_global_doctrine(coord_root: str, claude_home_dir: str, check_only: bool) -> "tuple[bool, List[str]]":
+    """Copy-if-absent leg: `<coord_root>/templates/global-doctrine/CLAUDE.md`
+    into `<claude_home_dir>/.claude/CLAUDE.md`, and every
+    `<coord_root>/templates/global-doctrine/rules/*.md` into
+    `<claude_home_dir>/.claude/rules/`.
+
+    Global doctrine and rules are copied IN, never OVERWRITTEN and never
+    PRUNED: an existing destination file (CLAUDE.md or a same-named rule) is
+    left exactly as the operator last edited it, and a rule present at the
+    destination but absent from this source tree is never removed -- this
+    function only ever adds files that are missing, matching
+    `coordinator/INSTALL.md`'s "copies in, never overwrites" contract for the
+    operator's own `~/.claude/CLAUDE.md` and `~/.claude/rules/`.
+
+    Returns `(claude_md_created, rules_created)` -- the CLAUDE.md leg as a
+    bool and the list of rule filenames actually copied. Under `check_only`
+    nothing is written; the return value reports what WOULD be created.
+    """
+    src_doctrine = os.path.join(coord_root, "templates", "global-doctrine", "CLAUDE.md")
+    src_rules_dir = os.path.join(coord_root, "templates", "global-doctrine", "rules")
+    dest_claude_dir = os.path.join(claude_home_dir, ".claude")
+    dest_claude_md = os.path.join(dest_claude_dir, "CLAUDE.md")
+    dest_rules_dir = os.path.join(dest_claude_dir, "rules")
+
+    claude_md_created = False
+    if os.path.isfile(src_doctrine) and not os.path.exists(dest_claude_md):
+        claude_md_created = True
+        if not check_only:
+            os.makedirs(dest_claude_dir, exist_ok=True)
+            shutil.copyfile(src_doctrine, dest_claude_md)
+
+    rules_created: List[str] = []
+    if os.path.isdir(src_rules_dir):
+        for name in sorted(os.listdir(src_rules_dir)):
+            if not name.endswith(".md"):
+                continue
+            src_rule = os.path.join(src_rules_dir, name)
+            if not os.path.isfile(src_rule):
+                continue
+            dest_rule = os.path.join(dest_rules_dir, name)
+            if os.path.exists(dest_rule):
+                continue
+            rules_created.append(name)
+            if not check_only:
+                os.makedirs(dest_rules_dir, exist_ok=True)
+                shutil.copyfile(src_rule, dest_rule)
+
+    return claude_md_created, rules_created
+
+
 def _install_claude_doe_wrapper(
     coord_root: str,
     claude_home_dir: str,
@@ -1770,6 +1820,28 @@ def _run_body(
             launcher_args,
             env=env,
         )
+
+        # -- Step 3.5b.3 -- install-global-doctrine (copy-if-absent, never overwrite/prune) --
+        orch.phase_header(
+            "install-global-doctrine (Step 3.5b.3 -- ~/.claude/CLAUDE.md + rules/*.md, copy-if-absent)"
+        )
+        try:
+            _doctrine_created, _rules_created = install_global_doctrine(coord_root, claude_home_dir, check_only)
+            _doctrine_verb = "would create" if check_only else "created"
+            if _doctrine_created:
+                print(f"     install-global-doctrine: {_doctrine_verb} ~/.claude/CLAUDE.md")
+            else:
+                print("     install-global-doctrine: ~/.claude/CLAUDE.md already present -- left untouched")
+            if _rules_created:
+                print(f"     install-global-doctrine: {_doctrine_verb} rules/{{{', '.join(_rules_created)}}}")
+            else:
+                print("     install-global-doctrine: no new rules/*.md to add")
+        except Exception as exc:  # noqa: BLE001 -- advisory step, never fails the install
+            print(
+                f"WARN: install-global-doctrine failed -- continuing (advisory, not fatal): {exc}",
+                file=sys.stderr,
+            )
+            orch.failed = True
 
     # -- Step 3.5c -- gen-settings-hooks (no --check-only support upstream) --
     #

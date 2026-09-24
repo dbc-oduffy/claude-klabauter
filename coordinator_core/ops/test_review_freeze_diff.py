@@ -531,6 +531,10 @@ def test_batch_of_two_ranges_equals_two_single_freezes_via_one_spawn(
 
     monkeypatch.setattr(review_freeze_diff, "_git", _counting_git)
 
+    # HEAD as the batch itself will see it -- captured BEFORE the batch call,
+    # since the batch now commits its own writes (P157-C1) and moves HEAD.
+    pre_batch_head = _git(["rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
+
     batch_results = freeze_diffs_batch(
         tmp_path,
         [
@@ -544,7 +548,12 @@ def test_batch_of_two_ranges_equals_two_single_freezes_via_one_spawn(
         f"{len(diff_tree_calls)}: {diff_tree_calls!r}"
     )
 
+    # Run AFTER the batch, so each single sees ITS OWN call's HEAD (the
+    # batch's commit for single_a, then single_a's own commit for single_b --
+    # each freeze_diff call commits its own write too, per this same fix).
+    head_before_single_a = _git(["rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
     single_a = freeze_diff(tmp_path, f"{sha1}..{sha2}", "single-a")
+    head_before_single_b = _git(["rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
     single_b = freeze_diff(tmp_path, f"{sha2}..{sha3}", "single-b")
 
     assert batch_results[0]["error"] is None
@@ -555,8 +564,10 @@ def test_batch_of_two_ranges_equals_two_single_freezes_via_one_spawn(
     assert Path(batch_results[1]["diff_path"]).read_text() == Path(
         single_b["diff_path"]
     ).read_text()
-    assert batch_results[0]["head_sha"] == single_a["head_sha"]
-    assert batch_results[1]["head_sha"] == single_b["head_sha"]
+    assert batch_results[0]["head_sha"] == pre_batch_head
+    assert batch_results[1]["head_sha"] == pre_batch_head
+    assert single_a["head_sha"] == head_before_single_a
+    assert single_b["head_sha"] == head_before_single_b
     assert batch_results[0]["empty"] == single_a["empty"] is False
     assert batch_results[1]["empty"] == single_b["empty"] is False
 
@@ -652,3 +663,305 @@ def test_frozen_diff_is_byte_identical_to_git_diff_of_the_range(tmp_path: Path) 
     for result in results:
         assert result["error"] is None
         assert Path(result["diff_path"]).read_text() == expected
+
+
+# ---------------------------------------------------------------------------
+# P157-C1 — the freeze commits its own writes (spec: docs/plans/2026-09-22-
+# the-review-diff-freeze-commits-its-own-writes.md).
+# ---------------------------------------------------------------------------
+
+
+def _tracked_and_clean(repo: Path, *relpaths: str) -> bool:
+    status = _git(["status", "--porcelain", "--", *relpaths], cwd=repo).stdout
+    return status.strip() == ""
+
+
+def test_single_freeze_lands_a_commit_touching_exactly_its_two_files(tmp_path: Path) -> None:
+    """AC1."""
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
+    sha2 = _commit(tmp_path, "a.txt", "line one\nline two\n", "extend a.txt")
+
+    result = freeze_diff(tmp_path, f"{sha1}..{sha2}", "s")
+
+    assert result["error"] is None
+    assert result["committed"] is True
+    assert _tracked_and_clean(tmp_path, "state/review-trail/diffs")
+
+    head = _git(["rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
+    parent = _git(["rev-parse", "HEAD^"], cwd=tmp_path).stdout.strip()
+    show = _git(["show", "--name-only", "--pretty=format:", head], cwd=tmp_path).stdout
+    touched = {line.strip() for line in show.splitlines() if line.strip()}
+    assert touched == {"state/review-trail/diffs/s.diff", "state/review-trail/diffs/s.head.sha"}
+    assert parent == result["head_sha"]
+    sha_content = (tmp_path / "state" / "review-trail" / "diffs" / "s.head.sha").read_text().strip()
+    assert sha_content == parent
+
+
+def test_two_request_batch_commits_once_over_all_four_files(tmp_path: Path) -> None:
+    """AC2."""
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
+    sha2 = _commit(tmp_path, "a.txt", "line one\nline two\n", "extend a.txt")
+    sha3 = _commit(tmp_path, "b.txt", "peer content\n", "add b.txt")
+
+    before = _git(["rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
+
+    results = freeze_diffs_batch(
+        tmp_path,
+        [
+            {"slice_id": "two-a", "range": f"{sha1}..{sha2}"},
+            {"slice_id": "two-b", "range": f"{sha2}..{sha3}"},
+        ],
+    )
+
+    after = _git(["rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
+    assert after != before
+
+    log = _git(["log", "--oneline", f"{before}..{after}"], cwd=tmp_path).stdout
+    assert len(log.strip().splitlines()) == 1, f"expected exactly one new commit, got: {log!r}"
+
+    assert results[0]["committed"] is True
+    assert results[1]["committed"] is True
+    assert results[0]["commit_sha"] == results[1]["commit_sha"] == after
+
+
+def test_byte_identical_re_freeze_of_committed_slice_makes_no_new_commit(tmp_path: Path) -> None:
+    """AC3."""
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
+    sha2 = _commit(tmp_path, "a.txt", "line one\nline two\n", "extend a.txt")
+
+    first = freeze_diff(tmp_path, f"{sha1}..{sha2}", "reref")
+    assert first["committed"] is True
+    head_after_first = _git(["rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
+
+    second = freeze_diff(tmp_path, f"{sha1}..{sha2}", "reref")
+    head_after_second = _git(["rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
+
+    assert second["error"] is None
+    assert second["committed"] is True
+    assert second["commit_sha"] is None
+    assert head_after_second == head_after_first
+
+
+def test_unrelated_staged_file_survives_the_freeze_commit(tmp_path: Path) -> None:
+    """AC4."""
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
+    sha2 = _commit(tmp_path, "a.txt", "line one\nline two\n", "extend a.txt")
+
+    (tmp_path / "unrelated.txt").write_text("staged content\n")
+    _git(["add", "unrelated.txt"], cwd=tmp_path)
+
+    result = freeze_diff(tmp_path, f"{sha1}..{sha2}", "s2")
+    assert result["committed"] is True
+
+    status = _git(["status", "--porcelain", "--", "unrelated.txt"], cwd=tmp_path).stdout
+    assert status.strip().startswith("A "), f"unrelated.txt lost its staged status: {status!r}"
+
+    head = _git(["rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
+    show = _git(["show", "--name-only", "--pretty=format:", head], cwd=tmp_path).stdout
+    touched = {line.strip() for line in show.splitlines() if line.strip()}
+    assert "unrelated.txt" not in touched
+
+
+def test_commit_refusal_is_fail_soft_files_still_on_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC5."""
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
+    sha2 = _commit(tmp_path, "a.txt", "line one\nline two\n", "extend a.txt")
+
+    from coordinator_core.git.commit import CommitRefused
+
+    def _refuse(*args, **kwargs):
+        raise CommitRefused("x")
+
+    monkeypatch.setattr(review_freeze_diff, "commit_paths", _refuse)
+
+    result = freeze_diff(tmp_path, f"{sha1}..{sha2}", "s3")
+
+    assert result["error"] is None
+    assert result["committed"] is False
+    assert "x" in result["commit_error"]
+    assert (tmp_path / "state" / "review-trail" / "diffs" / "s3.diff").exists()
+    assert (tmp_path / "state" / "review-trail" / "diffs" / "s3.head.sha").exists()
+
+
+def test_failed_request_reports_uncommitted_and_calls_no_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC6."""
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
+
+    calls = []
+    real_commit_paths = review_freeze_diff.commit_paths
+
+    def _counting(*args, **kwargs):
+        calls.append((args, kwargs))
+        return real_commit_paths(*args, **kwargs)
+
+    monkeypatch.setattr(review_freeze_diff, "commit_paths", _counting)
+
+    # A zero-commit range: sha1..sha1 resolves to zero commits.
+    result = freeze_diff(tmp_path, f"{sha1}..{sha1}", "zero")
+
+    assert result["error"] is not None
+    assert result["committed"] is False
+    assert result["commit_sha"] is None
+    assert result["commit_error"] is None
+    assert calls == []
+
+
+#: AC7 measures the commit leg's git-spawn cost. Measured against the LIVE
+#: `commit_paths`/`_worktree_blob` code (coordinator_core/git/commit.py):
+#: `text eol=lf`-pinned, CR-free content (exactly what a frozen `.diff`/
+#: `.sha` always is -- `_git()`'s `text=True` capture already normalizes any
+#: `\r` out, see `ops/ceremony/git_native.py`'s own note on that leg) hashes
+#: IN PROCESS via `write_object`, zero spawns -- `_worktree_blob`'s `TEXT`
+#: branch only falls to the spawning `blob_fallback` on CR-bearing content,
+#: which this op's output never produces. `pytest`'s own `_quarantine_home`
+#: autouse fixture (coordinator_core/conftest.py) also hides any ambient
+#: `commit.gpgsign`, so the signing spawn some environments would otherwise
+#: see here does not fire under this suite either. So the TRUE, live-measured
+#: floor for this op's commit leg is ZERO git spawns, not the batched
+#: `hash-object --stdin-paths` fallback AC7's prose names -- forcing that
+#: exact leg to fire (a `filter=` macro, to make `_worktree_blob` refuse
+#: in-process hashing) is what these two tests do, so the actually-reachable
+#: fallback leg itself is proven to cost exactly one spawn and stay FLAT
+#: across batch size -- the amplification-gate property AC7 exists to pin.
+def _pin_filter_macro(repo: Path) -> None:
+    """Route `*.diff`/`*.sha` through an unresolved `filter=` clean driver,
+    forcing `_worktree_blob` to raise `FilterUnsupported` and fall to
+    `blob_fallback` -- the only way to exercise that spawning leg with
+    content this op ever actually produces (CR-free, `text eol=lf`)."""
+    attrs = "*.sha filter=lfs text eol=lf\n*.diff filter=lfs text eol=lf\n"
+    (repo / ".gitattributes").write_text(attrs)
+    _commit(repo, ".gitattributes", attrs, "pin diff/sha through a clean filter")
+
+
+def test_one_request_freeze_commit_leg_costs_exactly_one_git_spawn_via_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC7 (single request) -- see `_pin_filter_macro` for why this is the
+    only way to force the fallback leg AC7 names with real op output."""
+    _init_repo(tmp_path)
+    _pin_filter_macro(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
+    sha2 = _commit(tmp_path, "a.txt", "line one\nline two\n", "extend a.txt")
+
+    from coordinator_core.git import run as git_run
+
+    calls = []
+    real_run_git = git_run.run_git
+
+    def _counting_run_git(*args, **kwargs):
+        calls.append((args, kwargs))
+        return real_run_git(*args, **kwargs)
+
+    monkeypatch.setattr(git_run, "run_git", _counting_run_git)
+
+    result = freeze_diff(tmp_path, f"{sha1}..{sha2}", "spawn-1")
+
+    assert result["committed"] is True
+    assert len(calls) == 1, f"expected exactly one git spawn for the commit leg, got {calls!r}"
+
+
+def test_two_request_batch_commit_leg_still_costs_exactly_one_git_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC7 (batch) -- flat, not per-request."""
+    _init_repo(tmp_path)
+    _pin_filter_macro(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
+    sha2 = _commit(tmp_path, "a.txt", "line one\nline two\n", "extend a.txt")
+    sha3 = _commit(tmp_path, "b.txt", "peer content\n", "add b.txt")
+
+    from coordinator_core.git import run as git_run
+
+    calls = []
+    real_run_git = git_run.run_git
+
+    def _counting_run_git(*args, **kwargs):
+        calls.append((args, kwargs))
+        return real_run_git(*args, **kwargs)
+
+    monkeypatch.setattr(git_run, "run_git", _counting_run_git)
+
+    results = freeze_diffs_batch(
+        tmp_path,
+        [
+            {"slice_id": "spawn-2a", "range": f"{sha1}..{sha2}"},
+            {"slice_id": "spawn-2b", "range": f"{sha2}..{sha3}"},
+        ],
+    )
+
+    assert results[0]["committed"] is True
+    assert results[1]["committed"] is True
+    assert len(calls) == 1, f"expected exactly one git spawn for the commit leg, got {calls!r}"
+
+
+def test_re_freeze_after_commit_leaves_head_sha_unchanged(tmp_path: Path) -> None:
+    """AC13."""
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
+    sha2 = _commit(tmp_path, "a.txt", "line one\nline two\n", "extend a.txt")
+
+    first = freeze_diff(tmp_path, f"{sha1}..{sha2}", "pin")
+    assert first["committed"] is True
+
+    sha_path = tmp_path / "state" / "review-trail" / "diffs" / "pin.head.sha"
+    sha_content_after_first = sha_path.read_text()
+    rev_count_before = _git(["rev-list", "--count", "HEAD"], cwd=tmp_path).stdout.strip()
+
+    second = freeze_diff(tmp_path, f"{sha1}..{sha2}", "pin")
+
+    assert second["committed"] is True
+    assert second["commit_sha"] is None
+    assert second["head_sha"] == first["head_sha"]
+    assert sha_path.read_text() == sha_content_after_first
+    rev_count_after = _git(["rev-list", "--count", "HEAD"], cwd=tmp_path).stdout.strip()
+    assert rev_count_after == rev_count_before
+
+
+def test_orphan_heal_commits_an_untracked_byte_identical_pair(tmp_path: Path) -> None:
+    """AC14."""
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
+    sha2 = _commit(tmp_path, "a.txt", "line one\nline two\n", "extend a.txt")
+
+    diffs_dir = tmp_path / "state" / "review-trail" / "diffs"
+    diffs_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write the pair by hand, byte-identical to what freeze_diff will produce,
+    # and leave it UNTRACKED (never committed) -- the orphan shape.
+    diff_text = _git(["diff", sha1, sha2], cwd=tmp_path).stdout
+    (diffs_dir / "orphan.diff").write_text(diff_text, newline="\n")
+    (diffs_dir / "orphan.head.sha").write_text(sha2 + "\n", newline="\n")
+
+    result = freeze_diff(tmp_path, f"{sha1}..{sha2}", "orphan")
+
+    assert result["error"] is None
+    assert result["committed"] is True
+    assert result["commit_sha"] is not None
+    assert _tracked_and_clean(tmp_path, "state/review-trail/diffs")
+
+
+def test_one_request_freeze_commit_leg_stays_under_the_500ms_brightline(tmp_path: Path) -> None:
+    """AC12. Measures process time (never wall clock, per CLAUDE.md's
+    brightline), including the new commit leg."""
+    import time
+
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
+    sha2 = _commit(tmp_path, "a.txt", "line one\nline two\n", "extend a.txt")
+
+    start = time.process_time()
+    result = freeze_diff(tmp_path, f"{sha1}..{sha2}", "timing")
+    elapsed_ms = (time.process_time() - start) * 1000
+
+    assert result["committed"] is True
+    assert elapsed_ms < 500.0, f"freeze_diff process time {elapsed_ms:.1f}ms exceeds the 500ms brightline"

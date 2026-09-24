@@ -31,6 +31,7 @@ PlanStatus = Literal[
     "draft",
     "reviewed",
     "approved",
+    "blocked",
     "executing",
     "landed",
     "implemented",

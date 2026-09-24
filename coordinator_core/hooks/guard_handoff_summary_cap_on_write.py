@@ -50,7 +50,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from coordinator_core.hooks._envelope import allow_advisory, no_advisory
+from coordinator_core.hooks._envelope import allow_advisory, no_advisory, payload_of
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.hooks.support.sentinel_write_guard import extract_target_path
 from coordinator_core.ipc import register_op
@@ -119,6 +119,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Write|Edit|MultiEdit) op: advise (never deny) when a
     write leaves a handoff's `summary:` frontmatter over its 140-char
     cap."""
+    params = payload_of(params)
     if params.get("tool_name", "") not in _GUARDED_TOOLS:
         return no_advisory()
 

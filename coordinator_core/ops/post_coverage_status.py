@@ -106,6 +106,8 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
+
 STATUS_CONTEXT = "coverage-gate"
 
 _GH_KEYRING_SERVICE = "gh:github.com"
@@ -130,6 +132,7 @@ def _load_merge_gate_module():
     global _merge_gate_mod
     if _merge_gate_mod is not None:
         return _merge_gate_mod
+    ensure_bin_lib_bound(str(_BIN_DIR))
     spec = importlib.util.spec_from_file_location(
         _MERGE_GATE_MODULE_NAME, _BIN_DIR / "merge-gate-and-pr.py"
     )
@@ -230,7 +233,7 @@ def _decode_credential_blob(blob: bytes) -> Optional[str]:
         try:
             text = blob.decode(encoding).strip()
         except (UnicodeDecodeError, ValueError):
-            continue
+            continue  # this encoding didn't decode; the next candidate encoding is tried
         if text and text.isprintable():
             return text
     return None
@@ -453,6 +456,27 @@ def _post_status(
         return PostResult(posted=False, state=None, reason=f"unpostable: {exc.reason}")
 
 
+def _no_token_reason() -> str:
+    """Unpostable-reason text for a fully-missed token ladder.
+
+    Platform-branched (Review: the two branches must not bleed into each
+    other's platform, coordinator_core/ops/tests/test_post_coverage_status.py):
+    leg 4 (Windows Credential Manager) is only reachable on `win32`, so
+    naming it as the operator's recourse anywhere else is a dead end. Reads
+    `sys.platform` at call time (not a def-time default) so a test's
+    `monkeypatch.setattr(pcs_mod.sys, "platform", ...)` takes effect.
+    """
+    if sys.platform == "win32":
+        return (
+            "unpostable: no GitHub token resolved (GITHUB_TOKEN/GH_TOKEN env, "
+            "gh hosts.yml, Windows Credential Manager)"
+        )
+    return (
+        "unpostable: no GitHub token resolved (GITHUB_TOKEN/GH_TOKEN env, "
+        "gh hosts.yml) -- export GITHUB_TOKEN or GH_TOKEN"
+    )
+
+
 def post_coverage_status(
     owner: str,
     repo: str,
@@ -469,7 +493,7 @@ def post_coverage_status(
         return PostResult(
             posted=False,
             state=None,
-            reason="unpostable: no GitHub token resolved (GITHUB_TOKEN/GH_TOKEN env, gh hosts.yml)",
+            reason=_no_token_reason(),
         )
     state, description = compute_status(commit_range, repo_root=repo_root)
     return _post_status(owner, repo, sha, state, description, token)

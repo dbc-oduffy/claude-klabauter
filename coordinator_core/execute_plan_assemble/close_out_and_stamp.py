@@ -136,6 +136,7 @@ from typing import Any, Iterable, Optional, Sequence
 import yaml
 
 import coordinator_core.archive_stamp as archive_stamp
+from coordinator_core.ops._sizing_citation import resolve_sizing_citation
 from coordinator_core.execute_plan_assemble.row_spans import (  # noqa: F401 -- re-exported
     _CODED,
     _COMMIT_REQUIRED_DISPOSITIONS,
@@ -1154,7 +1155,14 @@ def _resolve_derived_from(derived_from: str, root: Path) -> Optional[str]:
     narrows the string to one of two shapes; this reads the SAME string
     without re-validating that pattern:
 
-      - `state/sizings/<id>.yaml` -- must exist as a real file in `root`.
+      - `state/sizings/<id>.yaml` -- must resolve either at the literal
+        path or, on a miss, under `archive/sizings/**` by same basename --
+        `coordinator_core.ops._sizing_citation.resolve_sizing_citation`,
+        the same live-then-archive fallback `assert_plan_sizing_citation`
+        already uses. A terminal sizing's `fleet.archive_terminal_sizings`
+        move rewrites no citation, so a value resolving only under
+        `archive/` is correct, not broken (DR-293) -- the resolver widens
+        to see it; the archiver is not the one that skips its move.
       - `<goal_id>#kr-<kr-id>` -- `goal_id` must name a goal whose own `id`
         field is found among `state/goals/*.yaml`, AND that goal's
         `key_results[]` must carry an entry whose `id` equals the FULL
@@ -1162,15 +1170,15 @@ def _resolve_derived_from(derived_from: str, root: Path) -> Optional[str]:
         the same anchor rule `kr-suggestion.schema.json` already uses.
 
     Returns `None` on a resolved link, otherwise a short message naming
-    WHICH half failed. At most one filesystem read (the sizing-path shape)
-    or one directory scan (the KR shape) -- zero git spawns, so AC14's
-    at-most-2 budget (spent entirely by `baseline_ref`'s own ancestor
-    check) is untouched. A malformed/unreadable `state/goals/*.yaml` file
-    is skipped, never fatal -- mirrors this module's degrade-quietly
-    posture everywhere else it reads a corpus of caller-authored YAML."""
+    WHICH half failed. At most one filesystem read plus one archive probe
+    (the sizing-path shape) or one directory scan (the KR shape) -- zero
+    git spawns, so AC14's at-most-2 budget (spent entirely by
+    `baseline_ref`'s own ancestor check) is untouched. A malformed/
+    unreadable `state/goals/*.yaml` file is skipped, never fatal --
+    mirrors this module's degrade-quietly posture everywhere else it
+    reads a corpus of caller-authored YAML."""
     if "#" not in derived_from:
-        sizing_path = root / derived_from
-        if not sizing_path.is_file():
+        if resolve_sizing_citation(root, derived_from) is None:
             return f"sizing object not found: {derived_from}"
         return None
 
@@ -1366,6 +1374,25 @@ that constant answers a different problem (a stamp-fidelity write-diff
 defect); this one answers "the observation this refusal is about was never
 re-run", which the close-out skill (not this engine) is the thing that
 re-runs."""
+
+
+def _goal_refusal_next_move(reason: Optional[str]) -> str:
+    """The one next move for a given `goal_gate["reason"]` value (P129-C1) --
+    lifted from this module's own inline three-way choice at its
+    `close_out_and_stamp` call site so `plan_status_transition._stamp_
+    implemented` can print the SAME next move on its own refusal, rather
+    than drifting from this door's wording. Byte-identical to the choice it
+    replaces: `_GOAL_REFUSAL_NEXT_MOVE` is the default/fallback tail, and
+    each of the three named reasons overrides it with its own move (see
+    each constant's own docstring for why the generic tail misdirects for
+    that specific reason)."""
+    if reason == GOAL_REFUSAL_PRIME_ABSENT:
+        return _PRIME_ABSENT_NEXT_MOVE
+    if reason == GOAL_REFUSAL_FALSIFIER_ABSENT:
+        return _FALSIFIER_ABSENT_NEXT_MOVE
+    if reason == GOAL_REFUSAL_FALSIFIER_MISNESTED:
+        return _FALSIFIER_MISNESTED_NEXT_MOVE
+    return _GOAL_REFUSAL_NEXT_MOVE
 
 
 def _evaluate_goal_falsifier_gate(
@@ -2453,6 +2480,35 @@ def _ac_table_desync_finding(
         return None
 
 
+def _ac_advisory_text(finding: dict[str, Any]) -> str:
+    """Render `_ac_table_desync_finding`'s dict into the one binding
+    advisory sentence both doors emit (P129-C2 --
+    docs/plans/2026-09-12-the-direct-stamp-verb-refuses-what-close-out-
+    refuses.md), lifted verbatim from this module's own inline
+    close-out suffix so the two callers cannot drift apart -- close-out
+    still appends the returned string to its own `message` (unchanged
+    bytes); `plan_status_transition._ac_open_rows_warning` builds its
+    stderr line from it directly.
+
+    `state/cross-repo/archive/2026-08-27-doe-claude-em-ac-table-
+    disposition.md` (accepted) is the binding reason this stays
+    advisory-only, in these words, forever: "It reports and never
+    blocks... The emission names the table's advisory standing." No
+    caller of this helper may gate on its return value."""
+    return (
+        " -- ADVISORY: the '## Tasks' spine is fully resolved but the "
+        f"plan's own '## Acceptance Criteria' table still has "
+        f"{len(finding['unresolved_ac_ids'])} of "
+        f"{finding['total_ac_rows']} advisory AC cell(s) unticked "
+        f"({', '.join(finding['unresolved_ac_ids'])}) -- not a "
+        "gate; the mechanical oracle over this table is retired, an "
+        "unticked cell carries no information in either direction, and "
+        "delivery is the falsifier delta "
+        "(prime_exit_criterion.exit_criterion_met.falsifier_verdict "
+        "against its recorded baseline)."
+    )
+
+
 def _release_committed_path_claims(
     root: Path, sid: "Optional[str]", stage_paths: "Sequence[str]"
 ) -> None:
@@ -3189,13 +3245,7 @@ def close_out_and_stamp(
         # Arm 0 refuses on a field that was never written, so it takes its own
         # next move -- `_GOAL_REFUSAL_NEXT_MOVE` would tell the reader to
         # re-run an observation this plan never named.
-        _next_move = _GOAL_REFUSAL_NEXT_MOVE
-        if goal_gate["reason"] == GOAL_REFUSAL_PRIME_ABSENT:
-            _next_move = _PRIME_ABSENT_NEXT_MOVE
-        elif goal_gate["reason"] == GOAL_REFUSAL_FALSIFIER_ABSENT:
-            _next_move = _FALSIFIER_ABSENT_NEXT_MOVE
-        elif goal_gate["reason"] == GOAL_REFUSAL_FALSIFIER_MISNESTED:
-            _next_move = _FALSIFIER_MISNESTED_NEXT_MOVE
+        _next_move = _goal_refusal_next_move(goal_gate["reason"])
         message = (
             f"{plan_path_rel}: not stamped -- prime exit criterion goal "
             f"observation refused ({goal_gate['reason']}): {goal_gate['detail']}. "
@@ -3228,19 +3278,9 @@ def close_out_and_stamp(
         # above, which has already run by this point) -- same additive-
         # suffix posture as the disposition_ref_rejections NOTE block
         # above, appended regardless of which status_target branch produced
-        # `message`.
-        message += (
-            " -- ADVISORY: the '## Tasks' spine is fully resolved but the "
-            f"plan's own '## Acceptance Criteria' table still has "
-            f"{len(ac_table_desync['unresolved_ac_ids'])} of "
-            f"{ac_table_desync['total_ac_rows']} advisory AC cell(s) unticked "
-            f"({', '.join(ac_table_desync['unresolved_ac_ids'])}) -- not a "
-            "gate; the mechanical oracle over this table is retired, an "
-            "unticked cell carries no information in either direction, and "
-            "delivery is the falsifier delta "
-            "(prime_exit_criterion.exit_criterion_met.falsifier_verdict "
-            "against its recorded baseline)."
-        )
+        # `message`. Text lifted to `_ac_advisory_text` (P129-C2) so this
+        # door and the verb's `_ac_open_rows_warning` emit one register.
+        message += _ac_advisory_text(ac_table_desync)
 
     if dry_run:
         # Additive suffix only -- every branch above still describes what

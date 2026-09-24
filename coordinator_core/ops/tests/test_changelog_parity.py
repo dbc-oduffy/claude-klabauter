@@ -769,13 +769,11 @@ class TestAppendDaySmoke:
 
         This was the false-"none" fallback the exit gate rendered every
         non-trivial day, because its `reviewed_lines` read (`compute_day_fields`
-        -> `_reviewed_lines_for_date`) was gated on ephemeral state: the writer
+        -> the review-trail read) was gated on ephemeral state: the writer
         lands in the gitignored `.coordinator-local/review-trail/`, never
         `state/review-trail/` / `archive/review-trail/`, so the read was always
         empty. Retired per queue
-        2026-09-06-unreviewed-commits-check-gates-on-ephemeral-review-trail;
-        `changelog.upsert_reviewed` (Step 7/18) still renders the real line via
-        `_reviewed_block_lines` on its own surgical path.
+        2026-09-06-unreviewed-commits-check-gates-on-ephemeral-review-trail.
         """
         block = _compose_block(
             date="2000-01-01",

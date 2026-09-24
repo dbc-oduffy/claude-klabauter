@@ -233,10 +233,8 @@ async def _handler(params: dict, repo_root=None) -> dict:
     """PostToolUse(Write|Edit) op: advise (never deny/block) when a written
     initiative has no `goals` field and the repo carries goal(s) to attach.
     """
+    params = payload_of(params)
     try:
-        # Normalize the two params
-        # shapes both engine doors and the cold chain send (see
-        # block_worktree_tool).
-        return await _handle(payload_of(params))
+        return await _handle(params)
     except Exception:
         return no_advisory()

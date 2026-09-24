@@ -16,6 +16,7 @@ from typing import List, Optional
 
 import pytest
 
+from coordinator_core._claude_klabauter_root import clear_machine_local_cache
 from coordinator_core.roadmap.audit import (
     _count_verdict,
     _claude_klabauter_root,
@@ -33,6 +34,19 @@ from coordinator_core.roadmap.audit import (
     validate_run_id,
 )
 from coordinator_core.win_portability import no_console_passthrough_kwargs
+
+
+@pytest.fixture(autouse=True)
+def _reset_shared_machine_local_cache() -> None:
+    """The shared ``_machine_local_get`` (coordinator_core._claude_klabauter_root, R4) is
+    memoized per (key, resolved impl path) at MODULE scope. Without this reset,
+    a test that resolves ``repos.claude_klabauter`` under one MACHINE_LOCAL_IMPL/
+    COORDINATOR_SETTINGS_HOME combination leaks its cached result into a later
+    test using the same (now-stale) impl path but a different env, producing a
+    false pass or false failure depending on test order."""
+    clear_machine_local_cache()
+    yield
+    clear_machine_local_cache()
 
 # Declared, not excused: `test_resolve_repo_root_git_dir_returns_toplevel` and
 # `test_resolve_data_root_derives_from_cwd_repo_root` spawn a real `git init` because

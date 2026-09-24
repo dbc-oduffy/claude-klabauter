@@ -124,7 +124,7 @@ def list_unread_notices(worktree_root: Path, session_id: str) -> List[dict]:
             text = entry.read_text(encoding="utf-8")
             record = json.loads(text)
         except (OSError, json.JSONDecodeError):
-            continue
+            continue  # per-notice loop; one unreadable/malformed notice file is skipped, not fatal to the scan
         if not isinstance(record, dict):
             continue
         record = dict(record)

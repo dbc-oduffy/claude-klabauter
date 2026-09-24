@@ -53,8 +53,11 @@ reachable in-process, no port needed for either):
     JSON-RPC-wrapped `_handler` (params-shape marshalling has no purpose
     when both callers are Python in the same interpreter).
 
-Every input comes from `params["payload"]` — the shape `warm/hook_http.py ::
-payload_from_event` builds from the fired event — NEVER from `os.environ` or
+`params` reaches this op in either shape a `hooks.*` handler receives —
+wrapped as `params["payload"]` (the shape `warm/hook_http.py ::
+payload_from_event` builds from the fired event) by both engine doors, flat
+by the cold chain; `_envelope.payload_of` reads both. Every input comes from
+that payload — NEVER from `os.environ` or
 this process's own `cwd`. The resident engine serves ~50 concurrent
 sessions; its own process environment and cwd belong to none of them. In
 particular `CLAUDE_HOME`/`HOME`/`USERPROFILE`/`CLAUDE_PROJECT_DIR` (the four
@@ -95,9 +98,9 @@ inherited or silently fixed:
      not any session's override) — using it here would silently defeat the
      per-session CLAUDE_HOME test-isolation guarantee the fail-loud contract
      exists for. `Path.home()` (final rung, on every miss) is a fixed
-     ENGINE-HOST machine fact, not per-session state — same precedent
-     `nudge_autonomous_askuserquestion.py::_resolve_posture` already
-     establishes for `os.path.expanduser("~")`.
+     ENGINE-HOST machine fact, not per-session state — same terminal rung
+     `nudge_autonomous_askuserquestion.py::_resolve_posture` now shares,
+     falling back to `Path.home()` when `CLAUDE_HOME` is unset.
   3. WIKI ANCHOR CITED, NOT RESOLVED — the source script's `_WIKI_ANCHOR`
      ("coordinator/docs/wiki/guard-message-concision.md#plan-persistence-check")
      is rewritten by DoE-claude's own `_message_envelope.resolve_wiki_citation`
@@ -145,7 +148,7 @@ from pathlib import Path
 from typing import Mapping, Optional
 
 from coordinator_core.git.repo_root import show_toplevel
-from coordinator_core.hooks._envelope import no_advisory, post_advisory
+from coordinator_core.hooks._envelope import no_advisory, payload_of, post_advisory
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.plan_capture_persist import persist_captured_plan
 
@@ -347,10 +350,12 @@ def _handler(params: dict, repo_root=None) -> dict:
     `docs/plans/<date>-<slug>.md` in the firing repo, or the meta-repo
     reroute target when the firing repo IS the operator's own `~/.claude`.
 
-    `params["payload"]` is the dict `warm/hook_http.py :: payload_from_event`
-    builds from the fired event. Every input this handler reads —
-    `tool_name`, `tool_response`, `cwd`, `env` — comes from that payload,
-    never from `os.environ` or this process's own `cwd`.
+    `payload_of(params)` reads either shape `params` reaches this handler
+    in — wrapped as `params["payload"]` (the dict `warm/hook_http.py ::
+    payload_from_event` builds from the fired event) or flat, from the cold
+    chain. Every input this handler reads — `tool_name`, `tool_response`,
+    `cwd`, `env` — comes from that payload, never from `os.environ` or this
+    process's own `cwd`.
 
     Activation predicate (identical to the source script):
       - tool_name must be ExitPlanMode
@@ -367,9 +372,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     otherwise `post_advisory(<text>)` — the same hookSpecificOutput shape
     the source script printed to stdout.
     """
-    payload = params.get("payload")
-    if not isinstance(payload, Mapping):
-        payload = {}
+    payload = payload_of(params)
 
     tool_name = payload.get("tool_name") or ""
     if not isinstance(tool_name, str):
@@ -500,7 +503,7 @@ def _handler(params: dict, repo_root=None) -> dict:
                     fh.write(f"\n{readme_line}\n")
                 readme_modified = True
             except Exception:
-                pass
+                pass  # best-effort README append; a failure must not block the check
 
     rel_paths = [f"docs/plans/{target_name}"]
     if readme_modified:

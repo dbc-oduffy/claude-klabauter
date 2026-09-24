@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.ops import review_coverage_core
 from coordinator_core.ops.review_coverage_core import main
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -114,19 +115,27 @@ def _write_trail(repo: Path, name: str, obj: dict) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def test_reviewed_set_injection_shaped_range_rejected(tmp_path, monkeypatch, capsys):
+def test_reviewed_set_trail_path_arg_content_never_parsed_even_when_malicious(
+    tmp_path, monkeypatch, capsys,
+):
+    """Post-C4 (docs/plans/2026-08-27-the-reviewed-set-is-a-file-not-a-
+    computation.md § C4), positional trail-path args are accepted but inert
+    in --reviewed-set mode: the file is never opened, so an injection-shaped
+    sha_range inside it can never reach SAFE_RANGE validation (or anything
+    else) — no error, no git spawn, output tracks the resident store only."""
     repo = _make_fixture(tmp_path)
-    _add_commit(repo, "src/thing.py")
+    sha = _add_commit(repo, "src/thing.py")
     trail = _write_trail(
         repo, "unsafe.json",
         {"scope_kind": "diff", "sha_range": "--output=/tmp/evil..HEAD", "artifact": "evil"},
     )
     monkeypatch.chdir(repo)
-    rc = main(["--reviewed-set", str(trail)])
+    monkeypatch.setattr(review_coverage_core, "read_reviewed_set", lambda repo_root: {sha})
+    rc = main(["--reviewed-set", str(trail)], cwd=str(repo))
     out, err = capsys.readouterr()
     assert rc == 0
-    assert out.strip() == ""
-    assert "unsafe sha_range" in err or "failed rev-range validation" in err
+    assert out.strip() == sha
+    assert err == ""
 
 
 def test_reviewed_set_json_single_object(tmp_path, monkeypatch):
@@ -153,7 +162,12 @@ def test_reviewed_set_json_single_object(tmp_path, monkeypatch):
     assert {sha1, sha2} <= expected
 
 
-def test_reviewed_set_jsonl_dual_shape(tmp_path, monkeypatch, capsys):
+def test_reviewed_set_trail_file_content_never_credited(tmp_path, monkeypatch, capsys):
+    """A dual-JSON-object-per-line trail file shaped like a real diff record
+    (the shape `--segments-json` mode's `_parse_trail_file` still parses)
+    contributes nothing to --reviewed-set mode's output: post-C4, this mode
+    never loads or classifies trail records — only the resident store's own
+    membership is credited."""
     repo = _make_fixture(tmp_path)
     sha1 = _add_commit(repo, "src/a.py")
     sha2 = _add_commit(repo, "src/b.py")
@@ -166,11 +180,12 @@ def test_reviewed_set_jsonl_dual_shape(tmp_path, monkeypatch, capsys):
         + "\n"
     )
     monkeypatch.chdir(repo)
+    monkeypatch.setattr(review_coverage_core, "read_reviewed_set", lambda repo_root: set())
     rc = main(["--reviewed-set", str(trail)], cwd=str(repo))
     out, _err = capsys.readouterr()
     assert rc == 0
     lines = set(out.splitlines())
-    assert sha1 in lines and sha2 in lines
+    assert sha1 not in lines and sha2 not in lines
 
 
 @pytest.mark.parametrize("scope_kind", ["plan", "integration"])
@@ -208,11 +223,17 @@ def test_reviewed_set_unrecognized_scope_kind_empty_sha_range_skipped_silently(
     assert "inline-dispatch" not in err
 
 
-@pytest.mark.parametrize(
-    "verdict,included",
-    [("pending", False), ("ok", True), ("warn", True), ("blocked", True), ("waived", True), (None, True)],
-)
-def test_reviewed_set_verdict_filter(tmp_path, monkeypatch, capsys, verdict, included):
+@pytest.mark.parametrize("verdict", ["pending", "ok", "warn", "blocked", "waived", None])
+def test_reviewed_set_trail_file_verdict_field_irrelevant_to_output(
+    tmp_path, monkeypatch, capsys, verdict,
+):
+    """EXCLUDED_VERDICTS filtering (pending excluded, everything else
+    included) now runs once at write time
+    (`review_trail.backfill.resolve_and_fold`); --reviewed-set mode never
+    reads a trail file's verdict field at all post-C4. Output tracks the
+    resident store exactly, regardless of what an (unread) trail file on
+    disk claims — including a 'pending' verdict, which would have excluded
+    the sha pre-migration."""
     repo = _make_fixture(tmp_path)
     sha = _add_commit(repo, "src/v.py")
     origin = _origin_main(repo)
@@ -221,10 +242,11 @@ def test_reviewed_set_verdict_filter(tmp_path, monkeypatch, capsys, verdict, inc
         obj["verdict"] = verdict
     trail = _write_trail(repo, "v.json", obj)
     monkeypatch.chdir(repo)
+    monkeypatch.setattr(review_coverage_core, "read_reviewed_set", lambda repo_root: {sha})
     rc = main(["--reviewed-set", str(trail)], cwd=str(repo))
     out, _err = capsys.readouterr()
     assert rc == 0
-    assert (sha in out.splitlines()) == included
+    assert sha in out.splitlines()
 
 
 def test_reviewed_set_empty_trail_no_crash(tmp_path, monkeypatch, capsys):
@@ -237,33 +259,34 @@ def test_reviewed_set_empty_trail_no_crash(tmp_path, monkeypatch, capsys):
     assert out == ""
 
 
-def test_reviewed_set_union_across_records(tmp_path, monkeypatch, capsys):
+def test_reviewed_set_output_is_store_union_not_per_record_computation(tmp_path, monkeypatch, capsys):
+    """The SHA union across multiple review sessions is folded into the
+    resident store at write time (`review_trail.reviewed_set.fold_in`);
+    --reviewed-set mode performs no per-record range resolution or union
+    itself post-C4 — it prints exactly `read_reviewed_set()`'s membership,
+    verbatim, regardless of how many trail-path args are passed."""
     repo = _make_fixture(tmp_path)
     sha1 = _add_commit(repo, "src/u1.py")
     sha2 = _add_commit(repo, "src/u2.py")
     sha3 = _add_commit(repo, "src/u3.py")
-    origin = _origin_main(repo)
-    trail_a = _write_trail(
-        repo, "a.json", {"scope_kind": "diff", "sha_range": f"{origin}..{sha2}", "verdict": "ok", "artifact": "a"}
-    )
-    trail_b = _write_trail(
-        repo, "b.json", {"scope_kind": "diff", "sha_range": f"{sha2}..{sha3}", "verdict": "ok", "artifact": "b"}
-    )
     monkeypatch.chdir(repo)
-    rc = main(["--reviewed-set", str(trail_a), str(trail_b)], cwd=str(repo))
+    monkeypatch.setattr(review_coverage_core, "read_reviewed_set", lambda repo_root: {sha1, sha2, sha3})
+    rc = main(["--reviewed-set"], cwd=str(repo))
     out, _err = capsys.readouterr()
     assert rc == 0
     lines = set(out.splitlines())
-    assert {sha1, sha2, sha3} <= lines
+    assert lines == {sha1, sha2, sha3}
 
 
-def test_reviewed_set_unrecognized_scope_kind_degrades_not_fatal(tmp_path, monkeypatch, capsys):
-    """2026-08-10 coverage-gate wedge (cross-repo/inbox/2026-08-10-project-
-    rag-ue-addon-em-coverage-gate-crashes-on-chunk-and-inline-dispatch-
-    kinds.md): a trail record with an unrecognized scope_kind ("inline-
-    dispatch") must not take the whole --reviewed-set run down. It earns zero
-    credit (its sha is absent from the output) and a WARN naming the kind is
-    emitted; a sibling "diff" record in the same run is credited normally."""
+def test_reviewed_set_unrecognized_scope_kind_credit_comes_from_store_only(tmp_path, monkeypatch, capsys):
+    """Pre-C4, an unrecognized scope_kind ("inline-dispatch") record earned
+    zero credit and a loud WARN (2026-08-10 coverage-gate wedge). Post-C4
+    (docs/plans/2026-08-27-the-reviewed-set-is-a-file-not-a-computation.md
+    § C4) --reviewed-set mode never classifies scope_kind at all — credit is
+    exactly the resident store's membership regardless of what an (unread)
+    trail file's scope_kind says, and no WARN is possible since no record is
+    ever loaded here (that classification now lives only in --segments-json
+    mode / write-time fold-in)."""
     repo = _make_fixture(tmp_path)
     unrecognized_sha = _add_commit(repo, "src/inline.py")
     diff_sha = _add_commit(repo, "src/normal.py")
@@ -281,26 +304,28 @@ def test_reviewed_set_unrecognized_scope_kind_degrades_not_fatal(tmp_path, monke
         {"scope_kind": "diff", "sha_range": f"{diff_sha}^..{diff_sha}", "verdict": "ok", "artifact": "good"},
     )
     monkeypatch.chdir(repo)
+    monkeypatch.setattr(review_coverage_core, "read_reviewed_set", lambda repo_root: {diff_sha})
     rc = main(["--reviewed-set", str(trail_bad), str(trail_good)], cwd=str(repo))
     out, err = capsys.readouterr()
     assert rc == 0
     lines = set(out.splitlines())
-    assert diff_sha in lines, "the sibling diff record must still be credited normally"
-    assert unrecognized_sha not in lines, (
-        "an unrecognized scope_kind must credit nothing — fail-closed, not fatal"
-    )
-    assert "WARN" in err and "inline-dispatch" in err, (
-        "the unrecognized kind must be named in a loud WARN to stderr"
-    )
+    assert diff_sha in lines
+    assert unrecognized_sha not in lines, "the store, not the trail file, is authoritative"
+    assert err == "", "no classification happens in this mode, so no WARN is possible"
 
 
-def test_reviewed_set_unrecognized_scope_kind_warn_does_not_scale_with_records(
+def test_reviewed_set_never_emits_unrecognized_scope_kind_warn(
     tmp_path, monkeypatch, capsys,
 ):
-    """AC1: a corpus with >=2 unrecognized-scope_kind records must emit ONE
-    aggregated WARN line, not one per record. Regression guard for the WARN
-    flood that buried example-retrieval-repo-em's real trailing error (2026-08-15
-    memo)."""
+    """Pre-C4, a corpus with >=2 unrecognized-scope_kind records emitted ONE
+    aggregated WARN line (AC1, regression guard for the WARN flood that
+    buried example-retrieval-repo-em's real trailing error, 2026-08-15 memo). That
+    aggregation lived in the per-record classification this mode no longer
+    performs post-C4 (docs/plans/2026-08-27-the-reviewed-set-is-a-file-not-
+    a-computation.md § C4): with any number of unread trail-path args, no
+    WARN is ever emitted here, because no record is loaded in
+    --reviewed-set mode at all — the live equivalent of this guard now
+    belongs to --segments-json / the write-time fold-in path."""
     repo = _make_fixture(tmp_path)
     trail_paths = []
     for i in range(5):
@@ -317,28 +342,32 @@ def test_reviewed_set_unrecognized_scope_kind_warn_does_not_scale_with_records(
             )
         )
     monkeypatch.chdir(repo)
+    monkeypatch.setattr(review_coverage_core, "read_reviewed_set", lambda repo_root: set())
     rc = main(["--reviewed-set", *[str(p) for p in trail_paths]], cwd=str(repo))
     out, err = capsys.readouterr()
     assert rc == 0
-    warn_lines = [line for line in err.splitlines() if "unrecognized scope_kind" in line]
-    assert len(warn_lines) == 1, (
-        f"expected exactly one aggregated WARN line for 5 unrecognized-kind "
-        f"records, got {len(warn_lines)}: {warn_lines}"
-    )
-    assert "5" in warn_lines[0] and "inline-dispatch" in warn_lines[0]
+    assert err == ""
 
 
-def test_reviewed_set_garbage_file_default_fail(tmp_path, monkeypatch):
+def test_reviewed_set_garbage_trail_file_never_causes_failure(tmp_path, monkeypatch):
+    """--reviewed-set mode 'cannot fail' (module docstring): a garbage,
+    unparseable trail file passed as a positional arg is inert here post-C4
+    — the --on-record-error=fail default has nothing to act on since the
+    file is never opened in this mode."""
     repo = _make_fixture(tmp_path)
     _add_commit(repo, "src/g.py")
     trail = repo / "state" / "review-trail" / "garbage.json"
     trail.write_text('{"a":1}{"b":2}\n')
     monkeypatch.chdir(repo)
     rc = main(["--reviewed-set", str(trail)], cwd=str(repo))
-    assert rc == 1
+    assert rc == 0
 
 
-def test_reviewed_set_garbage_file_skip_processes_sibling(tmp_path, monkeypatch, capsys):
+def test_reviewed_set_on_record_error_skip_has_no_effect(tmp_path, monkeypatch, capsys):
+    """--on-record-error is accepted but inert in --reviewed-set mode post-
+    C4 (no record is ever loaded to skip or fail on): passing skip alongside
+    a garbage file and a real-looking trail file changes nothing — output is
+    exactly the resident store's membership, with no WARN."""
     repo = _make_fixture(tmp_path)
     sha = _add_commit(repo, "src/sib.py")
     origin = _origin_main(repo)
@@ -348,14 +377,19 @@ def test_reviewed_set_garbage_file_skip_processes_sibling(tmp_path, monkeypatch,
         repo, "good.json", {"scope_kind": "diff", "sha_range": f"{origin}..{sha}", "verdict": "ok", "artifact": "g"}
     )
     monkeypatch.chdir(repo)
+    monkeypatch.setattr(review_coverage_core, "read_reviewed_set", lambda repo_root: {sha})
     rc = main(["--reviewed-set", "--on-record-error", "skip", str(bad), str(good)], cwd=str(repo))
     out, err = capsys.readouterr()
     assert rc == 0
-    assert "WARN" in err
+    assert err == ""
     assert sha in out.splitlines()
 
 
-def test_reviewed_set_unresolvable_ref_skip_vs_fail(tmp_path, monkeypatch, capsys):
+def test_reviewed_set_unresolvable_ref_never_affects_reviewed_set_mode(tmp_path, monkeypatch, capsys):
+    """Ref resolution (`git rev-list`) happens only in --segments-json mode
+    post-C4; an unresolvable sha_range in a trail file passed to
+    --reviewed-set changes nothing under either --on-record-error value,
+    since no ref is ever resolved in this mode."""
     repo = _make_fixture(tmp_path)
     sha = _add_commit(repo, "src/r.py")
     bad_range = f"{sha}..WORKING"
@@ -366,26 +400,28 @@ def test_reviewed_set_unresolvable_ref_skip_vs_fail(tmp_path, monkeypatch, capsy
     monkeypatch.chdir(repo)
 
     rc_fail = main(["--reviewed-set", "--on-record-error", "fail", str(trail)], cwd=str(repo))
-    assert rc_fail == 1
+    assert rc_fail == 0
 
     rc_skip = main(["--reviewed-set", "--on-record-error", "skip", str(trail)], cwd=str(repo))
     out, err = capsys.readouterr()
     assert rc_skip == 0
-    assert "WARN" in err
+    assert err == ""
 
 
 def test_reviewed_set_intersect_filters_output(tmp_path, monkeypatch, capsys):
+    """--intersect is the one piece of --reviewed-set mode's classification
+    still live post-C4 (module docstring): it narrows the resident store's
+    membership to SHAs present in the intersect file. Seed the store via
+    `read_reviewed_set` directly (the trail-path arg is inert) rather than
+    a trail file, matching the C4 read-only contract."""
     repo = _make_fixture(tmp_path)
     sha1 = _add_commit(repo, "src/i1.py")
     sha2 = _add_commit(repo, "src/i2.py")
-    origin = _origin_main(repo)
-    trail = _write_trail(
-        repo, "i.json", {"scope_kind": "diff", "sha_range": f"{origin}..{sha2}", "verdict": "ok", "artifact": "i"}
-    )
     intersect_file = repo / "intersect.txt"
     intersect_file.write_text(sha1 + "\n")
     monkeypatch.chdir(repo)
-    rc = main(["--reviewed-set", "--intersect", str(intersect_file), str(trail)], cwd=str(repo))
+    monkeypatch.setattr(review_coverage_core, "read_reviewed_set", lambda repo_root: {sha1, sha2})
+    rc = main(["--reviewed-set", "--intersect", str(intersect_file)], cwd=str(repo))
     out, _err = capsys.readouterr()
     assert rc == 0
     lines = set(out.splitlines())

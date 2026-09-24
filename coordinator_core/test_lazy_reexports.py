@@ -72,7 +72,7 @@ def test_write_surface_is_not_promoted():
         try:
             getattr(coordinator_core, bad_name)
         except AttributeError:
-            pass
+            pass  # expected outcome under test; the else clause fails if it's missing
         else:
             raise AssertionError(f"expected AttributeError for {bad_name!r}")
 

@@ -671,6 +671,7 @@ def resolve_plan_owner(
         try:
             hf_text = hf_path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
+            # unreadable/non-UTF-8 handoff cannot be aged; skip it
             continue
 
         status = extract_frontmatter_scalar(hf_text, "status")
@@ -864,6 +865,7 @@ def list_stale_executing(
         try:
             text = file_path.read_text(encoding="utf-8")
         except OSError:
+            # unreadable plan file cannot be aged; skip it
             continue
 
         status = extract_frontmatter_scalar(text, "status")
@@ -992,6 +994,7 @@ def _list_dangling_baton_plan_references(
         try:
             hf_text = hf_path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
+            # unreadable/non-UTF-8 handoff cannot be aged; skip it
             continue
 
         rel_handoff = "/".join(("state", "handoffs", name))
@@ -1241,6 +1244,7 @@ def list_orphaned(
         try:
             text = file_path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
+            # unreadable/non-UTF-8 plan file cannot be scanned; skip it
             continue
 
         scanned_count += 1

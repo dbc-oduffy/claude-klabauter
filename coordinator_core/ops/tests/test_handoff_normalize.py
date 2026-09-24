@@ -494,6 +494,33 @@ def test_present_nonplaceholder_summary_still_untouched():
     assert result is None
 
 
+def test_backfilled_h1_summary_truncation_is_loud(capsys):
+    """The H1/title-backfill branch truncates over-cap text silently before
+    the fix -- no stderr WARNING, unlike the present-value cap path
+    (`normalize_present_summary`) and the block-scalar path
+    (`_normalize_block_scalar_summary`), which both already warn. Assert the
+    fix: an over-140-char H1 backfilled into `summary:` prints the same
+    WARNING shape those two paths use."""
+    over_cap_title = "x" * 160
+    content = _SPINOFF_NO_H1.replace(
+        "## What this covers", f"# {over_cap_title}\n\n## What this covers"
+    )
+
+    result = _normalize_one_text(content, Path("state/handoffs/x.md"))
+
+    assert result is not None
+    fm_text = handoff_normalize.split_frontmatter(result["rebuilt"]).fm_text
+    summary_value = handoff_normalize.read_fm_field(fm_text, "summary")
+    assert summary_value is not None
+    assert len(summary_value) <= handoff_normalize._SUMMARY_MAX_CHARS
+    assert summary_value.endswith("…")
+
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+    assert "state/handoffs/x.md" in captured.err
+    assert "truncated" in captured.err
+
+
 def test_batch_sweep_backfills_placeholder_summary_on_a_committed_record(
     tmp_path, monkeypatch
 ):

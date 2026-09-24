@@ -349,7 +349,15 @@ def test_dry_run_writes_no_claim_events(tmp_path, monkeypatch):
     old_rel = f"docs/research/{WORKDIR_NAME}/phase-1/notes.md"
     session_scope.touch(sid, old_rel, cwd=str(worktree))
 
-    touched_path = Path(session_core.session_dir(sid, cwd=str(worktree))) / "touched.txt"
+    # `touch-record.jsonl` is the live sink -- `touched.txt` is the retired
+    # legacy dialect (coordinator_core/ops/session/legacy_touch_corpus_migrate.py);
+    # session_scope._TOUCH_RECORD_FILENAME is the same indirection every
+    # other test in this suite uses (e.g. test_safe_commit_offer.py) so the
+    # filename can move again without a second stale literal to chase.
+    touched_path = (
+        Path(session_core.session_dir(sid, cwd=str(worktree)))
+        / session_scope._TOUCH_RECORD_FILENAME
+    )
     before = touched_path.read_text(encoding="utf-8")
 
     result = _call({"run_id": RUN_ID, "dry_run": True}, worktree / ".git")

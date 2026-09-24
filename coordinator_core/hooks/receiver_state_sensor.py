@@ -84,6 +84,7 @@ Spec backlink: docs/plans/2026-08-14-receiver-state-sensor.md § C3
 
 from __future__ import annotations
 
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.hooks._payload import field
@@ -207,6 +208,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     (fail-soft, AC12) — a broken sensor invocation must never surface as a tool-call
     failure.
     """
+    params = payload_of(params)
     import asyncio
 
     session_id = field(params, "session_id")

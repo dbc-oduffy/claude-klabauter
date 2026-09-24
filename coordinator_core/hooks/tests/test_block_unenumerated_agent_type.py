@@ -464,6 +464,21 @@ def test_fork_is_harness_owned_not_filesystem_derivable(doe_root: Path, plugin_h
     assert "fork" not in plugin_roster
 
 
+def test_workflow_subagent_is_harness_owned_not_filesystem_derivable(
+    doe_root: Path, plugin_home: Path
+) -> None:
+    """Pins `workflow-subagent` -- the identity of an agent a Workflow script
+    spawns without an `agentType` -- to `_HARNESS_BUILTIN_TYPES`. No
+    filesystem leg can carry it, so dropping it from the constant takes it
+    off the roster and confines every such workflow agent's Bash.
+    """
+    assert "workflow-subagent" in mod._HARNESS_BUILTIN_TYPES
+
+    assert "workflow-subagent" not in mod._load_policy_roster(str(doe_root))
+    assert "workflow-subagent" not in mod._load_agents_roster(str(doe_root))
+    assert "workflow-subagent" not in mod._load_plugin_roster(str(plugin_home))
+
+
 def test_non_agent_tool_name_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_roster(monkeypatch, frozenset())
     payload = {"tool_name": "Bash", "tool_input": {"subagent_type": "invented"}}

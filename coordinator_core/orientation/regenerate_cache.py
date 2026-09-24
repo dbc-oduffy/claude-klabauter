@@ -200,6 +200,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from coordinator_core._settings_home import settings_home
+from coordinator_core.daily_branch import is_work_branch
 from coordinator_core.engine_root import coordinator_engine_root_env
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.repo_root import is_inside_work_tree, show_toplevel
@@ -1045,7 +1046,7 @@ def emit_auto_push_health(repo_root: Path) -> str:
             f"cadence has no ref to compare and never publishes this branch. "
             f"Adopt one: git push -u origin {branch}"
         )
-    if not branch.startswith("work/"):
+    if not is_work_branch(branch):
         return (
             f"- ⚠ {unpushed} unpushed commit(s) on `{branch}` — the push cadence publishes "
             f"`work/*` only, so nothing will publish this branch. "

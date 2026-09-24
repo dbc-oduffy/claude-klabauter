@@ -103,9 +103,7 @@ _CARVEOUT_SEGMENTS = frozenset({"tests", "fixtures", "vendor", "node_modules"})
 
 _ESCAPE_HATCH_ENV_VAR = "COORDINATOR_NEW_SH_PUNT"
 
-_REASON_TEMPLATE = """New .sh: {file_path}. Spawns are costly cross-host.
-Use instead:
-  a coordinator_core module (invoking-shell-bash4-probe.sh/claude-machine-local.sh pre-approved){override_block}"""
+_REASON_TEMPLATE = """New .sh: {file_path}. Use a coordinator_core module (invoking-shell-bash4-probe.sh/claude-machine-local.sh pre-approved).{override_block}"""
 
 _TRIVIAL_PUNT_REASON_TEMPLATE = """New .sh: {file_path}. Spawns are costly cross-host.
 Use instead:

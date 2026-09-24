@@ -105,7 +105,19 @@ def _payload(command):
 
 def _decision(out):
     assert out is not None
-    return out["hookSpecificOutput"]["permissionDecision"]
+    hso = out["hookSpecificOutput"]
+    if "permissionDecision" not in hso:
+        # `coordinator_core._hook_envelope.rewrite_input` (shape (f), e.g. the
+        # in-process find-census answer `_bt_serve_find_census` returns)
+        # legitimately omits `permissionDecision` -- that builder's own
+        # docstring: "the rewrite is orthogonal to the allow/deny question,
+        # and omitting it leaves the normal permission flow intact", i.e. an
+        # implicit allow. Only an `updatedInput` rewrite is entitled to that
+        # reading; anything else missing the key is a genuine envelope-shape
+        # defect this helper must still catch.
+        assert "updatedInput" in hso
+        return "allow"
+    return hso["permissionDecision"]
 
 
 class TestMultiprobeBannerChainReachability:

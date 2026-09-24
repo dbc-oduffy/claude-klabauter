@@ -1,15 +1,20 @@
-"""Binds the persisted decision-object's judgment-point shape to BOTH readers
-of it, from the writer's own output rather than a hand-built fixture.
+"""Binds the persisted decision-object's judgment-point shape to its
+production reader, from the writer's own output rather than a hand-built
+fixture.
 
 The defect this exists to catch (code-reviewer Finding 3 on chunk C3 of
 docs/plans/2026-09-02-the-loader-fires-the-assembly-not-the-em.md, deferred
-there with its reason named): two independent readers consume the same
-on-disk shape --- `contract.decision_object.resume` and
-`pickup_assemble.apply._read_session_dispositions` --- and nothing failed if
-`judgment.py`/`envelope.py` renamed `judgment_points`, a point's `id`, or a
-disposition's `value`. One reader would keep working and the other would
-silently see nothing, which is indistinguishable from "the EM answered
-nothing".
+there with its reason named): a persisted-shape reader consumes the same
+on-disk shape the writer emits, and nothing failed if `judgment.py`/
+`envelope.py` renamed `judgment_points`, a point's `id`, or a disposition's
+`value`, leaving the reader silently seeing nothing -- indistinguishable
+from "the EM answered nothing".
+
+This originally bound TWO readers -- `contract.decision_object.resume` and
+`pickup_assemble.apply._read_session_dispositions` -- but `resume.py` is
+GRAVESTONED (Item 67, docs/plans/2026-09-22-inbox-blitz-bundled-xs-s-fixes-
+2026-09-11.md: zero non-test production callers). The `pickup_assemble.apply`
+binding below is what remains.
 
 Negative-spec: every judgment point and disposition below is built by
 `build_judgment_point`/`build_disposition`/`build_envelope` and validated by
@@ -31,11 +36,6 @@ from coordinator_core.contract.decision_object.envelope import (
 from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
     build_judgment_point,
-)
-from coordinator_core.contract.decision_object.resume import (
-    ResumeRefused,
-    _legal_disposition_values,
-    resume_decisions,
 )
 from coordinator_core.pickup_assemble import apply as pickup_apply
 
@@ -96,52 +96,16 @@ def repo_root(tmp_path):
     return tmp_path
 
 
-class TestBothConsumersReadTheSameBuiltObject:
-    """Neither reader may go blind on an object the writer produced. A rename
-    in `judgment.py` or `envelope.py` that reached only one of them fails
-    here, on whichever half stopped seeing the point.
+class TestPickupReaderReadsTheWritersOutput:
+    """`pickup_assemble.apply._read_session_dispositions` may not go blind on
+    an object the writer produced. A rename in `judgment.py` or `envelope.py`
+    that this reader stopped tracking fails here.
 
-    A sibling `TestSharedReadersSeeThe
-    WritersOutput` class used to assert `judgment_points_by_id`/
-    `legal_disposition_values` directly; it was strictly subsumed here (its
-    two tests could never be the only red) and was dropped. That subsumption
-    was INCOMPLETE and is repaired below: nothing that survived it proved a
-    legal non-first disposition is accepted, so "only `dispositions[0]` is
-    read" and correct behaviour were indistinguishable.
+    Was `TestBothConsumersReadTheSameBuiltObject`, binding a second reader
+    (`contract.decision_object.resume`) alongside this one; that reader is
+    GRAVESTONED (Item 67) and its tests removed with it -- see this module's
+    docstring.
     """
-
-    def test_resume_marshals_a_legal_answer(self, repo_root):
-        payload = resume_decisions(
-            _built_decision_object(), {_JP_ID: "adopt"}, repo_root=repo_root
-        )
-
-        assert payload == {_JP_ID: {"disposition": "adopt"}}
-
-    def test_resume_marshals_a_legal_answer_that_is_not_the_first_disposition(
-        self, repo_root
-    ):
-        """Restores what the dropped `TestSharedReadersSeeTheWritersOutput`
-        was carrying and the subsumption argument missed: with only "adopt"
-        (`dispositions[0]`) accepted and "negotiate" (absent entirely)
-        refused, a reader that consulted ONLY the first built disposition
-        would pass every other test in this class. "decline" is legal, is
-        NOT first, and must be accepted -- that is what separates the two."""
-        payload = resume_decisions(
-            _built_decision_object(), {_JP_ID: "decline"}, repo_root=repo_root
-        )
-
-        assert payload == {_JP_ID: {"disposition": "decline"}}
-
-    def test_legal_values_sees_every_built_disposition_not_just_the_first(self):
-        assert _legal_disposition_values(
-            _built_decision_object()["judgment_points"][0]
-        ) == {"adopt", "decline"}
-
-    def test_resume_refuses_a_value_the_built_dispositions_do_not_offer(self, repo_root):
-        with pytest.raises(ResumeRefused, match="does not record disposition"):
-            resume_decisions(
-                _built_decision_object(), {_JP_ID: "negotiate"}, repo_root=repo_root
-            )
 
     def test_pickups_persisted_reader_finds_the_same_point(self, repo_root):
         decision_object = _built_decision_object()
@@ -169,7 +133,3 @@ class TestMalformedPersistedShapeDegradesRatherThanRaising:
     )
     def test_index_degrades_to_empty(self, judgment_points):
         assert judgment_points_by_id({"judgment_points": judgment_points}) == {}
-
-    @pytest.mark.parametrize("dispositions", [None, {}, "adopt", [None, "x", {}]])
-    def test_legal_values_degrade_to_empty(self, dispositions):
-        assert _legal_disposition_values({"dispositions": dispositions}) == set()

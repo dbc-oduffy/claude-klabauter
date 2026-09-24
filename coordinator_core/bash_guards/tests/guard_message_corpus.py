@@ -2678,6 +2678,19 @@ def _wg_handoff_ac_shape_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict
     }
 
 
+def _wg_handoff_author_lint_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
+    """A `Write` to a not-yet-existing `state/handoffs/*.md` path whose
+    `summary:` is over the 140-char cap -- `SUMMARY_OVER_CAP`, one of the
+    three codes `nudge_handoff_author_lint` relays."""
+    summary = "x" * 150
+    content = f'---\nkind: spinoff\nsummary: "{summary}"\n---\n# Body\n'
+    return {
+        "tool_name": "Write",
+        "tool_input": {"file_path": "state/handoffs/bar.md", "content": content},
+        "cwd": str(scratch_dir),
+    }
+
+
 def _wg_dangling_sizing_citation_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
     """A `docs/plans/*.md` frontmatter `sizing_object:` naming a path that
     does not exist under the resolved git root -- the guard's whole fire
@@ -3239,6 +3252,10 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
     WriteGuardRow("nudge_handoff_ac_shape", "fire", True, _wg_handoff_ac_shape_fire),
     WriteGuardRow("nudge_handoff_ac_shape", "control", False, _wg_benign),
     WriteGuardRow(
+        "nudge_handoff_author_lint", "fire", True, _wg_handoff_author_lint_fire
+    ),
+    WriteGuardRow("nudge_handoff_author_lint", "control", False, _wg_benign),
+    WriteGuardRow(
         "nudge_improvement_queue_write", "fire", True, _wg_improvement_queue_write_fire
     ),
     WriteGuardRow("nudge_improvement_queue_write", "control", False, _wg_benign),
@@ -3574,7 +3591,7 @@ from coordinator_core.win_portability import no_console_creationflags, no_consol
 # ---------------------------------------------------------------------------
 # doe-holds-no-scripts W4 landing wave -- the 72 previously-uncovered
 # `hooks/<module>` rows this pass closes (docs/plans/2026-09-18-doe-holds-
-# no-scripts.md). Same `_hooks_asyncio.run(_hook_<mod>._handler(...))` fire
+# no-scripts.md). Same `_run_maybe_async(_hook_<mod>._handler(...))` fire
 # idiom as the C12 section above; each `_fire_*`/`_fire_*_control` pair is
 # self-contained (own scratch dir, own `pytest.MonkeyPatch` where needed).
 # ---------------------------------------------------------------------------
@@ -3630,6 +3647,19 @@ from coordinator_core.hooks import strip_worktree_isolation as _hook_strip_workt
 import coordinator_core.ops.session.guard_hook_generation_self_probe as _ops_guard_hook_generation_self_probe
 
 
+def _run_maybe_async(result: Any) -> Any:
+    """Fire a hook's already-called ``_handler(...)`` return value, tolerating
+    either shape: most hook modules' ``_handler`` is a plain ``def`` returning
+    the envelope dict directly (no coroutine to run); a few are ``async def``
+    and hand back a coroutine that still needs a loop. An unconditional
+    ``asyncio.run(...)`` raises ``ValueError: a coroutine was expected`` the
+    moment a handler is (or becomes) synchronous, so every ``_fire_*`` helper
+    routes through this instead of branching per site."""
+    if _hooks_asyncio.iscoroutine(result):
+        return _hooks_asyncio.run(result)
+    return result
+
+
 def _to_envelope_or_none(result: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Normalize a raw hook return into the `envelope-or-None` shape `HookCapture`
     expects -- `no_advisory()` returns `{}` (falsy but not `None`), and the
@@ -3648,7 +3678,7 @@ def _to_envelope_or_none(result: Optional[Dict[str, Any]]) -> Optional[Dict[str,
 # no_advisory()." Verified live: params={} takes the no-repo_root early return.
 def _fire_agent_completion_log_noop() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_agent_completion_log._handler({}, repo_root=None))
+        _run_maybe_async(_hook_agent_completion_log._handler({}, repo_root=None))
     )
 
 
@@ -3660,7 +3690,7 @@ def _fire_agent_completion_log_noop() -> Optional[Dict[str, Any]]:
 # unlike the auto_push/platform_localize exemptions.
 def _fire_agent_postuse_dispatch_noop() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_agent_postuse_dispatch._handler({}, repo_root=None))
+        _run_maybe_async(_hook_agent_postuse_dispatch._handler({}, repo_root=None))
     )
 
 
@@ -3675,7 +3705,7 @@ def _fire_agent_postuse_dispatch_noop() -> Optional[Dict[str, Any]]:
 # so this is side-effect-free and safe to fire from a fast-tier corpus row.
 def _fire_cater_subagent_start_missing_provisioning() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_cater_subagent_start._handler({}, repo_root=None))
+        _run_maybe_async(_hook_cater_subagent_start._handler({}, repo_root=None))
     )
 
 
@@ -3687,7 +3717,7 @@ def _fire_cater_subagent_start_missing_provisioning() -> Optional[Dict[str, Any]
 # that arm) -- no ledger write, no agent-facing text, ever, structurally.
 def _fire_subagent_review_mark_noop() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_subagent_review_mark._handler({}, repo_root=None))
+        _run_maybe_async(_hook_subagent_review_mark._handler({}, repo_root=None))
     )
 
 
@@ -3971,7 +4001,7 @@ def _fire_nudge_unauthorized_handoff() -> Optional[Dict[str, Any]]:
         "transcript_path": "",
     }
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_nudge_unauthorized_handoff._handler(payload, repo_root=None))
+        _run_maybe_async(_hook_nudge_unauthorized_handoff._handler(payload, repo_root=None))
     )
 
 
@@ -3983,7 +4013,7 @@ def _fire_nudge_unauthorized_handoff_control() -> Optional[Dict[str, Any]]:
         "transcript_path": "",
     }
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_nudge_unauthorized_handoff._handler(payload, repo_root=None))
+        _run_maybe_async(_hook_nudge_unauthorized_handoff._handler(payload, repo_root=None))
     )
 
 
@@ -4012,14 +4042,14 @@ def _fire_postuse_advisory_dispatch() -> Optional[Dict[str, Any]]:
         "transcript_path": "",
     }
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_postuse_advisory_dispatch._handler(payload, repo_root=None))
+        _run_maybe_async(_hook_postuse_advisory_dispatch._handler(payload, repo_root=None))
     )
 
 
 def _fire_postuse_advisory_dispatch_control() -> Optional[Dict[str, Any]]:
     payload = {"tool_name": "Read", "file_path": "", "content": "", "transcript_path": ""}
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_postuse_advisory_dispatch._handler(payload, repo_root=None))
+        _run_maybe_async(_hook_postuse_advisory_dispatch._handler(payload, repo_root=None))
     )
 
 
@@ -4072,7 +4102,7 @@ def _fire_example_retrieval_repo_detect_control() -> Optional[Dict[str, Any]]:
 # JSON-RPC result, not an advisory envelope)". Verified live: the result carries
 # no `hookSpecificOutput` key at all.
 def _fire_subagent_arrival_check_structured() -> Optional[Dict[str, Any]]:
-    result = _hooks_asyncio.run(_hook_subagent_arrival_check._handler({}))
+    result = _run_maybe_async(_hook_subagent_arrival_check._handler({}))
     assert "hookSpecificOutput" not in result, (
         "subagent_arrival_check began emitting an advisory envelope -- C12's "
         "no-agent-facing-emitter classification is stale"
@@ -4084,7 +4114,7 @@ def _fire_subagent_arrival_check_structured() -> Optional[Dict[str, Any]]:
 # an advisory envelope (own `_envelope()` helper returns a plain {"verdict", ...}
 # dict, no `hookSpecificOutput`). Verified live with params={}.
 def _fire_subagent_fabrication_check_structured() -> Optional[Dict[str, Any]]:
-    result = _hooks_asyncio.run(_hook_subagent_fabrication_check._handler({}, repo_root=None))
+    result = _run_maybe_async(_hook_subagent_fabrication_check._handler({}, repo_root=None))
     assert "hookSpecificOutput" not in result, (
         "subagent_fabrication_check began emitting an advisory envelope -- C12's "
         "no-agent-facing-emitter classification is stale"
@@ -4098,7 +4128,7 @@ def _fire_subagent_fabrication_check_structured() -> Optional[Dict[str, Any]]:
 # no_advisory() branch).
 def _fire_subagent_zero_tool_use_noop() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_subagent_zero_tool_use._handler({}, repo_root=None))
+        _run_maybe_async(_hook_subagent_zero_tool_use._handler({}, repo_root=None))
     )
 
 
@@ -4106,7 +4136,7 @@ def _fire_subagent_zero_tool_use_noop() -> Optional[Dict[str, Any]]:
 # (own `_verdict()` helper), not an advisory envelope. Verified live with
 # params={}.
 def _fire_subagent_zero_tool_use_resolve_structured() -> Optional[Dict[str, Any]]:
-    result = _hooks_asyncio.run(_hook_subagent_zero_tool_use_resolve._handler({}, repo_root=None))
+    result = _run_maybe_async(_hook_subagent_zero_tool_use_resolve._handler({}, repo_root=None))
     assert "hookSpecificOutput" not in result, (
         "subagent_zero_tool_use_resolve began emitting an advisory envelope -- "
         "C12's no-agent-facing-emitter classification is stale"
@@ -4118,7 +4148,7 @@ def _fire_subagent_zero_tool_use_resolve_structured() -> Optional[Dict[str, Any]
 # own module docstring: "this op returns a plain dict" (not an advisory
 # envelope). Verified live with params={}.
 def _fire_subagent_zero_tool_use_surface_structured() -> Optional[Dict[str, Any]]:
-    result = _hooks_asyncio.run(_hook_subagent_zero_tool_use_surface._handler({}, repo_root=None))
+    result = _run_maybe_async(_hook_subagent_zero_tool_use_surface._handler({}, repo_root=None))
     assert "hookSpecificOutput" not in result, (
         "subagent_zero_tool_use_surface began emitting an advisory envelope -- "
         "C12's no-agent-facing-emitter classification is stale"
@@ -4136,14 +4166,14 @@ def _fire_suggest_sonnet_research() -> Optional[Dict[str, Any]]:
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(_hook_suggest_sonnet_research, "_has_deep_research_plugin", lambda: False)
         payload = {"agent_id": "not-an-agent-id", "session_id": "abcdefgh"}
-        return _to_envelope_or_none(_hooks_asyncio.run(_hook_suggest_sonnet_research._handler(payload)))
+        return _to_envelope_or_none(_run_maybe_async(_hook_suggest_sonnet_research._handler(payload)))
 
 
 def _fire_suggest_sonnet_research_control() -> Optional[Dict[str, Any]]:
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(_hook_suggest_sonnet_research, "_has_deep_research_plugin", lambda: False)
         payload = {"agent_id": "arscout-deadbeef123456ab", "session_id": "abcdefgh-full-session"}
-        return _to_envelope_or_none(_hooks_asyncio.run(_hook_suggest_sonnet_research._handler(payload)))
+        return _to_envelope_or_none(_run_maybe_async(_hook_suggest_sonnet_research._handler(payload)))
 
 
 # --- (20) track_dispatched_agents -- write-only dispatch-tracking op;
@@ -4152,7 +4182,7 @@ def _fire_suggest_sonnet_research_control() -> Optional[Dict[str, Any]]:
 # an early no_advisory() branch).
 def _fire_track_dispatched_agents_noop() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_track_dispatched_agents._handler({}, repo_root=None))
+        _run_maybe_async(_hook_track_dispatched_agents._handler({}, repo_root=None))
     )
 
 
@@ -4161,7 +4191,7 @@ def _fire_track_dispatched_agents_noop() -> Optional[Dict[str, Any]]:
 # Verified live with params={}.
 def _fire_track_touched_files_noop() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_track_touched_files._handler({}, repo_root=None))
+        _run_maybe_async(_hook_track_touched_files._handler({}, repo_root=None))
     )
 
 
@@ -4175,7 +4205,7 @@ def _fire_track_touched_files_noop() -> Optional[Dict[str, Any]]:
 # branch, before any I/O).
 def _fire_receiver_state_sensor_noop() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_receiver_state_sensor._handler({}, repo_root=None))
+        _run_maybe_async(_hook_receiver_state_sensor._handler({}, repo_root=None))
     )
 
 
@@ -4272,7 +4302,7 @@ def _fire_allow_emitted_workflow_fire() -> Optional[Dict[str, Any]]:
             "session_id": "sess-x",
         }
         return _to_envelope_or_none(
-            _hooks_asyncio.run(_hook_allow_emitted_workflow_fire._handler(payload))
+            _run_maybe_async(_hook_allow_emitted_workflow_fire._handler(payload))
         )
 
 
@@ -4283,13 +4313,13 @@ def _fire_allow_emitted_workflow_fire_control() -> Optional[Dict[str, Any]]:
         script.write_text("console.log(1)")
         payload = {"tool_name": "Workflow", "tool_input": {"scriptPath": str(script)}, "cwd": str(scratch_dir)}
         return _to_envelope_or_none(
-            _hooks_asyncio.run(_hook_allow_emitted_workflow_fire._handler(payload))
+            _run_maybe_async(_hook_allow_emitted_workflow_fire._handler(payload))
         )
 
 
 def _fire_assert_em_role() -> Optional[Dict[str, Any]]:
     payload = {"payload": {"cwd": "/tmp", "session_id": "sess-aer"}}
-    return _to_envelope_or_none(_hooks_asyncio.run(_hook_assert_em_role._handler(payload)))
+    return _to_envelope_or_none(_run_maybe_async(_hook_assert_em_role._handler(payload)))
 
 
 def _fire_block_dispatch_suite_invocation() -> Optional[Dict[str, Any]]:
@@ -4298,14 +4328,14 @@ def _fire_block_dispatch_suite_invocation() -> Optional[Dict[str, Any]]:
         "tool_input": {"prompt": "Now run the full test suite: pytest coordinator_core/"},
     }
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_block_dispatch_suite_invocation._handler(payload))
+        _run_maybe_async(_hook_block_dispatch_suite_invocation._handler(payload))
     )
 
 
 def _fire_block_dispatch_suite_invocation_control() -> Optional[Dict[str, Any]]:
     payload = {"tool_name": "Agent", "tool_input": {"prompt": "Please implement the feature."}}
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_block_dispatch_suite_invocation._handler(payload))
+        _run_maybe_async(_hook_block_dispatch_suite_invocation._handler(payload))
     )
 
 
@@ -4333,7 +4363,7 @@ def _fire_block_workflow_foreign_emission() -> Optional[Dict[str, Any]]:
             "session_id": "sess-y",
         }
         return _to_envelope_or_none(
-            _hooks_asyncio.run(_hook_block_workflow_foreign_emission._handler(payload))
+            _run_maybe_async(_hook_block_workflow_foreign_emission._handler(payload))
         )
 
 
@@ -4344,7 +4374,7 @@ def _fire_block_workflow_foreign_emission_control() -> Optional[Dict[str, Any]]:
         script.write_text("console.log(1)")
         payload = {"tool_name": "Workflow", "tool_input": {"scriptPath": str(script)}, "cwd": str(scratch_dir)}
         return _to_envelope_or_none(
-            _hooks_asyncio.run(_hook_block_workflow_foreign_emission._handler(payload))
+            _run_maybe_async(_hook_block_workflow_foreign_emission._handler(payload))
         )
 
 
@@ -4359,7 +4389,7 @@ def _fire_block_workflow_unmodeled_agent() -> Optional[Dict[str, Any]]:
             "transcript_path": str(transcript),
         }
         return _to_envelope_or_none(
-            _hooks_asyncio.run(_hook_block_workflow_unmodeled_agent._handler(payload))
+            _run_maybe_async(_hook_block_workflow_unmodeled_agent._handler(payload))
         )
 
 
@@ -4374,19 +4404,19 @@ def _fire_block_workflow_unmodeled_agent_control() -> Optional[Dict[str, Any]]:
             "transcript_path": str(transcript),
         }
         return _to_envelope_or_none(
-            _hooks_asyncio.run(_hook_block_workflow_unmodeled_agent._handler(payload))
+            _run_maybe_async(_hook_block_workflow_unmodeled_agent._handler(payload))
         )
 
 
 def _fire_block_worktree_tool() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_block_worktree_tool._handler({"tool_name": "EnterWorktree"}))
+        _run_maybe_async(_hook_block_worktree_tool._handler({"tool_name": "EnterWorktree"}))
     )
 
 
 def _fire_block_worktree_tool_control() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_block_worktree_tool._handler({"tool_name": "ExitWorktree"}))
+        _run_maybe_async(_hook_block_worktree_tool._handler({"tool_name": "ExitWorktree"}))
     )
 
 
@@ -4396,7 +4426,7 @@ def _fire_check_claude_md_size() -> Optional[Dict[str, Any]]:
         target = scratch_dir / "CLAUDE.md"
         target.write_text("hello")
         payload = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": "x" * 50000}}
-        return _to_envelope_or_none(_hooks_asyncio.run(_hook_check_claude_md_size._handler(payload)))
+        return _to_envelope_or_none(_run_maybe_async(_hook_check_claude_md_size._handler(payload)))
 
 
 def _fire_check_claude_md_size_control() -> Optional[Dict[str, Any]]:
@@ -4405,7 +4435,7 @@ def _fire_check_claude_md_size_control() -> Optional[Dict[str, Any]]:
         target = scratch_dir / "CLAUDE.md"
         target.write_text("hello")
         payload = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": "small"}}
-        return _to_envelope_or_none(_hooks_asyncio.run(_hook_check_claude_md_size._handler(payload)))
+        return _to_envelope_or_none(_run_maybe_async(_hook_check_claude_md_size._handler(payload)))
 
 
 def _fire_derive_global_doctrine_live_copy() -> Optional[Dict[str, Any]]:
@@ -4429,7 +4459,7 @@ def _fire_derive_global_doctrine_live_copy() -> Optional[Dict[str, Any]]:
                 "tool_input": {"file_path": str(tracked)},
             }
             return _to_envelope_or_none(
-                _hooks_asyncio.run(_hook_derive_global_doctrine_live_copy._handler(payload))
+                _run_maybe_async(_hook_derive_global_doctrine_live_copy._handler(payload))
             )
 
 
@@ -4452,7 +4482,7 @@ def _fire_derive_global_doctrine_live_copy_control() -> Optional[Dict[str, Any]]
                 "tool_input": {"file_path": str(tracked_dir / "unrelated.md")},
             }
             return _to_envelope_or_none(
-                _hooks_asyncio.run(_hook_derive_global_doctrine_live_copy._handler(payload))
+                _run_maybe_async(_hook_derive_global_doctrine_live_copy._handler(payload))
             )
 
 
@@ -4469,7 +4499,7 @@ def _fire_derive_setup_copies() -> Optional[Dict[str, Any]]:
             canonical.write_text("a: 1")
             mp.setenv("CLAUDE_PLUGIN_ROOT", str(repo_root / "coordinator"))
             payload = {"tool_name": "Write", "tool_input": {"file_path": str(canonical)}}
-            return _to_envelope_or_none(_hooks_asyncio.run(_hook_derive_setup_copies._handler(payload)))
+            return _to_envelope_or_none(_run_maybe_async(_hook_derive_setup_copies._handler(payload)))
 
 
 def _fire_derive_setup_copies_control() -> Optional[Dict[str, Any]]:
@@ -4483,17 +4513,17 @@ def _fire_derive_setup_copies_control() -> Optional[Dict[str, Any]]:
             canonical_dir.mkdir(parents=True)
             mp.setenv("CLAUDE_PLUGIN_ROOT", str(repo_root / "coordinator"))
             payload = {"tool_name": "Write", "tool_input": {"file_path": str(canonical_dir / "unrelated.txt")}}
-            return _to_envelope_or_none(_hooks_asyncio.run(_hook_derive_setup_copies._handler(payload)))
+            return _to_envelope_or_none(_run_maybe_async(_hook_derive_setup_copies._handler(payload)))
 
 
 def _fire_enforce_agent_dispatch_mode() -> Optional[Dict[str, Any]]:
     payload = {"tool_name": "Agent", "tool_input": {"name": "bad/name"}}
-    return _to_envelope_or_none(_hooks_asyncio.run(_hook_enforce_agent_dispatch_mode._handler(payload)))
+    return _to_envelope_or_none(_run_maybe_async(_hook_enforce_agent_dispatch_mode._handler(payload)))
 
 
 def _fire_enforce_agent_dispatch_mode_control() -> Optional[Dict[str, Any]]:
     payload = {"tool_name": "Agent", "tool_input": {"subagent_type": "coordinator:executor"}}
-    return _to_envelope_or_none(_hooks_asyncio.run(_hook_enforce_agent_dispatch_mode._handler(payload)))
+    return _to_envelope_or_none(_run_maybe_async(_hook_enforce_agent_dispatch_mode._handler(payload)))
 
 
 def _fire_group_em_autofire() -> Optional[Dict[str, Any]]:
@@ -4525,7 +4555,7 @@ def _fire_guard_doctrine_changelog_prose() -> Optional[Dict[str, Any]]:
                 },
             }
             return _to_envelope_or_none(
-                _hooks_asyncio.run(_hook_guard_doctrine_changelog_prose._handler(payload))
+                _run_maybe_async(_hook_guard_doctrine_changelog_prose._handler(payload))
             )
 
 
@@ -4538,21 +4568,21 @@ def _fire_guard_doctrine_changelog_prose_control() -> Optional[Dict[str, Any]]:
             target = skills_dir / "foo.md"
             payload = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": "This rule requires X.\n"}}
             return _to_envelope_or_none(
-                _hooks_asyncio.run(_hook_guard_doctrine_changelog_prose._handler(payload))
+                _run_maybe_async(_hook_guard_doctrine_changelog_prose._handler(payload))
             )
 
 
 def _fire_guard_doctrine_surface_bash_write() -> Optional[Dict[str, Any]]:
     payload = {"tool_name": "Bash", "tool_input": {"command": 'echo "hello" > CLAUDE.md'}}
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_guard_doctrine_surface_bash_write._handler(payload))
+        _run_maybe_async(_hook_guard_doctrine_surface_bash_write._handler(payload))
     )
 
 
 def _fire_guard_doctrine_surface_bash_write_control() -> Optional[Dict[str, Any]]:
     payload = {"tool_name": "Bash", "tool_input": {"command": "cat CLAUDE.md"}}
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_guard_doctrine_surface_bash_write._handler(payload))
+        _run_maybe_async(_hook_guard_doctrine_surface_bash_write._handler(payload))
     )
 
 
@@ -4578,7 +4608,7 @@ def _fire_guard_doctrine_surface_ratio() -> Optional[Dict[str, Any]]:
             target.write_text("a" * 2000)
             payload = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": "a" * 2000 + "b" * 2000}}
             return _to_envelope_or_none(
-                _hooks_asyncio.run(_hook_guard_doctrine_surface_ratio._handler(payload))
+                _run_maybe_async(_hook_guard_doctrine_surface_ratio._handler(payload))
             )
 
 
@@ -4604,7 +4634,7 @@ def _fire_guard_doctrine_surface_ratio_control() -> Optional[Dict[str, Any]]:
             target.write_text("a" * 2000)
             payload = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": "a" * 2001}}
             return _to_envelope_or_none(
-                _hooks_asyncio.run(_hook_guard_doctrine_surface_ratio._handler(payload))
+                _run_maybe_async(_hook_guard_doctrine_surface_ratio._handler(payload))
             )
 
 
@@ -4615,7 +4645,7 @@ def _fire_guard_handoff_summary_cap_on_write() -> Optional[Dict[str, Any]]:
         content = "---\nsummary: %s\n---\nbody\n" % ("x" * 150)
         payload = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": content}}
         return _to_envelope_or_none(
-            _hooks_asyncio.run(_hook_guard_handoff_summary_cap_on_write._handler(payload))
+            _run_maybe_async(_hook_guard_handoff_summary_cap_on_write._handler(payload))
         )
 
 
@@ -4628,20 +4658,20 @@ def _fire_guard_handoff_summary_cap_on_write_control() -> Optional[Dict[str, Any
             "tool_input": {"file_path": str(target), "content": "---\nsummary: short\n---\nbody\n"},
         }
         return _to_envelope_or_none(
-            _hooks_asyncio.run(_hook_guard_handoff_summary_cap_on_write._handler(payload))
+            _run_maybe_async(_hook_guard_handoff_summary_cap_on_write._handler(payload))
         )
 
 
 def _fire_guard_hook_generation_self_probe() -> Optional[Dict[str, Any]]:
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(_ops_guard_hook_generation_self_probe, "run_self_probe", lambda config_dir: "self-probe advisory text")
-        return _to_envelope_or_none(_hooks_asyncio.run(_hook_guard_hook_generation_self_probe._handler({})))
+        return _to_envelope_or_none(_run_maybe_async(_hook_guard_hook_generation_self_probe._handler({})))
 
 
 def _fire_guard_hook_generation_self_probe_control() -> Optional[Dict[str, Any]]:
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(_ops_guard_hook_generation_self_probe, "run_self_probe", lambda config_dir: "")
-        return _to_envelope_or_none(_hooks_asyncio.run(_hook_guard_hook_generation_self_probe._handler({})))
+        return _to_envelope_or_none(_run_maybe_async(_hook_guard_hook_generation_self_probe._handler({})))
 
 
 def _fire_guard_host_subagent_bash_ban() -> Optional[Dict[str, Any]]:
@@ -4654,12 +4684,12 @@ def _fire_guard_host_subagent_bash_ban() -> Optional[Dict[str, Any]]:
             "cwd": str(scratch_dir),
             "agent_id": "aexecutor-1234567890abcdef",
         }
-        return _to_envelope_or_none(_hooks_asyncio.run(_hook_guard_host_subagent_bash_ban._handler(payload)))
+        return _to_envelope_or_none(_run_maybe_async(_hook_guard_host_subagent_bash_ban._handler(payload)))
 
 
 def _fire_guard_host_subagent_bash_ban_control() -> Optional[Dict[str, Any]]:
     payload = {"tool_name": "Bash", "tool_input": {"command": "ls"}}
-    return _to_envelope_or_none(_hooks_asyncio.run(_hook_guard_host_subagent_bash_ban._handler(payload)))
+    return _to_envelope_or_none(_run_maybe_async(_hook_guard_host_subagent_bash_ban._handler(payload)))
 
 
 def _fire_guard_host_subagent_bash_spawn_shapes() -> Optional[Dict[str, Any]]:
@@ -4673,14 +4703,14 @@ def _fire_guard_host_subagent_bash_spawn_shapes() -> Optional[Dict[str, Any]]:
             "agent_id": "aexecutor-1234567890abcdef",
         }
         return _to_envelope_or_none(
-            _hooks_asyncio.run(_hook_guard_host_subagent_bash_spawn_shapes._handler(payload))
+            _run_maybe_async(_hook_guard_host_subagent_bash_spawn_shapes._handler(payload))
         )
 
 
 def _fire_guard_host_subagent_bash_spawn_shapes_control() -> Optional[Dict[str, Any]]:
     payload = {"tool_name": "Bash", "tool_input": {"command": "npm test"}}
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_guard_host_subagent_bash_spawn_shapes._handler(payload))
+        _run_maybe_async(_hook_guard_host_subagent_bash_spawn_shapes._handler(payload))
     )
 
 
@@ -4734,14 +4764,14 @@ def _fire_guard_manufactured_blocker_control() -> Optional[Dict[str, Any]]:
 def _fire_guard_named_dispatch_tool_restriction() -> Optional[Dict[str, Any]]:
     payload = {"tool_name": "Agent", "tool_input": {"subagent_type": "Explore", "name": "peer1"}}
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_guard_named_dispatch_tool_restriction._handler(payload))
+        _run_maybe_async(_hook_guard_named_dispatch_tool_restriction._handler(payload))
     )
 
 
 def _fire_guard_named_dispatch_tool_restriction_control() -> Optional[Dict[str, Any]]:
     payload = {"tool_name": "Agent", "tool_input": {"subagent_type": "Explore"}}
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_guard_named_dispatch_tool_restriction._handler(payload))
+        _run_maybe_async(_hook_guard_named_dispatch_tool_restriction._handler(payload))
     )
 
 
@@ -4757,7 +4787,7 @@ def _fire_guard_posix_invocation_doctrine_write() -> Optional[Dict[str, Any]]:
             },
         }
         return _to_envelope_or_none(
-            _hooks_asyncio.run(_hook_guard_posix_invocation_doctrine_write._handler(payload))
+            _run_maybe_async(_hook_guard_posix_invocation_doctrine_write._handler(payload))
         )
 
 
@@ -4767,7 +4797,7 @@ def _fire_guard_posix_invocation_doctrine_write_control() -> Optional[Dict[str, 
         target.parent.mkdir(parents=True)
         payload = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": "plain text"}}
         return _to_envelope_or_none(
-            _hooks_asyncio.run(_hook_guard_posix_invocation_doctrine_write._handler(payload))
+            _run_maybe_async(_hook_guard_posix_invocation_doctrine_write._handler(payload))
         )
 
 
@@ -4776,7 +4806,7 @@ def _fire_guard_python_syntax_on_write() -> Optional[Dict[str, Any]]:
         target = Path(scratch) / "coordinator_core" / "hooks" / "fake_mod.py"
         target.parent.mkdir(parents=True)
         payload = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": "def f(:\n    pass"}}
-        return _to_envelope_or_none(_hooks_asyncio.run(_hook_guard_python_syntax_on_write._handler(payload)))
+        return _to_envelope_or_none(_run_maybe_async(_hook_guard_python_syntax_on_write._handler(payload)))
 
 
 def _fire_guard_python_syntax_on_write_control() -> Optional[Dict[str, Any]]:
@@ -4787,7 +4817,7 @@ def _fire_guard_python_syntax_on_write_control() -> Optional[Dict[str, Any]]:
             "tool_name": "Write",
             "tool_input": {"file_path": str(target), "content": "def f():\n    pass\n"},
         }
-        return _to_envelope_or_none(_hooks_asyncio.run(_hook_guard_python_syntax_on_write._handler(payload)))
+        return _to_envelope_or_none(_run_maybe_async(_hook_guard_python_syntax_on_write._handler(payload)))
 
 
 def _fire_guard_repo_setup_claude_home_refusal() -> Optional[Dict[str, Any]]:
@@ -4800,7 +4830,7 @@ def _fire_guard_repo_setup_claude_home_refusal() -> Optional[Dict[str, Any]]:
                 "cwd": scratch,
             }
             return _to_envelope_or_none(
-                _hooks_asyncio.run(_hook_guard_repo_setup_claude_home_refusal._handler(payload))
+                _run_maybe_async(_hook_guard_repo_setup_claude_home_refusal._handler(payload))
             )
 
 
@@ -4814,14 +4844,14 @@ def _fire_guard_repo_setup_claude_home_refusal_control() -> Optional[Dict[str, A
                 "cwd": scratch,
             }
             return _to_envelope_or_none(
-                _hooks_asyncio.run(_hook_guard_repo_setup_claude_home_refusal._handler(payload))
+                _run_maybe_async(_hook_guard_repo_setup_claude_home_refusal._handler(payload))
             )
 
 
 def _fire_guard_review_integrator_sidecar_intake() -> Optional[Dict[str, Any]]:
     payload = {"tool_name": "Agent", "tool_input": {"subagent_type": "review-integrator", "prompt": "do a review"}}
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_guard_review_integrator_sidecar_intake._handler(payload))
+        _run_maybe_async(_hook_guard_review_integrator_sidecar_intake._handler(payload))
     )
 
 
@@ -4839,7 +4869,7 @@ def _fire_guard_review_integrator_sidecar_intake_control() -> Optional[Dict[str,
             "cwd": scratch,
         }
         return _to_envelope_or_none(
-            _hooks_asyncio.run(
+            _run_maybe_async(
                 _hook_guard_review_integrator_sidecar_intake._handler(payload, repo_root=scratch)
             )
         )
@@ -4852,7 +4882,7 @@ def _fire_guard_test_tree_git_fixture_spawn() -> Optional[Dict[str, Any]]:
         content = "import subprocess\nsubprocess.run(['git', 'commit', '-m', 'x'])\n"
         payload = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": content}}
         return _to_envelope_or_none(
-            _hooks_asyncio.run(_hook_guard_test_tree_git_fixture_spawn._handler(payload))
+            _run_maybe_async(_hook_guard_test_tree_git_fixture_spawn._handler(payload))
         )
 
 
@@ -4865,7 +4895,7 @@ def _fire_guard_test_tree_git_fixture_spawn_control() -> Optional[Dict[str, Any]
             "tool_input": {"file_path": str(target), "content": "def test_x():\n    assert True\n"},
         }
         return _to_envelope_or_none(
-            _hooks_asyncio.run(_hook_guard_test_tree_git_fixture_spawn._handler(payload))
+            _run_maybe_async(_hook_guard_test_tree_git_fixture_spawn._handler(payload))
         )
 
 
@@ -4885,7 +4915,7 @@ def _fire_nudge_initiative_goals_ladder() -> Optional[Dict[str, Any]]:
             "cwd": scratch,
         }
         return _to_envelope_or_none(
-            _hooks_asyncio.run(_hook_nudge_initiative_goals_ladder._handler(payload))
+            _run_maybe_async(_hook_nudge_initiative_goals_ladder._handler(payload))
         )
 
 
@@ -4908,7 +4938,7 @@ def _fire_nudge_initiative_goals_ladder_control() -> Optional[Dict[str, Any]]:
             "cwd": scratch,
         }
         return _to_envelope_or_none(
-            _hooks_asyncio.run(_hook_nudge_initiative_goals_ladder._handler(payload))
+            _run_maybe_async(_hook_nudge_initiative_goals_ladder._handler(payload))
         )
 
 
@@ -4925,13 +4955,13 @@ def _fire_nudge_multiwave_workflow() -> Optional[Dict[str, Any]]:
                     "tool_input": {"subagent_type": "coordinator:executor"},
                     "session_id": session_id,
                 }
-                result = _hooks_asyncio.run(_hook_nudge_multiwave_workflow._handler(payload))
+                result = _run_maybe_async(_hook_nudge_multiwave_workflow._handler(payload))
             return _to_envelope_or_none(result)
 
 
 def _fire_nudge_multiwave_workflow_control() -> Optional[Dict[str, Any]]:
     payload = {"tool_name": "Agent", "tool_input": {"subagent_type": "Explore"}}
-    return _to_envelope_or_none(_hooks_asyncio.run(_hook_nudge_multiwave_workflow._handler(payload)))
+    return _to_envelope_or_none(_run_maybe_async(_hook_nudge_multiwave_workflow._handler(payload)))
 
 
 def _fire_nudge_plan_test_surface_tier() -> Optional[Dict[str, Any]]:
@@ -4946,7 +4976,7 @@ def _fire_nudge_plan_test_surface_tier() -> Optional[Dict[str, Any]]:
             },
         }
         return _to_envelope_or_none(
-            _hooks_asyncio.run(_hook_nudge_plan_test_surface_tier._handler(payload))
+            _run_maybe_async(_hook_nudge_plan_test_surface_tier._handler(payload))
         )
 
 
@@ -4962,7 +4992,7 @@ def _fire_nudge_plan_test_surface_tier_control() -> Optional[Dict[str, Any]]:
             },
         }
         return _to_envelope_or_none(
-            _hooks_asyncio.run(_hook_nudge_plan_test_surface_tier._handler(payload))
+            _run_maybe_async(_hook_nudge_plan_test_surface_tier._handler(payload))
         )
 
 
@@ -4977,14 +5007,14 @@ def _fire_nudge_workflow_authoring_trampoline() -> Optional[Dict[str, Any]]:
                 "session_id": "12345678-1234-4123-8123-123456789012",
             }
             return _to_envelope_or_none(
-                _hooks_asyncio.run(_hook_nudge_workflow_authoring_trampoline._handler(payload))
+                _run_maybe_async(_hook_nudge_workflow_authoring_trampoline._handler(payload))
             )
 
 
 def _fire_nudge_workflow_authoring_trampoline_control() -> Optional[Dict[str, Any]]:
     payload = {"tool_name": "Skill", "tool_input": {"skill": "other-skill"}, "session_id": "sess-x"}
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_nudge_workflow_authoring_trampoline._handler(payload))
+        _run_maybe_async(_hook_nudge_workflow_authoring_trampoline._handler(payload))
     )
 
 
@@ -5021,25 +5051,25 @@ def _fire_postuse_stop_family_dispatch() -> Optional[Dict[str, Any]]:
             mp.setenv("CLAUDE_PLUGIN_ROOT", str(repo_root / "coordinator"))
             payload = {"tool_name": "Write", "tool_input": {"file_path": str(canonical)}}
             return _to_envelope_or_none(
-                _hooks_asyncio.run(_hook_postuse_stop_family_dispatch._handler(payload))
+                _run_maybe_async(_hook_postuse_stop_family_dispatch._handler(payload))
             )
 
 
 def _fire_postuse_stop_family_dispatch_control() -> Optional[Dict[str, Any]]:
     payload = {"tool_name": "Write", "tool_input": {"file_path": "/tmp/nope-not-tracked.txt"}}
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_postuse_stop_family_dispatch._handler(payload))
+        _run_maybe_async(_hook_postuse_stop_family_dispatch._handler(payload))
     )
 
 
 def _fire_preuse_agent_dispatch() -> Optional[Dict[str, Any]]:
     payload = {"tool_name": "Agent", "tool_input": {"subagent_type": "totally-bogus-nonexistent-role-zz"}}
-    return _to_envelope_or_none(_hooks_asyncio.run(_hook_preuse_agent_dispatch._handler(payload)))
+    return _to_envelope_or_none(_run_maybe_async(_hook_preuse_agent_dispatch._handler(payload)))
 
 
 def _fire_preuse_agent_dispatch_control() -> Optional[Dict[str, Any]]:
     payload = {"tool_name": "Agent", "tool_input": {}}
-    return _to_envelope_or_none(_hooks_asyncio.run(_hook_preuse_agent_dispatch._handler(payload)))
+    return _to_envelope_or_none(_run_maybe_async(_hook_preuse_agent_dispatch._handler(payload)))
 
 
 def _fire_preuse_bash_dispatch() -> Optional[Dict[str, Any]]:
@@ -5053,12 +5083,12 @@ def _fire_preuse_bash_dispatch() -> Optional[Dict[str, Any]]:
             "agent_id": "aexecutor-1234567890abcdef",
             "session_id": "sess-pbd",
         }
-        return _to_envelope_or_none(_hooks_asyncio.run(_hook_preuse_bash_dispatch._handler(payload)))
+        return _to_envelope_or_none(_run_maybe_async(_hook_preuse_bash_dispatch._handler(payload)))
 
 
 def _fire_preuse_bash_dispatch_control() -> Optional[Dict[str, Any]]:
     payload = {"tool_name": "Bash", "tool_input": {"command": "true"}}
-    return _to_envelope_or_none(_hooks_asyncio.run(_hook_preuse_bash_dispatch._handler(payload)))
+    return _to_envelope_or_none(_run_maybe_async(_hook_preuse_bash_dispatch._handler(payload)))
 
 
 def _fire_preuse_skill_dispatch() -> Optional[Dict[str, Any]]:
@@ -5077,12 +5107,12 @@ def _fire_preuse_skill_dispatch() -> Optional[Dict[str, Any]]:
                 "tool_input": {"skill": "workflow-authoring"},
                 "session_id": "12345678-1234-4123-8123-123456789012",
             }
-            return _to_envelope_or_none(_hooks_asyncio.run(_hook_preuse_skill_dispatch._handler(payload)))
+            return _to_envelope_or_none(_run_maybe_async(_hook_preuse_skill_dispatch._handler(payload)))
 
 
 def _fire_preuse_skill_dispatch_control() -> Optional[Dict[str, Any]]:
     payload = {"tool_name": "Skill", "tool_input": {"skill": "other"}}
-    return _to_envelope_or_none(_hooks_asyncio.run(_hook_preuse_skill_dispatch._handler(payload)))
+    return _to_envelope_or_none(_run_maybe_async(_hook_preuse_skill_dispatch._handler(payload)))
 
 
 def _fire_preuse_write_dispatch() -> Optional[Dict[str, Any]]:
@@ -5093,12 +5123,12 @@ def _fire_preuse_write_dispatch() -> Optional[Dict[str, Any]]:
             "agent_id": "deadbeef0123",
             "cwd": scratch,
         }
-        return _to_envelope_or_none(_hooks_asyncio.run(_hook_preuse_write_dispatch._handler(payload)))
+        return _to_envelope_or_none(_run_maybe_async(_hook_preuse_write_dispatch._handler(payload)))
 
 
 def _fire_preuse_write_dispatch_control() -> Optional[Dict[str, Any]]:
     payload = {"tool_name": "Write", "tool_input": {"file_path": "/tmp/nope-untracked.txt"}}
-    return _to_envelope_or_none(_hooks_asyncio.run(_hook_preuse_write_dispatch._handler(payload)))
+    return _to_envelope_or_none(_run_maybe_async(_hook_preuse_write_dispatch._handler(payload)))
 
 
 def _fire_project_orientation() -> Optional[Dict[str, Any]]:
@@ -5132,7 +5162,7 @@ def _fire_runtime_tripwire_em_check_control() -> Optional[Dict[str, Any]]:
 def _fire_session_start_announce_job_mode() -> Optional[Dict[str, Any]]:
     payload = {"payload": {"session_id": "sess-x"}}
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_session_start_announce_job_mode._handler(payload))
+        _run_maybe_async(_hook_session_start_announce_job_mode._handler(payload))
     )
 
 
@@ -5143,13 +5173,13 @@ def _fire_session_start_guard_plane_check() -> Optional[Dict[str, Any]]:
             mp.setenv("CLAUDE_CONFIG_DIR", scratch)
             mp.delenv("CLAUDE_PROJECT_DIR", raising=False)
             return _to_envelope_or_none(
-                _hooks_asyncio.run(_hook_session_start_guard_plane_check._handler({}))
+                _run_maybe_async(_hook_session_start_guard_plane_check._handler({}))
             )
 
 
 def _fire_session_start_guard_plane_check_control() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_session_start_guard_plane_check._handler({}))
+        _run_maybe_async(_hook_session_start_guard_plane_check._handler({}))
     )
 
 
@@ -5158,13 +5188,13 @@ def _fire_sessionstart_async_dispatch() -> Optional[Dict[str, Any]]:
         mp.setattr(_hook_sessionstart_ensure_http_forwarder, "_probe_bind_wins", lambda *a, **kw: None)
         mp.setenv("CLAUDE_PLUGIN_ROOT", "/nonexistent-plugin-root-xyz")
         return _to_envelope_or_none(
-            _hooks_asyncio.run(_hook_sessionstart_async_dispatch._handler({}))
+            _run_maybe_async(_hook_sessionstart_async_dispatch._handler({}))
         )
 
 
 def _fire_sessionstart_async_dispatch_control() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_sessionstart_async_dispatch._handler({}))
+        _run_maybe_async(_hook_sessionstart_async_dispatch._handler({}))
     )
 
 
@@ -5183,7 +5213,7 @@ def _fire_sessionstart_bin_drift_refresh() -> Optional[Dict[str, Any]]:
             mp.setattr(_bin_impl_drift, "_templates_bin", lambda: templates_bin)
             mp.setattr(_hook_sessionstart_bin_drift_refresh, "settings_home", lambda: scratch_dir)
             return _to_envelope_or_none(
-                _hooks_asyncio.run(_hook_sessionstart_bin_drift_refresh._handler({}))
+                _run_maybe_async(_hook_sessionstart_bin_drift_refresh._handler({}))
             )
 
 
@@ -5194,7 +5224,7 @@ def _fire_sessionstart_bin_drift_refresh_control() -> Optional[Dict[str, Any]]:
             (scratch_dir / "bin").mkdir()
             mp.setattr(_hook_sessionstart_bin_drift_refresh, "settings_home", lambda: scratch_dir)
             return _to_envelope_or_none(
-                _hooks_asyncio.run(_hook_sessionstart_bin_drift_refresh._handler({}))
+                _run_maybe_async(_hook_sessionstart_bin_drift_refresh._handler({}))
             )
 
 
@@ -5212,7 +5242,7 @@ def _fire_sessionstart_dispatch() -> Optional[Dict[str, Any]]:
         # this row's sole firing signal.
         mp.setattr(_hook_sessionstart_dispatch, "_guard_settings_integrity_handler", lambda payload: {})
         mp.setattr(_hook_sessionstart_dispatch, "_guard_hooks_kill_switch_detail_handler", lambda payload: {})
-        return _to_envelope_or_none(_hooks_asyncio.run(_hook_sessionstart_dispatch._handler({})))
+        return _to_envelope_or_none(_run_maybe_async(_hook_sessionstart_dispatch._handler({})))
 
 
 def _fire_sessionstart_ensure_http_forwarder() -> Optional[Dict[str, Any]]:
@@ -5220,13 +5250,13 @@ def _fire_sessionstart_ensure_http_forwarder() -> Optional[Dict[str, Any]]:
         mp.setattr(_hook_sessionstart_ensure_http_forwarder, "_probe_bind_wins", lambda *a, **kw: None)
         mp.setenv("CLAUDE_PLUGIN_ROOT", "/nonexistent-plugin-root-xyz")
         return _to_envelope_or_none(
-            _hooks_asyncio.run(_hook_sessionstart_ensure_http_forwarder._handler({}))
+            _run_maybe_async(_hook_sessionstart_ensure_http_forwarder._handler({}))
         )
 
 
 def _fire_sessionstart_ensure_http_forwarder_control() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_sessionstart_ensure_http_forwarder._handler({}))
+        _run_maybe_async(_hook_sessionstart_ensure_http_forwarder._handler({}))
     )
 
 
@@ -5243,7 +5273,7 @@ def _fire_stop_dispatch() -> Optional[Dict[str, Any]]:
                     "last_assistant_message": "See test.py:42 and foo/bar.py:10 for details.",
                 }
             }
-            return _to_envelope_or_none(_hooks_asyncio.run(_hook_stop_dispatch._handler(payload)))
+            return _to_envelope_or_none(_run_maybe_async(_hook_stop_dispatch._handler(payload)))
 
 
 def _fire_stop_dispatch_control() -> Optional[Dict[str, Any]]:
@@ -5257,17 +5287,17 @@ def _fire_stop_dispatch_control() -> Optional[Dict[str, Any]]:
                 "last_assistant_message": "Done.",
             }
         }
-        return _to_envelope_or_none(_hooks_asyncio.run(_hook_stop_dispatch._handler(payload)))
+        return _to_envelope_or_none(_run_maybe_async(_hook_stop_dispatch._handler(payload)))
 
 
 def _fire_strip_worktree_isolation() -> Optional[Dict[str, Any]]:
     payload = {"tool_name": "Workflow", "tool_input": {"isolation": "worktree"}}
-    return _to_envelope_or_none(_hooks_asyncio.run(_hook_strip_worktree_isolation._handler(payload)))
+    return _to_envelope_or_none(_run_maybe_async(_hook_strip_worktree_isolation._handler(payload)))
 
 
 def _fire_strip_worktree_isolation_control() -> Optional[Dict[str, Any]]:
     payload = {"tool_name": "Workflow", "tool_input": {}}
-    return _to_envelope_or_none(_hooks_asyncio.run(_hook_strip_worktree_isolation._handler(payload)))
+    return _to_envelope_or_none(_run_maybe_async(_hook_strip_worktree_isolation._handler(payload)))
 
 
 HOOK_ROWS: List[HookRow] = [

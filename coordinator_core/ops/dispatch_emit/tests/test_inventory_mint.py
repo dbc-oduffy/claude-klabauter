@@ -471,6 +471,137 @@ def test_dispatch_emit_inventory_path_emits_prompts_leading_with_precedence_clau
         assert chunk_id in script
 
 
+# ---------------------------------------------------------------------------
+# execution_mode: operator is carried from the source plan's own spine onto
+# the minted row, and read_spine excludes it downstream (module docstring:
+# the plan route already handles operator rows -- the inventory route must
+# not drop the same field).
+# ---------------------------------------------------------------------------
+
+_OPERATOR_PLAN_FIXTURE = textwrap.dedent(
+    """\
+    ---
+    run_id: fixture-plan
+    ---
+
+    ## Tasks
+
+    ```yaml plan-tasks
+    - id: C6
+      title: Operator step
+      writes:
+        - some/operator/file.txt
+      execution_mode: operator
+    - id: C7
+      title: Agent step
+      writes:
+        - some/agent/file.txt
+    ```
+    """
+)
+
+
+def _write_plan_and_inventory(tmp_path, chunk_table_ids=("P144-C6", "P144-C7")):
+    """`<repo>/docs/plans/fixture-plan.md` plus
+    `<repo>/state/mise-inventory/<file>.md`, matching the real on-disk shape
+    `_resolve_spec_plan_path` resolves a relative `spec path` against --
+    `tmp_path` stands in for `<repo>`."""
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "fixture-plan.md"
+    plan_path.write_text(_OPERATOR_PLAN_FIXTURE, encoding="utf-8")
+
+    inv_dir = tmp_path / "state" / "mise-inventory"
+    inv_dir.mkdir(parents=True)
+    inventory_text = textwrap.dedent(
+        f"""\
+        ---
+        run_id: 20260918T000000-fixture
+        ---
+
+        ## Chunk table
+
+        | id | spec path | summary | footprint | deps | verification | complexity | disposition |
+        |---|---|---|---|---|---|---|---|
+        | {chunk_table_ids[0]} | `docs/plans/fixture-plan.md` | operator row | `some/operator/file.txt` | — | scoped pytest | S | in_progress |
+        | {chunk_table_ids[1]} | `docs/plans/fixture-plan.md` | agent row | `some/agent/file.txt` | — | scoped pytest | S | in_progress |
+        """
+    )
+    inventory_path = inv_dir / "20260918T000000-fixture.md"
+    inventory_path.write_text(inventory_text, encoding="utf-8")
+    return inventory_path, plan_path
+
+
+def test_operator_row_carried_from_plan_onto_minted_row(tmp_path):
+    inventory_path, _ = _write_plan_and_inventory(tmp_path)
+    rows = im.parse_chunk_table(inventory_path.read_text(encoding="utf-8"))
+    minted = im.mint_rows(rows, inventory_path=inventory_path)
+    by_id = {row["id"]: row for row in minted}
+
+    assert by_id["P144-C6"]["execution_mode"] == "operator"
+    assert "execution_mode" not in by_id["P144-C7"]
+
+
+def test_non_operator_row_unaffected_by_the_plan_lookup(tmp_path):
+    inventory_path, _ = _write_plan_and_inventory(tmp_path)
+    rows = im.parse_chunk_table(inventory_path.read_text(encoding="utf-8"))
+    minted = im.mint_rows(rows, inventory_path=inventory_path)
+    by_id = {row["id"]: row for row in minted}
+
+    assert by_id["P144-C7"]["title"] == "agent row"
+    assert "execution_mode" not in by_id["P144-C7"]
+
+
+def test_operator_row_then_excluded_by_read_spine_with_reason_operator(tmp_path):
+    from coordinator_core.ops.dispatch_emit.spine_read import read_spine
+
+    inventory_path, _ = _write_plan_and_inventory(tmp_path)
+    spine_text, spine_path = im.mint_spine(str(inventory_path))
+    spine_path.write_text(spine_text, encoding="utf-8")
+
+    exclusions: list = []
+    rows = read_spine(str(spine_path), exclusions=exclusions)
+
+    assert {row.id for row in rows} == {"P144-C7"}
+    operator_exclusions = [e for e in exclusions if e["id"] == "P144-C6"]
+    assert len(operator_exclusions) == 1
+    assert operator_exclusions[0]["reason"] == "operator"
+
+
+def test_missing_plan_carries_nothing(tmp_path):
+    inv_dir = tmp_path / "state" / "mise-inventory"
+    inv_dir.mkdir(parents=True)
+    inventory_text = textwrap.dedent(
+        """\
+        ---
+        run_id: 20260918T000000-fixture
+        ---
+
+        ## Chunk table
+
+        | id | spec path | summary | footprint | deps | verification | complexity | disposition |
+        |---|---|---|---|---|---|---|---|
+        | C1 | `docs/plans/does-not-exist.md` | no plan here | `some/file.txt` | — | scoped pytest | S | in_progress |
+        """
+    )
+    inventory_path = inv_dir / "20260918T000000-fixture.md"
+    inventory_path.write_text(inventory_text, encoding="utf-8")
+
+    rows = im.parse_chunk_table(inventory_text)
+    minted = im.mint_rows(rows, inventory_path=inventory_path)
+
+    assert "execution_mode" not in minted[0]
+
+
+def test_no_inventory_path_carries_nothing_standalone_call_unaffected(tmp_path):
+    inventory_path, _ = _write_plan_and_inventory(tmp_path)
+    rows = im.parse_chunk_table(inventory_path.read_text(encoding="utf-8"))
+    minted = im.mint_rows(rows)  # no inventory_path -- old call shape
+    by_id = {row["id"]: row for row in minted}
+
+    assert "execution_mode" not in by_id["P144-C6"]
+
+
 def test_dispatch_emit_rejects_both_plan_path_and_inventory_path(tmp_path):
     from coordinator_core.ops.dispatch_emit.op import InventoryPathConflictError
 

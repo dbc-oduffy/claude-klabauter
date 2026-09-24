@@ -132,49 +132,62 @@ def test_machine_local_absent_no_override_warns_and_exits_zero(tmp_path, capsys,
     assert "no private codenames to check" in captured.err
 
 
-def _write_fake_ml(path, keys_output: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"#!/bin/sh\nif [ \"$1\" = keys ]; then echo '{keys_output}'; fi\n")
-    path.chmod(0o755)
+def _write_registry_toml(path, *, repos_key: str) -> None:
+    """Write a minimal ``registry.toml`` declaring one ``repos.*`` key.
 
-
-@pytest.mark.skipif(os.name == "nt", reason="POSIX exec-bit fixture")
-def test_settings_home_rung_wins_over_legacy_home(tmp_path, monkeypatch):
-    """The settings-home install (DR-072, canonical) must be tried before the
-    legacy ~/.claude/bin rung, which is retired 2026-07-28 and kept only for
-    machines that predate the move — see [[verify_ue_overrides]]/
-    [[verify_dist_publish_repo_sync]] sibling resolvers for the same ordering.
+    ``_resolve_registry_keys`` -> ``merged_flat_registry()`` reads this file
+    directly via ``tomllib`` (zero-spawn cutover — see
+    ``test_machine_local_absent_no_override_warns_and_exits_zero``'s
+    docstring); there is no ``machine-local`` CLI subprocess left to fixture
+    with a fake executable.
     """
-    settings_ml = tmp_path / "settings" / "bin" / "machine-local"
-    _write_fake_ml(settings_ml, "repos.from_settings_home")
-    legacy_ml = tmp_path / "home" / ".claude" / "bin" / "machine-local"
-    _write_fake_ml(legacy_ml, "repos.from_legacy_home")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f'[repos]\n{repos_key} = "x"\n')
+
+
+def test_settings_home_rung_wins_over_legacy_home(tmp_path, monkeypatch):
+    """``merged_flat_registry()`` resolves the registry directory via
+    ``coordinator_core._settings_home.machine_local_dir()`` — the
+    settings-home ladder only (``COORDINATOR_SETTINGS_HOME`` override, else
+    ``CLAUDE_HOME``/home-derived ``.coordinator-claude-settings``). A legacy
+    ``~/.claude/machine-local/registry.toml`` sitting alongside it is never
+    consulted -- see ``check_machine_local_regeneratability.py``'s
+    ``_resolve_registry_dir`` docstring: reading that legacy path caused every
+    coordinator-owned key to false-WARN as unclassified on settings-home-
+    native machines, so this legacy rung was removed, not merely reordered.
+    """
+    settings_registry = tmp_path / "settings" / "machine-local" / "registry.toml"
+    _write_registry_toml(settings_registry, repos_key="from_settings_home")
+    legacy_registry = tmp_path / "home" / ".claude" / "machine-local" / "registry.toml"
+    _write_registry_toml(legacy_registry, repos_key="from_legacy_home")
 
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     env = _env()
     env.pop("COORDINATOR_CODENAME_REGISTRY_KEYS", None)
-    env["PATH"] = "/usr/bin:/bin"
-    env["HOME"] = str(tmp_path / "home")
 
     keys = _resolve_registry_keys(env)
     assert keys == ["repos.from_settings_home"]
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX exec-bit fixture")
-def test_legacy_home_rung_still_works_when_settings_home_absent(tmp_path, monkeypatch):
-    """Back-compat: a machine that predates the settings-home move must keep
-    resolving via the legacy ~/.claude/bin rung."""
-    legacy_ml = tmp_path / "home" / ".claude" / "bin" / "machine-local"
-    _write_fake_ml(legacy_ml, "repos.from_legacy_home")
+def test_legacy_home_rung_is_not_consulted_when_settings_home_empty(tmp_path, monkeypatch):
+    """The legacy ``~/.claude/machine-local`` rung is retired, not a fallback:
+    when ``COORDINATOR_SETTINGS_HOME`` resolves to a directory with no
+    registry file, resolution reports an empty registry rather than falling
+    back to a legacy registry that happens to exist. Pins the same
+    intentional removal ``test_settings_home_rung_wins_over_legacy_home``
+    pins, from the other direction (settings-home present-but-empty rather
+    than settings-home populated)."""
+    legacy_registry = tmp_path / "home" / ".claude" / "machine-local" / "registry.toml"
+    _write_registry_toml(legacy_registry, repos_key="from_legacy_home")
 
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "no-settings-here"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     env = _env()
     env.pop("COORDINATOR_CODENAME_REGISTRY_KEYS", None)
-    env["PATH"] = "/usr/bin:/bin"
-    env["HOME"] = str(tmp_path / "home")
 
     keys = _resolve_registry_keys(env)
-    assert keys == ["repos.from_legacy_home"]
+    assert keys == []
 
 
 def test_excludes_git_and_backup_files(tmp_path):
@@ -201,6 +214,10 @@ def test_unreadable_file_fails_closed_even_if_no_leak_found(tmp_path, capsys):
     (d / "clean.md").write_text("nothing sensitive here\n")
     blocked = d / "blocked.md"
     blocked.write_text("placeholder\n")
+    if os.geteuid() == 0:
+        pytest.skip("permission bits do not block reads for root (see "
+                     "baton_assemble/tests/test_adopt_prior_attempt_unreadable_candidate.py "
+                     "for the same skip)")
     os.chmod(blocked, 0o000)
     try:
         rc = main(

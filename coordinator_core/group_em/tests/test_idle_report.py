@@ -747,6 +747,21 @@ def test_watch_peer_absent_from_a_read_registry_is_excluded_and_marked_and_never
     assert report["counts"]["peers"] == 0
 
 
+def test_watch_verdict_renders_with_a_disambiguating_label_not_a_bare_role_word(
+    tmp_path, projects_dir, now
+):
+    """P103-C5: a peer EM read a bare rendered `watch` row as a role ("this peer
+    is running the watch") and filed a false bug report. The WIRE value stays
+    `VERDICT_WATCH` == "watch" (contract, unchanged) but the human-facing render
+    must say it is an idle-age band, not a role."""
+    _write(projects_dir, "6060aaaa-x", [_record(10, now)], mtime_minutes_ago=10, now=now)
+    report = _report(tmp_path, projects_dir, now, names={"6060aaaa-x": "p"})
+    row = _row(report, "6060aaaa")
+    assert row["verdict"] == idle_report.VERDICT_WATCH  # the wire value is untouched
+    rendered = idle_report.render(report)
+    assert "watch (idle-age band, not a role)" in rendered
+
+
 def test_watch_peer_with_an_unreadable_registry_stays_counted_and_unmarked(
     tmp_path, projects_dir, now
 ):
@@ -820,8 +835,60 @@ def test_live_count_excludes_exited_rows_the_same_way_peers_excludes_registry_ab
     assert live_row["verdict"] not in (idle_report.VERDICT_EXITED,)
     assert exited_row["verdict"] == idle_report.VERDICT_EXITED
     assert watch_absent_row["registry"] == "absent"
-    assert report["counts"]["peers"] == 2
+    # Item 63: `peers` also excludes EXITED now, so only the live row counts.
+    assert report["counts"]["peers"] == 1
     assert report["counts"]["live"] == 1
+
+
+def test_peers_count_excludes_exited_rows(tmp_path, projects_dir, now):
+    """Item 63: `counts["peers"]` used to exclude only `registry: absent`
+    rows, letting an EXITED row -- already counted separately in
+    `counts["exited"]` -- also inflate `peers`. Mirrors the filter `live`
+    already applies."""
+    names = {"6060aaaa-x": "live-peer"}
+    _write(projects_dir, "6060aaaa-x", [_record(2, now)], mtime_minutes_ago=2, now=now)
+    _write(projects_dir, "6161bbbb-x", [_record(45, now)], mtime_minutes_ago=45, now=now)
+    report = _report(tmp_path, projects_dir, now, names=names)
+
+    exited_row = _row(report, "6161bbbb")
+    assert exited_row["verdict"] == idle_report.VERDICT_EXITED
+    assert report["counts"]["exited"] == 1
+    assert report["counts"]["peers"] == 1
+
+
+# --- P103-C4: `peers` splits into three named, mutually-exclusive counts ---
+
+def test_peers_splits_into_quiet_actionable_and_exited_with_no_remainder(
+    tmp_path, projects_dir, now
+):
+    """`counts["peers"]` merges three populations a crown cannot tell apart
+    from one number: quiet (BETWEEN-TURNS/WATCH), actionable (ESCALATE/
+    OUT-OF-WORK/UNKNOWN), and exited (EXITED). Each must land in exactly one
+    of the three new/existing named counts, and the three must sum back to
+    `peers` with no remainder -- the merge this row exists to undo."""
+    names = {"5050aaaa-x": "quiet-peer", "5252cccc-x": "actionable-peer"}
+    # quiet: BETWEEN-TURNS (fresh content clock)
+    _write(projects_dir, "5050aaaa-x", [_record(1, now)], mtime_minutes_ago=1, now=now)
+    # exited: registry-absent AND stalled past the threshold
+    _write(projects_dir, "5151bbbb-x", [_record(45, now)], mtime_minutes_ago=45, now=now)
+    # actionable: ESCALATE (stalled, registry-present, no completion ceremony)
+    _write(projects_dir, "5252cccc-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
+    report = _report(tmp_path, projects_dir, now, names=names)
+
+    quiet_row = _row(report, "5050aaaa")
+    exited_row = _row(report, "5151bbbb")
+    actionable_row = _row(report, "5252cccc")
+    assert quiet_row["verdict"] == idle_report.VERDICT_BETWEEN_TURNS
+    assert exited_row["verdict"] == idle_report.VERDICT_EXITED
+    assert actionable_row["verdict"] == idle_report.VERDICT_ESCALATE
+
+    counts = report["counts"]
+    assert counts["quiet"] == 1
+    assert counts["actionable"] == 1
+    assert counts["exited"] == 1
+    # Item 63: `peers` now excludes EXITED too, so it sums from quiet+actionable
+    # alone -- `exited` is accounted for separately, never inside `peers`.
+    assert counts["quiet"] + counts["actionable"] == counts["peers"]
 
 
 def test_the_projects_directory_is_derived_from_the_repo_root(tmp_path):

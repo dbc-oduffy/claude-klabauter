@@ -133,6 +133,6 @@ def _handler(params: dict, repo_root=None) -> dict:
     try:
         registry_set(_REGISTRY_KEY, str(mirror))
     except Exception:
-        pass
+        pass  # best-effort registration; a failed write just leaves the key unset for a later run
 
     return no_advisory()

@@ -290,7 +290,7 @@ def _machine_rung_uncached(env: Mapping[str, str]) -> Locality:
         with open("/sys/class/dmi/id/sys_vendor", encoding="utf-8") as fh:
             vendor = fh.read().strip()
     except OSError:
-        pass
+        pass  # DMI sysfs absent (non-Linux or restricted); vendor stays empty
     if vendor.startswith(_CLOUD_DMI_VENDORS):
         return Locality("cloud", "high", "machine", "DMI sys_vendor=%s" % vendor)
     if cls == "explicit-vm":

@@ -86,6 +86,7 @@ __all__ = [
     "batch_reserve",
     "build_routing_table",
     "route_after_triage",
+    "resize_verdict_map",
     "follow_edge",
     "Row",
     "run_admission",
@@ -164,6 +165,21 @@ def route_after_triage(
         return ("handback", target or "stage-dead")
     return ("node", target)
 
+def resize_verdict_map(routing: Mapping[str, dict], triage_node_id: str) -> tuple[Optional[str], Optional[str]]:
+    """``(fix_verdict, close_verdict)`` -- the profile's OWN declared
+    triage verdicts whose edge off ``triage_node_id`` targets a fix-kind /
+    refute-close-kind node, resolved once from the profile's graph (design
+    item 4, docs/plans/2026-09-22-port-the-remaining-bug-backlog-grind-
+    les.md). Either is ``None`` when ambiguous (more than one verdict
+    targets that kind) -- never an invented value."""
+    edges = routing[triage_node_id]["edges"]
+    fix_verdicts = [v for v, t in edges.items() if t in routing and routing[t]["kind"] == "fix"]
+    close_verdicts = [v for v, t in edges.items() if t in routing and routing[t]["kind"] == "refute-close"]
+    fix_verdict = fix_verdicts[0] if len(fix_verdicts) == 1 else None
+    close_verdict = close_verdicts[0] if len(close_verdicts) == 1 else None
+    return fix_verdict, close_verdict
+
+
 def follow_edge(routing: Mapping[str, dict], node_id: str, outcome: str, row: "Row") -> tuple[str, str]:
     """``("handback", type)`` or ``("node", node_id)`` for a non-triage
     node's outcome, honouring the single ``on_fail`` back-edge per row."""
@@ -201,6 +217,16 @@ class Row:
     on_fail_used: bool = False
     done: bool = False
     sha: str = ""
+    #: Where this row's most recent close proposal came from --
+    #: ``triage:<verdict>`` for a triage-routed proposal (design item 3,
+    #: docs/plans/2026-09-22-port-the-remaining-bug-backlog-grind-les.md).
+    #: Derived from the row's own record, never from the batch id.
+    origin: str = ""
+    #: The refuter's own reason, set only when a refute-close `refuted`
+    #: entry revives this row (design item 2) -- consumed by the fix
+    #: composer's ``refute_note_js`` and echoed into a later hand-back's
+    #: `reason` alongside `origin` (design item 2's last bullet).
+    refute_note: str = ""
 
 @dataclass
 class _Batch:
@@ -268,6 +294,13 @@ def run_admission(
     settled: list[dict] = []
     admitted: dict[str, _Batch] = {}
     exhausted = False
+    #: `by_refute_origin[origin] = {"confirmed": n, "refuted": n}` -- design
+    #: item 3's per-origin refute-verdict accounting.
+    by_refute_origin: dict[str, dict[str, int]] = {}
+
+    def _bump_refute_origin(origin: str, key: str) -> None:
+        entry = by_refute_origin.setdefault(origin, {"confirmed": 0, "refuted": 0})
+        entry[key] += 1
 
     def _record_call(kind: str, unit_id: str) -> Any:
         result = agent(kind, unit_id)
@@ -277,6 +310,11 @@ def run_admission(
 
     def _handback(row: Row, htype: str, reason: str) -> None:
         row.done = True
+        # Design item 2's last bullet: a row revived after a refuted close
+        # proposal that later hands back gives, in its reason, the origin
+        # of that refuted proposal.
+        if row.refute_note:
+            reason = f"{reason} (revived from a refuted close proposal, origin {row.origin!r}: {row.refute_note!r})"
         if any(h["row"] == row.row_id and h["type"] == htype for h in handed_back):
             return
         handed_back.append({"row": row.row_id, "type": htype, "reason": reason})
@@ -302,15 +340,23 @@ def run_admission(
         result = _record_call("triage", batch.batch_id)
         batch.triaged = True
         seen: set[str] = set()
+        to_resize: list[Row] = []
         for rec in result or []:
             if rec["row"] not in batch.row_ids:
                 continue
             row = rows[rec["row"]]
             seen.add(rec["row"])
+            row.origin = f"triage:{rec['verdict']}"
             tradeoff = rec.get("tradeoff", "") if rec.get("has_tradeoff") else ""
             action = route_after_triage(
                 routing, triage_node_id, rec["verdict"], rec.get("tshirt_size"), tradeoff
             )
+            # Design item 4: a row's size-floor baton is deferred to one
+            # read-only resize call per batch, never handed back straight
+            # off triage.
+            if action == ("handback", "baton"):
+                to_resize.append(row)
+                continue
             _apply_route(row, action, f"triage verdict {rec['verdict']!r}")
         # A row triage never returned a record for must not stay pending
         # forever: hand it back rather than spin.
@@ -318,6 +364,28 @@ def run_admission(
             row = rows[rid]
             if rid not in seen and not row.done and row.node is None:
                 _handback(row, "stage-dead", "triage never returned a record for this row")
+        if to_resize:
+            _resize_batch(batch, to_resize)
+
+    def _resize_batch(batch: _Batch, to_resize: list[Row]) -> None:
+        fix_verdict, close_verdict = resize_verdict_map(routing, triage_node_id)
+        edges = routing[triage_node_id]["edges"]
+        fix_target = edges.get(fix_verdict) if fix_verdict else None
+        close_target = edges.get(close_verdict) if close_verdict else None
+        result = _record_call("resize", batch.batch_id) or {}
+        by_row = {a["row"]: a for a in result.get("answers", [])}
+        for row in to_resize:
+            ans = by_row.get(row.row_id)
+            answer = ans.get("answer") if ans else None
+            if answer == "focused-fix" and fix_target and fix_target in routing:
+                row.origin = "resize:focused-fix"
+                row.node = fix_target
+            elif answer == "not-reproduced" and close_target and close_target in routing:
+                row.origin = "resize:not-reproduced"
+                row.node = close_target
+            else:
+                reason = (ans.get("design_question") if ans else None) or "resize confirmed plan-weight"
+                _handback(row, "baton", reason)
 
     def _close_batch(batch: _Batch) -> None:
         proposal_ids = [
@@ -329,6 +397,7 @@ def run_admission(
             row = rows[item["row"]]
             if row.node is None or row.done:
                 continue
+            _bump_refute_origin(row.origin, "confirmed")
             row.removed_files = list(row.removed_files) + [row.path]
             row.touched_files = list(row.touched_files) + [item.get("new_path", "")]
             action = follow_edge(routing, row.node, "confirmed", row)
@@ -350,6 +419,8 @@ def run_admission(
             row = rows[entry["row"]]
             if row.node is None or row.done:
                 continue
+            _bump_refute_origin(row.origin, "refuted")
+            row.refute_note = entry.get("reason", "")
             _apply_route(row, follow_edge(routing, row.node, "refuted", row), "refute-close refuted")
         for stale_row_id in result.get("stale", []):
             row = rows[stale_row_id]
@@ -495,6 +566,7 @@ def run_admission(
         "call_log": call_log,
         "handed_back": handed_back,
         "settled": settled,
+        "by_refute_origin": by_refute_origin,
         "spend": {
             "output_tokens": end_spent - start_spent,
             "agent_calls_total": len(call_log),
@@ -785,6 +857,11 @@ def compose_grind_script(
     triage_node_id = _triage_node_id(profile)
     # Inlined single-caller comprehension.
     node_kind = {node_id: node.kind for node_id, node in profile.graph.items()}
+    routing_table = build_routing_table(profile)
+    resize_fix_verdict, resize_close_verdict = resize_verdict_map(routing_table, triage_node_id)
+    resize_edges = routing_table[triage_node_id]["edges"]
+    resize_fix_target = resize_edges.get(resize_fix_verdict) if resize_fix_verdict else None
+    resize_close_target = resize_edges.get(resize_close_verdict) if resize_close_verdict else None
 
     # Per-batch-key data (a small const, NOT unrolled per row/per batch --
     # the number of `agent(` call SITES must be a small constant
@@ -822,10 +899,12 @@ def compose_grind_script(
         "const BATCHES = " + json.dumps(batches_const, sort_keys=True) + ";"
     )
     lines.append(
-        "const ROUTING = " + json.dumps(build_routing_table(profile), sort_keys=True) + ";"
+        "const ROUTING = " + json.dumps(routing_table, sort_keys=True) + ";"
     )
     lines.append(f"const TRIAGE_NODE_ID = {_js_string_literal(triage_node_id)};")
     lines.append(f"const PLAN_WEIGHT_FLOOR_RANK = {_PLAN_WEIGHT_FLOOR_RANK};")
+    lines.append(f"const RESIZE_FIX_TARGET = {json.dumps(resize_fix_target)};")
+    lines.append(f"const RESIZE_CLOSE_TARGET = {json.dumps(resize_close_target)};")
     lines.append(_MUTEX_HELPERS)
     lines.append(_ROUTING_HELPERS)
 
@@ -860,8 +939,19 @@ def compose_grind_script(
     lines.append("const _handedBack = [];")
     lines.append("const _settled = [];")
     lines.append("const _ledgerCommitted = new Set();")
+    lines.append("const _byRefuteOrigin = {};")
+    lines.append(
+        "function _bumpRefuteOrigin(origin, key) {\n"
+        "  if (!_byRefuteOrigin[origin]) { _byRefuteOrigin[origin] = { confirmed: 0, refuted: 0 }; }\n"
+        "  _byRefuteOrigin[origin][key] += 1;\n"
+        "}"
+    )
     lines.append(
         "function _handBack(rowId, type, reason) {\n"
+        "  const _row = _rows[rowId];\n"
+        "  if (_row && _row.refuteNote) {\n"
+        "    reason = `${reason} (revived from a refuted close proposal, origin ${_row.origin}: ${_row.refuteNote})`;\n"
+        "  }\n"
         "  if (_handedBack.some((h) => h.row === rowId && h.type === type)) return;\n"
         "  _handedBack.push({ row: rowId, type, reason });\n"
         "}\n"
@@ -895,6 +985,22 @@ def compose_grind_script(
         + "\n}"
     )
 
+    resize_raw = stages.compose_resize_call(
+        label="resize", phase_title="Grind", profile=profile.name,
+        rows_js="JSON.stringify(rowsData)", run_id_js="RUN_ID",
+        fix_verdict=resize_fix_verdict, close_verdict=resize_close_verdict,
+        agent_type_host=agent_type_host, repo_root=".",
+    )
+    lines.append(
+        "async function _resizeCall(rowIds) {\n"
+        "  const rowsData = rowIds.map((r) => {\n"
+        "    const row = _rows[r];\n"
+        "    return { row_id: r, path: row.path, digest: row.digest };\n"
+        "  });\n"
+        + _indent_block(_capture(resize_raw, "resize", return_expr="_result.answers || []"), "  ")
+        + "\n}"
+    )
+
     if has_close_node:
         close_raw = stages.compose_refute_close_call(
             label="close", phase_title="Grind", profile=profile.name,
@@ -912,6 +1018,10 @@ def compose_grind_script(
         close_note_js=(
             "(row.closeResult ? (' This row is already closed at ' + row.closeResult.new + "
             "'; amend the fix only, do not run `backlog-grind-assemble grind-row close` again.') : '')"
+        ),
+        refute_note_js=(
+            "(row.refuteNote ? (' The refuter judged this defect live at HEAD; reason: ' + "
+            "row.refuteNote) : '')"
         ),
         profile=profile.name, profile_dir_js="PROFILE_DIR", row_path_js="row.path", digest_js="row.digest",
         run_id_js="RUN_ID", agent_type_host=agent_type_host,
@@ -967,7 +1077,7 @@ def compose_grind_script(
     lines.append("async function _undoCall(row) {\n" + _indent_block(_capture(undo_raw, "undo"), "  ") + "\n}")
 
     lines.append(
-        "function _counts() {\n  const by_type = {};\n  for (const h of _handedBack) { by_type[h.type] = (by_type[h.type] || 0) + 1; }\n  const by_outcome = {};\n  for (const s of _settled) { by_outcome[s.outcome] = (by_outcome[s.outcome] || 0) + 1; }\n  return { by_type, by_outcome };\n}\nfunction _spend() {\n  return { output_tokens: budget.spent() - _startSpent, agent_calls_total: _callCount, agent_calls_by_stage_kind: _agentCallsByStageKind };\n}\nfunction _runCostRecord() {\n  return { profile: PROFILE_NAME, appetite: APPETITE_NAME, run_id: RUN_ID, resolved_knobs: RESOLVED_KNOBS, manifest_digest: MANIFEST_DIGEST, counts: _counts(), spend: _spend() };\n}"
+        "function _counts() {\n  const by_type = {};\n  for (const h of _handedBack) { by_type[h.type] = (by_type[h.type] || 0) + 1; }\n  const by_outcome = {};\n  for (const s of _settled) { by_outcome[s.outcome] = (by_outcome[s.outcome] || 0) + 1; }\n  return { by_type, by_outcome, by_refute_origin: _byRefuteOrigin };\n}\nfunction _spend() {\n  return { output_tokens: budget.spent() - _startSpent, agent_calls_total: _callCount, agent_calls_by_stage_kind: _agentCallsByStageKind };\n}\nfunction _runCostRecord() {\n  return { profile: PROFILE_NAME, appetite: APPETITE_NAME, run_id: RUN_ID, resolved_knobs: RESOLVED_KNOBS, manifest_digest: MANIFEST_DIGEST, counts: _counts(), spend: _spend() };\n}"
     )
     lines.append(
         "const _rows = {};\n"
@@ -978,6 +1088,7 @@ def compose_grind_script(
         "    _rows[r] = { rowId: r, batchId: b.id, batchKey: b.batch_key, path: _path, digest: _entry.digest, node: null, "
         "declaredFiles: [_path], touchedFiles: [_path], removedFiles: [], createdFiles: [], "
         "evidence: '', verifyFeedback: '', fixPlan: '', fixNode: null, closeResult: null, lastOutcome: '', "
+        "origin: '', refuteNote: '', "
         "widened: false, verifyRetried: false, onFailUsed: false, done: false, sha: '' };\n"
         "  }\n"
         "}"
@@ -1001,6 +1112,7 @@ def compose_grind_script(
         "  const _out = await _triageCall(batchState.id, batchState.batchKey, batch.rows);\n"
         "  batchState.triaged = true;\n"
         "  const _seen = new Set();\n"
+        "  const _toResize = [];\n"
         "  for (const rec of (_out.rows || [])) {\n"
         "    const recRow = _normalizeRowRef(rowsMeta, rec.row);\n"
         "    if (!batch.rows.includes(recRow)) continue;\n"
@@ -1010,8 +1122,10 @@ def compose_grind_script(
         "    row.evidence = rec.evidence || '';\n"
         "    row.fixPlan = rec.fix_plan || '';\n"
         "    if (rec.declared_files && rec.declared_files.length) { row.declaredFiles = rec.declared_files; }\n"
+        "    row.origin = `triage:${rec.verdict}`;\n"
         "    const tradeoff = rec.has_tradeoff ? (rec.tradeoff || '') : '';\n"
         "    const route = routeAfterTriage(rec.verdict, rec.tshirt_size, tradeoff);\n"
+        "    if (route.kind === 'handback' && route.value === 'baton') { _toResize.push(recRow); continue; }\n"
         "    applyRoute(row, recRow, route, `triage verdict ${rec.verdict}`);\n"
         "  }\n"
         "  for (const staleRef of (_out.stale || [])) {\n"
@@ -1029,6 +1143,26 @@ def compose_grind_script(
         "      _handBack(r, 'stage-dead', 'triage never returned a record for this row');\n"
         "    }\n"
         "  }\n"
+        "  if (_toResize.length) {\n"
+        "    const _answers = await _resizeCall(_toResize);\n"
+        "    const _byRow = {};\n"
+        "    for (const a of _answers) { _byRow[a.row] = a; }\n"
+        "    for (const rid of _toResize) {\n"
+        "      const row = _rows[rid];\n"
+        "      const a = _byRow[rid];\n"
+        "      const answer = a && a.answer;\n"
+        "      if (answer === 'focused-fix' && RESIZE_FIX_TARGET && ROUTING[RESIZE_FIX_TARGET]) {\n"
+        "        row.origin = 'resize:focused-fix';\n"
+        "        row.node = RESIZE_FIX_TARGET;\n"
+        "      } else if (answer === 'not-reproduced' && RESIZE_CLOSE_TARGET && ROUTING[RESIZE_CLOSE_TARGET]) {\n"
+        "        row.origin = 'resize:not-reproduced';\n"
+        "        row.node = RESIZE_CLOSE_TARGET;\n"
+        "      } else {\n"
+        "        row.done = true;\n"
+        "        _handBack(rid, 'baton', (a && a.design_question) || 'resize confirmed plan-weight');\n"
+        "      }\n"
+        "    }\n"
+        "  }\n"
         "}"
     )
 
@@ -1039,7 +1173,7 @@ def compose_grind_script(
         "  const proposalIds = batch.rows.filter((r) => closeNodeIds.includes(_rows[r].node));\n"
         "  const proposals = proposalIds.map((r) => {\n"
         "    const row = _rows[r];\n"
-        "    return { row_id: r, path: row.path, digest: (QUEUE_GRIND_MANIFEST.entries.find((e) => e.row_id === r) || {}).digest, evidence: row.evidence };\n"
+        "    return { row_id: r, path: row.path, digest: (QUEUE_GRIND_MANIFEST.entries.find((e) => e.row_id === r) || {}).digest, evidence: row.evidence, origin: row.origin };\n"
         "  });\n"
         "  const result = await _closeCall(proposals);\n"
         "  batchState.closeCalled = true;\n"
@@ -1047,6 +1181,7 @@ def compose_grind_script(
         "    const itemRow = _normalizeRowRef(proposals, item.row);\n"
         "    const row = _rows[itemRow];\n"
         "    if (!row || row.done || !row.node) continue;\n"
+        "    _bumpRefuteOrigin(row.origin, 'confirmed');\n"
         "    row.removedFiles = row.removedFiles.concat([row.path]);\n"
         "    row.touchedFiles = row.touchedFiles.concat([item.new_path]);\n"
         "    row.closeResult = { old: row.path, new: item.new_path };\n"
@@ -1064,6 +1199,8 @@ def compose_grind_script(
         "    const entryRow = _normalizeRowRef(proposals, entry.row);\n"
         "    const row = _rows[entryRow];\n"
         "    if (!row || row.done || !row.node) continue;\n"
+        "    _bumpRefuteOrigin(row.origin, 'refuted');\n"
+        "    row.refuteNote = entry.reason || '';\n"
         "    row.lastOutcome = 'refuted';\n"
         "    applyRoute(row, entryRow, followEdge(row.node, 'refuted', row), 'refute-close refuted');\n"
         "  }\n"

@@ -264,6 +264,7 @@ def install(hooks_dir: Path) -> tuple[int, str]:
             try:
                 tmp_target.unlink(missing_ok=True)
             except OSError:
+                # tmp file already gone; write failure is reported below regardless
                 pass
         return 1, f"{_PROG}: failed writing {target} ({exc})."
 

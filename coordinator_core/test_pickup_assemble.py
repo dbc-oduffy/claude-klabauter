@@ -1959,6 +1959,15 @@ class TestComputeBranchGate:
 
         assert result == {"action": "unknown", "current_branch": None}
 
+    def test_origin_prefixed_work_branch_resumes(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        monkeypatch.setattr(pa, "_current_branch", lambda _root: "origin/work/test/2026-01-01")
+
+        result = pa.compute_branch_gate(repo, classification="handoff")
+
+        assert result == {"action": "resume", "current_branch": "origin/work/test/2026-01-01"}
+
     def test_no_live_peers_on_main_still_creates(self, tmp_path):
         repo = tmp_path / "repo"
         _init_repo(repo)
@@ -2300,6 +2309,11 @@ class TestTreeQuiescence:
         assert result == {
             "verdict": "quiet",
             "repos": [{"repo": ".", "dirty": [], "unparseable_scope_entries": []}],
+            "merge_state": {
+                "merge_head": False,
+                "cherry_pick_head": False,
+                "rebase_head": False,
+            },
         }
 
     def test_clean_local_path_is_quiet(self, tmp_path):
@@ -2321,6 +2335,53 @@ class TestTreeQuiescence:
 
         assert result["verdict"] == "dirty"
         assert result["repos"][0]["dirty"] == ["coordinator/bar.py"]
+
+    def test_merge_state_all_false_on_quiescent_repo(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+
+        result = pa.compute_tree_quiescence(repo, [])
+
+        assert result["merge_state"] == {
+            "merge_head": False,
+            "cherry_pick_head": False,
+            "rebase_head": False,
+        }
+
+    def test_merge_state_detects_merge_head_with_no_spawn(self, tmp_path):
+        """Item 12: MERGE_HEAD is a bare file-existence check on the git
+        dir, no `git` subprocess. Written directly rather than via a real
+        `git merge --no-commit` conflict to keep the fixture deterministic
+        and spawn-free."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        (repo / ".git" / "MERGE_HEAD").write_text("deadbeef\n", encoding="utf-8")
+
+        result = pa.compute_tree_quiescence(repo, [])
+
+        assert result["merge_state"]["merge_head"] is True
+        assert result["merge_state"]["cherry_pick_head"] is False
+        assert result["merge_state"]["rebase_head"] is False
+
+    def test_merge_state_detects_cherry_pick_head(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        (repo / ".git" / "CHERRY_PICK_HEAD").write_text("deadbeef\n", encoding="utf-8")
+
+        result = pa.compute_tree_quiescence(repo, [])
+
+        assert result["merge_state"]["cherry_pick_head"] is True
+        assert result["merge_state"]["merge_head"] is False
+
+    def test_merge_state_detects_rebase_head(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        (repo / ".git" / "REBASE_HEAD").write_text("deadbeef\n", encoding="utf-8")
+
+        result = pa.compute_tree_quiescence(repo, [])
+
+        assert result["merge_state"]["rebase_head"] is True
+        assert result["merge_state"]["merge_head"] is False
 
     def test_prose_scope_entry_never_lands_in_dirty_list(self, tmp_path):
         """AC3's red test: a prose `scope:` entry surfaces in
@@ -7347,3 +7408,47 @@ class TestStaleBookkeepingPromotesNoRestamp:
 
         assert do["gates"]["execution_stamp_match"]["verdict"] == "unstampable"
         assert "d-stamp" in {d["id"] for d in do["directives"]}
+
+
+class TestBuildShippedStateJudgmentPointThirdDisposition:
+    """2026-09-11 inbox blitz item 23 — `jshipped` gains a third disposition,
+    `confirm-shipped-archive-now`, letting the EM archive an already-terminal,
+    childless, `shipped_in`-resolvable baton on the spot instead of leaving it
+    for the corpus-wide sweep (forwarded from `state/cross-repo/archive/
+    2026-09-03-doe-claude-em-pickup-archives-a-terminal-baton-instead-of-
+    claiming-it.md`). Pure builder — no git/fixtures needed."""
+
+    def test_three_dispositions_present_with_guidance(self):
+        jp = pa.build_shipped_state_judgment_point("gates.shipped_state", ["d2"])
+
+        assert jp["id"] == "jshipped"
+        values = {d["value"] for d in jp["dispositions"]}
+        assert values == {
+            "reopen-and-proceed",
+            "confirm-shipped-stand-down",
+            "confirm-shipped-archive-now",
+        }
+        for disposition in jp["dispositions"]:
+            assert disposition.get("guidance")
+
+    def test_archive_now_disposition_resolves_nothing_and_names_the_predicate(self):
+        jp = pa.build_shipped_state_judgment_point("gates.shipped_state", ["d2"])
+
+        archive_now = next(
+            d for d in jp["dispositions"] if d["value"] == "confirm-shipped-archive-now"
+        )
+        assert archive_now["resolves"] == []
+        assert "terminal" in archive_now["guidance"]
+        assert "live children" in archive_now["guidance"]
+        assert "shipped_in" in archive_now["guidance"]
+
+    def test_reopen_and_stand_down_dispositions_unchanged(self):
+        jp = pa.build_shipped_state_judgment_point("gates.shipped_state", ["d2"])
+
+        reopen = next(d for d in jp["dispositions"] if d["value"] == "reopen-and-proceed")
+        assert reopen["resolves"] == ["d2"]
+
+        stand_down = next(
+            d for d in jp["dispositions"] if d["value"] == "confirm-shipped-stand-down"
+        )
+        assert stand_down["resolves"] == []

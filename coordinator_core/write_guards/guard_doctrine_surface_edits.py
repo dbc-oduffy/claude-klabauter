@@ -386,6 +386,20 @@ def _why_protected(is_local_config: bool) -> str:
     )
 
 
+#: Same env var and literal `_git_root`-independent read as
+#: `coordinator_core.hooks.repin_cloud_engine_root.REMOTE_ENV_VAR` /
+#: `REMOTE_ENV_TRUE` — kept as local literals rather than an import because
+#: that module's constants govern engine-root repinning, an unrelated
+#: concern; the two must stay byte-identical readings of the same venue
+#: signal, not the same symbol.
+_CLOUD_VENUE_ENV_VAR = "CLAUDE_CODE_REMOTE"
+_CLOUD_VENUE_ENV_TRUE = "true"
+
+
+def _in_cloud_session() -> bool:
+    return os.environ.get(_CLOUD_VENUE_ENV_VAR) == _CLOUD_VENUE_ENV_TRUE
+
+
 def _deny_reason(
     target: str,
     is_local_config: bool = False,
@@ -394,8 +408,24 @@ def _deny_reason(
     """Audience-gated render — see module docstring "Deny message".
 
     Subagent/unresolved audience: REFUSAL only, no unlock statement in any
-    shape. Positively-resolved EM (`resolves_em_audience`): the REFUSAL plus
-    a doc pointer, and nothing else — no key, no path, no command.
+    shape, byte-identical regardless of venue. Positively-resolved EM
+    (`resolves_em_audience`):
+      - workstation (not a cloud session) — the REFUSAL plus a doc pointer,
+        and nothing else — no key, no path, no command. Unchanged from
+        before this venue split.
+      - cloud session (`CLAUDE_CODE_REMOTE == "true"`) — the doc pointer
+        names an approval route (create the sentinel at its owning root)
+        this audience cannot reach: PM assent this guard trusts arrives by
+        the operator creating the sentinel file directly, which requires a
+        workstation session. Naming that unreachable route here is not a
+        remedy (guard-messaging.md § Register, "A remedy that is
+        unreachable in every case is not a remedy") and doubles as a B6
+        artifact leak with no payoff. Render one fact plus one terse
+        alternative instead: approval cannot be granted from here; make the
+        edit from a workstation session. No sentinel name, no doc pointer,
+        no override key — nothing C6's future approval command could turn
+        into a bypass recipe. C6 replaces this alternative with the
+        approval command once it exists.
     """
     base = (
         "[doctrine-surface guard] BLOCKED: "
@@ -405,10 +435,16 @@ def _deny_reason(
         "skill surface instead — those need no approval."
     )
     if resolves_em_audience(payload, _git_root()):
-        base += (
-            f" See {resolve_override_keys_doc_display()} for how "
-            "approval works."
-        )
+        if _in_cloud_session():
+            base += (
+                " Approval for this surface cannot be granted from a cloud "
+                "session — make the edit from a workstation session."
+            )
+        else:
+            base += (
+                f" See {resolve_override_keys_doc_display()} for how "
+                "approval works."
+            )
     return base
 
 

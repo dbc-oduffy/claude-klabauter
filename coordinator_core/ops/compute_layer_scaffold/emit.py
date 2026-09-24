@@ -152,13 +152,16 @@ def compose_producer_module(skill_name: str, verbs: Sequence[str]) -> str:
         "shared envelope/exit-code/dispatch contract:\n"
         "coordinator_core.contract.decision_object.envelope.build_envelope,\n"
         "coordinator_core.contract.decision_object.envelope.extend_exit_codes,\n"
-        "coordinator_core.contract.apply_base.execute_directives.\n"
+        "coordinator_core.contract.apply_base.execute_directives.\n\n"
+        "Spec backlink: pln-the-compute-layer-scaffolder-e-90d036, chunk C1.\n"
         '"""\n'
     )
 
     header = (
         f"{module_docstring}\n"
         "from __future__ import annotations\n\n"
+        "import json\n"
+        "import sys\n"
         "from pathlib import Path\n"
         "from typing import Any, Callable\n\n"
         "from coordinator_core.contract.decision_object.envelope import (\n"
@@ -220,21 +223,36 @@ def compose_producer_module(skill_name: str, verbs: Sequence[str]) -> str:
         "    )\n"
     )
 
+    usage_block = (
+        "\n\ndef _usage() -> int:\n"
+        '    """Prints the generated CLI\'s usage line to stderr, returns USAGE."""\n'
+        "    print(\n"
+        f"        {_py_str_literal(f'usage: {skill_name} [brief|apply]')},\n"
+        "        file=sys.stderr,\n"
+        "    )\n"
+        f"    return int({exit_code_name}.USAGE)\n"
+    )
+
     main_block = (
         "\n\ndef main(argv: list[str]) -> int:\n"
         '    """Generated CLI entrypoint: dispatches "brief"/"apply", else USAGE."""\n'
         "    if not argv:\n"
-        f"        return int({exit_code_name}.USAGE)\n"
+        "        return _usage()\n"
         "    verb = argv[0]\n"
         "    if verb == 'brief':\n"
-        "        brief()\n"
+        "        print(json.dumps(brief(), indent=2, sort_keys=True))\n"
         f"        return int({exit_code_name}.SUCCESS)\n"
         "    if verb == 'apply':\n"
         "        exit_code, _report = apply([], [], Path.cwd())\n"
         "        if exit_code == apply_base.APPLY_EXIT_OK:\n"
         f"            return int({exit_code_name}.SUCCESS)\n"
         f"        return int({exit_code_name}.BUSINESS_FAIL)\n"
-        f"    return int({exit_code_name}.USAGE)\n"
+        "    return _usage()\n"
+    )
+
+    dunder_main_block = (
+        "\n\nif __name__ == '__main__':\n"
+        "    sys.exit(main(sys.argv[1:]))\n"
     )
 
     return (
@@ -245,5 +263,7 @@ def compose_producer_module(skill_name: str, verbs: Sequence[str]) -> str:
         + dispatch_table_block
         + brief_block
         + apply_block
+        + usage_block
         + main_block
+        + dunder_main_block
     )

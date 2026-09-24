@@ -411,7 +411,7 @@ def _tail_entries(path: Path, *, tail_bytes: int, max_rows: int):
                 try:
                     entry = json.loads(line.decode("utf-8", errors="replace"))
                 except (json.JSONDecodeError, ValueError):
-                    continue
+                    continue  # malformed log line; a truncated/hand-edited record is skipped, not fatal to the scan
                 if isinstance(entry, dict):
                     entries.append(entry)
     except OSError:

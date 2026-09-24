@@ -1,7 +1,7 @@
 """Tests for coordinator_core.ops.repo_bootstrap.
 
 Machine-local registry calls are faked via an in-memory dict monkeypatched
-over `_machine_local_get`/`_machine_local_set` (no real `machine-local`
+over `_machine_local_registry_get`/`_machine_local_set` (no real `machine-local`
 binary is required/invoked). Every `git` invocation runs against a throwaway
 source repo created fresh under pytest's `tmp_path` fixture and cloned via
 the real `clone_idempotent()` — never the working claude-klabauter repo.
@@ -76,7 +76,7 @@ class _FakeRegistry:
 def fake_registry(monkeypatch):
     registry = _FakeRegistry()
     monkeypatch.setattr(rb, "_resolve_machine_local_bin", lambda: "dummy-machine-local")
-    monkeypatch.setattr(rb, "_machine_local_get", registry.get)
+    monkeypatch.setattr(rb, "_machine_local_registry_get", registry.get)
     monkeypatch.setattr(rb, "_machine_local_set", registry.set)
     return registry
 
@@ -220,7 +220,7 @@ def test_machine_local_set_failure_raises_repo_bootstrap_error(tmp_path, monkeyp
     target = tmp_path / "cloned" / "sibling"
 
     monkeypatch.setattr(rb, "_resolve_machine_local_bin", lambda: "dummy-machine-local")
-    monkeypatch.setattr(rb, "_machine_local_get", lambda ml, key: None)
+    monkeypatch.setattr(rb, "_machine_local_registry_get", lambda ml, key: None)
     monkeypatch.setattr(rb, "_machine_local_set", lambda ml, key, value: False)
 
     with pytest.raises(rb.RepoBootstrapError):

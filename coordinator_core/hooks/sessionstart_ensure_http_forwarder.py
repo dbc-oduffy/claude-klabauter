@@ -107,7 +107,7 @@ def _probe_bind_wins(port: int = _FIXED_PORT) -> "Optional[bool]":
             try:
                 sock.setsockopt(socket.SOL_SOCKET, exclusive_flag, 1)
             except OSError:
-                pass
+                pass  # Windows-only exclusive-bind flag; absence just loses the stronger race guarantee
         try:
             sock.bind(("127.0.0.1", port))
         except OSError as exc:
@@ -121,7 +121,7 @@ def _probe_bind_wins(port: int = _FIXED_PORT) -> "Optional[bool]":
         try:
             sock.close()
         except Exception:
-            pass
+            pass  # teardown of a probe socket that is already going out of scope
 
 
 def _dial_count_path() -> Path:

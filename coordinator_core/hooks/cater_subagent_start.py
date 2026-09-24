@@ -178,6 +178,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from coordinator_core._settings_home import claude_config_dir, machine_local_dir
 from coordinator_core.data_root import content_root_for
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel_no_spawn
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.hooks._envelope import context_only, no_advisory
 from coordinator_core.hooks._payload import field
 from coordinator_core.ipc import register_op
@@ -1287,6 +1288,8 @@ async def _handler(params: dict, repo_root=None) -> dict:
     it does not -- fail-open on every arm (AC5): `compose_catering` itself never
     raises, so there is nothing for this handler to catch.
     """
+    params = payload_of(params)
+
     import asyncio
 
     cwd = field(params, "cwd") or None

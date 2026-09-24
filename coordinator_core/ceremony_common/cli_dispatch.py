@@ -115,6 +115,62 @@ winner on a genuine conflict is the failure that doctrine names):
        AttributeError if the module isn't registered yet). This module
        carries the same order for the same reason; do not re-derive it.
 
+THE TWO-ROOT MODEL (added by
+docs/plans/2026-09-07-directive-resolution-reaches-a-plugin-local-cli.md T1;
+see docs/reference/plugin-local-cli-dispatch.md for the full route). This
+module now resolves TWO distinct producer roots, never conflated:
+
+    1. `resolve_cli_script_root()` (unchanged, AC1) -- the ENGINE root,
+       `coordinator/bin` under THIS module's own clone. Always resolvable:
+       the engine that runs this code ships that directory by construction.
+    2. `resolve_plugin_cli_script_root()` -- a SECOND, DoE-anchored root,
+       `<doe_root>/coordinator/bin`, resolved via
+       `coordinator_core.ops.coordinator_doe_root.coordinator_doe_root_in_process()`.
+       Optional by construction: a box with no DoE-claude clone has no such
+       root, and the function returns `None` rather than guessing or raising.
+
+THE RUNG CUT (why `resolve_plugin_cli_script_root()` does not simply call
+`coordinator_doe_root()`). The full ladder's rung 3 delegates to
+`resolve_coordinator_clone.resolve_clone_root()`, which retains a
+`subprocess.run` fallback. `resolve_plugin_cli_script_root()` consults rungs
+1, 2, 2.5 and 2.75 ONLY (`coordinator_doe_root_in_process()`) and returns
+`None` rather than descending to rung 3 -- so resolving this second root is
+zero-spawn on EVERY box, resolvable or not. A box that needs a subprocess to
+find DoE is a box where plugin-local dispatch should be off; the sentinel
+below already handles `None` without loss.
+
+THE SENTINEL'S CONTRACT. `UNRESOLVED_PLUGIN_CLI_ROOT` is a module-level
+literal `Path` whose last path segment is `bin`, at a location guaranteed not
+to exist. It exists so a consumer of the optional second root (a
+`dict[str, Path]`-typed dispatch table, e.g.) can keep a non-optional `Path`
+value without inventing its own DoE-root join -- `<script root> or
+UNRESOLVED_PLUGIN_CLI_ROOT` -- and it is owned here, not by any caller,
+because the one-definition guard
+(`ceremony_common/test_producer_root_has_one_definition.py`) exists precisely
+to refuse a second module spelling its own DoE-root join.
+
+`resolve_plugin_cli_script_root()` never returns a path it has not itself
+seen on disk: the joined `<doe_root>/coordinator/bin` must be a real
+directory (one `is_dir()` inside the resolver), which also covers the stale
+or moved DoE clone -- a resolved-but-gone root is treated exactly like an
+unresolvable one, never surfaced as a `FileNotFoundError` three calls later.
+The join is deliberately NOT layout-aware: a flat OSS/marketplace root (whose
+`schemas/` and `bin/` sit directly under it, no `coordinator/` subdirectory)
+joins to a `coordinator/bin` that does not exist, so it is never an
+admissible plugin-local dispatch source even when `coordinator_doe_root_in_
+process()` itself resolves it (at rung 2.75). Admitting a published mirror's
+scripts would be a product decision about consumer boxes this module does
+not make.
+
+`sys.path` FINDING, FOLDED INTO THE EXISTING NEGATIVE SPEC BELOW: a
+plugin-local script resolved through this second root is loaded through the
+SAME `load_cli_module()` as any engine-local one, so it gets the same
+transient `sys.path` insert of its own directory for the duration of
+`exec_module` -- and nothing more. A DoE-side script that itself mutates
+`sys.path` at import (several do -- see the plan's own census) is NOT
+isolated by this module; that hazard belongs to the loaded script, not to
+this dispatch primitive.
+
 TWO CACHE LAYERS, NOT ONE (post-C5 note — the trio is now repointed at
 this module; the paragraph above describing "ADDITIVE ONLY... nothing in
 the trio is repointed" is C1-era history, not current state). Each trio
@@ -153,7 +209,11 @@ Negative-spec:
       directory for the duration of `exec_module` and removes it by value
       before returning (see "What this module does NOT isolate" above and
       `_exec_with_own_dir_on_path`) — everything else about `sys.path` is
-      left exactly as ambient.
+      left exactly as ambient. One further durable, idempotent insert:
+      `load_cli_module` calls `ensure_bin_lib_bound` unconditionally before
+      building the spec, which binds `coordinator/bin` on `sys.path` when
+      (and only when) `script_path` resolves under this engine's own bin —
+      a no-op for every tmp-dir script `test_cli_dispatch.py` loads.
 """
 
 from __future__ import annotations
@@ -169,10 +229,19 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable, Optional
 
+from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
 from coordinator_core.ceremony_common.cli_rejection import (
     CliExitClass,
     classify_cli_exit,
 )
+from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root_in_process
+
+#: A literal `Path` ending in a `bin` segment, at a location guaranteed absent
+#: on any real box -- see module docstring, "THE SENTINEL'S CONTRACT". Exists
+#: so a `dict[str, Path]`-typed dispatch table can carry a plugin-local
+#: member whose root failed to resolve without widening the table's value
+#: type to `Optional[Path]`.
+UNRESOLVED_PLUGIN_CLI_ROOT = Path("/__coordinator_unresolved_plugin_cli_root__/coordinator/bin")
 
 #: Guards `_exec_with_own_dir_on_path`'s insert/remove pair against a
 #: concurrent caller's own insert landing between this one's insert and its
@@ -257,6 +326,28 @@ def resolve_cli_script_root() -> Path:
     return Path(__file__).resolve().parents[2] / "coordinator" / "bin"
 
 
+def resolve_plugin_cli_script_root() -> Optional[Path]:
+    """The SECOND, DoE-anchored `coordinator/bin` directory -- see module
+    docstring, "THE TWO-ROOT MODEL" and "THE RUNG CUT". Zero parameters, for
+    the same reason `resolve_cli_script_root()` takes none: a caller's
+    `repo_root` names the repo a CLI operates on, never the tree it ships in.
+
+    Resolves `<doe_root>/coordinator/bin` from
+    `coordinator_doe_root_in_process()`, which covers rungs 1, 2, 2.5 and
+    2.75 ONLY -- this function never calls `coordinator_doe_root()` and
+    never reaches `resolve_coordinator_clone.resolve_clone_root()`'s
+    `subprocess.run`. Returns `None`, never raises, when the ladder cannot
+    resolve a root AND, equally, when it resolves a root whose joined
+    `coordinator/bin` is not a directory (a stale/moved clone, or a
+    flat-layout root admissible only up to rung 2.75 itself -- the join is
+    deliberately not layout-aware, see module docstring)."""
+    root, _rung = coordinator_doe_root_in_process()
+    if root is None:
+        return None
+    candidate = Path(root) / "coordinator" / "bin"
+    return candidate if candidate.is_dir() else None
+
+
 def load_cli_module(module_name: str, script_path: Path) -> ModuleType:
     """Loads (once, cached under `script_path`'s resolved absolute path —
     see `_LOADED_MODULES`, never under `module_name`) the script at
@@ -290,6 +381,7 @@ def load_cli_module(module_name: str, script_path: Path) -> ModuleType:
     cache_key = str(script_path.resolve())
     if cache_key in _LOADED_MODULES:
         return _LOADED_MODULES[cache_key]
+    ensure_bin_lib_bound(str(script_path.resolve().parent))
     loader = importlib.machinery.SourceFileLoader(module_name, str(script_path))
     spec = importlib.util.spec_from_file_location(module_name, script_path, loader=loader)
     if spec is None or spec.loader is None:

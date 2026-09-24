@@ -512,7 +512,7 @@ def _gate_distill_threshold(repo_root: Path, _settings: Path, overrides: dict) -
             try:
                 rel_parts = p.relative_to(tasks_dir).parts
             except ValueError:
-                continue
+                continue  # per-file loop; a path outside tasks_dir (should not occur from rglob) is skipped
             if len(rel_parts) >= 2:
                 tasks += 1
     total = plans + handoffs + completed + tasks

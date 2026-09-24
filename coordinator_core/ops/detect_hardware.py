@@ -219,6 +219,7 @@ def _adapter_vram_bytes(adapter_key) -> Optional[int]:
         try:
             raw, _ = winreg.QueryValueEx(adapter_key, value_name)
         except FileNotFoundError:
+            # this value name is absent under this adapter; try the next one
             continue
         as_int = _coerce_registry_int(raw) if raw else None
         if as_int:
@@ -270,12 +271,14 @@ def _detect_gpu_windows() -> Tuple[Optional[str], Optional[int]]:
                         try:
                             driver_desc, _ = winreg.QueryValueEx(adapter_key, "DriverDesc")
                         except FileNotFoundError:
+                            # this adapter subkey has no driver description; skip it
                             continue
                         vram_bytes = _adapter_vram_bytes(adapter_key)
                         if best_desc is None or (vram_bytes or 0) > (best_bytes or 0):
                             best_desc = driver_desc
                             best_bytes = vram_bytes
                 except OSError:
+                    # adapter subkey unreadable; skip it
                     continue
     except OSError:
         return None, None

@@ -237,7 +237,7 @@ def _record_arm_latency(arm_op: str, t_start: float, root: Path) -> None:
             repo_root=root,
         )
     except Exception:
-        pass
+        pass  # best-effort telemetry, silent on any failure -- see this function's own docstring
 
 
 def _is_p4_repo(root: Path) -> bool:
@@ -312,7 +312,7 @@ def _p4_leg_precheck(root: Path, session_id: Optional[str]) -> Optional[dict]:
                 error_kind=type(exc).__name__,
             )
         except Exception:
-            pass
+            pass  # best-effort telemetry; the outer arm's own record already failed, a nested telemetry error is not fatal
         return None
 
     if state["p4_shelved_sha"] is not None and state["p4_shelved_sha"] == current_head:
@@ -366,7 +366,7 @@ def _p4_leg_execute(
                 error_kind=type(exc).__name__,
             )
         except Exception:
-            pass
+            pass  # best-effort telemetry; the p4 refusal is already classified above, a nested telemetry error is not fatal
         return
 
     try:
@@ -386,7 +386,7 @@ def _p4_leg_execute(
             remint=outcome.remint,
         )
     except Exception:
-        pass
+        pass  # best-effort telemetry, silent on any failure -- matches the arm's own "never breaks dispatch" contract
 
 
 #: `.gitattributes`, repo-root only -- this predicate answers "can this
@@ -506,7 +506,7 @@ def _upstream_sha(repo: Union[str, Path], branch: str) -> Optional[str]:
         try:
             content = ref_path.read_text(encoding="utf-8").strip()
         except OSError:
-            continue
+            continue  # per-remote loop; a missing/unreadable packed-ref for this remote is skipped, the next remote is tried
         if content:
             return content
 
@@ -777,9 +777,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     READING THE RESULT -- the discriminator is which LIST is non-empty, never
     `pushed_count`. Every outcome below is reachable; branch in this order:
 
-        unconfirmed non-empty  -> the push's outcome was NEVER OBSERVED. It may
-                                  already be on the remote. Reconcile (see
-                                  below), never re-push blind.
+        unconfirmed non-empty  -> the push's outcome was NEVER OBSERVED. Per
+                                  DR-442, `push.outstanding` is declared
+                                  `fire_and_forget` (`evidence_class
+                                  ("push.outstanding")`): this outcome is not
+                                  the caller's to adjudicate. Never re-push
+                                  blind -- the next cadence tick re-drives it.
         failed non-empty       -> observed, definite failure. Safe to act on.
         acted == ["push"]      -> landed. `pushed_range`/`pushed_count` describe
                                   what THIS call landed.
@@ -806,11 +809,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     empty on the second. The fields were all present and the reading order was
     not, which is why this block exists rather than a shape change.
 
-    Reconciling an `unconfirmed` is the ONE case needing more than this result:
-    the push may have landed after the parent was killed, so re-read the remote
-    (`git merge-base --is-ancestor HEAD <upstream>`) or simply let the next
-    cadence tick re-drive it. `ipc.py`'s reconcile-before-retry negative spec
-    owns that rule; do not hand-roll a re-push here.
+    An `unconfirmed` outcome is fire-and-forget telemetry (DR-442): the push
+    may have landed after the parent was killed, but that is not observed
+    evidence for this caller to act on, and it is not the caller's to
+    adjudicate by hand -- never re-push blind, and never inspect the remote's
+    own state to decide instead. The next cadence tick re-drives it on its
+    own.
 
     Negative-spec: does NOT collapse `failed`/`unconfirmed` into one key or
     synthesize a summary string from them -- they are mutually exclusive by

@@ -141,7 +141,7 @@ def read_doe_root_pointer_file(home: str | None = None) -> str:
         try:
             content = candidate.read_text(encoding="utf-8").rstrip("\n")
         except OSError:
-            continue
+            continue  # candidate pointer file absent or unreadable; try the next one
         if content:
             return content
     return ""
@@ -208,5 +208,5 @@ def read_doe_root_pointer() -> str:
         if content:
             return content
     except OSError:
-        pass
+        pass  # durable pointer file absent or unreadable; fall through to "" below
     return ""

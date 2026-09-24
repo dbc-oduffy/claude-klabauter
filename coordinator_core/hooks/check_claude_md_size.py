@@ -88,6 +88,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from coordinator_core import claude_md_budget
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.hooks._envelope import allow_advisory, deny, no_advisory
 from coordinator_core.hooks.claude_md_ledger import (
     LedgerError,
@@ -237,6 +238,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     byte-size soft-warn -- the residual advisory legs of the CLAUDE.md
     budget gate (the HARD_LIMIT_BYTES deny is a separate, already-landed
     write-guards op)."""
+    params = payload_of(params)
     result = evaluate(params)
     if result is None:
         return no_advisory()

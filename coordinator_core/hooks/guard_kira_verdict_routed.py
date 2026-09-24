@@ -23,9 +23,12 @@ in this row) — `stop_dispatch` now imports `_guard_kira_verdict_routed_handler
 from here instead of defining it inline, so the fan-in composition is
 unchanged, just no longer duplicated.
 
-Op contract: `params["payload"]` is the Stop payload dict (`session_id`,
-`cwd`, `agent_id`, `stop_hook_active`, ...) — never `os.environ` or this
-process's own `cwd`. Returns `deny("Stop", <reasons>)` when it fires,
+Op contract: `params` reaches this op in either shape a `hooks.*` handler
+receives — wrapped as `params["payload"]` by both engine doors, flat by the
+cold chain; `_envelope.payload_of` reads both, supplying the Stop payload
+dict (`session_id`, `cwd`, `agent_id`, `stop_hook_active`, ...) — never
+`os.environ` or this process's own `cwd`. Returns `deny("Stop", <reasons>)`
+when it fires,
 `post_advisory(<text>)` on a fail-OPEN could-not-evaluate path (mirrors the
 source script's own stdout breadcrumb, never blocking on its own inability
 to read a fact), `no_advisory()` otherwise.
@@ -37,10 +40,10 @@ DoE source: coordinator/hooks/scripts/guard-kira-verdict-routed.py
 from __future__ import annotations
 
 import os
-from typing import Mapping, Optional
+from typing import Optional
 
 from coordinator_core.git.repo_root import show_toplevel
-from coordinator_core.hooks._envelope import deny, no_advisory, post_advisory
+from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, post_advisory
 from coordinator_core.ipc import register_op
 from coordinator_core.session.machinery_paths import share_dirs as _share_dirs
 
@@ -206,9 +209,10 @@ def _kira_find_answers(kira_filename: str, in_scope: list) -> list:
     return answers
 
 
-def _kira_unstamped_integrators(in_scope: list) -> list:
+def _kira_unstamped_integrators(in_scope: list, plan: "Optional[str]" = None) -> list:
     """Sidecars carrying a SPAWN-time `integrator_receipt` with no
-    `integrated_from` of their own.
+    `integrated_from` of their own, paired against the reviewer's OWN
+    `plan:` field rather than the whole session.
 
     This is a "an integrator was born" signal ONLY, never a "this verdict
     is being handled" one — `_receipt_block`'s splice fires at spawn, before
@@ -219,12 +223,22 @@ def _kira_unstamped_integrators(in_scope: list) -> list:
     checks for via `integrated_from`; a caller MUST NOT read this list as
     evidence that any one of these sidecars answers a PARTICULAR verdict —
     see `_guard_kira_verdict_routed`'s own reasons loop, which surfaces this
-    list as an FYI count only, never as a "do not re-dispatch" claim."""
-    return [
-        f
+    list as an FYI count only, never as a "do not re-dispatch" claim.
+
+    `plan` is the reviewer (Kira) sidecar's own `plan:` value. A session
+    routinely runs multiple unrelated plans concurrently; an integrator
+    spawned for a DIFFERENT plan is not evidence about THIS verdict, so it
+    is excluded when `plan` is a non-empty string. `plan is None` (the
+    field could not be read) falls back to the old session-wide count
+    rather than silently reporting zero."""
+    candidates = [
+        (f, m)
         for f, m in in_scope
         if "integrator_receipt" in m and not m.get("integrated_from")
     ]
+    if not isinstance(plan, str) or not plan.strip():
+        return [f for f, m in candidates]
+    return [f for f, m in candidates if m.get("plan") == plan]
 
 
 _KIRA_BLOCK_HEADER = (
@@ -337,7 +351,9 @@ def _guard_kira_verdict_routed(payload: dict) -> dict:
             # counts as routing; an unstamped receipt is surfaced below as a
             # count, never as grounds to withhold the owed-route remedy or
             # to instruct a false `integrated_from` stamp.
-            unstamped_count = len(_kira_unstamped_integrators(in_scope))
+            unstamped_count = len(
+                _kira_unstamped_integrators(in_scope, plan=kira_meta.get("plan"))
+            )
             unstamped_note = (
                 f" ({unstamped_count} integrator sidecar(s) in this session "
                 "carry a spawn-time integrator_receipt with no integrated_from "
@@ -367,10 +383,8 @@ def _guard_kira_verdict_routed_handler(params: dict, repo_root=None) -> dict:
     from `payload["cwd"]`, matching every other payload-cwd-resolving
     `hooks.*` op in this family). Fail-open: any exception degrades to
     `no_advisory()`, never propagated."""
+    payload = payload_of(params)
     try:
-        payload = params.get("payload")
-        if not isinstance(payload, Mapping):
-            payload = {}
         return _guard_kira_verdict_routed(dict(payload))
     except Exception:
         return no_advisory()

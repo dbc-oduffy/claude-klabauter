@@ -275,6 +275,7 @@ def _resolve_scaffold_manifest_root(claude_home: str, coordinator_root: str) -> 
     try:
         locate_manifest(Path(coordinator_root))
     except ScaffoldError:
+        # rung 1 missed; fall through to rungs 2-4 below
         pass
     else:
         return coordinator_root

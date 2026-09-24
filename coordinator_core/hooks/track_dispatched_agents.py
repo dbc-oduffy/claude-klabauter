@@ -89,6 +89,7 @@ if TYPE_CHECKING:
 # (dispatched-agents.txt, em-session-id.txt) -- never a tracked repo artifact.
 GENERATES = []
 
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.hooks._payload import field
@@ -533,6 +534,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     """
     # asyncio deferred to first use here (not module scope). Spec:
     # docs/plans/2026-07-24-canonical-resolution-engine.md task W0-1.
+    params = payload_of(params)
     import asyncio
 
     # Class-2 instrument: asyncio.CancelledError raised while this handler is

@@ -272,7 +272,7 @@
         "type": "string"
       },
       "uniqueItems": true,
-      "description": "Selects which reviewers this plan needs, forward — distinct from `reviewer`, which records who already approved it, backward. Values are not enumerated here by design — the vocabulary is `coordinator/contract/review-signals.json`, and membership is enforced by the contract's parity test plus the frontmatter write guard where a coordinator engine is installed."
+      "description": "Selects which reviewers this plan needs, forward — distinct from `reviewer`, which records who already approved it, backward. Values are not enumerated here by design — the vocabulary is `DoE-claude coordinator/contract/review-signals.json`, and membership is enforced by the contract's parity test plus the frontmatter write guard where a coordinator engine is installed."
     },
     "review_verified_by": {
       "type": "string",

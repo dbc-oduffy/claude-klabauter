@@ -11,8 +11,6 @@ Covers:
   - handoffs enumeration.
   - decisions/blockers extraction — BOTH the primary (YAML-frontmatter +
     markdown-heading) path and the grep-fallback path, independently.
-  - review-trail Reviewed: line parsing — BOTH the primary (json.load) path
-    and the fallback (regex) path, independently.
   - HEADER staleness reporting (report-only, no skip decision).
   - the orchestrator (compute_day_fields) end-to-end.
   - the changelog.compute_day_fields IPC handler (param validation + dispatch).
@@ -23,7 +21,6 @@ DR authority: docs/decisions/DR-216-changelog-completion-reviewtrail-write-carve
 from __future__ import annotations
 
 import asyncio
-import json
 import subprocess
 from pathlib import Path
 
@@ -36,10 +33,8 @@ from coordinator_core.ops.changelog_ops import (
     _handoffs_for_date,
     _header_staleness,
     _plans_touched,
-    _reviewed_lines_for_date,
     compute_day_fields,
     extract_field_from_handoffs,
-    parse_review_record,
 )
 from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
@@ -464,70 +459,6 @@ def test_extract_field_fallback_reads_populated_key_unchanged(
     result = extract_field_from_handoffs("Decisions", [f], force_fallback=True)
 
     assert result == "use approach W"
-
-
-# ---------------------------------------------------------------------------
-# review-trail Reviewed: lines — BOTH extraction paths
-# ---------------------------------------------------------------------------
-
-
-def test_parse_review_record_primary(tmp_path: Path) -> None:
-    f = tmp_path / "rec.json"
-    f.write_text(json.dumps({"sha_range": "abc..def", "reviewer": "code-reviewer", "verdict": "OK", "diff_loc": 42}))
-
-    line = parse_review_record(f)
-
-    assert line == "sha_range=abc..def reviewer=code-reviewer verdict=OK diff_loc=42"
-
-
-def test_parse_review_record_fallback(tmp_path: Path) -> None:
-    """The fallback regex only matches QUOTED string values (mirrors the oracle's
-    `grep -oE '"diff_loc"[[:space:]]*:[[:space:]]*"[^"]*"'`, which is itself
-    quotes-only) — an unquoted JSON number degrades to "unknown" on this path,
-    see test_parse_review_record_fallback_missing_fields for that shape."""
-    f = tmp_path / "rec.json"
-    f.write_text(
-        json.dumps({"sha_range": "abc..def", "reviewer": "code-reviewer", "verdict": "OK", "diff_loc": "42"})
-    )
-
-    line = parse_review_record(f, force_fallback=True)
-
-    assert line == "sha_range=abc..def reviewer=code-reviewer verdict=OK diff_loc=42"
-
-
-def test_parse_review_record_fallback_missing_fields(tmp_path: Path) -> None:
-    f = tmp_path / "rec.json"
-    f.write_text('{"reviewer": "code-reviewer"}')
-
-    line = parse_review_record(f, force_fallback=True)
-
-    assert line == "sha_range=unknown reviewer=code-reviewer verdict=unknown diff_loc=unknown"
-
-
-def test_parse_review_record_primary_falls_back_on_malformed_json(tmp_path: Path) -> None:
-    f = tmp_path / "rec.json"
-    f.write_text("not valid json {{{")
-
-    line = parse_review_record(f)
-
-    assert "sha_range=unknown" in line
-
-
-def test_reviewed_lines_for_date_filters_by_prefix(tmp_path: Path) -> None:
-    repo = _init_repo(tmp_path)
-    rdir = repo / "state" / "review-trail"
-    rdir.mkdir(parents=True)
-    (rdir / "2026-07-15-100000-x.json").write_text(
-        json.dumps({"sha_range": "a..b", "reviewer": "r1", "verdict": "OK", "diff_loc": 5})
-    )
-    (rdir / "2026-07-14-100000-x.json").write_text(
-        json.dumps({"sha_range": "c..d", "reviewer": "r2", "verdict": "OK", "diff_loc": 5})
-    )
-
-    lines = _reviewed_lines_for_date(repo, "2026-07-15")
-
-    assert len(lines) == 1
-    assert "reviewer=r1" in lines[0]
 
 
 # ---------------------------------------------------------------------------

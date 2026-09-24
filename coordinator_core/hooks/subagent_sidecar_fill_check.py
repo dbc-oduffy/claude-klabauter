@@ -95,6 +95,7 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import no_advisory, post_advisory
 from coordinator_core.hooks._payload import field
@@ -173,6 +174,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     least one sidecar is flagged and this exact flagged set has not already
     fired this session.
     """
+    params = payload_of(params)
     session_id = field(params, "session_id")
     if not session_id or not repo_root:
         return no_advisory()

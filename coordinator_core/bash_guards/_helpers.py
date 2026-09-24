@@ -666,11 +666,11 @@ def operator_override_note(
 #: ``block_subagent_commit`` independently of this set) -- e.g. a
 #: qualitatively new bypass vector, not a re-litigation of the commit case
 #: this ruling already settled. The SOLE consumer of this set,
-#: ``block_reviewer_bash_outside_allowlist``, resolves a DIFFERENT, wider
-#: per-type ruleset for ``coordinator:executor`` than for
-#: ``coordinator:code-reviewer`` (see that module's own docstring Divergence
-#: 9 and ``_DEFAULT_RULESET_TYPE_OVERRIDES``) — membership here is
-#: SET-WIDE, but the allowed Bash surface per member is not. Adding a member
+#: ``block_reviewer_bash_outside_allowlist``, resolves its ruleset per member
+#: type via ``_DEFAULT_RULESET_TYPE_OVERRIDES``. ``coordinator:executor`` is
+#: not a member of this set (unconfined outright since the 2026-08-02
+#: narrowing; see that module's own docstring Divergence 9) and carries no
+#: ruleset of its own. Adding a member
 #: here is still the single edit point for CONFINEMENT membership itself,
 #: matching the bash lib's "single source of truth" intent; it is a
 #: SEPARATE, independent hardcoded set from

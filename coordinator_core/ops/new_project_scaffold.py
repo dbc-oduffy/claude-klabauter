@@ -172,6 +172,7 @@ def _resolve_doe_root() -> Tuple[Optional[str], int]:
                 if proc.returncode == 0:
                     value = proc.stdout.strip()
             except (OSError, subprocess.TimeoutExpired):
+                # probe command unavailable/timed out; other candidates still apply
                 pass
     if not value:
         print(f"{_PROG}: could not resolve repos.doe_claude via the registry", file=sys.stderr)

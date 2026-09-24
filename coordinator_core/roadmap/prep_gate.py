@@ -245,7 +245,7 @@ def _refuse(kind: str, detail: str, withheld: Optional[List[str]] = None) -> Dic
 # ---------------------------------------------------------------------------
 
 
-def _spine(plan_path: Path, text: str) -> Dict[str, Any]:
+def _spine(plan_path: Path, text: str, repo_root: Optional[Path] = None) -> Dict[str, Any]:
     """``read_spine()`` + ``build_waves()``, EXECUTED. Never a review of shape.
 
     The absent-block case is reported separately from a parse error because the
@@ -296,6 +296,9 @@ def _spine(plan_path: Path, text: str) -> Dict[str, Any]:
     archive_defect = _archive_writes_refused_in_wave(rows)
     if archive_defect is not None:
         return archive_defect
+    shape_defect = _writes_shape_refused_at_emit(rows, repo_root)
+    if shape_defect is not None:
+        return shape_defect
     unroutable, first = _unroutable_rows(waves)
     if unroutable:
         return _defect(type(first).__name__, str(first).strip()[:300], withheld=unroutable)
@@ -350,6 +353,61 @@ def _archive_writes_refused_in_wave(rows: List[Any]) -> Optional[Dict[str, Any]]
         "out of archive/. A value tagged `writes_under` names a PREFIX, so the guard's "
         "file-shaped carve-outs cannot be checked against it — concretize into `writes:` "
         "if the row only ever writes carve-out-shaped names.",
+    )
+
+
+def _writes_shape_refused_at_emit(
+    rows: List[Any], repo_root: Optional[Path]
+) -> Optional[Dict[str, Any]]:
+    """A live row whose ``writes:`` entry is glob- or directory-shaped
+    certifies here and is refused later, at ``dispatch.emit`` time:
+    ``inventory_mint.py``'s ``_refuse_if_glob``/``_refuse_if_directory_shaped``
+    raise on exactly these two shapes when minting a spine, and
+    ``pathspec.py``'s ``DirectoryShapedWriteError`` (via ``_declared_paths``)
+    raises the directory case again when an already-authored spine reaches
+    emit. Both refusals fire AFTER this bar has already stamped
+    ``mise_prepped_*`` — moving the check here catches it before the stamp,
+    not after (example-retrieval-repo, 2026-09-07: 12 certified rows carried a
+    directory-shaped write; DR-*-terminal-test-phase-refuse-vs-omit.md
+    carried a bare glob).
+
+    Glob detection reuses ``inventory_mint._GLOB_CHARS`` (``*``, ``?``,
+    ``[``) rather than a second guess at the character set. Directory-shape
+    detection reuses ``inventory_mint._refuse_if_directory_shaped``'s own
+    two-spelling rule (trailing ``/``/``\\``, OR an existing directory on
+    disk at ``repo_root`` — never ``pathspec.py``'s narrower trailing-
+    separator-only check, which is deliberately NOT an on-disk test because
+    spine derivation there must not depend on worktree state; THIS bar runs
+    at authoring/certification time, when reading the worktree is exactly
+    the point).
+
+    Only rows ``read_spine`` already scheduled (open disposition, not
+    deferred) reach here — a closed row is never dispatched, so nothing it
+    declares is ever resolved by a driver.
+    """
+    from coordinator_core.ops.dispatch_emit.inventory_mint import _GLOB_CHARS
+    from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
+
+    root = repo_root or Path.cwd()
+    findings: List[str] = []
+    for row in rows:
+        if row.writes is UNDECLARED:
+            continue
+        for value in row.writes:
+            text = str(value)
+            if any(ch in text for ch in _GLOB_CHARS):
+                findings.append(f"{row.id} ({text!r}, glob pathspec)")
+                continue
+            if text.endswith("/") or text.endswith("\\") or (root / text).is_dir():
+                findings.append(f"{row.id} ({text!r}, directory-shaped)")
+    if not findings:
+        return None
+    return _defect(
+        "writes-unreadable-at-emit",
+        f"rows with a glob or directory-shaped writes: entry: {', '.join(findings)} — "
+        "dispatch.emit refuses both shapes at emit time (inventory_mint.py, pathspec.py). "
+        "Fix: name a concrete file, or declare `writes_under: <dir>/` if the row chooses "
+        "the filename at run time.",
     )
 
 
@@ -1079,6 +1137,7 @@ def evaluate_plan(
     text: Optional[str] = None,
     root_names: frozenset,
     siblings: Sequence[str],
+    repo_root: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """The whole bar over one plan. Returns a report; writes nothing.
 
@@ -1086,13 +1145,18 @@ def evaluate_plan(
     op holds them under a lock and must gate the exact document it is about to
     stamp, or the recorded sha certifies a body the bar never saw. Omitted, the
     file is read here.
+
+    ``repo_root`` is forwarded to SPINE's directory-existence rung
+    (``_writes_shape_refused_at_emit``) — omitted, it falls back to the
+    process cwd, matching ``inventory_mint.py``'s own convention for a
+    caller with no worktree root at hand.
     """
     if text is None:
         text = plan_path.read_text(encoding="utf-8", errors="replace")
     fm = plan_frontmatter(text)
     prime_exit = _prime_exit(fm)
     classes = {
-        "SPINE": _spine(plan_path, text),
+        "SPINE": _spine(plan_path, text, repo_root),
         "CENSUS": _census(fm),
         "EXTERNAL_DEPS": _external_deps(raw_spine_rows(text), root_names, siblings),
         "PRIME_EXIT": prime_exit,
@@ -1238,6 +1302,7 @@ def gate_plan(worktree_root: Path, plan_path: Path, *, text: Optional[str] = Non
         text=text,
         root_names=repo_root_names(worktree_root),
         siblings=fleet_siblings(worktree_root),
+        repo_root=worktree_root,
     )
 
 

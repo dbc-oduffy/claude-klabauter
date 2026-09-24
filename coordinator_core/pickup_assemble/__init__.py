@@ -108,6 +108,7 @@ from coordinator_core.shipped_in_tokens import (
 )
 from coordinator_core.claim_state import handoff_claim_dir, resolve_claim_state
 from coordinator_core import dag
+from coordinator_core.daily_branch import is_work_branch
 from coordinator_core.git.git_objects import (
     _GitReadModelError,
     _MAX_DELTA_DEPTH,
@@ -274,16 +275,19 @@ _RUN_GIT_SPAWN_VERBS = ("status", "diff", "add", "commit")
 # semantics in-process is a materially different (and much larger) project
 # than reading committed history, and the plan explicitly carves it out.
 # `git diff` is a second sanctioned residual spawn (Review: code-reviewer —
-# Finding 1): `_classify_stamp_delta`'s `stale-bookkeeping`/`stale-
-# substantive` verdict is PM-gating, and `difflib.unified_diff`'s
+# Finding 1): `pickup_brief._classify_stamp_delta`'s `stale-bookkeeping`/
+# `stale-substantive` verdict is PM-gating, and `difflib.unified_diff`'s
 # SequenceMatcher alignment is not guaranteed to partition the same two
 # blobs into the same `+`/`-` lines as git's own Myers diff — a divergence
 # there could misclassify a substantive change as bookkeeping and bypass
 # the PM gate. It stays a real spawn to keep that comparison byte-for-byte
-# git-equivalent. It is off the hot `brief()` path: `compute_execution_
-# stamp_match` returns `None` before ever reaching `_classify_stamp_delta`
-# on any artifact without an `execution_authorized_sha`/`Plan to Execute`
-# pointer, which is the common case — so AC-6's hot-path-zero-spawn holds.
+# git-equivalent (the line-shape arm only — R6 added a structural-anchor
+# arm that spawns one `git show` instead). It is off the hot `brief()`
+# path: `compute_execution_stamp_match` returns `None` before ever
+# reaching `_classify_stamp_delta` on any artifact without an
+# `execution_authorized_sha`/`Plan to Execute` pointer, which is the
+# common case — so AC-6's hot-path-zero-spawn holds. The classifier itself
+# now lives in `pickup_brief.py`, not this module.
 # Every other git call in this module funnels through `_run_git`, which
 # now dispatches on argv[0] to the read-model instead of spawning; callers
 # are unchanged (Finding 4a's uniform-`CompletedProcess`-on-failure
@@ -2074,6 +2078,23 @@ def _porcelain_dirty_paths(repo_root: Path, paths: list[str]) -> list[str]:
     return dirty
 
 
+def _merge_state_flags(root: Path) -> dict[str, bool]:
+    """Whole-tree merge-in-progress state — `MERGE_HEAD`/`CHERRY_PICK_HEAD`/
+    `REBASE_HEAD` file-existence checks on the git dir found via
+    `_discover_git_dirs`, no subprocess spawned. Not resolved to a repo
+    root that isn't a git worktree: all three flags come back `False`."""
+    discovered = _discover_git_dirs(root)
+    if discovered is None:
+        return {"merge_head": False, "cherry_pick_head": False, "rebase_head": False}
+    _, dirs = discovered
+    git_dir = dirs.git_dir
+    return {
+        "merge_head": (git_dir / "MERGE_HEAD").is_file(),
+        "cherry_pick_head": (git_dir / "CHERRY_PICK_HEAD").is_file(),
+        "rebase_head": (git_dir / "REBASE_HEAD").is_file(),
+    }
+
+
 def compute_tree_quiescence(root: Path, scope_entries: list[str]) -> dict[str, Any]:
     """`preflight.tree_quiescence` (AC3/AC8) — replaces the `dirty_paths`
     scope-echo with a real `git status --porcelain` intersection per repo
@@ -2091,6 +2112,12 @@ def compute_tree_quiescence(root: Path, scope_entries: list[str]) -> dict[str, A
     Negative-spec: does NOT run `git fetch` (AC3's read-only guarantee —
     see module docstring) and does NOT report every dirty file in a repo,
     only the intersection with the paths named in `scope:`.
+
+    Also reads `merge_state` — whole-tree `MERGE_HEAD`/`CHERRY_PICK_HEAD`/
+    `REBASE_HEAD` presence for `root` (see `_merge_state_flags`), file-
+    existence checks only, no subprocess. This is a read, not a gate:
+    whether `compute_coast` gates on it is held for the PM and untouched
+    here.
     """
     local_paths: list[str] = []
     local_unparseable: list[str] = []
@@ -2126,7 +2153,11 @@ def compute_tree_quiescence(root: Path, scope_entries: list[str]) -> dict[str, A
             dirty_found = True
         repos.append({"repo": str(sibling_root), "dirty": sibling_dirty, "unparseable_scope_entries": []})
 
-    return {"verdict": "dirty" if dirty_found else "quiet", "repos": repos}
+    return {
+        "verdict": "dirty" if dirty_found else "quiet",
+        "repos": repos,
+        "merge_state": _merge_state_flags(root),
+    }
 
 
 def compute_coast(
@@ -2292,7 +2323,7 @@ def compute_branch_gate(
                 "current branch; the engine creates no work branch"
             ),
         }
-    if branch.startswith("work/"):
+    if is_work_branch(branch):
         return {"action": "resume", "current_branch": branch}
 
     # UNQUALIFIED_BRANCH_CUT, not FRESH_CUT_AT_HEAD: this function PRESCRIBES
@@ -5893,7 +5924,20 @@ def build_shipped_state_judgment_point(evidence_pointer: str, resolves: list[str
     engine-read frontmatter fields (not a quote of untrusted body text), but
     whether the shipped stamp still reflects reality — has the fix since
     regressed, was the stamp premature — is exactly the read this module
-    never mechanizes."""
+    never mechanizes.
+
+    Third disposition (2026-09-11 inbox blitz item 23, forwarded from
+    `state/cross-repo/archive/2026-09-03-doe-claude-em-pickup-archives-a-
+    terminal-baton-instead-of-claiming-it.md`): `confirm-shipped-archive-now`
+    lets the EM archive the record on the spot instead of leaving it for the
+    later corpus-wide sweep, when — and only when — it is terminal, has no
+    live children, AND `shipped_in` resolves to a real object. That is the
+    SAME archive-safe predicate `ops/fleet/archive_terminal_handoffs.py`
+    evaluates before its own sweep moves a record (the memo's own framing);
+    this function does not recompute it — the EM checks it (or runs
+    `handoff.has_live_children` / the sweep's dry-run) before choosing this
+    value, exactly as `reopen-and-proceed`'s guidance already asks the EM to
+    check `shipped_in` by hand rather than this builder reading it."""
     return build_judgment_point(
         "jshipped",
         "This handoff is already stamped deployment_state: shipped — reopen "
@@ -5921,6 +5965,21 @@ def build_shipped_state_judgment_point(evidence_pointer: str, resolves: list[str
                     "is expected (ship-handoff retains it in place for later "
                     "archival, per `handoff_archive_transition`'s stamp_shipped "
                     "mode) — not a sign it needs picking up."
+                ),
+            },
+            {
+                "value": "confirm-shipped-archive-now",
+                "resolves": [],
+                "guidance": (
+                    "Confirm the shipped stamp is accurate AND this baton is "
+                    "archive-safe — terminal, has no live children, and "
+                    "`shipped_in` resolves to a real commit in this repo (the same "
+                    "predicate `ops/fleet/archive_terminal_handoffs.py` uses before "
+                    "its own sweep moves a record). If all three hold, archive it "
+                    "now (e.g. `archive-stamp-cli chain-archive-handoff`) rather "
+                    "than leaving it for the next sweep — release any claim first. "
+                    "If any of the three does not hold, use "
+                    "`confirm-shipped-stand-down` instead."
                 ),
             },
         ],
@@ -6740,18 +6799,13 @@ def build_completeness_checklist(fm: dict[str, Any], artifact_path: str) -> dict
 # exec_auth_stamp._canonical_body_sha`) rather than each hand-rolling the
 # awk-port + blob-hash algorithm locally. `_find_stamp_commit`/
 # `_read_file_at_revision` resolve through the same in-process loose/pack
-# object + ref read-model as the rest of this module. Only
-# `_classify_stamp_delta`'s `git diff` comparison stays a real spawn — a
-# PM-gating verdict where a `difflib` vs. Myers alignment divergence would
-# be silently unsafe (see the `git diff` residual-spawn comment above
-# `_NO_CONSOLE`).
+# object + ref read-model as the rest of this module. `_classify_stamp_delta`
+# and `_is_bookkeeping_diff_line` (the `git diff` line-shape classifier) were
+# ported to `pickup_brief.py` and extended there with a structural set
+# comparison (R6); this module carries no classifier of its own any more.
 # ---------------------------------------------------------------------------
 
 _PLAN_TO_EXECUTE_HEADING = "Plan to Execute"
-_RATIFICATION_LINE_RE = re.compile(
-    r"^[+-]\s*execution_authorized_(?:by|at|sha|note)\s*:", re.IGNORECASE
-)
-_STATUS_LINE_RE = re.compile(r"^[+-]\*\*Status:?\*\*")
 
 
 def _extract_plan_to_execute_pointer(body_text: str) -> Optional[str]:
@@ -6846,42 +6900,6 @@ def _find_stamp_commit(repo_root: Path, path: str, stamped_sha: str) -> Optional
         return None
     out = result.stdout.strip()
     return out or None
-
-
-def _is_bookkeeping_diff_line(line: str) -> bool:
-    """One changed content line (a unified-diff `+`/`-` row, header rows
-    already filtered by the caller) is bookkeeping iff it is a ratification
-    field (`execution_authorized_*`), a body `**Status:**` line, or blank."""
-    if _RATIFICATION_LINE_RE.match(line):
-        return True
-    if _STATUS_LINE_RE.match(line):
-        return True
-    if not line[1:].strip():
-        return True
-    return False
-
-
-def _classify_stamp_delta(repo_root: Path, stamp_commit: str, path: str) -> str:
-    """The `/pickup` Step 1 triage, mechanized: every changed content line in
-    `stamp_commit..HEAD -- path` must be a ratification-line, a
-    `**Status:**` line, or blank to count as `bookkeeping` — a single new
-    spine row, changed target, or altered scope/AC line (or anything this
-    triage does not recognize) defaults to `substantive`. This function
-    only recognizes that substantive content changed; it never judges
-    whether the change is an acceptable one."""
-    result = _run_git(["diff", f"{stamp_commit}..HEAD", "--", path], repo_root)
-    if result.returncode != 0:
-        return "substantive"
-    saw_change = False
-    for line in result.stdout.splitlines():
-        if line.startswith(("+++", "---", "diff --git", "index ", "@@")):
-            continue
-        if not line or line[0] not in "+-":
-            continue
-        saw_change = True
-        if not _is_bookkeeping_diff_line(line):
-            return "substantive"
-    return "bookkeeping" if saw_change else "substantive"
 
 
 #: Review: overengineering-reviewer (finding 5) — DERIVED from

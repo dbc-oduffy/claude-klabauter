@@ -107,6 +107,7 @@ _PLAN_STATUS_ENUM = frozenset({
     "draft",
     "reviewed",
     "approved",
+    "blocked",
     "executing",
     "landed",
     "implemented",

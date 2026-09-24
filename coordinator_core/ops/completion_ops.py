@@ -63,18 +63,17 @@ import datetime
 import logging
 import os
 import re
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import List, Optional, Sequence, Set, Tuple
 
 from coordinator_core.claim_state import resolve_claim_state
+from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.machine_resolver import load_flat_registry_file, registry_dir
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id
-from coordinator_core.reconcile.commit_reality import _git as _reality_git
 from coordinator_core.session.machinery_paths import (
     machinery_root as _machinery_root,
     share_roots as _share_roots,
@@ -281,11 +280,9 @@ def _canonicalize_stored_shas(
     ``--batch-check`` never silently drops a line, so no separate reconciliation
     pass is required here).
 
-    ``commit_reality._git`` is NOT reused for this spawn — it has no stdin-feed
-    parameter (a read-only-verb choke point, not a general git runner; out of
-    scope for this chunk to extend) — this composes ``subprocess.run`` directly,
-    the same shape ``classify_shas_on_origin_main`` itself uses for its own
-    ``--batch-check`` call.
+    This composes ``coordinator_core.git.run.run_git`` directly, feeding the batch-check
+    candidates via its bytes-only ``input=`` parameter — the same shape
+    ``classify_shas_on_origin_main`` itself uses for its own ``--batch-check`` call.
 
     A rev-parse-equivalent failure (ambiguous/unknown ref, or a genuine
     subprocess failure) still WARNs, never crashes — the SHA is simply treated
@@ -297,25 +294,15 @@ def _canonicalize_stored_shas(
     if not candidates:
         return full_set, warnings
 
-    from coordinator_core.win_portability import leaf_spawn_creationflags
-
     def _warn_all() -> Tuple[Set[str], List[str]]:
         return full_set, [f"rev-parse failed for {sha} — treating as unmatched" for sha in candidates]
 
-    stdin_payload = "\n".join(f"{sha}^{{commit}}" for sha in candidates) + "\n"
-    try:
-        result = subprocess.run(
-            ["git", "cat-file", "--batch-check=%(objectname) %(objecttype)"],
-            input=stdin_payload,
-            capture_output=True,
-            text=True,
-            check=False,
-            cwd=str(worktree_root),
-            timeout=120,
-            **leaf_spawn_creationflags(),
-        )
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        return _warn_all()
+    stdin_payload = ("\n".join(f"{sha}^{{commit}}" for sha in candidates) + "\n").encode("utf-8")
+    result = run_git(
+        ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
+        cwd=str(worktree_root),
+        input=stdin_payload,
+    )
 
     if result.returncode != 0:
         return _warn_all()
@@ -659,7 +646,7 @@ def _tag_sha(worktree_root: Path, tag: str) -> Optional[str]:
     conventionally the release currently being cut, which may not exist as a real
     tag yet at flip time (tagging happens after this step in the ceremony).
     """
-    result = _reality_git(worktree_root, ["rev-list", "-n", "1", tag])
+    result = run_git(["rev-list", "-n", "1", tag], cwd=str(worktree_root))
     sha = result.stdout.strip()
     return sha if result.returncode == 0 and sha else None
 
@@ -670,14 +657,14 @@ def _tag_date(worktree_root: Path, sha_or_tag: str) -> Optional[str]:
     Byte-parity port of the oracle's ``tag_date()`` (``git log -1 --format=%ad
     --date=short <sha_or_tag>``).
     """
-    result = _reality_git(worktree_root, ["log", "-1", "--format=%ad", "--date=short", sha_or_tag])
+    result = run_git(["log", "-1", "--format=%ad", "--date=short", sha_or_tag], cwd=str(worktree_root))
     date = result.stdout.strip()
     return date if result.returncode == 0 and date else None
 
 
 def _current_head_sha(worktree_root: Path) -> Optional[str]:
     """Return the worktree's current ``HEAD`` commit SHA, or ``None`` on failure."""
-    result = _reality_git(worktree_root, ["rev-parse", "HEAD"])
+    result = run_git(["rev-parse", "HEAD"], cwd=str(worktree_root))
     sha = result.stdout.strip()
     return sha if result.returncode == 0 and sha else None
 
@@ -712,7 +699,7 @@ def _contains_all_commits(worktree_root: Path, tag: str, commits: Sequence[str])
     an ancestor.
 
     Same primitive SHAPE as ``orphan_branch_sweep.py``'s ``_is_ancestor``, composed
-    here over this module's own cwd-aware ``_reality_git(worktree_root, args)``
+    here over ``run_git(args, cwd=str(worktree_root))``
     rather than imported — see module docstring for why the oracle module's
     two-arg ``_is_ancestor`` (no ``cwd`` parameter, always runs against the
     process's own cwd) is not safe to reuse for a ``common_dir``-scoped op
@@ -722,7 +709,7 @@ def _contains_all_commits(worktree_root: Path, tag: str, commits: Sequence[str])
     if not commits:
         return False
 
-    rev_list = _reality_git(worktree_root, ["rev-list", tag])
+    rev_list = run_git(["rev-list", tag], cwd=str(worktree_root))
     if rev_list.returncode != 0:
         return False
     ancestor_set = set(rev_list.stdout.split())
@@ -1230,6 +1217,7 @@ def _sibling_homed_session_ids(
             if repo_root.resolve() == self_root or not repo_root.is_dir():
                 continue
         except OSError:
+            # registry root unreadable/gone; treat as not a sibling repo
             continue
 
         # Both share roots -- see machinery_paths.share_roots.
@@ -1239,6 +1227,7 @@ def _sibling_homed_session_ids(
                     if child.name in session_ids and child.is_dir():
                         sibling_homed.add(child.name)
             except OSError:
+                # share dir unreadable/gone; no sibling to home under it
                 continue
 
         ceremony_dir = repo_root.joinpath(*_SESSION_CEREMONY_REL)
@@ -1250,6 +1239,7 @@ def _sibling_homed_session_ids(
             try:
                 records = list(kind.iterdir())
             except OSError:
+                # ceremony kind dir unreadable/gone; no records to attribute
                 continue
             for record in records:
                 sid = unique_prefixes.get(record.name[:_CEREMONY_SID_PREFIX_LEN])
@@ -1299,8 +1289,7 @@ def _day_commit_log(worktree_root: Path, day: str) -> List[Tuple[str, Optional[s
     )
     day_end = day_start + datetime.timedelta(days=1)
 
-    result = _reality_git(
-        worktree_root,
+    result = run_git(
         [
             "log",
             "HEAD",
@@ -1308,6 +1297,7 @@ def _day_commit_log(worktree_root: Path, day: str) -> List[Tuple[str, Optional[s
             f"--until={day} 23:59:59 +0000",
             "--pretty=format:%H%x1f%cI%x00%B%x03",
         ],
+        cwd=str(worktree_root),
     )
     if result.returncode != 0 or not result.stdout:
         return []
@@ -1394,8 +1384,7 @@ def _foreign_delivery_commits(
     if not day_shas:
         return set()
 
-    result = _reality_git(
-        worktree_root,
+    result = run_git(
         [
             "log",
             "HEAD",
@@ -1404,6 +1393,7 @@ def _foreign_delivery_commits(
             "--name-only",
             "--pretty=format:%x03%H%x1f%s",
         ],
+        cwd=str(worktree_root),
     )
     if result.returncode != 0 or not result.stdout:
         return set()
@@ -1470,8 +1460,8 @@ def day_coverage_sweep(worktree_root: Path, day: str) -> dict:
 
     READ-ONLY: performs zero writes. Does not fold anything into any
     entry's ``commits:`` list, mutate any handoff, or run any mutating git
-    verb — a pure diagnostic composing this module's existing read-only git
-    subprocess pattern (``_reality_git``) and file-scan helpers (``_iter_files``,
+    verb — a pure diagnostic composing this module's existing read-only
+    ``run_git`` calls and file-scan helpers (``_iter_files``,
     ``_parse_existing_commits``, ``_read_frontmatter_field``,
     ``_canonicalize_stored_shas``, ``_resolve_handoff_dirs``).
 
@@ -1516,6 +1506,7 @@ def day_coverage_sweep(worktree_root: Path, day: str) -> dict:
         try:
             text = entry_path.read_text(encoding="utf-8")
         except OSError:
+            # unreadable completed-record file; skip it
             continue
         all_stored_shas.update(_parse_existing_commits(text))
         authored_by = _read_frontmatter_field(text, "authored_by")
@@ -1546,6 +1537,7 @@ def day_coverage_sweep(worktree_root: Path, day: str) -> dict:
         try:
             text = hf_path.read_text(encoding="utf-8")
         except OSError:
+            # unreadable handoff file; skip it
             continue
         claimed_by = _read_frontmatter_field(text, "claimed_by") or _read_frontmatter_field(
             text, "consumed_by"

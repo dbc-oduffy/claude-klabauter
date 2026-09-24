@@ -214,7 +214,7 @@ def _iter_inbox_frontmatter(inbox: Path, limit: int):
             with open(entry, encoding="utf-8", errors="replace") as fh:
                 yield [next(fh, "") for _ in range(24)]
         except OSError:
-            continue
+            continue  # inbox entry unreadable; skip it, not fatal to the sweep
 
 
 def _probe_peer_ems_reachable(

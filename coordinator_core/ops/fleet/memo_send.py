@@ -158,6 +158,7 @@ from coordinator_core.git.index_write import IndexStaleAfterCommit, IndexWriteEr
 from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, locked_rmw
 from coordinator_core.ops.ceremony import git_native
+from coordinator_core.ops.fleet.archive_actioned_memos import memo_archive_dest
 from coordinator_core.ops.fleet._common import (
     build_act_result,
     build_dry_run_result,
@@ -1750,7 +1751,14 @@ def _memo_send(params: dict, repo_root=None) -> dict:
 
     target_file = inbox_dir / filename
     # AC6 leg 1 — existence pre-check, independent of the O_EXCL leg below.
-    collision_exists = target_file.exists()
+    # Extended beyond the inbox (item 52): a memo already ARCHIVED under this
+    # exact filename is just as much a collision as one still sitting in the
+    # inbox — checking the inbox alone let a resend of an already-actioned
+    # topic slip past this pre-check the moment the original was swept into
+    # cross-repo/archive/, silently duplicating a memo the receiver had
+    # already dispositioned.
+    archive_file = memo_archive_dest(receiver_repo_path, target_file)
+    collision_exists = target_file.exists() or archive_file.exists()
 
     if dry_run:
         return build_dry_run_result(_MODE, [{
@@ -1761,18 +1769,20 @@ def _memo_send(params: dict, repo_root=None) -> dict:
             "collision": collision_exists,
             "note": (
                 "collision: a memo already exists at this receiver-inbox path "
-                "— refuse (no clobber)."
+                "(or was already archived under this filename) — refuse (no "
+                "clobber)."
                 if collision_exists else None
             ),
         }])
 
     # ── act path ──────────────────────────────────────────────────────────
     if collision_exists:
+        collision_path = target_file if target_file.exists() else archive_file
         return build_act_result(_MODE, [], [], [{
             "id": str(target_file),
             "reason": (
-                f"collision: {target_file} already exists in the receiver's "
-                f"inbox — refuse (no clobber)."
+                f"collision: {collision_path} already exists in the receiver's "
+                f"inbox or archive — refuse (no clobber)."
             ),
         }])
 

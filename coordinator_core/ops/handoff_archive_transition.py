@@ -1164,6 +1164,7 @@ def _commit_retained_supersede_flip(
         try:
             Path(msg_path).unlink()
         except OSError:
+            # temp commit-message file already gone; nothing left to clean up
             pass
 
     if not result.ok:

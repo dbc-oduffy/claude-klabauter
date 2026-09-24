@@ -85,7 +85,7 @@ except Exception:  # pragma: no cover -- defensive: an isolated test harness
     # or partial deploy must still fail open rather than crash on import.
     yaml = None
 
-from coordinator_core.hooks._envelope import context_only, no_advisory
+from coordinator_core.hooks._envelope import context_only, no_advisory, payload_of
 from coordinator_core.hooks.support.forwarder_resolve import forwarder_argv, resolve_forwarder
 from coordinator_core.hooks.support.skill_invocation import read_invocation
 from coordinator_core.ipc import register_op
@@ -474,9 +474,9 @@ def compute_context(payload: dict) -> Optional[str]:
 def _handler(params: dict, repo_root=None) -> dict:
     """UserPromptExpansion / PreToolUse(Skill) op: serve `/handoff`'s
     residue segments into the SAME turn's `additionalContext`."""
+    params = payload_of(params)
     try:
-        payload = params if isinstance(params, dict) else {}
-        additional_context = compute_context(payload)
+        additional_context = compute_context(params)
     except Exception:
         additional_context = None
 

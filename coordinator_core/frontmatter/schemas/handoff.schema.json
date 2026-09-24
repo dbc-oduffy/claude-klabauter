@@ -1202,7 +1202,7 @@
         "type": "string"
       },
       "uniqueItems": true,
-      "description": "C3: mirrors plan.schema.json's review_signals byte-for-byte on shape (array of unique strings, no enum) — declared here because roadmap-baton stubs (kind: roadmap-baton on this schema) carry the same field, and this schema previously did not declare it, leaving it unvalidated. Selects which reviewers this baton needs, forward — distinct from a reviewer-recorded-approval field, backward. Values are not enumerated here by design — the vocabulary is coordinator/contract/review-signals.json, and membership is enforced by that contract's parity test (coordinator/tests/test_review_signal_vocabulary_parity.py, extended to this schema as a second consumer) plus the frontmatter write guard where a coordinator engine is installed."
+      "description": "C3: mirrors plan.schema.json's review_signals byte-for-byte on shape (array of unique strings, no enum) — declared here because roadmap-baton stubs (kind: roadmap-baton on this schema) carry the same field, and this schema previously did not declare it, leaving it unvalidated. Selects which reviewers this baton needs, forward — distinct from a reviewer-recorded-approval field, backward. Values are not enumerated here by design — the vocabulary is DoE-claude coordinator/contract/review-signals.json, and membership is enforced by that contract's parity test (DoE-claude coordinator/tests/test_review_signal_vocabulary_parity.py, extended to this schema as a second consumer) plus the frontmatter write guard where a coordinator engine is installed."
     },
     "governing_plan": {
       "anyOf": [

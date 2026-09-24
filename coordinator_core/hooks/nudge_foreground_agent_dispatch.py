@@ -170,7 +170,7 @@ import logging
 import re
 from pathlib import Path
 
-from coordinator_core.hooks._envelope import deny, no_advisory, rewrite_input
+from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, rewrite_input
 from coordinator_core.hooks._payload import field
 from coordinator_core.ipc import register_op
 
@@ -302,6 +302,7 @@ def _handler(params: dict, repo_root=None) -> dict:
         The escape-hatch file check runs only on the reroute/deny path; zero-spawn on the
         common bg_true pass path (repo_root direct param, no git subprocess).
     """
+    params = payload_of(params)
     # Only fires on Agent tool dispatches
     tool_name = field(params, "tool_name")
     if tool_name != "Agent":

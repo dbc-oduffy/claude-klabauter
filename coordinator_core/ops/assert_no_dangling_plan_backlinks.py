@@ -380,6 +380,7 @@ def _iter_backlink_lines(root: str):
             with open(full_path, "r", encoding="utf-8", errors="replace") as fh:
                 lines = fh.readlines()
         except OSError:
+            # an unreadable file cannot be scanned for backlinks; skip it
             continue
         for line in lines:
             if _BACKLINK_LINE_RE.search(line):

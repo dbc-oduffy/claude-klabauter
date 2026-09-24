@@ -98,6 +98,22 @@
  *     point, which is why the socket path carries no uid.
  */
 
+/* Feature-test macros, ahead of every include (must precede the first
+ * system header in the translation unit, including headers pulled in by
+ * door_core.h/door_env_set.h). Without one, glibc under `-std=c11` hides
+ * CLOCK_MONOTONIC (needs POSIX.1b, >=199309L) and O_CLOEXEC (needs
+ * POSIX.1-2008, >=200809L) even though both are used below -- this file
+ * built clean on macOS, where Apple's headers are not gated the same way,
+ * and was never compiled against glibc's strict-conformance path. 200809L
+ * covers both. _DARWIN_C_SOURCE keeps macOS's BSD extensions visible
+ * alongside it; glibc ignores the macro it doesn't recognize. */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+#ifndef _DARWIN_C_SOURCE
+#define _DARWIN_C_SOURCE
+#endif
+
 #include "door_core.h"
 #include "door_env_set.h"
 

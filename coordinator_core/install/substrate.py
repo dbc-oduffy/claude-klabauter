@@ -1121,6 +1121,7 @@ _KILLED_OP_ORPHAN_NAMES = frozenset({
     "list-review-trail-records",
     "repair-empty-review-trail-ranges",
     "coordinator-auto-push",
+    "schema-drift-gate",
 })
 
 # NATIVE-FORWARDER MANIFEST (C4a, docs/plans/2026-08-26-every-forwarder-that-
@@ -1337,6 +1338,7 @@ def _cut_over_to_native_door(
     *,
     engine_root: Optional[Path],
     static_family_names: "frozenset[str]" = frozenset(),
+    source: "Optional[Path]" = None,
 ) -> "Union[Path, None, _StaticFamilyAlreadyServed, _NoLauncherForThisName]":
     """Attempts the C5 cutover for one door-eligible `name`, returning:
 
@@ -1394,12 +1396,20 @@ def _cut_over_to_native_door(
     there) and only ever acts on names ABSENT from `bin_dst`, which a
     static-family name never is. Passing the set in there without
     converting that test to `is` would silently reintroduce the
-    conflation this sentinel exists to prevent."""
+    conflation this sentinel exists to prevent.
+
+    `source` (C5 part b) is the door path a caller looping over many names
+    already installed ONCE, threaded straight through to
+    `_write_native_door_forwarder`/`install_named_forwarder` so this name's
+    cutover does not pay a redundant `install_door` call. Defaults to
+    `None`, which reaches `install_door` exactly as before."""
     if name in static_family_names:
         return _STATIC_FAMILY_ALREADY_SERVED
     if engine_root is None:
         return None
-    native_dst = _write_native_door_forwarder(name, bin_dst, check_only, engine_root=engine_root)
+    native_dst = _write_native_door_forwarder(
+        name, bin_dst, check_only, engine_root=engine_root, source=source
+    )
     if native_dst is _NO_LAUNCHER_FOR_THIS_NAME:
         return native_dst
     if native_dst is None or check_only:
@@ -1411,7 +1421,8 @@ def _cut_over_to_native_door(
 
 
 def _write_native_door_forwarder(
-    name: str, bin_dst: Path, check_only: bool, *, engine_root: Path
+    name: str, bin_dst: Path, check_only: bool, *, engine_root: Path,
+    source: "Optional[Path]" = None,
 ) -> "Union[Path, None, _NoLauncherForThisName]":
     """Writes the native `.exe`-direct door forwarder for one door-eligible
     `name` (C5) via `door_install.install_named_forwarder` (hardlink-to-
@@ -1422,6 +1433,10 @@ def _write_native_door_forwarder(
     claim_bare_name` already defuses for the door's own bare name.
     `check_only` performs no removal (no mutation permitted in check-only
     mode, matching `install_named_forwarder`'s own contract).
+
+    `source`, passed straight to `install_named_forwarder`, is the door
+    path a per-run caller already installed once (C5 part b) -- `None`
+    reaches `install_door` exactly as before.
 
     RETURNS None ON AN UNSTAMPED ENGINE ROOT OR A FAILED BUILD, never raises.
     The native image is ADDITIVE to the `.py`/`.cmd` pair this function's
@@ -1525,7 +1540,9 @@ def _write_native_door_forwarder(
     # "left on its existing Python path -- correct, merely uncut-over," the
     # promise this docstring already made for the unstamped-root case.
     try:
-        dest = door_install.install_named_forwarder(bin_dst, engine_root, name, check_only=check_only)
+        dest = door_install.install_named_forwarder(
+            bin_dst, engine_root, name, check_only=check_only, source=source
+        )
     except (door_install.DoorInstallError, SystemExit) as exc:
         # check_only=True
         # raises DoorInstallError as its own normal "not yet cut over"
@@ -2032,30 +2049,6 @@ _AGENT_HELPER_RESERVED_NAMES = frozenset(
     | {"claude-home"}
 )
 
-# Non-CLI data/doc file extensions that can appear alongside real CLIs in
-# coordinator/bin/ (schema/manifest/baseline files) — never a forwarder
-# candidate regardless of exec bit.
-#
-# `.json` IS ON THIS LIST, and its absence was a real defect, not tidiness.
-# `coordinator/bin/published-name-map.json` exists only in the PUBLISHED tree
-# (publish emits it there; see `percolate.rewrite_basename.
-# PUBLISHED_NAME_MAP_BASENAME`), so a claude-klabauter-tree scan never sees it and the
-# omission was invisible here — but an install off a published engine root
-# derived `published-name-map.json` as an installed CLI NAME, wrote a native
-# door image over that slot in the settings home, and recorded the name in
-# `_native-forwarder-manifest.json`. Measured live before the fix: the door
-# binary carried 386 hardlinks and the manifest 386 names, one of which was a
-# data file. `.json` is a data suffix everywhere in this tree; no
-# `coordinator/bin/` CLI is invoked as `<name>.json`, and both door censuses
-# already accept only `<name>.py`/extensionless as a CLI-name shape
-# (`door_serving_census._generator_bin_names`), so the derivation was the one
-# surface disagreeing.
-#
-# Negative-spec: `.js` is NOT a data suffix — `lint-frontmatter.js` IS its
-# bareword installed identity (see `_derive_agent_helper_target_map`'s
-# stem-dedup rules). Only `.json` was added.
-_AGENT_HELPER_DATA_SUFFIXES = frozenset({".md", ".toml", ".yaml", ".yml", ".txt", ".json"})
-
 # BYTE-COPIED BIN MEMBERS -- installed name -> claude-klabauter-live-root-relative source
 # path components, for the entries whose installed body is the SOURCE FILE'S
 # OWN BYTES rather than a body `_write_agent_forwarder` generates.
@@ -2182,19 +2175,27 @@ def _derive_agent_helper_target_map(agent_bin: Path) -> "dict[str, str]":
     installed ``.cmd`` half is GENERATED by ``_write_agent_cmd_forwarder``,
     never copied from an on-disk twin — see that function's docstring —
     so a source-side ``.cmd``/``.ps1`` file is excluded from the map,
-    never independently-installed names), non-CLI data/doc files
-    (``_AGENT_HELPER_DATA_SUFFIXES``), and
+    never independently-installed names), and
     ``_AGENT_HELPER_RESERVED_NAMES`` (already installed by a different
     family — see that set's own docstring for the collision it prevents).
 
+    Allowlist, not a denylist: past the exclusions above, an entry is a CLI
+    only when its suffix is ``.py`` or empty ("extensionless"). Everything
+    else — a stray editor backup (``.bak``, ``.orig``, ``~``), a data/doc
+    file (``.md``, ``.toml``, ``.yaml``, ``.yml``, ``.txt``, ``.json``), or
+    any other suffix — is skipped silently, with no data-suffix denylist to
+    keep in sync as new junk shapes turn up. "Extensionless" also covers
+    non-Python shells (some of the 14 extensionless entries live in
+    ``coordinator/bin/`` today) — the allowlist admits them unchanged,
+    which is not a regression: "extensionless = CLI" is not
+    "extensionless = Python".
+
     Stem-dedup: a CLI commonly ships as a ``<name>.py`` + ``<name>.cmd``
     (+ optionally ``<name>.ps1``) triplet, or as an extensionless polyglot
-    with a ``.cmd`` twin (``claude-doe``, ``verify-coverage``,
-    ``lint-frontmatter.js`` — note the latter's "extension" IS its bareword
-    identity, there is no separate ``lint-frontmatter`` file to collide
-    with). Only the ``.py`` suffix is stripped to form the installed name;
-    every other suffix (``.js``, extensionless) is kept verbatim, since
-    those ARE the installed/invoked name on this tree.
+    with a ``.cmd`` twin (``claude-doe``, ``verify-coverage``). Only the
+    ``.py`` suffix is stripped to form the installed name; an extensionless
+    entry is kept verbatim, since that IS the installed/invoked name on
+    this tree.
 
     ``mint-deliverable-id.py`` no longer diverges from this rule (it was
     formerly pinned to the asymmetric installed name
@@ -2220,7 +2221,7 @@ def _derive_agent_helper_target_map(agent_bin: Path) -> "dict[str, str]":
             continue
         if entry.suffix in (".cmd", ".ps1"):
             continue
-        if entry.suffix in _AGENT_HELPER_DATA_SUFFIXES:
+        if entry.suffix not in ("", ".py"):
             continue
         installed_name = entry.stem if entry.suffix == ".py" else n
         if installed_name in mapping and mapping[installed_name] != n:
@@ -3750,11 +3751,28 @@ def _write_agent_helper_forwarders(
 
     agent_helper_resolved = []
     with held_lock(bin_dst, holder_label="install-substrate-forwarders"):
+        # HOIST install_door OUT OF THE PER-NAME LOOP (C5 part b). Every
+        # name's own `install_named_forwarder` used to call `install_door`
+        # itself -- idempotent, but not free: a content check of the door
+        # image plus (on a stale/absent install) an unlink-then-relink, once
+        # per name, 445 times per install. Installed ONCE here, under the
+        # same lock the loop already holds, and threaded down as `source=`
+        # so every name links against this one resolved path instead of
+        # re-resolving it. A failure here (no compiler, degraded root)
+        # leaves `door_source` `None`; each name's own call then falls back
+        # to calling `install_door` itself and degrades exactly as before --
+        # this is a perf hoist, never a new failure mode.
+        door_source: "Optional[Path]" = None
+        if engine_root is not None:
+            try:
+                door_source = door_install.install_door(bin_dst, engine_root, check_only=False)
+            except _PER_NAME_DEGRADE_EXCEPTIONS:
+                door_source = None
         for f, target in sorted(agent_helper_target_map.items()):
             try:
                 native_dst = _cut_over_to_native_door(
                     f, bin_dst, check_only, engine_root=engine_root,
-                    static_family_names=static_family_names,
+                    static_family_names=static_family_names, source=door_source,
                 )
                 if native_dst is _STATIC_FAMILY_ALREADY_SERVED:
                     continue
@@ -4999,6 +5017,83 @@ def _fnm_step(check_only: bool) -> None:
             print(f"[setup] WARNING: curl installer for fnm failed — optional, core substrate unaffected; {fnm_manual}", file=sys.stderr)
 
 
+def _ensure_interpreter_dir_on_windows_path(check_only: bool) -> None:
+    """C3 leg 1 — the third `_win_user_path_prepend` call site (`census` row 1
+    named exactly two: the claude-CLI dir and the settings-home `bin` dir).
+    `coordinator_core.ops.ensure_python3_exe_shim._install_shim` writes
+    `python3.exe`/`python.exe` into the resolved interpreter's own directory
+    (`py_dir`) but nothing ever prepended that directory, so a bare `python3`
+    invocation could still resolve to whatever precedes `py_dir` on PATH.
+
+    Gated on `_is_windows_shell()` explicitly (unlike the two existing sites,
+    which rely on their caller — `_windows_health_steps` — already being
+    reached only under that gate): this function is exercised directly by
+    `coordinator_core/install/tests/test_interpreter_path_precedence.py` and
+    must SKIP cleanly rather than mutate machine state when that test runs on
+    POSIX.
+
+    Same value-type preservation and idempotence as the two existing sites;
+    does not refactor either of them.
+    """
+    if not _is_windows_shell():
+        return
+
+    from coordinator_core.ops.ensure_python3_exe_shim import _resolve_python_bin
+
+    python_bin = _resolve_python_bin()
+    if not python_bin:
+        print(
+            "[setup] WARNING: no interpreter resolved; skipping interpreter-dir PATH "
+            "integration — bare-name `python3` invocation may still resolve to whatever "
+            "precedes the intended interpreter on PATH.",
+            file=sys.stderr,
+        )
+        return
+
+    py_dir = Path(python_bin).resolve().parent if os.path.isabs(python_bin) else Path(python_bin).parent
+    py_dir_win = _cygpath_w(str(py_dir))
+    if not py_dir_win:
+        print(
+            f"[setup] WARNING: cygpath unavailable; cannot resolve Windows path for {py_dir}; "
+            "skipping interpreter-dir PATH integration. Install cygpath (provided by MSYS2, "
+            "Cygwin, or Git-for-Windows) and re-run install.",
+            file=sys.stderr,
+        )
+        return
+
+    win_path = _win_user_path_entries()
+    if win_path is None:
+        print(
+            "[setup] WARNING: could not read Windows user PATH from HKCU\\Environment; "
+            f"skipping interpreter-dir PATH integration. Add {py_dir_win} to your user "
+            "PATH manually, or re-run install.",
+            file=sys.stderr,
+        )
+        return
+
+    entries, raw, value_type = win_path
+    target = py_dir_win.rstrip("\\")
+    already = any(
+        e.rstrip("\\").lower() == target.lower()
+        or os.path.expandvars(e).rstrip("\\").lower() == target.lower()
+        for e in entries
+    )
+    if already:
+        return
+
+    if check_only:
+        print(f"[install-substrate] would: add {py_dir_win} (interpreter dir) to Windows user PATH")
+        return
+
+    blocked = _refuse_machine_mutation(str(py_dir), what="add interpreter dir to Windows user PATH")
+    if blocked:
+        print(f"[setup] REFUSED: {blocked}", file=sys.stderr)
+        return
+
+    _win_user_path_prepend(py_dir_win, raw, value_type)
+    print(f"[setup] added {py_dir_win} (interpreter dir) to Windows user PATH — open a new shell/Claude session for it to take effect")
+
+
 def _windows_health_steps(bin_dst: Path, check_only: bool) -> None:
     # 3b: ensure the resolved bin dir on Windows user PATH.
     bin_dst_win = _cygpath_w(str(bin_dst))
@@ -5040,6 +5135,19 @@ def _windows_health_steps(bin_dst: Path, check_only: bool) -> None:
                         _win_user_path_prepend(bin_dst_win, raw, value_type)
                         print(f"[setup] added {bin_dst_win} to Windows user PATH — open a new shell/Claude session for it to take effect")
 
+    # 3b-ii (C3 leg 1): ensure the resolved interpreter's OWN directory is on
+    # Windows user PATH too — the third `_win_user_path_prepend` call site.
+    # `ensure_python3_exe_shim._install_shim` writes `python3.exe`/`python.exe`
+    # into the resolved interpreter's `py_dir`, but nothing prepended that
+    # directory before this leg; a bare `python3` invocation could still
+    # resolve to whatever precedes `py_dir` on PATH. This leg is necessary but
+    # not sufficient for the guarantee — see `prereq_probe.py :: probe_python`
+    # (C3 leg 2) for the precedence ASSERTION this leg is checked against, and
+    # this plan's C1 spike (docs/research/2026-09-11-appx-alias-vs-path-
+    # precedence.md, recorded UNRUN) for why a live App Execution Alias is not
+    # provably covered by a PATH prepend alone.
+    _ensure_interpreter_dir_on_windows_path(check_only)
+
     # 3c-1: orphan AppX stub detection.
     local_app_data = os.environ.get("LOCALAPPDATA")
     for stub_name in ("python.exe", "python3.exe"):
@@ -5077,7 +5185,21 @@ def _windows_health_steps(bin_dst: Path, check_only: bool) -> None:
                     else:
                         print("[setup]   Deleted.")
             else:
-                print("[setup]   (non-interactive context: skipping deletion; re-run in interactive shell to clean up)")
+                # C3 leg 3: this text previously sat beside a PATH prepend
+                # that could read as covering the hazard just left behind.
+                # It does not — a live AppX App Execution Alias intercepts
+                # python3/python regardless of PATH order (arm B; C1 spike
+                # recorded UNRUN: docs/research/2026-09-11-appx-alias-vs-
+                # path-precedence.md, claude-klabauter). No default changes
+                # here — whether an unattended install should delete the
+                # orphan stub is direction-class and stays undecided.
+                print(
+                    "[setup]   (non-interactive context: skipping deletion. This stub is left "
+                    "in place; the Windows user-PATH additions made elsewhere in this install "
+                    "do NOT protect against it — a live AppX App Execution Alias intercepts "
+                    "python3/python invocations regardless of PATH order. Re-run in an "
+                    "interactive shell to delete it, or delete it manually.)"
+                )
 
     # 3c-2: store-alias-on-PATH warning
     py_resolved = shutil.which("python3") or shutil.which("python") or ""

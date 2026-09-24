@@ -600,3 +600,131 @@ def test_bare_directory_is_still_not_a_content_root(tmp_path: Path):
     assert result.returncode == 1, result.stdout
     assert "BROKEN" in result.stdout
     assert "partial checkout" in result.stdout, result.stdout
+
+
+# ---------------------------------------------------------------------------
+# P105-C5 — resolve-claude-klabauter shim freshness (Layer 6)
+#
+# Driven in-process (direct calls to `_check_shim_freshness`/`run_doctor`),
+# not through the CLI subprocess: the seam under test is a pure filesystem
+# compare with no hook-registration document to fixture, and every other
+# in-process test in this file (`test_legacy_form_survives_windows_path_
+# separators` etc.) uses the same pattern for exactly that reason.
+# ---------------------------------------------------------------------------
+
+
+def _fresh_source_tree(tmp_path: Path, body: str = "print('source')\n") -> Path:
+    root = tmp_path / "claude-klabauter-source"
+    (root / "coordinator_core").mkdir(parents=True)
+    shim_dir = root / "coordinator" / "lib" / "resolve-claude-klabauter"
+    shim_dir.mkdir(parents=True)
+    (shim_dir / "_resolve_claude_klabauter.py").write_text(body, encoding="utf-8")
+    return root
+
+
+def _install_shim(settings_home: Path, body: str) -> Path:
+    bin_dir = settings_home / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    shim = bin_dir / "_resolve_claude_klabauter.py"
+    shim.write_text(body, encoding="utf-8")
+    return shim
+
+
+def test_shim_freshness_identical_is_ok_and_silent(tmp_path: Path, monkeypatch):
+    from coordinator_core.ops import doctor
+
+    source_root = _fresh_source_tree(tmp_path)
+    settings_home = tmp_path / "settings-home"
+    _install_shim(settings_home, "print('source')\n")
+    # No compat mirror on this box.
+    monkeypatch.setenv("HOME", str(tmp_path / "no-compat-mirror-home"))
+
+    import coordinator_core.engine_root as engine_root_mod
+    monkeypatch.setattr(engine_root_mod, "coordinator_engine_root", lambda: str(source_root))
+    import coordinator_core._settings_home as settings_home_mod
+    monkeypatch.setattr(settings_home_mod, "settings_home", lambda: settings_home)
+
+    layer = doctor._check_shim_freshness()
+
+    assert layer.status == "ok", layer.findings
+    assert layer.findings == []
+
+
+def test_shim_freshness_content_differs_is_broken_with_remediation(tmp_path: Path, monkeypatch):
+    from coordinator_core.ops import doctor
+
+    source_root = _fresh_source_tree(tmp_path, body="print('source-v2')\n")
+    settings_home = tmp_path / "settings-home"
+    _install_shim(settings_home, "print('stale-installed-shim')\n")
+    monkeypatch.setenv("HOME", str(tmp_path / "no-compat-mirror-home"))
+
+    import coordinator_core.engine_root as engine_root_mod
+    monkeypatch.setattr(engine_root_mod, "coordinator_engine_root", lambda: str(source_root))
+    import coordinator_core._settings_home as settings_home_mod
+    monkeypatch.setattr(settings_home_mod, "settings_home", lambda: settings_home)
+
+    layer = doctor._check_shim_freshness()
+
+    assert layer.status == "broken"
+    assert len(layer.findings) == 1
+    msg = layer.findings[0].message
+    assert "content-differs" in msg
+    assert f"{source_root}/scripts/setup.py" in msg
+
+
+def test_shim_freshness_no_installed_shim_is_unknown(tmp_path: Path, monkeypatch):
+    from coordinator_core.ops import doctor
+
+    source_root = _fresh_source_tree(tmp_path)
+    settings_home = tmp_path / "settings-home-empty"
+    monkeypatch.setenv("HOME", str(tmp_path / "no-compat-mirror-home"))
+
+    import coordinator_core.engine_root as engine_root_mod
+    monkeypatch.setattr(engine_root_mod, "coordinator_engine_root", lambda: str(source_root))
+    import coordinator_core._settings_home as settings_home_mod
+    monkeypatch.setattr(settings_home_mod, "settings_home", lambda: settings_home)
+
+    layer = doctor._check_shim_freshness()
+
+    assert layer.status == "unknown"
+    assert "no installed" in layer.findings[0].message
+
+
+def test_shim_freshness_unresolvable_source_is_unknown(tmp_path: Path, monkeypatch):
+    from coordinator_core.ops import doctor
+
+    import coordinator_core.engine_root as engine_root_mod
+
+    def _raise():
+        raise RuntimeError("cannot resolve CLAUDE_KLABAUTER_ROOT")
+
+    monkeypatch.setattr(engine_root_mod, "coordinator_engine_root", _raise)
+
+    layer = doctor._check_shim_freshness()
+
+    assert layer.status == "unknown"
+    assert "did not resolve" in layer.findings[0].message
+
+
+def test_shim_freshness_fix_does_not_touch_the_shim(tmp_path: Path, monkeypatch):
+    """DETECT-ONLY: `run_doctor(fix=True)` must not rewrite the installed
+    shim even when this layer reports it BROKEN."""
+    from coordinator_core.ops import doctor
+
+    source_root = _fresh_source_tree(tmp_path, body="print('source-v2')\n")
+    settings_home = tmp_path / "settings-home"
+    stale_body = "print('stale-installed-shim')\n"
+    shim = _install_shim(settings_home, stale_body)
+    monkeypatch.setenv("HOME", str(tmp_path / "no-compat-mirror-home"))
+
+    import coordinator_core.engine_root as engine_root_mod
+    monkeypatch.setattr(engine_root_mod, "coordinator_engine_root", lambda: str(source_root))
+    import coordinator_core._settings_home as settings_home_mod
+    monkeypatch.setattr(settings_home_mod, "settings_home", lambda: settings_home)
+
+    report, fix_report = doctor.run_doctor(fix=True)
+
+    shim_layer = next(l for l in report.layers if l.name == "Resolve-claude-klabauter shim freshness")
+    assert shim_layer.status == "broken"
+    assert shim.read_text(encoding="utf-8") == stale_body
+    assert not any("_resolve_claude_klabauter" in line for line in fix_report)

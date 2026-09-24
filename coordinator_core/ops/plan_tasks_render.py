@@ -159,22 +159,55 @@ def _disposition(row: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
-def spine_projection(rows: list) -> dict:
+def spine_projection(rows: list, *, governed: bool = False) -> dict:
     """Unresolved-head/closed-tail-count projection (C9 output (b)).
 
-    Returns ``{"open": [<row>, ...], "closed_count": <int>}`` — every
-    ``open``-disposition row in full (a subagent sidecar reading this
-    projection sees exactly the live work, unabridged), plus a bare count
-    of everything else. D5 sorts closed rows to the spine's tail; this
-    projection is the machine-consumable form of that same head/tail
-    split — the sidecar never needs the closed rows' content, only how
-    many there are. ``closed_count`` follows D5's full non-open partition
-    (``coded`` included), which is intentionally wider than
-    ``render_closed_items``'s narrower closed-SECTION scope — see the
+    Returns ``{"open": [<row>, ...], "closed_count": <int>, "unratified_deferrals":
+    [<row id>, ...]}`` — every ``open``-disposition row in full (a subagent
+    sidecar reading this projection sees exactly the live work, unabridged),
+    plus a bare count of everything else. D5 sorts closed rows to the
+    spine's tail; this projection is the machine-consumable form of that
+    same head/tail split — the sidecar never needs the closed rows'
+    content, only how many there are. ``closed_count`` follows D5's full
+    non-open partition (``coded`` included), which is intentionally wider
+    than ``render_closed_items``'s narrower closed-SECTION scope — see the
     module docstring's "Closed-set scope decision" for why the two differ.
+
+    ``unratified_deferrals`` is a LIST OF ROW IDS, never prose — the whole
+    failure this key closes is that prose interpretation of the deferred
+    flag was load-bearing, so a paragraph here would rebuild the defect at
+    a new address. Empty list when there are none: a declared empty is a
+    finding a consumer can act on, an absent key is one it has to guess
+    about. The predicate is imported from
+    ``coordinator_core.frontmatter.schema_validate.is_unratified_deferral``
+    rather than restated here — a projection predicate that disagrees with
+    the validator (e.g. a bare ``pm_approved is not True`` blind to plan
+    kind) trains consumers to ignore the signal, which is the defect this
+    plan closes (docs/plans/2026-09-11-the-unratified-deferral-gets-a-
+    mechanism.md P119-C1/C4). Imported inside this function, not at module
+    top: this module does not import ``schema_validate`` at module scope
+    today, and ``coordinator/bin/plan-task-brief.py`` imports this module
+    cold for ``load_rows`` alone — a module-level import would add
+    ``schema_validate``'s load to every such cold start for a key it never
+    reads.
+
+    ``governed`` mirrors ``is_unratified_deferral``'s own kwarg: pass
+    ``is_governed_plan(fm)`` when the caller holds the plan frontmatter.
+    Default ``False`` leaves the one existing caller
+    (``workstream_complete/directives_spine_worklist.py``) unchanged; it
+    does not read this key.
     """
+    from coordinator_core.frontmatter.schema_validate import is_unratified_deferral
+
     open_rows = [row for row in rows if _disposition(row) == _OPEN]
-    return {"open": open_rows, "closed_count": len(rows) - len(open_rows)}
+    unratified_deferrals = [
+        row.get("id") for row in rows if is_unratified_deferral(row, governed=governed)
+    ]
+    return {
+        "open": open_rows,
+        "closed_count": len(rows) - len(open_rows),
+        "unratified_deferrals": unratified_deferrals,
+    }
 
 
 # ---------------------------------------------------------------------------

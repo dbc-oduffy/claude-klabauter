@@ -54,7 +54,7 @@ from datetime import datetime, timezone
 from pathlib import PurePosixPath
 
 from coordinator_core._settings_home import settings_home
-from coordinator_core.hooks._envelope import context_only, no_advisory
+from coordinator_core.hooks._envelope import context_only, no_advisory, payload_of
 from coordinator_core.hooks._payload import field, present
 from coordinator_core.ipc import register_op
 from coordinator_core.session.dispatch_nudge_sentinel import (
@@ -130,6 +130,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     Returns context_only("PreToolUse", msg) when the nudge fires;
     no_advisory() for all suppression conditions.
     """
+    params = payload_of(params)
     # asyncio deferred to first use here (not module scope) — this is the only function
     # in the module touching the asyncio namespace at runtime; a module-scope
     # `import asyncio` dragged asyncio.base_events (~5ms) into every eager op/hook
@@ -291,7 +292,7 @@ def _bootstrap_dirs() -> list[str]:
     try:
         dirs.append(str(settings_home() / "bin"))
     except (ValueError, RuntimeError, OSError):
-        pass
+        pass  # unresolvable settings home; other candidate dirs below still apply
 
     home = os.environ.get("HOME")
     if home:

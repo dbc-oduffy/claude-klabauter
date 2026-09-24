@@ -274,14 +274,52 @@ def _first_h1(lines: Sequence[str]) -> str:
     return ""
 
 
-def _first_nonblank_after_h1(lines: Sequence[str]) -> str:
-    """First non-blank line strictly after the first `/^# /` line. Empty if none."""
-    found_h1 = False
-    for line in lines:
-        if not found_h1:
-            if line.startswith("# "):
-                found_h1 = True
+def _strip_leading_noise(lines: Sequence[str]) -> List[str]:
+    """Drop leading blank lines, HTML comments, and image/badge lines from the
+    front of `lines`, stopping at the first genuine content line.
+
+    A hero comment (`<!-- ... -->`, possibly spanning multiple lines) or a
+    leading `![...](...)` image/badge is layout, not the project's actual
+    lead sentence — README.md conventionally opens the H1 with exactly this
+    (hero-art attribution comment, then the hero image itself) before the
+    real prose starts.
+    """
+    out = list(lines)
+    idx = 0
+    in_comment = False
+    while idx < len(out):
+        stripped = out[idx].strip()
+        if in_comment:
+            if "-->" in stripped:
+                in_comment = False
+            idx += 1
             continue
+        if stripped == "":
+            idx += 1
+            continue
+        if stripped.startswith("<!--"):
+            if "-->" not in stripped:
+                in_comment = True
+            idx += 1
+            continue
+        if stripped.startswith("![") or stripped.startswith("[!["):
+            idx += 1
+            continue
+        break
+    return out[idx:]
+
+
+def _first_nonblank_after_h1(lines: Sequence[str]) -> str:
+    """First non-blank, non-comment/image/badge line strictly after the first
+    `/^# /` line. Empty if none."""
+    after: Optional[List[str]] = None
+    for i, line in enumerate(lines):
+        if line.startswith("# "):
+            after = list(lines[i + 1 :])
+            break
+    if after is None:
+        return ""
+    for line in _strip_leading_noise(after):
         if line.strip() != "":
             return line
     return ""
@@ -315,24 +353,23 @@ def _derive_project_title(repo_root: str) -> str:
 
 
 def _extract_lead_paragraph(lines: Sequence[str]) -> str:
-    """First non-blank paragraph after the H1 (up to the next blank line)."""
-    found_h1 = False
-    in_para = False
-    out: List[str] = []
-    for line in lines:
-        is_h1 = line.startswith("# ")
-        is_blank = line.strip() == ""
-        if is_h1:
-            found_h1 = True
-            continue
-        if found_h1 and not in_para and is_blank:
-            continue
-        if found_h1 and not in_para and not is_blank:
-            in_para = True
-        if in_para and is_blank:
+    """First non-blank paragraph after the H1 (up to the next blank line),
+    skipping any leading HTML comment or image/badge lines first — see
+    `_strip_leading_noise`."""
+    after: Optional[List[str]] = None
+    for i, line in enumerate(lines):
+        if line.startswith("# "):
+            after = list(lines[i + 1 :])
             break
-        if in_para:
-            out.append(line)
+    if after is None:
+        return ""
+    out: List[str] = []
+    for line in _strip_leading_noise(after):
+        if line.strip() == "":
+            if out:
+                break
+            continue
+        out.append(line)
     return "\n".join(out)
 
 
@@ -472,6 +509,7 @@ def _date_from_path(path: str) -> Optional[datetime]:
         try:
             return datetime.strptime(match.group(1), "%Y-%m-%d").replace(tzinfo=timezone.utc)
         except ValueError:
+            # component matched the date regex but is not a real calendar date; try the next one
             continue
     return None
 

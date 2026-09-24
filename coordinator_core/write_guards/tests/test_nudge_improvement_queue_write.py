@@ -230,6 +230,78 @@ class TestAuthoringSkillSuppression:
         assert result is None
 
 
+class TestFiveQuestionsDocCitationResolvesInConsumerRepos:
+    """P143-T56 fix 1: the doc citation used to be a bare engine-relative
+    path that does not resolve when the write it is nudging happens in a
+    consumer repo's own checkout. The deny text must name the engine repo
+    the doc actually lives in."""
+
+    def test_deny_text_names_engine_repo(self):
+        result = guard.check(
+            _payload(
+                "Write",
+                {
+                    "file_path": "state/improvement-queue/new-item.yaml",
+                    "content": "title: test\ndescription: a thing",
+                },
+            )
+        )
+        reason = _advisory_context(result)
+        assert "queue-admission-five-questions.md" in reason
+        assert "claude-klabauter engine repo" in reason
+
+
+class TestBlockScalarJustificationIsNotTrivial:
+    """P143-T56 fix 2: `_JUSTIFICATION_RE` used to judge a YAML block-scalar
+    justification (`justification: |-`) trivial, because the regex only
+    ever captured the bare header token (`|-`) as the "value" -- never the
+    indented lines that follow it, which is where the actual text lives."""
+
+    def test_block_scalar_justification_suppresses_the_nudge(self):
+        result = guard.check(
+            _payload(
+                "Write",
+                {
+                    "file_path": "state/improvement-queue/new-item.yaml",
+                    "content": (
+                        "title: test\n"
+                        "justification: |-\n"
+                        "  Genuinely cross-cutting concern that needs its own\n"
+                        "  separate plan instead of a same-session fix.\n"
+                        "description: a thing\n"
+                    ),
+                },
+            )
+        )
+        assert result is None
+
+    def test_block_scalar_justification_extraction_joins_lines(self):
+        text = (
+            "justification: |-\n"
+            "  Genuinely cross-cutting concern that needs its own\n"
+            "  separate plan instead of a same-session fix.\n"
+            "description: a thing\n"
+        )
+        assert guard._extract_justification(text) == (
+            "Genuinely cross-cutting concern that needs its own "
+            "separate plan instead of a same-session fix."
+        )
+
+    def test_empty_block_scalar_justification_still_denies(self):
+        """A block-scalar header with no following indented content is an
+        empty justification -- still trivial, still nudged."""
+        result = guard.check(
+            _payload(
+                "Write",
+                {
+                    "file_path": "state/improvement-queue/new-item.yaml",
+                    "content": "title: test\njustification: |-\ndescription: a thing",
+                },
+            )
+        )
+        _advisory_context(result)
+
+
 class TestModuleContract:
     """Cheap regression net against an accidental CLASS/PRIORITY/MATCHERS edit --
     parity with test_nudge_windows_subprocess_popup.py's

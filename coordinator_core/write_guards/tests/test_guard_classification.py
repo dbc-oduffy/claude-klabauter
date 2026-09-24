@@ -201,6 +201,7 @@ ADVISORY_NAMES = [
     "nudge_baton_body_bar",
     "nudge_em_code_dispatch",
     "nudge_handoff_ac_shape",
+    "nudge_handoff_author_lint",
     "nudge_improvement_queue_write",
     "nudge_new_sh_file_naked_python",
     "nudge_peer_notice_unread",

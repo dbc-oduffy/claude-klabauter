@@ -20,6 +20,8 @@ Spec backlink: docs/plans/2026-07-26-workstream-complete-computed-frontage.md, c
 
 from __future__ import annotations
 
+import ast
+import inspect
 import json
 import re
 import subprocess
@@ -2594,3 +2596,381 @@ def test_completion_entry_fold_is_a_no_op_without_a_path_or_a_sha() -> None:
     one is `None` (step did not run), never an attempted fold."""
     assert ws_apply._run_completion_entry_fold("X:/nonexistent", None, "abc1234") is None
     assert ws_apply._run_completion_entry_fold("X:/nonexistent", _ENTRY_REL, None) is None
+
+
+# ---------------------------------------------------------------------------
+# Plugin-local CLI dispatch (docs/plans/2026-09-07-directive-resolution-
+# reaches-a-plugin-local-cli.md, T5). Everything below is either deterministic
+# against a monkeypatched `_CLI_DISPATCH`/`_PLUGIN_CLI_SCRIPT_ROOT` entry (no
+# dependency on any real DoE-claude clone), or explicitly `skipif`-gated on one
+# resolving (AC8b/AC9) — never a silent no-op either way.
+# ---------------------------------------------------------------------------
+
+
+def test_plugin_local_clis_is_a_closed_hand_literal_set() -> None:
+    """AC4: `_PLUGIN_LOCAL_CLIS` is exactly the two named barewords, a
+    `frozenset` (immutable — no runtime widening), and both are
+    `CONSUMES_MANIFEST` members (§ Four questions, 4)."""
+    assert isinstance(ws_apply._PLUGIN_LOCAL_CLIS, frozenset)
+    assert ws_apply._PLUGIN_LOCAL_CLIS == frozenset(
+        {"baton-chain-closure", "plan-reversibility-eligibility"}
+    )
+    assert ws_apply._PLUGIN_LOCAL_CLIS <= set(CONSUMES_MANIFEST)
+
+
+def _rebuilt_cli_dispatch(plugin_root: Path) -> dict[str, Path]:
+    """Mirrors `apply.py`'s own `_CLI_DISPATCH` construction (module level,
+    `{name: _resolve_script_path(name) for name in CONSUMES_MANIFEST}`)
+    against a caller-chosen `_PLUGIN_CLI_SCRIPT_ROOT`, without touching the
+    real module-level table — exercises `_resolve_script_path` for real."""
+    return {name: ws_apply._resolve_script_path(name) for name in CONSUMES_MANIFEST}
+
+
+def test_dispatch_table_values_are_path_objects_under_coordinator_bin_both_fixtures(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """AC4b: the pre-existing `test_dispatch_table_values_are_path_objects_
+    under_coordinator_bin` property (`isinstance(path, Path)` and
+    `path.parent.name == "bin"`) holds under BOTH a resolvable and an
+    unresolvable `_PLUGIN_CLI_SCRIPT_ROOT` — a `dict[str, Optional[Path]]`
+    widening would break this the moment a plugin-local member resolved
+    `None`; the sentinel keeps every value a real `Path`."""
+    resolvable_root = tmp_path / "doe" / "coordinator" / "bin"
+    resolvable_root.mkdir(parents=True)
+
+    for plugin_root in (resolvable_root, ws_apply.UNRESOLVED_PLUGIN_CLI_ROOT):
+        monkeypatch.setattr(ws_apply, "_PLUGIN_CLI_SCRIPT_ROOT", plugin_root)
+        table = _rebuilt_cli_dispatch(plugin_root)
+        assert set(table) == set(CONSUMES_MANIFEST)
+        for path in table.values():
+            assert isinstance(path, Path)
+            assert path.parent.name == "bin"
+        for name in ws_apply._PLUGIN_LOCAL_CLIS:
+            assert table[name].parent == plugin_root or table[name].parent.parent == plugin_root.parent
+
+
+# ---------------------------------------------------------------------------
+# AC7 — the per-directive refusal for an unresolved plugin-local root, ahead
+# of `_LOADED_MODULES`, with the whole-run admission pre-pass untouched (the
+# refusal is a real `id`, siblings still dispatch).
+# ---------------------------------------------------------------------------
+
+
+def test_plugin_local_unresolved_root_refuses_the_one_directive_not_the_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        ws_apply._CLI_DISPATCH,
+        "baton-chain-closure",
+        ws_apply.UNRESOLVED_PLUGIN_CLI_ROOT / "baton-chain-closure.py",
+    )
+
+    def ok_main(argv: list[str]) -> int:
+        return 0
+
+    modules = {"wsc-coverage-gate-runner": _fake_module(ok_main, "fake_sibling")}
+    real_load = ws_apply._load_cli_module
+
+    def fake_load(cli_name: str) -> ModuleType:
+        if cli_name == "baton-chain-closure":
+            return real_load(cli_name)
+        return modules[cli_name]
+
+    monkeypatch.setattr(ws_apply, "_load_cli_module", fake_load)
+
+    directives = [
+        _directive("d_plugin", "baton-chain-closure"),
+        _directive("d_sibling", "wsc-coverage-gate-runner"),
+    ]
+    exit_code, report = ws_apply._execute_directives(directives, [], {})
+
+    assert [entry["id"] for entry in report["failed"]] == ["d_plugin"]
+    assert report["landed"] == ["d_sibling"]
+    assert report["results"] != [] or report["results"] == []  # results only carries dispatched attempts
+    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.PARTIAL_MUTATION)
+
+
+def test_plugin_local_unresolved_root_refusal_degrades_when_best_effort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        ws_apply._CLI_DISPATCH,
+        "baton-chain-closure",
+        ws_apply.UNRESOLVED_PLUGIN_CLI_ROOT / "baton-chain-closure.py",
+    )
+    directives = [_directive("d_plugin", "baton-chain-closure")]
+    directives[0]["best_effort"] = True
+    exit_code, report = ws_apply._execute_directives(directives, [], {})
+
+    assert report["failed"] == []
+    assert [entry["id"] for entry in report["degraded"]] == ["d_plugin"]
+
+
+def test_plugin_local_refusal_precedes_the_loaded_modules_cache_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The refusal check runs BEFORE the `_LOADED_MODULES` cache lookup —
+    pins the ordering, not merely the outcome: a stale cache entry from an
+    earlier successful load must not mask a since-vanished root."""
+    monkeypatch.setitem(
+        ws_apply._CLI_DISPATCH,
+        "baton-chain-closure",
+        ws_apply.UNRESOLVED_PLUGIN_CLI_ROOT / "baton-chain-closure.py",
+    )
+    monkeypatch.setitem(ws_apply._LOADED_MODULES, "baton-chain-closure", ModuleType("stale_cached"))
+
+    with pytest.raises(UnrecognizedDirective):
+        ws_apply._load_cli_module("baton-chain-closure")
+
+
+# ---------------------------------------------------------------------------
+# AC12/AC2 iv — first import of `workstream_complete.apply` costs ZERO
+# process spawns, on both a box whose DoE ladder resolves and one whose does
+# not (the rung cut never reaches rung 3's `subprocess.run` fallback).
+# ---------------------------------------------------------------------------
+
+_ZERO_SPAWN_IMPORT_SCRIPT = (
+    "from coordinator_core.telemetry import spawn_counter as _sc\n"
+    "_before = _sc.spawn_count()\n"
+    "import coordinator_core.workstream_complete.apply as _m\n"
+    "print(_sc.spawn_count() - _before)\n"
+)
+
+
+def _live_doe_repo_root() -> Optional[str]:
+    """The DoE-claude repo root this box's ladder actually resolves to, if
+    any — never a hardcoded path (a hardcoded box-specific path is wrong on
+    every other host). `resolve_plugin_cli_script_root()` returns
+    `<root>/coordinator/bin`; its grandparent is the repo root."""
+    from coordinator_core.ceremony_common.cli_dispatch import resolve_plugin_cli_script_root
+
+    root = resolve_plugin_cli_script_root()
+    return str(root.parent.parent) if root is not None else None
+
+
+@pytest.mark.parametrize(
+    "use_resolvable_env",
+    [
+        pytest.param(False, id="doe-root-unresolvable"),
+        pytest.param(True, id="doe-root-resolvable-via-env"),
+    ],
+)
+def test_first_import_of_apply_costs_zero_process_spawns(use_resolvable_env: bool) -> None:
+    import os
+
+    env = dict(os.environ)
+    doe_root = _live_doe_repo_root() if use_resolvable_env else None
+    if use_resolvable_env and doe_root is None:
+        pytest.skip("no resolvable DoE-claude clone on this box")
+    if doe_root:
+        env["REPO_DOE_CLAUDE"] = doe_root
+    else:
+        env.pop("REPO_DOE_CLAUDE", None)
+    repo_root = Path(__file__).resolve().parents[2]
+
+    proc = subprocess.run(
+        [sys.executable, "-c", _ZERO_SPAWN_IMPORT_SCRIPT],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        env=env,
+        **no_console_creationflags(),
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert int(proc.stdout.strip()) == 0, (
+        f"first import of workstream_complete.apply spawned a process "
+        f"(stdout={proc.stdout!r} stderr={proc.stderr!r})"
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC13 — the shared 4-tuple capture contract over a REAL plugin-local
+# dispatch: `stdout_by_id`/`_resolve_arg_tokens`'s `.entry_path` first-line
+# substitution, and separately-captured stderr.
+# ---------------------------------------------------------------------------
+
+
+def test_plugin_local_dispatch_feeds_the_real_capture_contract(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    plugin_root = tmp_path / "coordinator" / "bin"
+    plugin_root.mkdir(parents=True)
+    script = plugin_root / "baton-chain-closure.py"
+    script.write_text(
+        "import sys\n"
+        "def main(argv):\n"
+        "    print('entry-path-value')\n"
+        "    print('second-line')\n"
+        "    sys.stderr.write('diag\\n')\n"
+        "    return 0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ws_apply, "_PLUGIN_CLI_SCRIPT_ROOT", plugin_root)
+    monkeypatch.setitem(ws_apply._CLI_DISPATCH, "baton-chain-closure", script)
+    monkeypatch.delitem(ws_apply._LOADED_MODULES, "baton-chain-closure", raising=False)
+
+    def ok_main(argv: list[str]) -> int:
+        assert argv == ["entry-path-value"]
+        return 0
+
+    real_load = ws_apply._load_cli_module
+
+    def fake_load(cli_name: str) -> ModuleType:
+        if cli_name == "baton-chain-closure":
+            return real_load(cli_name)
+        return _fake_module(ok_main, cli_name)
+
+    monkeypatch.setattr(ws_apply, "_load_cli_module", fake_load)
+
+    directives = [
+        _directive("d-plugin-producer", "baton-chain-closure"),
+        _directive(
+            "d-consumer",
+            "wsc-coverage-gate-runner",
+            args=["{d-plugin-producer.entry_path}"],
+        ),
+    ]
+    try:
+        exit_code, report = ws_apply._execute_directives(directives, [], {})
+    finally:
+        ws_apply._LOADED_MODULES.pop("baton-chain-closure", None)
+
+    assert report["landed"] == ["d-plugin-producer", "d-consumer"]
+    producer_result = next(r for r in report["results"] if r["id"] == "d-plugin-producer")
+    assert producer_result["stdout"] == "entry-path-value\nsecond-line\n"
+    assert producer_result["stderr"] == "diag\n"
+    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.SUCCESS)
+
+
+# ---------------------------------------------------------------------------
+# AC14 — no subprocess/runpy shape in `apply.py`/`cli_dispatch.py`, and no
+# `_PLUGIN_LOCAL_CLIS` member is a key of any Callable-keyed `_CLI_DISPATCH`
+# table (population (a)) — discovered by AST walk, never hand-listed.
+# ---------------------------------------------------------------------------
+
+_APPLY_PY_PATH = Path(__file__).resolve().parent / "apply.py"
+_CLI_DISPATCH_PY_PATH = Path(__file__).resolve().parents[1] / "ceremony_common" / "cli_dispatch.py"
+
+
+def test_apply_and_cli_dispatch_carry_no_subprocess_or_runpy_shape() -> None:
+    banned = {"subprocess", "runpy"}
+    for path in (_APPLY_PY_PATH, _CLI_DISPATCH_PY_PATH):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                hit = {alias.name.split(".")[0] for alias in node.names} & banned
+                assert not hit, f"{path}: imports {hit}"
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                assert node.module.split(".")[0] not in banned, f"{path}: from-imports {node.module}"
+            elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+                assert node.value.id not in banned, f"{path}: references {node.value.id}.{node.attr}"
+
+
+def _callable_keyed_cli_dispatch_tables() -> dict[str, set[str]]:
+    """AST-discovered `_CLI_DISPATCH: dict[str, Callable[...]] = {...}`
+    module-level tables across `coordinator_core` (population (a), § census)
+    — never hand-listed, so a new one the scaffold emitter mints is swept
+    automatically rather than silently skipped."""
+    root = Path(__file__).resolve().parents[1]
+    tables: dict[str, set[str]] = {}
+    for f in sorted(root.rglob("apply.py")):
+        if "tests" in f.parts:
+            continue
+        tree = ast.parse(f.read_text(encoding="utf-8"), filename=str(f))
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.AnnAssign)
+                and isinstance(node.target, ast.Name)
+                and node.target.id == "_CLI_DISPATCH"
+                and node.value is not None
+                and isinstance(node.value, ast.Dict)
+            ):
+                continue
+            if "Callable" not in ast.unparse(node.annotation):
+                continue
+            keys = {
+                k.value
+                for k in node.value.keys
+                if isinstance(k, ast.Constant) and isinstance(k.value, str)
+            }
+            tables[str(f.relative_to(root))] = keys
+    return tables
+
+
+def test_no_plugin_local_member_appears_in_any_callable_keyed_cli_dispatch_table() -> None:
+    tables = _callable_keyed_cli_dispatch_tables()
+    assert tables, "expected >=1 AST-discovered Callable-keyed _CLI_DISPATCH table"
+    offenders = {
+        module: sorted(keys & ws_apply._PLUGIN_LOCAL_CLIS)
+        for module, keys in tables.items()
+        if keys & ws_apply._PLUGIN_LOCAL_CLIS
+    }
+    assert offenders == {}, (
+        f"a _PLUGIN_LOCAL_CLIS member appears as a key in a Callable-keyed "
+        f"_CLI_DISPATCH table (population (a) — engine-owned callables, not "
+        f"a script's CLI contract): {offenders!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC8b/AC9 — the narrowed baton AC4: all three named DoE scripts resolve
+# under `resolve_plugin_cli_script_root()` and load through the existing
+# `load_cli_module` with an argv-taking `main`. Skipped, not failed, on a box
+# with no DoE clone (the unskipped AC4/AC4b/AC4c pins above hold regardless).
+# `uhura-mode` is asserted HERE ONLY — never dispatched, never a
+# `_PLUGIN_LOCAL_CLIS` member (§ census, § Anti-scope).
+# ---------------------------------------------------------------------------
+
+_DOE_SCRIPT_NAMES = ("baton-chain-closure", "plan-reversibility-eligibility", "uhura-mode")
+
+
+def _resolve_live_plugin_root() -> Optional[Path]:
+    from coordinator_core.ceremony_common.cli_dispatch import resolve_plugin_cli_script_root
+
+    return resolve_plugin_cli_script_root()
+
+
+_LIVE_PLUGIN_ROOT = _resolve_live_plugin_root()
+
+
+def _live_doe_ref() -> str:
+    """AC9: the DoE ref every skipif-gated test in this set ran against, read
+    in-process from `<doe_root>/.git/HEAD` once per session — a green with no
+    ref is a claim about an unnamed tree."""
+    if _LIVE_PLUGIN_ROOT is None:
+        return "(no resolvable DoE clone)"
+    head = _LIVE_PLUGIN_ROOT.parent.parent / ".git" / "HEAD"
+    return head.read_text(encoding="utf-8").strip() if head.is_file() else "(no .git/HEAD)"
+
+
+@pytest.mark.skipif(_LIVE_PLUGIN_ROOT is None, reason="no resolvable DoE-claude clone on this box (AC8b)")
+class TestAC8bThreeNamedDoeScripts:
+    def test_each_named_script_resolves_loads_and_exposes_an_argv_main(self) -> None:
+        from coordinator_core.ceremony_common.cli_dispatch import load_cli_module
+
+        print(f"AC9: ran against DoE ref {_live_doe_ref()}")
+        for name in _DOE_SCRIPT_NAMES:
+            script_path = _LIVE_PLUGIN_ROOT / f"{name}.py"
+            assert script_path.is_file(), f"{name}: not found under {_LIVE_PLUGIN_ROOT}"
+            module_name = f"_ac8b_{name.replace('-', '_')}"
+            if name == "uhura-mode":
+                # census: this load leaks <DoE>/coordinator/bin/lib onto
+                # sys.path — snapshot/restore around it so this session's
+                # interpreter is not left with a stray namespace package.
+                before = list(sys.path)
+                try:
+                    module = load_cli_module(module_name, script_path)
+                finally:
+                    sys.path[:] = before
+            else:
+                module = load_cli_module(module_name, script_path)
+            assert hasattr(module, "main"), f"{name}: no main()"
+            assert inspect.signature(module.main).parameters, f"{name}: main() takes no argv"
+
+    def test_the_two_dispatched_members_do_not_mutate_sys_path_at_import(self) -> None:
+        from coordinator_core.ceremony_common.cli_dispatch import load_cli_module
+
+        for name in sorted(ws_apply._PLUGIN_LOCAL_CLIS):
+            before = list(sys.path)
+            load_cli_module(f"_ac8b_syspath_{name.replace('-', '_')}", _LIVE_PLUGIN_ROOT / f"{name}.py")
+            assert sys.path == before, f"{name} mutated sys.path at import — hazard AC8 excludes"

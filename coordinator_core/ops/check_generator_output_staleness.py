@@ -345,6 +345,7 @@ def resolve_peer_repo_path() -> Optional[Path]:
             if (candidate / PEER_REPO_SENTINEL).is_file():
                 return candidate
         except OSError:
+            # candidate root unreadable; try the next candidate
             continue
     return None
 

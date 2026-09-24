@@ -279,7 +279,7 @@ def _batch_committer_timestamps(shas: List[str]) -> dict:
         try:
             ct = int(ct_str)
         except ValueError:
-            continue
+            continue  # malformed count field on this stdout line; the line is skipped, not fatal to the scan
         for raw in ordered:
             if raw not in matched and full[: len(raw)] == raw:
                 sha_ct[raw] = ct
@@ -411,7 +411,11 @@ async def _run_promotions(handoffs_dir: Path, repo_root_path: Path) -> _Promotio
         # --- end Tier 2 ---
 
         # Target predicate: forked spinoff-roadmap stub, still in_flight.
-        if not (canonical_kind(kind) == "roadmap-baton" and dstate == "in_flight"):
+        # `kind: spinoff` (handoff.schema.json's own enum member, distinct
+        # from the roadmap-baton family `canonical_kind` normalizes) is a
+        # second eligible shape -- a shipped spinoff stub promotes the same
+        # way a shipped roadmap-baton fork does.
+        if not (canonical_kind(kind) in ("roadmap-baton", "spinoff") and dstate == "in_flight"):
             continue
         # Defensive: these stubs should also carry status:claimed (or the
         # pre-DR-084 status:consumed, tolerated on read).

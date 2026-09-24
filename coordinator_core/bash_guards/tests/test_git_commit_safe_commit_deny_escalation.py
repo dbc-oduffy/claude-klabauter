@@ -918,3 +918,49 @@ def test_bare_commit_outside_any_sequencer_still_denies(tmp_path):
     assert not (repo / ".git" / "MERGE_HEAD").exists()
     cmd = 'git -C %s commit -m "x"' % (shlex.quote(str(repo)),)
     assert _verdict(cmd) == "deny"
+
+
+# ---------------------------------------------------------------------------
+# P133-C3 (docs/plans/2026-09-22-cli-and-guard-remedies-name-dead-or-refused-
+# routes.md): the compound `git add -- <paths> && git commit -F - <<'EOF'`
+# heredoc shape had no regression pin through the real
+# `_bt_compound_add_bare_commit` predicate -- only its `-m` twin did. This
+# pins that both flag sets reach the SAME verdict, in both polarities,
+# through the real predicate (no monkeypatch).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "commit_flags",
+    ['-m "x"', "-q -F - <<'EOF'\nsubject\n\nbody\nEOF"],
+    ids=["-m", "-F"],
+)
+def test_compound_deny_escalation_matches_across_m_and_f_heredoc_shapes(
+    tmp_path, commit_flags
+):
+    """AC6: the `-F -` heredoc shape denies exactly like its `-m` twin when
+    the index holds a foreign staged path the command's own `git add` never
+    named -- unscoped, same predicate, no monkeypatch of
+    `_bt_compound_add_bare_commit`."""
+    repo = _init_repo(tmp_path)
+    _stage(repo, "foreign.txt")
+    cmd = _compound_cmd(repo, ["own.txt"], commit_flags)
+    assert _verdict(cmd) == "deny"
+
+
+@pytest.mark.parametrize(
+    "commit_flags",
+    ['-m "x" -- own.txt', "-q -F - -- own.txt <<'EOF'\nsubject\n\nbody\nEOF"],
+    ids=["-m", "-F"],
+)
+def test_compound_scoped_trailing_pathspec_matches_across_m_and_f_heredoc_shapes(
+    tmp_path, commit_flags
+):
+    """Negative-spec companion: an explicit trailing pathspec on the commit
+    half short-circuits BOTH flag sets to silence -- for the `-F` shape the
+    pathspec sits BEFORE the heredoc marker, same as a real invocation
+    (the marker must be the last token on its line)."""
+    repo = _init_repo(tmp_path)
+    _stage(repo, "foreign.txt")
+    cmd = _compound_cmd(repo, ["own.txt"], commit_flags)
+    assert _verdict(cmd) == "none"

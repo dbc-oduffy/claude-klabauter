@@ -1182,15 +1182,6 @@
     "verdict": null
   },
   {
-    "detail": "coordinator_core/ops/emit/recorder.py declares MUTATES = ['state/backlog-snapshots.*.jsonl'] (corpus mutator, no staleness contract)",
-    "generator": "coordinator_core/ops/emit/recorder.py",
-    "mutates": [
-      "state/backlog-snapshots.*.jsonl"
-    ],
-    "pairs": [],
-    "verdict": "MUTATES_DECLARED"
-  },
-  {
     "detail": "coordinator_core/ops/emit_artifact_shape_contract.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator_core/ops/emit_artifact_shape_contract.py",
     "mutates": [],

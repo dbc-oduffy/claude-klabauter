@@ -579,7 +579,7 @@ def scan_corpus(
         try:
             text = path.read_text(encoding="utf-8")
         except Exception:
-            continue
+            continue  # wiki file unreadable; skip it, not fatal to the sweep
         roots = (repo_root / "coordinator", repo_root)
         for citation in extract_citations(text, path):
             verdicts.append(resolve_citation(citation, wiki_index, repo_index, roots))

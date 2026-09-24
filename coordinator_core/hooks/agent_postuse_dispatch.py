@@ -98,6 +98,7 @@ from __future__ import annotations
 import asyncio
 import sys
 
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.ipc import CallerFacingValidationError, register_op
 from coordinator_core.hooks._envelope import no_advisory, post_advisory
 from coordinator_core.hooks import agent_completion_log, track_dispatched_agents
@@ -239,7 +240,8 @@ async def _handler(params: dict, repo_root=None) -> dict:
     leg cancels the merge and the second leg's write is lost, which the two
     separate processes this op replaces would never have done.
     """
-    flat_params = _flatten_hook_payload(params)
+    payload = payload_of(params)
+    flat_params = _flatten_hook_payload(payload if isinstance(params, dict) else params)
 
     results = await asyncio.gather(
         *(leg(flat_params, repo_root) for _label, leg in _LEGS),

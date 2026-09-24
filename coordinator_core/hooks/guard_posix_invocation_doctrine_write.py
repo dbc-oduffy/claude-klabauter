@@ -62,7 +62,7 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 
-from coordinator_core.hooks._envelope import allow_advisory, no_advisory
+from coordinator_core.hooks._envelope import allow_advisory, no_advisory, payload_of
 from coordinator_core.hooks.posix_invocation_detect import find_posix_forwarder_invocations
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.hooks.support.sentinel_write_guard import extract_target_path
@@ -126,6 +126,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Write|Edit|MultiEdit) op: advise (never deny) when a write
     introduces a new POSIX-only coordinator-CLI invocation into a doctrine
     surface tree."""
+    params = payload_of(params)
     if params.get("tool_name", "") not in _GUARDED_TOOLS:
         return no_advisory()
 

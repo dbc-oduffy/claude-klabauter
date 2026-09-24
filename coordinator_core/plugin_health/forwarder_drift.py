@@ -244,21 +244,20 @@ every one of them as absent. This manifest is the producer's own record of
 which names it installed, and it is the only way to see them without parsing
 Mach-O/PE headers."""
 
-# Minimum remedy (AC5): `python3 -m coordinator_core.install.substrate`
-# requires CLAUDE_PLUGIN_ROOT pointed at the DoE-claude clone's coordinator/
-# dir and fails loud without it (no self-derivation) — that is the whole
-# forwarder-regeneration step, without the maximalist orchestrator's broader
-# scope (settings.json hook blocks, shell shims, the claude-doe wrapper, the
-# venv), which is over-broad advice for forwarder-only drift on a machine
-# running dozens of concurrent sessions. /coordinator:install
+# Minimum remedy (AC5, repointed): `install.substrate` is no longer the
+# remedy — its sweep deleted 31 live forwarders (the 71-73 spin-off record),
+# so pointing an operator at it again would recommend the same deletion.
+# `scripts/setup.py --i-am-agent`, named relative to the engine root, is the
+# command the record names as the one that restored the 31 forwarders the
+# substrate sweep deleted. /coordinator:install
 # (coordinator/scripts/install-maximalist.py) remains the guided superset,
 # not the only named option. Note for whoever reads this: `--check-only`
 # stops at the FIRST divergence and never reaches the forwarder step, so it
 # cannot preview this drift.
 _REMEDY = (
-    "run `python3 -m coordinator_core.install.substrate` (requires CLAUDE_PLUGIN_ROOT set to the "
-    "DoE-claude coordinator/ dir) as the minimum remedy, or /coordinator:install "
-    "(coordinator/scripts/install-maximalist.py) as the guided superset, to regenerate forwarders"
+    "run `scripts/setup.py --i-am-agent` (from the engine root) as the minimum remedy, or "
+    "/coordinator:install (coordinator/scripts/install-maximalist.py) as the guided superset, "
+    "to regenerate forwarders"
 )
 
 # Corrected 2026-08-14 (percolate-push memo — 10 real forwarders, including

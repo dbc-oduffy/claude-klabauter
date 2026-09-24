@@ -214,7 +214,7 @@ def _write_first_prompt_into_body(
     try:
         handoff_path.write_text(text, encoding="utf-8", newline="\n")
     except OSError:
-        pass
+        pass  # degrade silently rather than risk corrupting the freshly-scaffolded file -- see this function's docstring
 
 
 def _write_intent_into_body(handoff_path: Path, intent: Optional[str]) -> None:
@@ -238,7 +238,7 @@ def _write_intent_into_body(handoff_path: Path, intent: Optional[str]) -> None:
     try:
         handoff_path.write_text(text, encoding="utf-8", newline="\n")
     except OSError:
-        pass
+        pass  # degrade silently rather than risk corrupting the freshly-scaffolded file -- see this function's docstring
 
 
 @register_op("session_baton.promote")

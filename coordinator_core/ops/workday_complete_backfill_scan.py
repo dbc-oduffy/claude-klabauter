@@ -109,7 +109,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from coordinator_core._settings_home import settings_home
+from coordinator_core._claude_klabauter_root import _machine_local_get
 from coordinator_core.daily_day import local_day as _coordinator_local_day
 from coordinator_core.engine_root import coordinator_engine_root_env
 from coordinator_core.win_portability import no_console_creationflags, same_path
@@ -174,44 +174,6 @@ def _claude_home() -> str:
     if override:
         return override
     return os.path.join(os.path.expanduser("~"), ".claude")
-
-
-def _machine_local_impl() -> str:
-    """Return the path to _machine_local.py, settings-home first, honouring
-    MACHINE_LOCAL_IMPL for tests.
-
-    Settings-home-first per DR-210 Amendment 2026-07-24 ("coordinator resolves
-    nothing through ``~/.claude/bin``"); the retired compat mirror stays as a
-    last-resort rung only. Negative-spec: does NOT stop consulting the mirror —
-    a machine whose settings-home copy is absent must still resolve.
-    """
-    override = os.environ.get("MACHINE_LOCAL_IMPL")
-    if override:
-        return override
-    settings_home_impl = os.path.join(str(settings_home()), "bin", "_machine_local.py")
-    if os.path.exists(settings_home_impl):
-        return settings_home_impl
-    return os.path.join(_claude_home(), "bin", "_machine_local.py")
-
-
-def _machine_local_get(key: str) -> Optional[str]:
-    impl = _machine_local_impl()
-    if not os.path.exists(impl):
-        return None
-    try:
-        result = subprocess.run(
-            [sys.executable, impl, "get", key],
-            capture_output=True,
-            text=True,
-            timeout=_GIT_TIMEOUT,
-            stdin=subprocess.DEVNULL,
-            **_CREATIONFLAGS,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if result.returncode != 0 or not result.stdout.strip():
-        return None
-    return result.stdout.strip()
 
 
 def _claude_klabauter_root() -> Optional[str]:

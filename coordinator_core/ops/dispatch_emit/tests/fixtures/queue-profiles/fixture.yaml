@@ -20,14 +20,14 @@ graph:
     kind: refute-close
     edges:
       confirmed: commit
-      refuted: commit
+      refuted: fix
   fix:
     kind: fix
     edges:
       done: verify
       NEEDS_WIDER_SCOPE: widen-exhausted
       PEER_DIRTY: peer-dirty
-      NOT_REPRODUCED: verify
+      NOT_REPRODUCED: needs-judgment
       baton: baton
       needs-judgment: needs-judgment
   verify:

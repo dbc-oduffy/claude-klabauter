@@ -1134,6 +1134,7 @@ class _PlanIdLegResult:
     population_lacking: int = 0
     stamped: int = 0
     write_failed: int = 0
+    withheld_out_of_scope: int = 0
 
 
 def run_plan_id_leg(
@@ -1151,12 +1152,17 @@ def run_plan_id_leg(
     grouping/ambiguity concept applies here — `plan_id` is per-file identity,
     not shared across a workstream group.
 
-    `only_kind` is accepted ONLY to print the asymmetry loudly (Review:
-    coordinator:code-reviewer) — this leg does NOT filter on it. A caller
-    reasoning from `--only-kind`'s name alone could otherwise be surprised
-    that a scoped run still mints/writes `plan_id` onto every unthreaded
-    `docs/plans/*.md`/`archive/specs/**` record. See the module's `--only-kind`
-    help text for the same disclosure.
+    `only_kind`, when truthy, gates the MINT/WRITE body per-record on
+    whether that record's own `artifact_class` is a member of `only_kind`
+    (not on whether `only_kind` intersects `_PLAN_ID_CLASSES` as a set) —
+    the write is scoped, the enumeration and dry-run disclosure are not.
+    Every unthreaded record still counts toward `result.population_lacking`,
+    which downstream legs use as a before/after comparison, and in dry-run
+    mode every such record still prints `[would-mint]` regardless of
+    `only_kind`. In write mode, a record outside `only_kind` prints
+    `[skip-out-of-scope]` and is counted in `result.withheld_out_of_scope`
+    instead of being minted. See the module's `--only-kind` help text for
+    the same disclosure.
     """
     result = _PlanIdLegResult()
     print("", file=out)
@@ -1164,9 +1170,8 @@ def run_plan_id_leg(
     print("PLAN_ID LEG (C2, fourth leg)", file=out)
     if only_kind:
         print(
-            "  NOTE: this leg is unconditional and NOT scoped by --only-kind "
-            f"({', '.join(only_kind)}) — it will still mint/write plan_id onto "
-            "every unthreaded docs/plans/*.md and archive/specs/** record.",
+            f"  NOTE: write is scoped to {', '.join(only_kind)}; records outside "
+            "it are counted, not minted.",
             file=out,
         )
     print("-" * 60, file=out)
@@ -1198,6 +1203,15 @@ def run_plan_id_leg(
             print(f"  [would-mint] {rel}  (lacks plan_id)", file=out)
             continue
 
+        if only_kind and artifact_class not in only_kind:
+            print(
+                f"  [skip-out-of-scope] {rel}  (lacks plan_id; class: {artifact_class}, "
+                "not in --only-kind scope)",
+                file=out,
+            )
+            result.withheld_out_of_scope += 1
+            continue
+
         slug = _derive_plan_slug(f)
         plan_id = _mint_plan_id(slug)
         landed = _stamp_file(f, plan_id, field_name="plan_id")
@@ -1213,6 +1227,8 @@ def run_plan_id_leg(
     print(f"  Lacking plan_id:    {result.population_lacking}", file=out)
     if mode == "write":
         print(f"  Stamped:            {result.stamped}", file=out)
+        if only_kind:
+            print(f"  Withheld (out-of-scope):   {result.withheld_out_of_scope}", file=out)
         if result.write_failed:
             print(f"  Write failures:     {result.write_failed}", file=out)
     return result
@@ -1397,8 +1413,10 @@ Usage:
                               artifact class(es) (repeatable) — does not filter
                               enumeration, grouping, or the report. Accepted:
                               plan, handoff, handoff-archived, completion,
-                              archived-spec, roadmap, sizing. Does not scope
-                              the plan_id leg, which is unconditional.
+                              archived-spec, roadmap, sizing. Also scopes the
+                              plan_id leg's mint/write per-record to a class
+                              named in --only-kind — enumeration and dry-run
+                              disclosure are unaffected either way.
 
 Exit codes:
   0 — clean (no ambiguities; write applied or dry-run report emitted)

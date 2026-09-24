@@ -142,8 +142,8 @@ class TestRootPointerProbe:
             "claude-klabauter.root.pointer must carry required=False (WARN, not hard FAIL)"
         )
         assert isinstance(result.remediation, str) and len(result.remediation) > 0
-        assert "gen-claude-klabauter-root-pointer" in result.remediation, (
-            f"Remediation should point at the install-time writer, got: {result.remediation!r}"
+        assert "setup.py --claude-klabauter-live-root" in result.remediation, (
+            f"Remediation should name the cold-path-valid writer first, got: {result.remediation!r}"
         )
 
     def test_pointer_present_and_matches_is_pass(
@@ -199,17 +199,20 @@ class TestRootPointerProbe:
         )
         assert result.required is False
 
-    def test_pointer_none_root_still_checks_presence(
+    def test_pointer_none_root_valid_existing_dir_is_pass(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """claude_klabauter_root=None still reports pointer presence; content-match is skipped."""
+        """claude_klabauter_root=None with a single-line pointer naming an existing dir -> PASS."""
         mod = _require_module()
 
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
 
+        cold_root = tmp_path / "cold-checkout"
+        cold_root.mkdir()
+
         pointer_dir = tmp_path / "machine-local"
         pointer_dir.mkdir()
-        (pointer_dir / ".claude-klabauter-live-root").write_text("/some/path")
+        (pointer_dir / ".claude-klabauter-live-root").write_text(str(cold_root))
 
         result = mod._run_probe_root_pointer(None)
 
@@ -218,8 +221,54 @@ class TestRootPointerProbe:
         )
         assert result.probe == "claude-klabauter.root.pointer"
         assert result.status == mod._PASS, (
-            f"Expected PASS (presence-only check) when claude_klabauter_root is None, "
-            f"got {result.status!r}"
+            f"Expected PASS when the cold-box pointer names an existing directory, "
+            f"got {result.status!r}; detail: {result.detail!r}"
+        )
+        assert result.required is False
+
+    def test_pointer_none_root_missing_directory_is_degraded(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """claude_klabauter_root=None with a pointer naming a non-existent directory -> DEGRADED."""
+        mod = _require_module()
+
+        monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+
+        pointer_dir = tmp_path / "machine-local"
+        pointer_dir.mkdir()
+        (pointer_dir / ".claude-klabauter-live-root").write_text("/some/path/that/does/not/exist")
+
+        result = mod._run_probe_root_pointer(None)
+
+        assert _is_parseable_probe_result(result), (
+            "None claude_klabauter_root with an invalid pointer must produce a parseable "
+            "_ProbeResult, not a crash"
+        )
+        assert result.probe == "claude-klabauter.root.pointer"
+        assert result.status == mod._DEGRADED, (
+            f"Expected DEGRADED when the cold-box pointer names a missing directory, "
+            f"got {result.status!r}; detail: {result.detail!r}"
+        )
+        assert result.required is False
+        assert "setup.py --claude-klabauter-live-root" in result.remediation
+
+    def test_pointer_none_root_absent_pointer_is_degraded(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """claude_klabauter_root=None with no pointer file at all -> DEGRADED."""
+        mod = _require_module()
+
+        monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+
+        result = mod._run_probe_root_pointer(None)
+
+        assert _is_parseable_probe_result(result), (
+            "None claude_klabauter_root with no pointer must produce a parseable "
+            "_ProbeResult, not a crash"
+        )
+        assert result.probe == "claude-klabauter.root.pointer"
+        assert result.status == mod._DEGRADED, (
+            f"Expected DEGRADED when no pointer exists at all, got {result.status!r}"
         )
         assert result.required is False
 

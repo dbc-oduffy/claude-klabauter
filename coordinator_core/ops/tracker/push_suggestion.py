@@ -136,6 +136,16 @@ onto the dispatched JSON-RPC response at a fixed path
     (mirrors `tracker_transitions.py`'s own documented "absence == version 1"
     convention for `schema_version`), never rejected.
 
+P144-C4 adds a FOURTH class, `PushSuggestionKeyMisuseError` — this one is
+NOT one of the three C12 classes above (raised only on the local write
+arm, after ownership resolution, not before any write is attempted like
+the three), but it shares their shape: `caller_facing_validation = True`
+and its own pinned `refusal_class` (`_REFUSAL_CLASS_KEY_MISUSE`), so it is
+just as distinguishable at the wire. Fires when `idempotency_key` is
+already bound (own shard/own rotated history) to a different event under
+a different logical payload — see that class's own docstring and
+`tracker_store.TrackerStoreKeyMisuseError`.
+
 Spec backlink: docs/plans/2026-08-18-sat-06-cockpit-consumption-seam.md
   § Tasks C4, C12, § CORRECTION ("cockpit cannot reach a claude-klabauter op" conflates
   two transports), § Acceptance Criteria AC2/AC5/AC10/AC17.
@@ -227,6 +237,15 @@ _REFUSAL_CLASS_SCHEMA_STALE = "schema_stale"
 #: classes so a rename is caught by the same `test_refusal_class_values_
 #: are_pinned` this joins.
 _REFUSAL_CLASS_DUPLICATE_DELIVERY = "duplicate_delivery"
+#: P144-C4 (idempotency-key binding, spike verdict § 3) — the fifth
+#: refusal class: `idempotency_key` reuse under a DIFFERENT logical
+#: payload, own-shard/own-history only (`tracker_store.
+#: TrackerStoreKeyMisuseError`). The OPPOSITE message from
+#: `duplicate_delivery` — that class is success-on-retry evidence; this one
+#: is a refusal an cockpit-side caller must NOT retry as-is, so it cannot
+#: be folded into `duplicate_delivery` without corrupting the very
+#: distinction `refusal_class=` exists to let a caller parse.
+_REFUSAL_CLASS_KEY_MISUSE = "key_misuse"
 
 
 class PushSuggestionRefused(RuntimeError):
@@ -348,6 +367,26 @@ class PushSuggestionDuplicateDeliveryError(PushSuggestionRefused):
 
     caller_facing_validation = True
     refusal_class = _REFUSAL_CLASS_DUPLICATE_DELIVERY
+
+
+class PushSuggestionKeyMisuseError(PushSuggestionRefused):
+    """P144-C4 — KEY MISUSE: the local write arm's
+    `tracker_store.append_event` found this request's `idempotency_key`
+    already bound (own shard or own rotated history) to a DIFFERENT event
+    under a DIFFERENT logical payload (`tracker_store.
+    TrackerStoreKeyMisuseError`, raised only when the stripped payloads
+    genuinely differ — a same-payload retry is idempotent success instead,
+    never this class). The message names the bound id.
+
+    Local-arm only: the peer arm's key check happens at the RECEIVER's own
+    apply step, never at push time (spike verdict § "What it does not
+    claim" — reading the receiver's tree would be required to catch it
+    here, and this op never does that).
+
+    `refusal_class = _REFUSAL_CLASS_KEY_MISUSE`."""
+
+    caller_facing_validation = True
+    refusal_class = _REFUSAL_CLASS_KEY_MISUSE
 
 
 #: This op's own wire-contract version (module docstring § Rejection
@@ -676,11 +715,30 @@ def _deliver_envelope(target_root: Path, owning_repo: Optional[str], event: dict
     }
 
 
-def _write_local(worktree: Path, event: dict) -> dict:
+def _write_local(
+    worktree: Path, event: dict, idempotency_key: Optional[str] = None
+) -> dict:
     """Local arm: the target IS the caller's own repo — a direct, same-repo
     write through `tracker_store.append_event`. Not a cross-tree crossing
-    and not DR-338's subject (see module docstring negative-spec)."""
-    stored = tracker_store.append_event(dict(event), repo_root=worktree)
+    and not DR-338's subject (see module docstring negative-spec).
+
+    P144-C4: passes *idempotency_key* through as `tracker_store.
+    append_event`'s `key` keyword, so the own-shard/own-history
+    duplicate-key comparison runs. A same-key, same-payload retry returns
+    the pre-existing bound event (idempotent success — `stored` is that
+    event, not a new append). A same-key, different-payload reuse raises
+    `tracker_store.TrackerStoreKeyMisuseError`, reclassified here to this
+    op's own caller-facing `PushSuggestionKeyMisuseError` (module docstring
+    § Rejection contract) rather than propagated verbatim — unlike the
+    other `TrackerStoreError` types, which stay verbatim per that same
+    docstring section, this one needs the wire-visible `refusal_class`
+    token a bare `TrackerStoreError` does not carry."""
+    try:
+        stored = tracker_store.append_event(
+            dict(event), repo_root=worktree, key=idempotency_key
+        )
+    except tracker_store.TrackerStoreKeyMisuseError as exc:
+        raise PushSuggestionKeyMisuseError(f"tracker.push_suggestion: {exc}") from exc
     return {"delivered": "local", "event": stored}
 
 
@@ -718,9 +776,14 @@ def _mint_event_id(event: dict, idempotency_key: Optional[str] = None) -> str:
     stays content-derived (P3-3, review-driven correction, 2026-08-20: it
     is the *id*, not the digest, that is machine-qualified — the
     `<machine>-` prefix carries that half, applied outside the digest
-    below); `idempotency_key` is an INPUT to the digest's derivation, never
-    a stored key (the caller-supplied `id` refusal is unchanged — different
-    field, different role). Absent `idempotency_key`, today's wall-clock
+    below); `idempotency_key` is an INPUT to the digest's derivation, and
+    (P144-C4) is now ALSO stored as its own event field by
+    `_push_suggestion_sync` — the two roles are independent: this function
+    folds it into the id's digest input; `_push_suggestion_sync` stamps it
+    verbatim onto the event so `tracker_store.append_event`'s own-shard
+    duplicate-key pass can compare a later attempt against it (the
+    caller-supplied `id` refusal is unchanged — different field, different
+    role). Absent `idempotency_key`, today's wall-clock
     nonce behaviour is unchanged. Two machines pushing an identical payload
     with an identical key therefore produce the SAME digest and DIFFERENT
     ids — correct, and the reason the digest/id distinction above matters.
@@ -763,10 +826,17 @@ def _push_suggestion_sync(
 
     `idempotency_key` (F5, optional wire field) — folded into `_mint_event_id`
     in place of the wall-clock nonce when supplied, see that function's
-    docstring."""
+    docstring. P144-C4: also stamped onto the event itself (below, AFTER
+    the id is minted from the key-less content so the digest input is
+    unaffected) — this is the field `tracker_store.append_event`'s
+    own-shard duplicate-key comparison reads on a later attempt. Stamped
+    only when a key is supplied; absent `idempotency_key`, the event
+    carries no such field and today's behaviour is unchanged."""
     owning_repo = _resolve_owning_repo(event)
     event = dict(event)
     event["id"] = _mint_event_id(event, idempotency_key=idempotency_key)
+    if idempotency_key:
+        event["idempotency_key"] = idempotency_key
     try:
         target_root = tracker_holder.write_root_for(owning_repo=owning_repo, repo_root=worktree)
     except RuntimeError as exc:
@@ -777,7 +847,7 @@ def _push_suggestion_sync(
         raise
 
     if target_root.resolve() == worktree.resolve():
-        return _write_local(worktree, event)
+        return _write_local(worktree, event, idempotency_key)
     return _deliver_envelope(target_root, owning_repo, event)
 
 
@@ -802,7 +872,10 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "idempotency_key": str (optional, F5 — folded into the minted
                 event id's digest in place of the wall-clock nonce so a
                 same-payload retry collides on tracker_store's duplicate-id
-                guard instead of double-appending; see _mint_event_id).
+                guard instead of double-appending; see _mint_event_id.
+                P144-C4: also stamped onto the event and, on the local
+                write arm, bound against a same-key different-payload
+                event — see PushSuggestionKeyMisuseError).
         }
         ->      `_write_local`'s `{"delivered": "local", "event": ...}` or
                 `_deliver_envelope`'s `{"delivered": "peer", "path": ...,
@@ -831,6 +904,12 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             classes, its own distinguishable message.
         TrackerStoreError / TrackerStoreDuplicateIdError — propagated
             verbatim from `tracker_store.append_event` (local arm).
+        PushSuggestionKeyMisuseError — the local arm's `idempotency_key`
+            is already bound to a different event under a different
+            logical payload (reclassified from `tracker_store.
+            TrackerStoreKeyMisuseError`, P144-C4) — its own distinguishable
+            message, NOT propagated verbatim like the bare
+            TrackerStoreError types above.
         RuntimeError — propagated verbatim from `tracker_holder.write_root_for`
             on any failure rung OTHER than the non-member-slug refusal
             (holder unset, not cloned, etc.) — operator misconfiguration,

@@ -36,7 +36,7 @@ Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C8
 from __future__ import annotations
 
 from coordinator_core.bash_guards.guard_host_subagent_bash_ban import check
-from coordinator_core.hooks._envelope import no_advisory
+from coordinator_core.hooks._envelope import no_advisory, payload_of
 from coordinator_core.ipc import register_op
 
 
@@ -44,8 +44,7 @@ from coordinator_core.ipc import register_op
 def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Bash) op: deny a dispatched subagent's Bash call on a
     host that declares `subagent_bash_policy: deny`."""
-    if not isinstance(params, dict):
-        return no_advisory()
+    params = payload_of(params)
 
     try:
         result = check(params)

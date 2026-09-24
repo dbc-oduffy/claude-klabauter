@@ -136,7 +136,7 @@ def all_carried_guards() -> Dict[str, str]:
         try:
             rows = carried_guards(carrier)
         except AttributeError:
-            continue
+            continue  # carrier declares no CARRIED_GUARDS; contributes nothing to the union
         for guard_id, _script_tail in rows:
             if guard_id in seen:
                 raise ValueError(

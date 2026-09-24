@@ -197,7 +197,7 @@ def do_reap(
     try:
         lock.unlink()
     except FileNotFoundError:
-        pass
+        pass  # already absent -- equivalent to reaped, falls through to the success log below
     except OSError:
         _append_log(reap_log, f"FAILED to reap {label}: {lock} (rm failed)")
         print(f"{_PREFIX}: ERROR — rm failed on {lock}", file=sys.stderr)

@@ -474,7 +474,6 @@ class TestNoSubprocessSpawnedByRevParse(unittest.TestCase):
         "cruft-sweep.py",
         "cutover-cli.py",
         "queue-triage.py",
-        "schema-drift-gate.py",
         # `coordinator/bin/app-session.py` (commit f004929a6, 2026-08-15):
         # genuinely postdates the freeze and is a real new call site, but
         # its own docstring/`_resolve_repo_root` explicitly mirror

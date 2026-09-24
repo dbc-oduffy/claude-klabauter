@@ -62,6 +62,12 @@ Negative-spec:
     ``append_event`` for a multi-event cascade gives N lock acquisitions
     and an observable partial cascade, which is the bug this primitive
     exists to prevent.
+  - ``idempotency_key`` binding (P144-C4) is own-shard only: the key check
+    added to ``append_event`` compares only against this machine's own
+    live shard and its own rotated history — the same two passes the
+    duplicate-id check already runs. Cross-machine key binding is
+    cockpit's merge policy (DEC-10), never this module's to design or
+    approximate.
 """
 
 from __future__ import annotations
@@ -178,6 +184,25 @@ class TrackerStoreDuplicateIdError(TrackerStoreError):
     """
 
 
+class TrackerStoreKeyMisuseError(TrackerStoreError):
+    """Raised when ``append_event``'s ``key`` argument (an
+    ``idempotency_key``) already appears on a DIFFERENT, previously-stored
+    event under a DIFFERENT logical payload — key reuse across two
+    distinct payloads, never a same-payload retry (see ``append_event``'s
+    own docstring for the retry-vs-misuse split, P144-C4 / spike verdict
+    docs/research/spike-verdicts/2026-09-23-idempotency-key-binding-under-
+    dr-241.md § 3).
+
+    Carries ``bound_id`` — the ``id`` of the pre-existing event this key
+    is already bound to — so a caller (``push_suggestion``) can name it in
+    a refusal message without re-parsing this exception's text.
+    """
+
+    def __init__(self, message: str, *, bound_id: str) -> None:
+        super().__init__(message)
+        self.bound_id = bound_id
+
+
 def _now_ms() -> int:
     """Return the current wall-clock time in integer milliseconds.
 
@@ -258,18 +283,85 @@ def _validate_event_fields(event: dict) -> None:
         )
 
 
-def append_event(event: dict, *, repo_root: Path) -> dict:
+#: Fields stripped before comparing two same-``idempotency_key`` events for
+#: "is this the same logical payload" (P144-C4, spike verdict § 3). Every
+#: member is stamped POST-HOC by ``_mutate`` from the current call's own
+#: wall-clock/tail-state, not from caller-supplied bytes, so two genuinely
+#: identical logical payloads differ on exactly these fields and only these
+#: fields. ``id`` is included: identity is what's colliding, not what's
+#: compared. ``applied_at`` is a fold/apply-stamped field per
+#: ``read_events``'s participation filter (see that function), never
+#: present on a freshly-submitted event, but stripped for symmetry with a
+#: stored comparison target that may carry it.
+_VOLATILE_EVENT_FIELDS = frozenset(
+    {"id", "observed_at", "machine", "sequence", "logical_clock", "applied_at"}
+)
+
+
+def _stable_payload(event: dict) -> dict:
+    """*event* with every ``_VOLATILE_EVENT_FIELDS`` member removed — the
+    "logical payload" two same-``idempotency_key`` events are compared on
+    (P144-C4). Compared with plain ``==``; no normalization is applied on
+    either side (spike verdict § 2 — the NFC/NFD trap already exists in id
+    derivation and must not be papered over here with an asymmetric fix)."""
+    return {k: v for k, v in event.items() if k not in _VOLATILE_EVENT_FIELDS}
+
+
+def append_event(event: dict, *, repo_root: Path, key: str | None = None) -> dict:
     """Append *event* to THIS MACHINE'S shard under an exclusive same-host lock.
 
     Wraps ``locked_rmw`` over this machine's shard only, treating the
     read-assign-append cycle (duplicate check, sequence bump, logical-clock
     bump, serialize, write) as one atomic operation under a single lock
     acquisition — never a split counter-then-append.
+
+    *key* (P144-C4, optional) is the caller's ``idempotency_key`` — compared
+    against each existing event's own stored ``idempotency_key`` field
+    inside the SAME two duplicate-scan passes below (own rotated history,
+    then own live shard), never a second pass or a second lock (see the
+    module negative-spec). ``None`` (the default) reproduces today's
+    behaviour exactly: no key comparison runs. Storing the key onto the
+    newly-appended event is the CALLER's job (``push_suggestion`` stamps
+    ``event["idempotency_key"]`` before calling this function when a key is
+    supplied) — this function only ever READS *key* for comparison; it
+    never writes it onto ``new_event`` itself.
+
+    On a match against a DIFFERENT id whose stripped (``_stable_payload``)
+    content is IDENTICAL to *event*'s, this is a retry: nothing is
+    appended and this function returns the PRE-EXISTING bound event
+    (idempotent success — the caller names the outcome; this function
+    performs it). On a match whose stripped content DIFFERS, this is key
+    misuse: raises ``TrackerStoreKeyMisuseError`` naming the bound id, and
+    nothing is appended. A match against the SAME id is not reached here —
+    it is caught first by the ordinary duplicate-id check below, exactly
+    as an identical-payload same-key retry (which re-derives the same id,
+    per ``_mint_event_id``) already was before this feature existed.
     """
     _validate_event_fields(event)
 
     target = shard_path(repo_root)
     assigned: dict = {}
+
+    def _check_key_collision(existing: dict) -> None:
+        """Own-shard/own-history key-reuse check, called from BOTH
+        duplicate-scan loops below, right after each loop's own id check
+        (which already returned/raised on an id match). No-op when *key*
+        is not supplied, when *existing* carries no matching key, or when
+        *existing*'s id already matched ``event["id"]`` (that path raises
+        ``TrackerStoreDuplicateIdError`` before this is ever called)."""
+        if key is None:
+            return
+        if existing.get("idempotency_key") != key:
+            return
+        if _stable_payload(existing) == _stable_payload(event):
+            assigned["event"] = existing
+            raise MutateAbort
+        raise TrackerStoreKeyMisuseError(
+            f"idempotency_key {key!r} is already bound to event id "
+            f"{existing.get('id')!r} with a different payload — refusing "
+            "to append a second, different event under the same key",
+            bound_id=existing.get("id"),
+        )
 
     def _mutate(old_text: str) -> str:
         lines = _split_lines(old_text)
@@ -289,12 +381,15 @@ def append_event(event: dict, *, repo_root: Path) -> dict:
                 try:
                     existing = json.loads(line)
                 except json.JSONDecodeError:
+                    continue  # malformed JSONL line; skip it, not fatal to the duplicate check
+                if not isinstance(existing, dict):
                     continue
-                if isinstance(existing, dict) and existing.get("id") == event["id"]:
+                if existing.get("id") == event["id"]:
                     raise TrackerStoreDuplicateIdError(
                         f"event id {event['id']!r} already appears in this "
                         "machine's rotated shard history"
                     )
+                _check_key_collision(existing)
 
         # Own-shard duplicate detection: one extra pass over data already
         # read into memory for the sequence bump. A line that fails to
@@ -314,10 +409,12 @@ def append_event(event: dict, *, repo_root: Path) -> dict:
                 continue
             tail_parsed = existing
             tail_parse_error = None
-            if isinstance(existing, dict) and existing.get("id") == event["id"]:
-                raise TrackerStoreDuplicateIdError(
-                    f"event id {event['id']!r} already appears in this shard"
-                )
+            if isinstance(existing, dict):
+                if existing.get("id") == event["id"]:
+                    raise TrackerStoreDuplicateIdError(
+                        f"event id {event['id']!r} already appears in this shard"
+                    )
+                _check_key_collision(existing)
 
         if lines:
             if tail_parse_error is not None:
@@ -353,7 +450,15 @@ def append_event(event: dict, *, repo_root: Path) -> dict:
             return old_text + "\n" + new_line
         return old_text + new_line
 
-    locked_rmw(target, _mutate, repo_root=repo_root, missing_ok=True)
+    try:
+        locked_rmw(target, _mutate, repo_root=repo_root, missing_ok=True)
+    except MutateAbort:
+        # A same-key, same-payload retry: `_check_key_collision` already
+        # set assigned["event"] to the pre-existing bound event and raised
+        # MutateAbort to skip the write cleanly (locked_rmw releases the
+        # lock and re-raises, never writing) — idempotent success, not a
+        # failure.
+        pass
     return assigned["event"]
 
 
@@ -703,7 +808,7 @@ def rotate_month(*, repo_root: Path, month: str, machine: str | None = None) -> 
                 try:
                     existing_record = json.loads(line)
                 except json.JSONDecodeError:
-                    continue
+                    continue  # malformed JSONL line; skip it, not fatal to the id scan
                 if isinstance(existing_record, dict) and existing_record.get("id"):
                     existing_ids.add(existing_record["id"])
 

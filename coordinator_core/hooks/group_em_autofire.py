@@ -59,6 +59,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.hooks._envelope import context_only, no_advisory
 from coordinator_core.hooks.support.skill_invocation import normalize_command_name
 from coordinator_core.ipc import get_op_handler
@@ -228,9 +229,9 @@ def _handler(params: dict, repo_root=None) -> dict:
     otherwise (silent pass — matches the DoE source's own fail-open
     contract).
     """
+    params = payload_of(params)
     try:
-        payload = params if isinstance(params, dict) else {}
-        additional_context = compute_context(payload)
+        additional_context = compute_context(params)
     except Exception:
         additional_context = None
 

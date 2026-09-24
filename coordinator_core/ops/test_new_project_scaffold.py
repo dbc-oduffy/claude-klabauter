@@ -310,7 +310,7 @@ def _write_fake_machine_local(bin_dir: Path, store: Path) -> Path:
                                 k, v = line.rstrip("\\n").split("\\t", 1)
                                 out[k] = v
                 except FileNotFoundError:
-                    pass
+                    pass  # no store file yet -- fresh-install cold start, not a real error
                 return out
 
             def _write(d):

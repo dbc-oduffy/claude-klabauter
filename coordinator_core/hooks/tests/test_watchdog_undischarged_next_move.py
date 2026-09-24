@@ -141,6 +141,42 @@ def test_stop_leg_blocks_at_default_posture(tmp_path) -> None:
     assert "Invoke it now" in hso["permissionDecisionReason"]
 
 
+def test_stop_leg_blocks_via_claude_home_from_payload_env(tmp_path) -> None:
+    """No coordinator.local.md in the repo; the Stop payload's env carries
+    CLAUDE_HOME pointing at an identity file reading "default". This pins that
+    the watchdog passes the payload env through to the posture resolver."""
+    from coordinator_core.hooks.watchdog_undischarged_next_move import _handler
+
+    repo_root = _make_repo(tmp_path)
+
+    claude_home = tmp_path / "claude-home"
+    identity_dir = claude_home / ".claude"
+    identity_dir.mkdir(parents=True)
+    with open(identity_dir / "coordinator-identity.yaml", "w", encoding="utf-8") as fh:
+        fh.write("engagement_posture: default\n")
+
+    session_id = "sid-stop-block-claude-home"
+    open_payload = {
+        "session_id": session_id,
+        "cwd": repo_root,
+        "tool_name": "Skill",
+        "tool_input": {"skill": "coordinator:pickup"},
+    }
+    assert _handler({"payload": open_payload}) == {}
+
+    stop_payload = {
+        "session_id": session_id,
+        "cwd": repo_root,
+        "transcript_path": str(tmp_path / "transcript.jsonl"),
+        "env": {"CLAUDE_HOME": str(claude_home)},
+    }
+    result = _handler({"payload": stop_payload})
+    hso = result["hookSpecificOutput"]
+    assert hso["hookEventName"] == "Stop"
+    assert hso["permissionDecision"] == "deny"
+    assert "Invoke it now" in hso["permissionDecisionReason"]
+
+
 def test_discharge_closes_the_obligation_before_stop_fires(tmp_path) -> None:
     from coordinator_core.hooks.watchdog_undischarged_next_move import _handler
 
@@ -227,6 +263,25 @@ def _sizing_open_ledger_action(tmp_path, route: str, skill: str):
         return None
     with open(ledger, "r", encoding="utf-8") as fh:
         return [json.loads(line) for line in fh if line.strip()]
+
+
+def test_touched_txt_paths_reads_touch_record_jsonl_not_touched_txt(tmp_path) -> None:
+    """P143-T36: `_touched_txt_paths` is the sibling leg to
+    `_touch_record_jsonl_paths` in `_newest_touched_sizing_path`'s
+    source-then-recency fallback — it must read `touch-record.jsonl` too, not
+    the retired `touched.txt`. No non-test writer of `touched.txt` exists, so
+    a session dir carrying only `touch-record.jsonl` (the real-session shape)
+    used to read as empty from this leg."""
+    from coordinator_core.hooks.watchdog_undischarged_next_move import _touched_txt_paths
+
+    repo_root = _make_repo(tmp_path)
+    session_id = "sid-touched-txt-paths"
+    rel_path = "state/sizings/thing.yaml"
+    session_dir = os.path.join(repo_root, ".git", "coordinator-sessions", session_id)
+    _write_touch_record(repo_root, session_id, rel_path)
+    assert not os.path.exists(os.path.join(session_dir, "touched.txt"))
+
+    assert _touched_txt_paths(session_dir) == [rel_path]
 
 
 def test_sizing_route_dispatch_opens_sizing_routed_obligation(tmp_path) -> None:

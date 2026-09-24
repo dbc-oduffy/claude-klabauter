@@ -1016,6 +1016,51 @@ class TestCheckStagedPathspecDivergence:
     def test_empty_command_not_applicable(self):
         assert commit_tripwires.check_staged_pathspec_divergence("", "/tmp") is None
 
+    def test_index_only_removal_fires_and_offers_reset(self, tmp_path):
+        """`git rm --cached tracked.txt` untracks the file but leaves it on
+        disk. A trailing-pathspec `git commit -- tracked.txt` would re-`add`
+        that worktree copy back into the index, silently reverting the
+        untrack -- this is the shape `_index_only_removed_paths` exists to
+        catch, distinct from `_diverging_paths`'s own (which never sees a
+        path with no index entry at all)."""
+        root = _init_repo(tmp_path)
+        (tmp_path / "tracked.txt").write_text("line1\n", encoding="utf-8")
+        _git(root, "add", "tracked.txt")
+        _git(root, "commit", "-q", "-m", "seed tracked.txt")
+
+        _git(root, "rm", "--cached", "-q", "tracked.txt")
+        assert (tmp_path / "tracked.txt").exists()
+
+        result = commit_tripwires.check_staged_pathspec_divergence(
+            'git commit -m "test" -- tracked.txt', root
+        )
+        assert result is not None
+        assert result.startswith("OFFER:")
+        assert "tracked.txt" in result
+        assert "INDEX-ONLY removal" in result
+        assert "git reset -q -- tracked.txt" in result
+        # SC-DR-015: the advisory must never tell the agent a bare commit is
+        # the fix.
+        assert "A bare no-pathspec commit is NOT the fix" in result
+
+    def test_index_only_removal_of_deleted_file_not_flagged(self, tmp_path):
+        """A `D` staged-removal whose worktree copy is ALSO gone (an ordinary
+        tracked deletion, not an untrack) must not be misread as this
+        branch -- `os.path.exists` gates on the worktree copy still being
+        present."""
+        root = _init_repo(tmp_path)
+        (tmp_path / "tracked.txt").write_text("line1\n", encoding="utf-8")
+        _git(root, "add", "tracked.txt")
+        _git(root, "commit", "-q", "-m", "seed tracked.txt")
+
+        _git(root, "rm", "-q", "tracked.txt")
+        assert not (tmp_path / "tracked.txt").exists()
+
+        result = commit_tripwires.check_staged_pathspec_divergence(
+            'git commit -m "test" -- tracked.txt', root
+        )
+        assert result is None
+
 
 # ---------------------------------------------------------------------------
 # coordinator_core.git.divergence.diverging_paths -- the extracted predicate

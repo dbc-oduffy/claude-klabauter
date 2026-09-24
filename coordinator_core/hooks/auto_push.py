@@ -600,12 +600,12 @@ def _git_exe_off_path() -> str | None:
                 with winreg.OpenKey(root, r"SOFTWARE\GitForWindows") as key:
                     install_path = winreg.QueryValueEx(key, "InstallPath")[0]
             except OSError:
-                continue
+                continue  # this registry root has no Git for Windows key; try the next
             found = _usable(os.path.join(str(install_path), "cmd", "git.exe"))
             if found:
                 return found
     except Exception:
-        pass
+        pass  # non-Windows host or winreg unavailable; fall through to path probes
 
     for base in (os.environ.get("ProgramW6432"), os.environ.get("ProgramFiles")):
         if base:
@@ -699,7 +699,7 @@ def _canonical_branch_case(common_dir: Path, raw_branch: str) -> str:
                 if name.lower() == raw_lower:
                     return name
     except OSError:
-        pass
+        pass  # heads dir unreadable; fall back to packed-refs below
 
     try:
         packed_text = (common_dir / "packed-refs").read_text(encoding="utf-8")
@@ -995,7 +995,7 @@ def _module_provenance() -> str:
         try:
             interp = Path(interp).as_posix()
         except ValueError:
-            pass
+            pass  # unparsable interpreter path; keep the raw string for the log line
     else:
         interp = "<unknown>"
     version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"

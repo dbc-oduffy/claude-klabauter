@@ -283,7 +283,10 @@ def test_marker_present_false_when_session_id_empty(tmp_path):
     assert marker.marker_present(gitdir, "") is False
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits only")
+@pytest.mark.skipif(
+    sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="POSIX permission bits only, and meaningless as root (DAC_OVERRIDE bypasses them)",
+)
 def test_marker_present_allows_rather_than_dead_ends_on_unreadable_gitdir(tmp_path):
     gitdir = tmp_path / ".git"
     gitdir.mkdir()
@@ -612,7 +615,10 @@ def test_marker_gitdir_is_writable_false_when_path_does_not_exist(tmp_path):
     assert marker.marker_gitdir_is_writable(tmp_path / "does-not-exist") is False
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits only")
+@pytest.mark.skipif(
+    sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="POSIX permission bits only, and meaningless as root (DAC_OVERRIDE bypasses them)",
+)
 def test_marker_gitdir_is_writable_false_when_read_only(tmp_path):
     gitdir = tmp_path / ".git"
     gitdir.mkdir()
@@ -669,7 +675,10 @@ def test_ac4_clearing_target_a_leaves_target_b_firing(tmp_path, monkeypatch):
     )
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits only")
+@pytest.mark.skipif(
+    sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="POSIX permission bits only, and meaningless as root (DAC_OVERRIDE bypasses them)",
+)
 def test_ac5_unwritable_target_gitdir_allows_matching_unresolvable_precedent(tmp_path, monkeypatch):
     """STAFF-ENG F0 / AC5: an unwritable/unreadable target gitdir takes the
     IDENTICAL disposition as an unresolvable one -- ALLOW (`continue`),

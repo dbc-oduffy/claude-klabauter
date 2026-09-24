@@ -130,7 +130,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "coordinator_core.frontmatter.schema_cli",
         'registers "schema.describe", "schema.validate" (C7 byte-parity CLI + JSON-RPC ops)',
     ),
-    ("coordinator_core.ops.emit.recorder", 'registers "backlog.record"'),
     ("coordinator_core.ops.goal_append", 'registers "goal.append"'),
     ("coordinator_core.ops.goal_kr_status", 'registers "goal.set_kr_status"'),
     ("coordinator_core.ops.goal_close_day", 'registers "goal.close_day", "goal.close_day_apply"'),
@@ -231,6 +230,12 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     (
         "coordinator_core.ops.cascade_backstop_sweep",
         'registers "deliverable.cascade_backstop_sweep" (C6c read-only backstop sweep, AC6d)',
+    ),
+    (
+        "coordinator_core.ops.cascade_divergence_report",
+        'registers "deliverable.cascade_divergence_report" (single-pass, read-only, '
+        "zero-spawn report naming a live record whose engine terminal an implemented "
+        "plan already owns, docs/plans/2026-09-23-cascade-write-provenance.md C2)",
     ),
     (
         "coordinator_core.ops.cascade_retract",
@@ -344,6 +349,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.session.scope_report", 'registers "session.scope_report"'),
     ("coordinator_core.ops.session.safe_commit_offer", 'registers "session.safe_commit_offer"'),
     ("coordinator_core.ops.session_resolve_address", 'registers "session.resolve_address"'),
+    ("coordinator_core.ops.session_whoami_live", 'registers "session.whoami_live"'),
     ("coordinator_core.ops.session_peer_roster", 'registers "session.peer_roster"'),
     ("coordinator_core.ops.group_em_enter", 'registers "groupem.enter"'),
     ("coordinator_core.ops.group_em_stamp", 'registers "groupem.stamp"'),
@@ -444,7 +450,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "cli.parse_flag", "cli.parse_date_flags"',
     ),
     ("coordinator_core.ops.probe_fresh_repo_noop", 'registers "update_docs.probe_fresh_repo_noop"'),
-    ("coordinator_core.ops.schema_drift_gate", 'registers "schema.drift_gate"'),
     (
         "coordinator_core.ops.release_tagging",
         'registers "release.cut_tag", "release.cut_tag_and_publish"',
@@ -640,6 +645,23 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "module never imports on the warm-engine path, so OP_CLASSIFICATION/"
         "_OP_KEY_SCOPE/ASSEMBLER_DISPATCHABLE rows for both ops name an op that "
         "never actually registers.",
+    ),
+    (
+        "coordinator_core.ops.grind_ops",
+        'registers "lessons.extract", "lessons.verify_extraction", '
+        '"doctrine.surface_split_regenerate" (the queue-grind engine\'s closed '
+        "source/verify/regenerate op list). Complete on OP_MODULE_MAP/"
+        "OP_CLASSIFICATION/_OP_KEY_SCOPE but missed this table at registration "
+        "time — caught by test_registration_quad.py's live-tree eager-modules "
+        "surface check.",
+    ),
+    (
+        "coordinator_core.ops.warm_request_status",
+        'registers "warm.request_status" (docs/plans/2026-09-23-warm-dispatch-'
+        "reconcile.md C4 — the poll op named in a -32004 envelope; this leg's "
+        "handler runs only on the cold/pool path and always answers "
+        "unknowable(no-resident-engine), never not_received; the accept "
+        "process's `_serve_line` intercepts and answers it from AckStore instead)",
     ),
 ]
 

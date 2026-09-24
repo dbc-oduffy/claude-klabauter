@@ -324,6 +324,7 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
         try:
             os.unlink(tmp)
         except OSError:
+            # tmp file already gone; the write failure is re-raised below regardless
             pass
         raise
 

@@ -104,7 +104,7 @@ def resolve_checkout(search_parent: Path) -> Optional[Path]:
                     if entry.is_dir() and entry.name.lower() == FRESH_CHECKOUT_BASENAME:
                         return Path(entry.path)
                 except OSError:
-                    continue
+                    continue  # per-entry stat probe; one unreadable entry must not abort the scan
     except OSError:
         return None
     return None

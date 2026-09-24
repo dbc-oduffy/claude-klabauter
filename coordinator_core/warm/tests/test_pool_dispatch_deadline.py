@@ -270,8 +270,12 @@ def test_an_over_budget_handler_finishes_inside_its_callers_identity(monkeypatch
     monkeypatch.setattr(ipc, "_engine_stamped_verdict", True)
     monkeypatch.setattr(ipc, "_timeout_for", lambda method, msg=None: 0.05)
     # Production joins for 300s and then walks away; shrink it so the
-    # pre-fix shape returns while the handler is still asleep.
-    monkeypatch.setattr(asyncio.constants, "THREAD_JOIN_TIMEOUT", 0.01)
+    # pre-fix shape returns while the handler is still asleep. The
+    # constant is 3.12+ only -- absent from asyncio.constants under 3.11,
+    # which this suite also runs on -- so raising=False makes the
+    # monkeypatch a no-op there instead of an unrelated AttributeError;
+    # nothing below depends on it having taken effect.
+    monkeypatch.setattr(asyncio.constants, "THREAD_JOIN_TIMEOUT", 0.01, raising=False)
 
     seen = []
 

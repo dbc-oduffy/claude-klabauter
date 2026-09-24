@@ -35,7 +35,7 @@ Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C8
 from __future__ import annotations
 
 from coordinator_core.bash_guards.guard_host_subagent_bash_spawn_shapes import check
-from coordinator_core.hooks._envelope import no_advisory
+from coordinator_core.hooks._envelope import no_advisory, payload_of
 from coordinator_core.ipc import register_op
 
 
@@ -44,8 +44,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Bash|PowerShell) op: deny a dispatched subagent's
     in-process-answerable spawn shape on a host that declares the deny
     policy."""
-    if not isinstance(params, dict):
-        return no_advisory()
+    params = payload_of(params)
 
     try:
         result = check(params)

@@ -19,6 +19,9 @@ Spec backlink: docs/decisions/DR-210-claude-klabauter-native-tooling-ownership-s
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -32,6 +35,7 @@ from coordinator_core.ops.fleet._memo_resolver import (
     read_publish_mirrors,
     read_registry_repos,
     receiver_em_to_repo_key,
+    registry_home,
     reroute_owner,
     resolve_receiver_inbox,
     resolve_self_em_id,
@@ -42,7 +46,8 @@ from coordinator_core.ops.fleet._memo_resolver import (
 
 @pytest.fixture(autouse=True)
 def _drop_settings_home_override(monkeypatch):
-    """Neutralise ``COORDINATOR_SETTINGS_HOME`` for every test in this module.
+    """Neutralise ``COORDINATOR_SETTINGS_HOME`` and ``MACHINE_LOCAL_IMPL`` for
+    every test in this module.
 
     Every fixture here builds its registry under
     ``<CLAUDE_HOME>/.coordinator-claude-settings/machine-local`` and then points
@@ -55,8 +60,23 @@ def _drop_settings_home_override(monkeypatch):
     machine-local registry instead of its own. A handful of tests below already
     dropped it by hand at their own call sites; this hoists that isolation to
     the whole module so a newly-added test cannot forget it.
+
+    P128-C3 finding: ``MACHINE_LOCAL_IMPL`` is an INDEPENDENT second vector of
+    the exact same shape. ``registry_home()`` honours it ahead of
+    ``machine_local_dir()`` (a bin/-shaped override rederives
+    ``<X>/bin/_machine_local.py`` -> ``<X>/machine-local``), the suite-root
+    quarantine does not clear it either, and — unlike ``COORDINATOR_SETTINGS_
+    HOME`` — most test classes below (``TestResolveReceiverInboxZeroMatch``,
+    ``TestAmbiguousCentralReceiver``, ``TestCanonicalReceiverId``,
+    ``TestResolveSelfEmId``, ``TestPublishMirrorReroute``, etc.) never touched
+    it at all before this fix, so an operator box with a bin/-shaped ambient
+    ``MACHINE_LOCAL_IMPL`` exported would have silently redirected every one of
+    those tests' registry reads off their own synthetic ``CLAUDE_HOME`` fixture
+    onto the real machine-local registry. Closed the same way, in the same
+    fixture, for the same reason.
     """
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    monkeypatch.delenv("MACHINE_LOCAL_IMPL", raising=False)
 
 
 def _make_claude_home(tmp_path: Path, receiver_repos: dict[str, Path]) -> Path:
@@ -240,6 +260,74 @@ class TestRegistryHomeHonorsMachineLocalImpl:
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         assert read_registry_repos() == {"repos.example_retrieval_repo": str(tmp_path / "rag-repo")}
+
+
+class TestMachineLocalImplSecondVectorDeterministic:
+    """P128-C3: settle, by deterministic construction rather than by reading
+    whatever value happens to be ambient on the executing box, whether
+    ``MACHINE_LOCAL_IMPL`` is an independent second vector for a test in this
+    module to escape its own synthetic ``CLAUDE_HOME`` fixture.
+
+    Construction, per the plan's C3 body: a ``bin/_machine_local.py`` under a
+    NON-``tmp_path`` directory this test creates for the purpose (``tempfile.
+    mkdtemp()`` — a real, durable-shaped directory, never pytest's per-test
+    ``tmp_path``, since a tmp_path-rooted override cannot distinguish "the
+    mechanism resolves non-tmp paths too" from "the mechanism only works
+    because pytest already sandboxes tmp_path"). Only a bin/-shaped override
+    exercises the ``<X>/bin/_machine_local.py`` -> ``<X>/machine-local``
+    derivation `registry_home()` performs, so this is the only construction
+    whose negative is worth recording (see module docstring/negative-spec on
+    ``registry_home()``).
+
+    Finding: YES, independent second vector — `_drop_settings_home_override`
+    above did not clear ``MACHINE_LOCAL_IMPL`` before this chunk, and most test
+    classes in this module never touched the var themselves, so a bin/-shaped
+    ambient value would have silently redirected their registry reads. Pinned
+    at this module's own call sites (the shared autouse fixture), the same way
+    the sibling ``COORDINATOR_SETTINGS_HOME`` vector was pinned — no edit to
+    ``_memo_resolver.py`` itself; the module's own honouring of the override is
+    correct and documented, the gap was this test module's isolation.
+    """
+
+    def test_non_tmp_bin_shaped_override_resolves_and_is_now_neutralised(
+        self, monkeypatch
+    ):
+        durable_dir = Path(tempfile.mkdtemp(prefix="p128c3-non-tmp-settings-home-"))
+        try:
+            impl_script = durable_dir / "bin" / "_machine_local.py"
+            impl_script.parent.mkdir(parents=True)
+            impl_script.write_text(
+                "# stub — never executed by this test\n", encoding="utf-8"
+            )
+            decoy_machine_local = durable_dir / "machine-local"
+            decoy_machine_local.mkdir()
+            (decoy_machine_local / "registry.toml").write_text(
+                'schema = 1\n"repos.decoy_receiver" = "/nonexistent/decoy-repo"\n',
+                encoding="utf-8",
+            )
+
+            # Before this test even sets the var: the shared autouse fixture
+            # already ran and delenv'd it for every test in this module,
+            # regardless of what the executing box's ambient shell exports —
+            # the deterministic closure of the second vector.
+            assert "MACHINE_LOCAL_IMPL" not in os.environ
+
+            # The mechanism itself still resolves a bin/-shaped override that
+            # sits under a genuinely non-tmp, durable-shaped directory — this
+            # is the deterministic construction proving the derivation is real
+            # and not an artifact of tmp_path sandboxing.
+            monkeypatch.setenv("MACHINE_LOCAL_IMPL", str(impl_script))
+            assert registry_home() == decoy_machine_local
+            assert read_registry_repos() == {
+                "repos.decoy_receiver": "/nonexistent/decoy-repo"
+            }
+        finally:
+            shutil.rmtree(durable_dir, ignore_errors=True)
+
+        # monkeypatch reverts the setenv above at teardown; the shared
+        # autouse fixture's delenv is what keeps every OTHER test in this
+        # module — most of which never mention MACHINE_LOCAL_IMPL — from
+        # ever seeing this or any ambient override at all.
 
 
 class TestResolveReceiverInboxZeroMatch:

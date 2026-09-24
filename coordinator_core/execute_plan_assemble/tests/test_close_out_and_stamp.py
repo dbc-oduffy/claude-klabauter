@@ -4083,23 +4083,7 @@ class TestCoAuthoredByAttachedOnCloseOutCommit:
     pattern above."""
 
     def test_close_out_commit_carries_co_authored_by(self, tmp_path, monkeypatch):
-        from coordinator_core.git import commit_trailers as ct
-
-        ct._ATTRIBUTION_TRANSCRIPT_MEMO.clear()
-        ct._ATTRIBUTION_VALUE_MEMO.clear()
-
         sid = "23232323-2323-4232-8232-232323232323"
-        claude_home = tmp_path / "fake-claude-home"
-        proj = claude_home / ".claude" / "projects" / "p"
-        proj.mkdir(parents=True)
-        import json
-
-        (proj / f"{sid}.jsonl").write_text(
-            json.dumps({"type": "assistant", "message": {"model": "claude-opus-5-5"}})
-            + "\n",
-            encoding="utf-8",
-        )
-        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         monkeypatch.setenv("COORDINATOR_SESSION_ID", sid)
 
         root = tmp_path / "repo"
@@ -4116,9 +4100,50 @@ class TestCoAuthoredByAttachedOnCloseOutCommit:
         assert _head_sha(root) != pre_head
 
         body = _run_git(["log", "-1", "--format=%B", "HEAD"], root).stdout
-        assert "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" in body
+        assert "Co-Authored-By: Claude <noreply@anthropic.com>" in body
 
-        ct._ATTRIBUTION_TRANSCRIPT_MEMO.clear()
-        ct._ATTRIBUTION_VALUE_MEMO.clear()
+
+class TestResolveDerivedFromArchiveSizingsFallback:
+    """`_resolve_derived_from`'s sizing-path arm now resolves through
+    `coordinator_core.ops._sizing_citation.resolve_sizing_citation` --
+    live-then-archive, the same fallback `assert_plan_sizing_citation`
+    already uses. A terminal sizing that `fleet.archive_terminal_sizings`
+    relocated to `archive/sizings/<month>/<id>.yaml` rewrites no citation
+    (DR-293: "a value resolving only under `archive/` is correct, not
+    broken"), so a plan still citing the pre-move `state/sizings/<id>.yaml`
+    path must resolve via the archived namesake, not refuse."""
+
+    def test_archived_sizing_resolves_by_basename(self, tmp_path):
+        archived = tmp_path / "archive" / "sizings" / "2026-08" / "x.yaml"
+        archived.parent.mkdir(parents=True)
+        archived.write_text("estimate:\n  tshirt: M\n", encoding="utf-8")
+        assert coas._resolve_derived_from("state/sizings/x.yaml", tmp_path) is None
+
+    def test_live_path_still_wins_over_archive(self, tmp_path):
+        live = tmp_path / "state" / "sizings" / "x.yaml"
+        live.parent.mkdir(parents=True)
+        live.write_text("estimate:\n  tshirt: M\n", encoding="utf-8")
+        archived = tmp_path / "archive" / "sizings" / "2026-08" / "x.yaml"
+        archived.parent.mkdir(parents=True)
+        archived.write_text("estimate:\n  tshirt: L\n", encoding="utf-8")
+        assert coas._resolve_derived_from("state/sizings/x.yaml", tmp_path) is None
+
+    def test_absent_at_both_live_and_archive_still_refuses(self, tmp_path):
+        failure = coas._resolve_derived_from(
+            "state/sizings/never-existed.yaml", tmp_path
+        )
+        assert failure is not None
+        assert "never-existed.yaml" in failure
+
+    def test_ambiguous_archive_basename_match_still_refuses(self, tmp_path):
+        first = tmp_path / "archive" / "sizings" / "2026-07" / "x.yaml"
+        second = tmp_path / "archive" / "sizings" / "2026-08" / "x.yaml"
+        first.parent.mkdir(parents=True)
+        second.parent.mkdir(parents=True)
+        first.write_text("estimate:\n  tshirt: M\n", encoding="utf-8")
+        second.write_text("estimate:\n  tshirt: L\n", encoding="utf-8")
+        failure = coas._resolve_derived_from("state/sizings/x.yaml", tmp_path)
+        assert failure is not None
+        assert "x.yaml" in failure
 
 

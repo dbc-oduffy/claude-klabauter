@@ -243,138 +243,45 @@ the deny message (``_METACHARACTER_REASON``) was updated to describe the
 two new carve-outs precisely rather than continuing to claim ``|``/``>``
 always deny.
 
-Divergence 9 (2026-08-01, Amendment 1 -- confine coordinator:executor too):
+Divergence 9 (2026-08-01, Amendment 1 -- confine coordinator:executor too;
+REVERSED 2026-08-02 by PM ruling; DELETED entirely 2026-09-23, this plan's C1):
 
-**REVERSED 2026-08-02 BY PM RULING, AND THIS WHOLE DIVERGENCE IS NOW DEAD CODE.
-READ THIS BEFORE BELIEVING A WORD OF THE PARAGRAPHS BELOW.** The PM narrowed the
-confined perimeter to two harm classes, and
-``docs/plans/2026-08-03-narrow-subagent-commit-confinement-two-classes.md``
-reverses C1's addition of ``coordinator:executor`` to
-``_helpers._CONFINED_FINDINGS_AGENTS`` -- see the amendment banner at the top of
-``docs/plans/2026-08-01-confine-subagent-bash-by-allowlist.md``. That frozenset has
-exactly one member today (``coordinator:code-reviewer``), the ``bash_policy:`` table
-has exactly one key (the same one), and executor is rostered, so ALL THREE legs of
-``_is_confined_type`` return False for it. Measured, not inferred::
+Amendment 1 added ``coordinator:executor`` to
+``_helpers._CONFINED_FINDINGS_AGENTS`` and layered a wider, executor-specific
+ruleset (an ``interpreter_allowed_modules``/``interpreter_allow_scripts``
+pytest/script allowance, and a relaxed ``scaffolder_required_arg``) onto the
+shared ``coordinator-doc-new`` scaffolder logic. ``docs/plans/2026-08-03-
+narrow-subagent-commit-confinement-two-classes.md`` reversed the membership
+addition the next day, so ``coordinator:executor`` was never confined once
+that plan landed -- the override dict entries it left behind were dead code
+from that point on (unreachable by ``_default_ruleset``, which is consulted
+only for a confined type), and their own tests passed vacuously. Reported by
+doe-claude-em (cross-repo/inbox/2026-09-06-doe-claude-em-executor-is-not-
+confined-so-its-ruleset-override-is-dead.md) after the surviving prose here
+misled claude-klabauter's own EM into asserting the opposite to two sibling repos.
 
-    coordinator:executor           confined=False  known=True
-    coordinator:code-reviewer      confined=True   known=True
+**State (binding, current): ``coordinator:executor`` is unconfined outright
+and carries no Bash ruleset of its own.** All three legs of
+``_is_confined_type`` return ``False`` for it (the roster does list it, so
+leg 3 does not fire either); the reviewer's own ruleset
+(``_DEFAULT_RULESET_TYPE_OVERRIDES[_REVIEWER_TYPE]``) and the shared
+``_default_ruleset()`` base are the only entries this module resolves. The
+dead ``_EXECUTOR_TYPE`` override dict entries, the executor-specific deny-
+message stanzas, and the tests that forced the executor into confinement to
+exercise them were deleted by this plan's C1
+(``state/bug-backlog/2026-09-06-divergence-9-s-executor-ruleset-override-
+84156761aab8.yaml``), which also added a structural pin asserting every
+``_DEFAULT_RULESET_TYPE_OVERRIDES`` key names a type ``_is_confined_type``
+actually confines -- the pin that would have caught this divergence going
+stale.
 
-``_default_ruleset`` is consulted only for a type that is confined, so
-``_DEFAULT_RULESET_TYPE_OVERRIDES[_EXECUTOR_TYPE]`` -- the pytest module allowance,
-``interpreter_allow_scripts``, and the ``scaffolder_required_arg: ""`` relaxation --
-CANNOT BE REACHED, and neither can ``_DENY_MESSAGE_STANZA_OVERRIDES``'s executor
-stanzas or ``_EXECUTOR_HEADER_LINE``. Their tests pass vacuously, exactly as the
-``:860`` note warns for ``_CONFINED_FINDINGS_AGENTS`` itself. The executor is not
-confined-with-a-relaxation; it is unconfined outright.
-
-Reported by doe-claude-em (cross-repo/inbox/2026-09-06-doe-claude-em-executor-is-
-not-confined-so-its-ruleset-override-is-dead.md) after this prose misled claude-klabauter's
-own EM into asserting the opposite to two sibling repos. Kept rather than deleted
-only so a reader arriving at the paragraphs below is not misled a third time; the
-deletion is tracked in state/bug-backlog/. DO NOT cite anything below this banner
-as live behaviour.
-
-``coordinator:executor`` joined ``_helpers._CONFINED_FINDINGS_AGENTS``
-(``docs/plans/2026-08-01-confine-subagent-bash-by-allowlist.md``, a prior C1
-attempt returned BLOCKED on the substrate drift this divergence fixes). The
-pre-existing ``python3 <path>`` handling in ``_first_effective_token``
-(designed for ``python3 <path-to-coordinator-doc-new>``) resolves
-``python3 -m pytest -q`` -- this repo's CONFIGURED fast test command -- to
-the effective token ``-m``, which matches no allowlisted binary and DENIES;
-an executor confined under the ORIGINAL Tier A/B logic alone could not run
-its own tests at all. The REJECTED fix (an unconditional ``python3``
-passthrough regardless of the second token) was explicitly rejected by the
-amended plan -- it would re-admit ``python3 -c "...dispatch_message..."``,
-the literal incident shape this whole guard exists to close.
-
-The fix actually landed is a new, narrow, ADDITIVE discrimination tier
-(``_evaluate_python3_interpreter``), consulted ONLY as a fallthrough after
-Tier B's scaffolder check has already rejected the command (so a genuine
-``python3 <path-to-coordinator-doc-new>`` invocation never reaches this tier
-at all -- it is resolved by the pre-existing Tier B path exactly as before,
-which is what keeps AC3 intact):
-  - ``python3 -c``/``python3 -e`` (inline code) -> DENY unconditionally.
-    NOT policy-overridable — there is no ruleset key that can re-admit this;
-    ``_PY_INLINE_CODE_FLAGS`` is a module-level constant, not a
-    ``ruleset[...]`` lookup.
-  - ``python3 -m <module>`` -> allowed only if ``<module>`` is a member of
-    ``ruleset["interpreter_allowed_modules"]`` — data, not code. The
-    AC11-fallback default for this key is empty for every type EXCEPT
-    ``coordinator:executor``'s own default override (``("pytest",)`` — see
-    ``_DEFAULT_RULESET_TYPE_OVERRIDES``), so a bare python3 -m invocation is
-    denied-by-omission for every OTHER confined type exactly as it would
-    have been before this divergence (``coordinator:code-reviewer`` never
-    reaches an ALLOW via this leg).
-
-    **KNOWN RESIDUAL (review Finding 3, 2026-08-02, deliberately NOT fixed
-    here; scope widened Amendment 2, 2026-08-03):** this leg examines ONLY
-    ``tokens[2]`` (the module name) — every argument after it passes through
-    unexamined. For ``pytest`` specifically this is not exec-safe the way the
-    "data, not code" framing above implies: pytest auto-imports and executes
-    any ``conftest.py`` in the collected directory at collection time, and
-    honours a ``-p <plugin>`` flag to import an arbitrary importable module.
-    A confined type that holds an unconfined ``Edit`` or ``Write`` tool can
-    author a ``conftest.py`` and get arbitrary code executed by a bare
-    ``python3 -m pytest -q`` — the same code-execution shape the
-    ``-c``/``-e`` inline-code deny above exists to close, reachable through
-    the one module this divergence allowlists. This sits under the SAME
-    "eager agent taking the cheapest path, not an adversary authoring an
-    evasion" threat model as the ``python3 <script-path>`` residual
-    documented immediately below — accepted, not solved, for the identical
-    reason: a confined type that wants to run arbitrary code already has an
-    unconfined Edit/Write tool to reach for, so this leg does not newly grant
-    that capability, it just offers a marginally cheaper path to it. A
-    reader must not conclude ``python3 -m pytest`` is exec-safe on account
-    of the "data, not code" framing above — it is exec-safe only in the
-    sense that the DENYLIST cannot re-admit ``-c``/``-e``, not in the sense
-    that pytest itself cannot execute arbitrary code once module-gated.
-    (Amendment 2, 2026-08-03) This residual is now explicitly accepted for
-    BOTH confined types, not just ``coordinator:executor``: the "already has
-    unconfined write" precondition holds for ``coordinator:code-reviewer``
-    too (its agent definition grants an unconfined ``Edit`` tool — see
-    Amendment 2 below), so excluding it from ``interpreter_allowed_modules``
-    bought no additional containment, only cost verification fidelity. Do
-    not read the pre-Amendment-2 prose above as still implying
-    ``coordinator:code-reviewer`` is, or should be, excluded from this leg on
-    write-capability grounds — it explicitly is not, as of Amendment 2.
-  - ``python3 <script-path>`` (second token does not start with ``-``) ->
-    allowed only if ``ruleset["interpreter_allow_scripts"]`` is true — again
-    data-gated per effective_type, defaulting to ``False`` for every type
-    except ``coordinator:executor``'s override. This is the documented
-    "known residual" (write-then-execute) the parent plan accepts
-    deliberately: an executor that is DENIED the cheap ``python3 -c``/``-m
-    coordinator_core.invoke`` path can still write a script importing
-    ``dispatch_message`` and run it via ``python3 <script.py>`` — accepted,
-    not solved, because the threat model here is an eager agent taking the
-    cheapest path, not an adversary authoring an evasion script.
-  - Any other shape (``tokens[0] != "python3"``, nothing follows ``python3``,
-    or an unrecognized ``-``-prefixed second token) returns ``None`` from
-    ``_evaluate_python3_interpreter`` — the caller (``check()``) then falls
-    through to the ORIGINAL, UNCHANGED generic Tier B deny message ("first
-    command token is not coordinator-doc-new"), which is what makes AC3's
-    byte-for-byte code-reviewer parity possible: a reviewer-typed
-    ``python3 evil-coordinator-doc-new --type review-findings`` (a
-    pre-existing negative-control test, F1/F2) still denies with the exact
-    same message text as before this divergence, because
-    ``interpreter_allow_scripts`` defaults to ``False`` for
-    ``coordinator:code-reviewer`` and the script-path leg above returns
-    ``None`` (not an explicit deny) in that case, deferring entirely to the
-    untouched generic path.
-
-``coordinator:executor``'s Tier B scaffolder requirement is ALSO widened via
-the same per-type default-ruleset-override mechanism
-(``_DEFAULT_RULESET_TYPE_OVERRIDES``): its ``scaffolder_required_arg`` is
-``""`` rather than ``"--type review-findings"``, so
-``_has_required_type_arg``'s ``cmd.endswith("")`` is trivially satisfied —
-an executor's ``coordinator-doc-new`` invocation is not pinned to any one
-``--type`` value the way the reviewer's is, since an executor legitimately
-scaffolds several sidecar kinds (``run-report``, not only
-``review-findings``).
-
-None of Tier A's git/readonly-fs matching paths, or Tier B's scaffolder
-binary-name/suffix matching, are touched by this divergence — only the
-DATA fed to them (``ruleset[...]``) is now type-conditional, and the new
-interpreter tier is a wholly separate, additive fallthrough branch.
+The python3-interpreter discrimination tier this divergence introduced
+(``_evaluate_python3_interpreter``: unconditional deny for ``-c``/``-e``
+inline code; a module-allowlist gate for ``python3 -m <module>``; a
+per-type ``interpreter_allow_scripts`` gate for ``python3 <script-path>``)
+is live code, unaffected by this deletion -- Amendment 2 (2026-08-03, below)
+extended its module allowance to ``coordinator:code-reviewer`` and remains
+the current behaviour for that type.
 
 Divergence 10 (2026-08-01, stderr/stdout fd-duplication carve-out):
 confirmed live, a confined ``coordinator:executor`` running its own ordinary
@@ -611,44 +518,28 @@ The new Tier A allowlist is a READ-ONLY escape hatch, not a general one --
 it does not add an env-var bypass and it does not touch the metacharacter
 gate.
 
-Divergence 12 (2026-08-02, per-type deny-message remediation text):
-``coordinator:executor`` joining the confined set (Divergence 9) reused this
-guard's ONE hardcoded deny message verbatim, which was written for
-``coordinator:code-reviewer`` and instructs the recipient to run
-``coordinator-doc-new --type review-findings`` (a pin the executor's own
-ruleset does not require -- ``scaffolder_required_arg`` is ``""`` for it, per
-``_DEFAULT_RULESET_TYPE_OVERRIDES``), calls the recipient a "findings agent"
-throughout, and closes with "dispatch a separate non-confined executor for
-that step" -- self-defeating advice when the executor IS the confined type
-being denied. Reported by doe-claude-em, cross-repo memo
-``cross-repo/inbox/2026-08-02-doe-claude-em-executor-confinement-deny-message-addresses-wrong-agent-class.md``.
-Fix: the header line and the three agent-class-specific stanzas (scaffolder
-framing, "Accepted invocation forms", closing paragraph) are now resolved
-per ``effective_type`` via ``_DENY_MESSAGE_STANZA_OVERRIDES``, the same
-data-driven dict-lookup shape ``_DEFAULT_RULESET_TYPE_OVERRIDES`` already
-uses for ruleset content -- not an inline ``if effective_type == ...`` branch
-at the emit site. ``coordinator:code-reviewer`` has no entry in that dict, so
-``_deny_reason`` falls through to the ORIGINAL literal header/stanza text
-unchanged -- byte-identical, pinned by the message-coherence test suite
-(AC3-equivalent for this fix). The middle "Did you mean.../Denied: any other
-command..." stanzas describe guard mechanics identical across every confined
-type and are deliberately left shared, not made per-type.
-
-**Negative spec, binding on any future third confined type:** remediation
-text is per-confined-type, resolved through ``_DENY_MESSAGE_STANZA_OVERRIDES``
-exactly as ruleset content is resolved through
-``_DEFAULT_RULESET_TYPE_OVERRIDES`` -- a new confined type must add its own
-entry there rather than inheriting ``coordinator:code-reviewer``'s
-findings-agent framing verbatim. ``coordinator:code-reviewer``'s header and
-three default stanzas must never be edited to make room for a new type's
-text -- the message-coherence test suite (Review: coordinator:code-reviewer,
-Finding 6) asserts that specific ENUMERATIONS embedded in this message (git
-subcommands, fs binaries, metacharacters, find flags) match the
-corresponding module constants, a real and valuable property, but it does
-NOT assert full-string equality of the header line or the three stanzas
-against a literal known-good value -- an edit to the header/stanza WORDING
-that left every enumerated list untouched would currently pass that suite
-silently.
+Divergence 12 (2026-08-02, per-type deny-message remediation text; the
+per-type override mechanism it introduced DELETED 2026-09-23 by this plan's
+C1, since ``coordinator:executor`` was its sole caller): ``coordinator:
+executor`` joining the confined set (Divergence 9) reused this guard's ONE
+hardcoded deny message verbatim, which was written for ``coordinator:code-
+reviewer`` and instructed the recipient to run ``coordinator-doc-new --type
+review-findings`` (a pin the executor's own ruleset did not require), called
+the recipient a "findings agent" throughout, and closed with "dispatch a
+separate non-confined executor for that step" -- self-defeating advice when
+the executor was the confined type being denied. Fixed at the time via a
+``_DENY_MESSAGE_STANZA_OVERRIDES`` per-``effective_type`` dict, the same
+data-driven shape ``_DEFAULT_RULESET_TYPE_OVERRIDES`` uses for ruleset
+content. Once Divergence 9's confinement addition was reversed
+(2026-08-02), that dict had exactly one entry (``coordinator:executor``) and
+no live caller could ever reach it, so this plan's C1 deleted the dict, the
+executor-specific header/stanza constants, and the lookup in
+``_deny_reason`` entirely rather than keep an unreachable mechanism "for a
+future confined type" -- zero cost is not a reason to keep code.
+``_deny_reason`` now always renders the single default header and stanzas
+(below); a future third confined type with distinct remediation text
+reintroduces the per-type mechanism rather than resurrecting this one from
+history.
 
 Divergence 13 (2026-08-07, C6 of
 `docs/plans/2026-08-07-guards-reach-a-verdict-on-powershell-or-stay-silent.md`
@@ -1321,32 +1212,24 @@ _CMD_SAFE_MAX_LEN = 200
 _GIT_SHORT_FORM_OUTPUT_FLAG = "-o"
 
 
-#: (Amendment 1, 2026-08-01) The confined type whose default ruleset
-#: diverges most widely from the shared base -- see
-#: ``_DEFAULT_RULESET_TYPE_OVERRIDES``.
-_EXECUTOR_TYPE = "coordinator:executor"
-
-#: (Amendment 2, 2026-08-03) The other confined type -- see the module
-#: docstring's Amendment 2 entry for why it now shares the pytest allowance
-#: with ``_EXECUTOR_TYPE`` above.
+#: (Amendment 2, 2026-08-03) The sole confined type with an entry in
+#: ``_DEFAULT_RULESET_TYPE_OVERRIDES`` -- see the module docstring's
+#: Amendment 2 entry for why it gets a pytest allowance.
 _REVIEWER_TYPE = "coordinator:code-reviewer"
 
-#: (Amendment 1, 2026-08-01; widened Amendment 2, 2026-08-03) Per-
-#: ``effective_type`` overrides layered onto the shared base
-#: ``_default_ruleset()`` returns. This is the "policy row" for a confined
-#: type that has no external ``bash_policy:`` YAML entry -- expressing the
-#: divergence as DATA here (rather than an ``if effective_type == ...``
-#: branch inside a matching function) is what keeps the git/readonly-fs/
-#: scaffolder matching paths themselves untouched (see module docstring
-#: Divergence 9).
+#: (Amendment 1, 2026-08-01, reversed 2026-08-02, its ``coordinator:executor``
+#: entry deleted 2026-09-23 by this plan's C1) Per-``effective_type``
+#: overrides layered onto the shared base ``_default_ruleset()`` returns.
+#: This is the "policy row" for a confined type that has no external
+#: ``bash_policy:`` YAML entry -- expressing the divergence as DATA here
+#: (rather than an ``if effective_type == ...`` branch inside a matching
+#: function) is what keeps the git/readonly-fs/scaffolder matching paths
+#: themselves untouched.
 #:
-#: (Amendment 2, 2026-08-03) ``coordinator:code-reviewer`` now ALSO gets an
-#: entry -- ``interpreter_allowed_modules: ("pytest",)`` only, mirroring
-#: exactly the executor's module allowance and nothing else (no
-#: ``interpreter_allow_scripts``, no ``scaffolder_required_arg`` relaxation
-#: -- those remain executor-only divergences). See the module docstring's
-#: Amendment 2 entry for the PM-ruling discriminator (destructive-vs-
-#: non-destructive, not read-only-vs-executing) that motivates this, and
+#: (Amendment 2, 2026-08-03) ``coordinator:code-reviewer`` is the only member
+#: -- ``interpreter_allowed_modules: ("pytest",)`` only. See the module
+#: docstring's Amendment 2 entry for the PM-ruling discriminator (destructive-
+#: vs-non-destructive, not read-only-vs-executing) that motivates this, and
 #: why it does not weaken containment: ``coordinator:code-reviewer`` already
 #: holds an unconfined ``Edit`` tool (confirmed against its own agent
 #: definition, ``coordinator/agents/code-reviewer.md``,
@@ -1355,21 +1238,14 @@ _REVIEWER_TYPE = "coordinator:code-reviewer"
 #: this allowlist -- denying it here bought no containment, only cost
 #: verification fidelity (see the KNOWN RESIDUAL note on
 #: ``_evaluate_python3_interpreter`` below, updated the same day).
-#: Reviewer-type-unaffected structural coverage
-#: (``test_reviewer_type_unaffected_by_executor_interpreter_allowance`` and
-#: its ``_default_ruleset``-fallback siblings) still holds for every OTHER
-#: divergence: ``dict.get(type, {})`` merges only the keys present in a
-#: type's own entry, so the reviewer picks up ``interpreter_allowed_modules``
-#: alone and stays on the base (``()``-empty/``False``) value for every other
-#: interpreter/scaffolder key -- AC3's narrower claim (byte-identical DENY
-#: MESSAGE TEXT for a non-pytest command) is untouched, since no message
-#: stanza is edited by this amendment.
+#:
+#: STRUCTURAL PIN (this plan's C1): every key in this dict must be a type
+#: ``_is_confined_type`` actually confines -- see
+#: ``test_ruleset_override_keys_are_confined_types`` in
+#: ``test_executor_bash_confinement.py``. This is what would have caught
+#: Divergence 9 going stale instead of shipping a dead, vacuously-tested
+#: override.
 _DEFAULT_RULESET_TYPE_OVERRIDES: Dict[str, Dict[str, Any]] = {
-    _EXECUTOR_TYPE: {
-        "interpreter_allowed_modules": ("pytest",),
-        "interpreter_allow_scripts": True,
-        "scaffolder_required_arg": "",
-    },
     _REVIEWER_TYPE: {
         "interpreter_allowed_modules": ("pytest",),
     },
@@ -1385,13 +1261,12 @@ def _default_ruleset(effective_type: str = "") -> Dict[str, Any]:
     none are deleted or altered, per the AC11 requirement to KEEP the prior
     literals as the fallback.
 
-    (Amendment 1, 2026-08-01) ``effective_type`` selects an optional overlay
-    from ``_DEFAULT_RULESET_TYPE_OVERRIDES`` -- ``coordinator:code-reviewer``
-    (and any other type with no entry there) gets the base dict completely
+    (Amendment 1, 2026-08-01; widened Amendment 2, 2026-08-03) ``effective_
+    type`` selects an optional overlay from ``_DEFAULT_RULESET_TYPE_
+    OVERRIDES`` -- ``coordinator:code-reviewer`` is the sole member (a
+    pytest module allowance); any other type gets the base dict completely
     unchanged, byte-for-byte identical to the pre-Amendment-1 return value
-    (AC3). ``coordinator:executor`` layers in its interpreter-tier allowances
-    and its relaxed Tier B scaffolder requirement (see module docstring
-    Divergence 9 for why each differs).
+    (AC3).
     """
     base: Dict[str, Any] = {
         "git_readonly_subcommands": _GIT_READONLY_SUBCOMMANDS,
@@ -3044,58 +2919,6 @@ def _sanitize_cmd_for_reason(cmd: str) -> str:
     return safe or "(empty/unparseable)"
 
 
-#: (Message-parity fix, 2026-08-02) Per-``effective_type`` override of the
-#: header line and the three deny-message stanzas that are genuinely
-#: agent-class-specific -- the "BLOCKED:" header, the scaffolder-framing
-#: stanza, the "Accepted invocation forms" stanza, and the closing framing
-#: paragraph -- selected the same data-driven way
-#: ``_DEFAULT_RULESET_TYPE_OVERRIDES`` selects ruleset content, per
-#: cross-repo/inbox/2026-08-02-doe-claude-em-executor-confinement-deny-message-addresses-wrong-agent-class.md.
-#: ``coordinator:code-reviewer`` (and any other type with no entry here) has
-#: no key in this dict, so ``_deny_reason`` falls through to the
-#: ``_DEFAULT_HEADER_LINE``/``_DEFAULT_*_STANZA`` values below unchanged --
-#: byte-identical to the pre-fix message (AC3). The middle "Did you
-#: mean.../Denied: any other command..." stanzas describe guard mechanics
-#: that hold for every confined type identically and are deliberately NOT
-#: made per-type here -- only the header and the three stanzas that name a
-#: specific agent class or a specific required argument vary.
-#:
-#: Negative spec (binding for a future third confined type): remediation
-#: text is per-confined-type, resolved through this dict exactly as
-#: ``_DEFAULT_RULESET_TYPE_OVERRIDES`` resolves ruleset content -- a new
-#: confined type MUST add its own entry here rather than either (a) reusing
-#: the code-reviewer's findings-agent framing verbatim, or (b) forking the
-#: deny path with an inline ``if effective_type == ...`` at the emit site.
-#: ``coordinator:code-reviewer``'s default header and three stanzas MUST NOT
-#: be edited to accommodate a new type -- the message-coherence test suite
-#: enforces ENUMERATION coherence (git subcommands, fs binaries,
-#: metacharacters, find flags named in the message match the module
-#: constants), not full-string equality against a literal known-good value.
-_EXECUTOR_SCAFFOLDER_STANZA = (
-    "Confined coordinator:executor subagents may also run read-only git,",
-    "python3 -m pytest, python3 <script>, the read-only machine-local",
-    "subcommands (get/has/keys/path/dir), and coordinator-doc-new -- no --type",
-    "pin required, since an executor legitimately scaffolds several sidecar kinds:",
-    "",
-    "  coordinator-doc-new [--plan <path>] [--chunk <id>] ...",
-)
-
-_EXECUTOR_ACCEPTED_FORMS_STANZA = (
-    "Accepted invocation forms (the dispatching EM resolves <claude-klabauter-live-root> from the",
-    "machine-local registry key repos.claude_klabauter and injects the literal",
-    "absolute path into the dispatch prompt -- a confined agent cannot resolve it):",
-    "  <claude-klabauter-live-root>/coordinator/bin/coordinator-doc-new.py [--plan <path>] [--chunk <id>] ...",
-    "  python3 <claude-klabauter-live-root>/coordinator/bin/coordinator-doc-new.py [--plan <path>] [--chunk <id>] ...",
-)
-
-_EXECUTOR_CLOSING_STANZA = (
-    "This guard confines coordinator:executor Bash to the commands named above.",
-    "A command outside this list is genuinely out of scope for this dispatch --",
-    "report the blocker to the dispatching EM rather than retrying it.",
-)
-
-_EXECUTOR_HEADER_LINE = "BLOCKED: confined coordinator:executor Bash invocation outside the allowlist."
-
 #: (Message-size discipline, 2026-09-11, docs/plans/2026-09-11-trim-the-
 #: remaining-over-cap-guard-messages.md, C4) "confined findings-agent" is
 #: meta-commentary about the guard's own confinement mechanism, not
@@ -3198,15 +3021,6 @@ _DEFAULT_ACCEPTED_FORMS_STANZA = (
 #: (findings-agent) type -- the indented alternatives above already are the
 #: route forward; nothing left to restate.
 _DEFAULT_CLOSING_STANZA: tuple = ()
-
-_DENY_MESSAGE_STANZA_OVERRIDES: Dict[str, Dict[str, Any]] = {
-    _EXECUTOR_TYPE: {
-        "header": _EXECUTOR_HEADER_LINE,
-        "scaffolder": _EXECUTOR_SCAFFOLDER_STANZA,
-        "accepted_forms": _EXECUTOR_ACCEPTED_FORMS_STANZA,
-        "closing": _EXECUTOR_CLOSING_STANZA,
-    },
-}
 
 
 #: (Message-size discipline, 2026-08-03) The Tier A enumerations (git
@@ -3320,11 +3134,13 @@ def _deny_reason(
     suppress_retry_advice: bool = False,
     confinement_cause: str = "",
 ) -> str:
-    """The REASON block, with the header line and the three
-    agent-class-specific stanzas resolved per ``effective_type`` via
-    ``_DENY_MESSAGE_STANZA_OVERRIDES`` (see that dict's docstring).
-    ``coordinator:code-reviewer`` has no entry there, so the header and
-    every stanza below resolve to their ``_DEFAULT_*`` value.
+    """The REASON block: header line and the three deny-message stanzas
+    (scaffolder framing, accepted-invocation-forms, closing paragraph)
+    always resolve to their ``_DEFAULT_*`` value -- the per-``effective_type``
+    override mechanism this function once consulted
+    (``_DENY_MESSAGE_STANZA_OVERRIDES``) was deleted 2026-09-23 (this plan's
+    C1) once ``coordinator:executor``, its sole entry, was confirmed dead
+    (module docstring Divergence 9/12).
 
     (Message-size discipline, 2026-08-03) Restructured to fit the 220-byte
     guard-message prose cap (``docs/plans/2026-08-02-guard-message-size-
@@ -3337,33 +3153,26 @@ def _deny_reason(
     "Subagent:" line spent bytes restating information already known to the
     reader, not new information a denied agent needs to self-correct.
 
-    ``suppress_retry_advice`` (Divergence 18, 2026-08-11): the closing
-    stanza (only non-empty for ``coordinator:executor`` today) ends with
-    "report the blocker to the dispatching EM rather than retrying it" --
-    correct for a genuinely out-of-scope command, actively wrong for a
-    python-family misspelling whose ``python3``-corrected form would allow.
-    The caller sets this ``True`` for exactly that case; it forces the
-    closing stanza empty regardless of ``effective_type``, never adds text.
+    ``suppress_retry_advice`` (Divergence 18, 2026-08-11): forces the
+    closing stanza empty regardless of ``effective_type`` -- correct for a
+    genuinely out-of-scope command, actively wrong for a python-family
+    misspelling whose ``python3``-corrected form would allow. The caller
+    sets this ``True`` for exactly that case. (``_DEFAULT_CLOSING_STANZA``
+    is empty today, so this currently only guards against a future
+    non-empty default closing stanza.)
     """
     cmd_safe = _sanitize_cmd_for_reason(cmd)
-    overrides = _DENY_MESSAGE_STANZA_OVERRIDES.get(effective_type, {})
-    header_line = overrides.get("header", _DEFAULT_HEADER_LINE)
+    header_line = _DEFAULT_HEADER_LINE
     # A leg-3 confinement is not a findings-agent confinement, and saying so
     # is what stopped two sessions finding the cause -- see
-    # `_ROSTER_UNREADABLE_HEADER_LINE`'s own comment. An explicit per-type
-    # override still wins: a type with its own header (today only
-    # `coordinator:executor`) has an identity that DID resolve, so leg 3 is
-    # not why it is here.
-    if "header" not in overrides:
-        if confinement_cause == "roster-unreadable":
-            header_line = _ROSTER_UNREADABLE_HEADER_LINE
-        elif confinement_cause == "unenumerated":
-            header_line = _unenumerated_header_line(effective_type)
-    scaffolder_stanza = overrides.get("scaffolder", _DEFAULT_SCAFFOLDER_STANZA)
-    accepted_forms_stanza = overrides.get("accepted_forms", _DEFAULT_ACCEPTED_FORMS_STANZA)
-    closing_stanza = (
-        () if suppress_retry_advice else overrides.get("closing", _DEFAULT_CLOSING_STANZA)
-    )
+    # `_ROSTER_UNREADABLE_HEADER_LINE`'s own comment.
+    if confinement_cause == "roster-unreadable":
+        header_line = _ROSTER_UNREADABLE_HEADER_LINE
+    elif confinement_cause == "unenumerated":
+        header_line = _unenumerated_header_line(effective_type)
+    scaffolder_stanza = _DEFAULT_SCAFFOLDER_STANZA
+    accepted_forms_stanza = _DEFAULT_ACCEPTED_FORMS_STANZA
+    closing_stanza = () if suppress_retry_advice else _DEFAULT_CLOSING_STANZA
     lines = [
         header_line,
         "",

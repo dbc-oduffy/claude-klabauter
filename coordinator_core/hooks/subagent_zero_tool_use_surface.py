@@ -70,6 +70,7 @@ import json
 import os
 from pathlib import Path
 
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._payload import field
 from coordinator_core.lifecycle import git_common_dir
@@ -147,6 +148,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     repo_root or session_id resolves to the same empty-result shape as a missing
     store file, never an error.
     """
+    params = payload_of(params)
     import asyncio
 
     session_id = field(params, "session_id")

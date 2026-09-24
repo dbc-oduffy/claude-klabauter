@@ -16,7 +16,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from coordinator_core.ops.whoami_run_tests import main
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 import pytest
 
@@ -55,8 +55,12 @@ def test_provisions_venv_when_sentinel_absent(tmp_path: Path) -> None:
     assert len(calls) == 5
     assert calls[0][:3] == ["python3", "-m", "venv"]
     assert calls[-1][1:3] == ["-m", "pytest"]
-    # Every spawn is suppressed -- pins whoami_run_tests to console-popup suppression.
-    expected = no_console_creationflags()
+    # Every spawn is suppressed -- pins whoami_run_tests to console-popup
+    # suppression WITH passthrough (not bare no_console_creationflags()): a
+    # provisioning/nested-pytest-run step is exactly the "operator must see
+    # the child's output" case win_portability.no_console_passthrough_kwargs()
+    # documents.
+    expected = no_console_passthrough_kwargs()
     assert all(kwargs == expected for kwargs in suppression_kwargs)
 
 
@@ -80,7 +84,7 @@ def test_skips_provisioning_when_sentinel_present(tmp_path: Path) -> None:
     assert len(calls) == 1
     assert calls[0][1:3] == ["-m", "pytest"]
     assert calls[0][-1] == "tests/test_machine.py"
-    assert suppression_kwargs[0] == no_console_creationflags()
+    assert suppression_kwargs[0] == no_console_passthrough_kwargs()
 
 
 def test_pytest_nonzero_exit_passes_through(tmp_path: Path) -> None:

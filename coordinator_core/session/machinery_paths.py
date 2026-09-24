@@ -121,6 +121,32 @@ def share_dir(repo_root: str, session_id: str) -> str:
     return os.path.join(share_root(repo_root), session_id)
 
 
+def machinery_path_prefixes() -> tuple:
+    """Every repo-relative path PREFIX a name-based excluder (a corpus
+    census/walk) must skip to exclude coordinator machinery, current and
+    legacy roots alike.
+
+    Decided NOT to gravestone: the premise "the legacy root is retired"
+    does not hold. `04572a0bbe` alone is not dispositive -- DoE-claude's
+    `coordinator/hooks/scripts/_plan_path_bridge.py` module (P143-T6's own
+    finding) and several reviewer-sidecar writers there still cite and
+    match live `state/subagent-share/<session>/...` paths (measured via
+    `grep -rl "state/subagent-share" --include=*.py coordinator`, both
+    here and against the DoE-claude mirror), so a census keyed on
+    `.coordinator-local` alone would silently miss every legacy-root
+    artifact.
+
+    Anchored at a full path segment, never a name token -- same selector
+    discipline as `fleet_machinery_sweep.select_machinery_paths` (a
+    caller matches these as PREFIXES of a repo-relative candidate, not a
+    substring). Returns a fixed tuple of bare relative strings rather than
+    a `repo_root`-joined path: a name-based excluder tests a
+    repo-relative candidate, it does not resolve a filesystem path -- same
+    role as `SHARE_RELDIR`/`LEGACY_SHARE_RELDIR` above.
+    """
+    return (_MACHINERY_ROOT_LEAF, LEGACY_SHARE_RELDIR, LEGACY_MEMO_OUTBOX_RELDIR)
+
+
 #: Repo-relative, POSIX-separated spelling of the RETIRED share root. Same
 #: role as `LEGACY_MEMO_OUTBOX_RELDIR`: the declaration sites that need a
 #: bare relative string (op `MUTATES` lists, guard prefix tuples) cannot use

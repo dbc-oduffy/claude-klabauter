@@ -26,6 +26,7 @@ same-process re-resolution guard is now an explicit module-scope memo, which
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 
@@ -549,6 +550,57 @@ def test_f1_marketplace_cache_rung_ordered_ahead_of_flat_layout(tmp_path, monkey
     assert result == str(version_dir)
 
 
+# ---------------------------------------------------------------------------
+# P174-C2: engine-rung delegation to `_settings_home.claude_config_dir()`.
+# Both rungs previously inlined `CLAUDE_HOME or HOME or USERPROFILE` +
+# `.claude`, ignoring `CLAUDE_CONFIG_DIR` entirely. C2 gives them the same
+# `CLAUDE_CONFIG_DIR`-first precedence the bin plane and the checker's own
+# seam already have.
+# ---------------------------------------------------------------------------
+
+
+def test_c2_flat_layout_probe_honors_claude_config_dir(tmp_path, monkeypatch):
+    """CLAUDE_CONFIG_DIR set, CLAUDE_HOME set to a DIFFERENT directory: the
+    flat-layout rung must resolve under CLAUDE_CONFIG_DIR, not
+    <CLAUDE_HOME>/.claude — the precedence change named in Anti-scope."""
+    config_dir = tmp_path / "harness-config"
+    ignored_home = tmp_path / "should-be-ignored"
+    flat_root = config_dir / "plugins" / "coordinator-claude"
+    (flat_root / ".claude-plugin").mkdir(parents=True)
+    (flat_root / ".claude-plugin" / "plugin.json").write_text("{}")
+
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("CLAUDE_HOME", str(ignored_home))
+
+    assert mod._cf_flat_layout_probe() == str(flat_root)
+
+
+def test_c2_marketplace_cache_rung_honors_claude_config_dir(tmp_path, monkeypatch):
+    """Same precedence change for the marketplace-cache rung."""
+    config_dir = tmp_path / "harness-config"
+    ignored_home = tmp_path / "should-be-ignored"
+    version_dir = config_dir / "plugins" / "cache" / "coordinator-claude" / "coordinator" / "4.0.0"
+    (version_dir / "schemas").mkdir(parents=True)
+    (version_dir / "schemas" / "coordinator-registry.manifest.json").write_text("{}")
+
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("CLAUDE_HOME", str(ignored_home))
+
+    assert mod._cf_marketplace_cache_rung() == str(version_dir)
+
+
+def test_c2_flat_layout_probe_relative_claude_home_returns_none_not_raise(monkeypatch):
+    """A relative CLAUDE_HOME, which `_require_rooted` rejects, must fold to
+    None (a resolution rung never raises) rather than the old inline
+    ladder's silent cwd-relative join — the behaviour change C1's audit
+    names in table 1."""
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("CLAUDE_HOME", "relative/not/rooted")
+
+    assert mod._cf_flat_layout_probe() is None
+    assert mod._cf_marketplace_cache_rung() is None
+
+
 def test_main_cli_success_prints_no_trailing_newline(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("REPO_DOE_CLAUDE", "/tmp/some-doe-root")
     rc = mod.main([])
@@ -627,6 +679,94 @@ def test_shared_helper_allow_unchanged_fallback_false_returns_empty(tmp_path):
 def test_shared_helper_unknown_drive_root_guard_raises():
     with pytest.raises(ValueError):
         mod.repo_root_from_plugin_root_candidate("x", drive_root_guard="bogus")
+
+
+# ---------------------------------------------------------------------------
+# coordinator_doe_root_in_process() -- AC2c (P036-T1). The in-process entry
+# point is additive, and a non-spawning miss hides nothing.
+# ---------------------------------------------------------------------------
+
+
+def test_ac2c_i_in_process_resolves_at_each_rung(tmp_path, monkeypatch):
+    # rung 1: env
+    monkeypatch.setenv("REPO_DOE_CLAUDE", "/x/env-doe-root")
+    assert mod.coordinator_doe_root_in_process() == ("/x/env-doe-root", "env")
+    mod._reset_doe_root_cache()
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
+
+    # rung 2: repos.doe_claude
+    _seed_registry(tmp_path / "ml-registry", **{"repos.doe_claude": "/x/rung2-doe-root"})
+    assert mod.coordinator_doe_root_in_process() == ("/x/rung2-doe-root", "repos.doe_claude")
+    mod._reset_doe_root_cache()
+
+    # rung 2.5: plugin.mirrors.coordinator-claude.live_path (fresh registry dir)
+    live_path_registry = tmp_path / "ml-registry-25"
+    _seed_registry(live_path_registry, **{"plugin.mirrors.coordinator-claude.live_path": "/x/rung25-doe-root"})
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(live_path_registry))
+    assert mod.coordinator_doe_root_in_process() == ("/x/rung25-doe-root", "plugin.mirrors.live_path")
+    mod._reset_doe_root_cache()
+
+    # rung 2.75: codename-free ladder, via a `.doe-root` pointer file.
+    fake_home = tmp_path / "ac2c-fake-home"
+    fake_settings_home = tmp_path / "ac2c-fake-settings-home"
+    fake_plugin_root = tmp_path / "ac2c-fake-plugin-root"
+    (fake_home / ".claude").mkdir(parents=True)
+    (fake_settings_home / "machine-local").mkdir(parents=True)
+    (fake_plugin_root / "schemas").mkdir(parents=True)
+    (fake_plugin_root / "schemas" / "coordinator-registry.manifest.json").write_text("{}")
+    (fake_settings_home / "machine-local" / ".doe-root").write_text(str(fake_plugin_root))
+    empty_registry = tmp_path / "ml-registry-275"
+    empty_registry.mkdir()
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(empty_registry))
+    monkeypatch.setenv("CLAUDE_HOME", str(fake_home))
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(fake_settings_home))
+
+    result = mod.coordinator_doe_root_in_process()
+    assert result == (str(fake_plugin_root), "codename-free")
+
+
+def test_ac2c_ii_unresolvable_with_no_spawn_returns_none_none(tmp_path, monkeypatch):
+    empty_bin = tmp_path / "empty-bin"
+    empty_bin.mkdir()
+    fake_home = tmp_path / "ac2c-neg-fake-home"
+    fake_home.mkdir()
+    monkeypatch.setenv("CLAUDE_HOME", str(fake_home))
+    monkeypatch.setenv("PATH", str(empty_bin))
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("coordinator_doe_root_in_process must not spawn a subprocess")
+
+    monkeypatch.setattr(mod._resolve_coordinator_clone, "resolve_clone_root", _boom)
+
+    assert mod.coordinator_doe_root_in_process() == (None, None)
+
+
+def test_ac2c_iii_full_ladder_answer_never_enters_in_process_memo(tmp_path, monkeypatch):
+    empty_bin = tmp_path / "empty-bin"
+    empty_bin.mkdir()
+    fake_home = tmp_path / "ac2c-iii-fake-home"
+    fake_home.mkdir()
+    monkeypatch.setenv("CLAUDE_HOME", str(fake_home))
+    monkeypatch.setenv("PATH", str(empty_bin))
+    monkeypatch.setattr(
+        mod, "_resolve_via_clone_root_script", lambda: "/x/rung3-only-doe-root"
+    )
+
+    in_process_first = mod.coordinator_doe_root_in_process()
+    assert in_process_first == (None, None)
+
+    full_ladder = mod.coordinator_doe_root()
+    assert full_ladder == "/x/rung3-only-doe-root"
+
+    # The in-process memo still holds (None, None) -- the full ladder's
+    # rung-3 answer never leaked into it.
+    assert mod._IN_PROCESS_DOE_ROOT == (None, None)
+    assert mod.coordinator_doe_root_in_process() == (None, None)
+
+
+def test_ac2c_iv_coordinator_doe_root_signature_and_annotation_unchanged():
+    assert inspect.signature(mod.coordinator_doe_root).parameters == {}
+    assert mod.coordinator_doe_root.__annotations__.get("return") == "Optional[str]"
 
 
 def test_shared_helper_unknown_basename_compare_raises(tmp_path):

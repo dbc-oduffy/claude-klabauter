@@ -86,6 +86,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from coordinator_core import timestamps
+from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
 from coordinator_core.ceremony_common.json_payload_flag import (
     detect_conflicting_payload_channels,
     resolve_json_payload_flag,
@@ -1695,10 +1696,12 @@ def _load_doc_new_module() -> Any:
     registered in `sys.modules` before `exec_module` for the same
     dataclass-forward-ref reason documented there).
 
-    The exec goes through `exec_module_with_own_dir_on_path` because the loaded
-    script opens with a bare `import lib` that only resolves when its own
-    directory is on `sys.path` -- see that function's docstring for the silent
-    failure this repaired.
+    Preceded by `ensure_bin_lib_bound(script_path.parent)`: when `claude_klabauter_bin`
+    names this engine's own bin, that call durably binds it and this
+    function's own transient insert below is a no-op redundancy; when
+    `claude_klabauter_bin` names another clone, the durable bind is a no-op and this
+    function's transient insert is that clone's own path -- both cases are
+    covered, never just one.
 
     The check-cache/register/exec sequence runs under `module_load_lock.
     held_during_load(module_name)` so a second concurrent caller (warm engine,
@@ -1729,6 +1732,7 @@ def _load_doc_new_module() -> Any:
             raise ImportError(f"baton_assemble.apply: could not load {script_path}")
         module = importlib.util.module_from_spec(spec)
         sys.modules[module_name] = module
+        ensure_bin_lib_bound(str(script_path.parent))
         try:
             exec_module_with_own_dir_on_path(spec.loader, module, str(script_path.parent))
         except BaseException:

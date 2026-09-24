@@ -300,7 +300,7 @@ def _mark_fired(payload: dict) -> None:
         with open(path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write("1")
     except OSError:
-        pass
+        pass  # best-effort marker; the call must fire regardless of whether it lands
 
 
 # ---------------------------------------------------------------------------

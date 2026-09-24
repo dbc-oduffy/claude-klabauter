@@ -342,6 +342,7 @@ def _reconciled_no_successor_basenames(worktree_root: Path) -> "FrozenSet[str]":
         try:
             text = path.read_text(encoding="utf-8")
         except OSError:
+            # an unreadable audit file cannot be checked; skip it
             continue
         split = split_frontmatter(text)
         if split is None:

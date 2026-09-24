@@ -117,7 +117,10 @@ def test_write_fails_open_when_not_in_a_git_repo(tmp_path):
     assert session_start.write_session_start_record("sess-4", launch_cwd=str(scratch)) is False
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits only")
+@pytest.mark.skipif(
+    sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="chmod 0o000 permission denial is not reliable on Windows or as root",
+)
 def test_write_fails_open_on_unwritable_sessions_dir(tmp_path):
     root = _init_repo(tmp_path)
     sessions_hub = root / ".git" / "coordinator-sessions"
@@ -183,7 +186,10 @@ def test_read_returns_none_for_empty_record_file(tmp_path):
     assert session_start.read_session_start_record("sess-8", cwd=str(root)) is None
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits only")
+@pytest.mark.skipif(
+    sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="chmod 0o000 permission denial is not reliable on Windows or as root",
+)
 def test_read_fails_open_on_unreadable_record(tmp_path):
     root = _init_repo(tmp_path)
     session_dir = root / ".git" / "coordinator-sessions" / "sess-9"
@@ -412,7 +418,10 @@ def test_delete_settings_home_session_record_is_idempotent_when_absent(tmp_path)
     assert session_start.delete_settings_home_session_record("no-such-session-h10") is True
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits only")
+@pytest.mark.skipif(
+    sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="chmod 0o000 permission denial is not reliable on Windows or as root",
+)
 def test_delete_settings_home_session_record_fails_open_on_permission_error(tmp_path):
     """Fail-open: a delete that cannot actually remove the record returns `False` rather
     than raising."""

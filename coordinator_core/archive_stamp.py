@@ -2613,50 +2613,6 @@ def cs_resolve_memo(memo_path: str, *disposition_args: str, return_result: bool 
 # coordinator_core.ops.plan_status_transition port (no subprocess/node hop).
 # ---------------------------------------------------------------------------
 
-_AC_ROW_RE = re.compile(
-    r"^\s*\|\s*(AC\d+)\s*\|.*\|\s*([A-Za-z][\w-]*)\s*\|\s*$"
-)
-
-
-def _count_open_acs(plan_path: str) -> Optional[int]:
-    """Conservatively counts `open` rows in a plan's Acceptance-Criteria
-    table. Spec: state/audits/2026-08-13-implemented-plans-keep-ac-tables-at-
-    open.md — the census that found 17/40 `implemented` plans still carrying
-    an all- or partly-`open` AC table with nothing in the close ceremony
-    ever touching those cells.
-
-    Returns None (never a count) when the table is absent or its shape
-    can't be confidently read — a false count trains readers to ignore the
-    message, which costs more than staying silent. Only lines matching
-    `| ACn | ... | <status> |` on one physical line are counted; the
-    criterion-prose column is matched non-greedily-agnostic (`.*` before
-    the final `|`) so embedded pipe characters inside backticks in that
-    column cannot manufacture a phantom row or misread the status field.
-
-    Negative-spec: does NOT normalise the observed status vocabulary
-    (`open`, `met`, `shipped`, `closed`, `deferred`, ...) — only `open`
-    counts as un-dispositioned, everything else is treated as dispositioned
-    verbatim, per the audit's own instruction not to invent a closed
-    vocabulary.
-    """
-    try:
-        text = Path(plan_path).read_text(encoding="utf-8")
-    except OSError:
-        return None
-
-    open_count = 0
-    saw_row = False
-    for line in text.splitlines():
-        match = _AC_ROW_RE.match(line)
-        if not match:
-            continue
-        saw_row = True
-        if match.group(2) == "open":
-            open_count += 1
-
-    return open_count if saw_row else None
-
-
 def cs_stamp_plan_implemented(plan_path: str) -> int:
     """Flips a plan's frontmatter status: to implemented via the native
     coordinator_core.ops.plan_status_transition port (a completed 1:1,
@@ -2665,24 +2621,15 @@ def cs_stamp_plan_implemented(plan_path: str) -> int:
     directly in-process; no subprocess, no node dependency, no DoE-root
     resolution. Returns the port's own exit code verbatim.
 
-    Offer, not a block (spec: state/audits/2026-08-13-implemented-plans-
-    keep-ac-tables-at-open.md): after a successful stamp, if the plan
-    carries an Acceptance-Criteria table with any row still `open`, prints
-    a one-line notice to stderr naming the count and the plan path. The
-    stamp itself, and this function's return value, are unaffected either
-    way — silence on no table or an unparseable one, never a false count.
+    A pure pass-through of the verb's exit code: it prints nothing of its
+    own. The verb's own AC emission (`_ac_open_rows_warning`,
+    `coordinator_core.ops.plan_status_transition`) already reports an
+    open-AC-rows advisory for every route into this function, so a second,
+    divergent AC parser here would be a duplicate, register-breaking notice
+    (spec: docs/plans/2026-09-12-the-direct-stamp-verb-refuses-what-close-
+    out-refuses.md, C3).
     """
-    rc = plan_status_transition.main(["stamp-implemented", "--plan", plan_path])
-    if rc == 0:
-        open_count = _count_open_acs(plan_path)
-        if open_count:
-            plural = "s" if open_count != 1 else ""
-            print(
-                f"stamp-plan-implemented: {open_count} AC row{plural} still "
-                f"open in {plan_path}",
-                file=sys.stderr,
-            )
-    return rc
+    return plan_status_transition.main(["stamp-implemented", "--plan", plan_path])
 
 
 def cs_stamp_plan_superseded(plan_path: str, by: str) -> int:

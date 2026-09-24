@@ -288,6 +288,7 @@ def save(repo_root: Path, entries: dict) -> None:
             if tmp_path.exists():
                 tmp_path.unlink()
         except OSError:
+            # tmp file already gone; cache write already failed above regardless
             pass
 
 
@@ -352,6 +353,7 @@ def load_content_cache() -> dict[str, FileWrites]:
         try:
             writes = file_writes_from_json(writes_data)
         except (ValueError, KeyError, TypeError):
+            # malformed entry in the content cache; drop it rather than fail the whole load
             continue
         entries[digest] = writes
     return entries
@@ -391,4 +393,5 @@ def save_content_cache(entries: dict[str, FileWrites]) -> None:
             if tmp_path.exists():
                 tmp_path.unlink()
         except OSError:
+            # tmp file already gone; cache write already failed above regardless
             pass

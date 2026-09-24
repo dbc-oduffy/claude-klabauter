@@ -38,8 +38,12 @@ Spec backlink: DoE-claude:pln-b1-ceremony-complete-computed--9ffa54 § AC10
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 
+from coordinator_core.ops import workday_complete_step2_5_dirty_tree as step2_5_dirty_tree
 from coordinator_core.workday_complete import brief as wc_brief
 
 # Documented consumes-manifest members that are never a `directives[].cli`
@@ -428,26 +432,95 @@ def test_scope_summary_leading_dash_survives_intact() -> None:
     ]
 
 
-def test_dirty_tree_verdict_probe_argv_unchanged_by_c6_claim_awareness(monkeypatch) -> None:
-    """C6 (docs/plans/2026-08-05-in-process-writers-declare-their-writes.md)
-    decided the Step 2.5 script obtains its session id via
-    `coordinator_core.session.core.resolve_session_id`, in-process, rather
-    than growing `main()` a session-id parameter/flag -- specifically so
-    this repo's own in-process caller
-    (`_compute_dirty_tree_verdict`) never needs to change its own call
-    shape. Regression guard for that decision: this must keep calling
-    `_step2_5_dirty_tree_main` with EXACTLY `["--dry-run"]`, no session
-    argument threaded through, byte-identical to pre-C6."""
-    captured: dict[str, object] = {}
+def test_dirty_tree_verdict_probe_raise_degrades_to_ambiguous(monkeypatch) -> None:
+    """Posture pin (docs/plans/2026-09-22-the-step-2-5-dirty-tree-actor-
+    decomposes.md, C2): a raise out of `classify_dirty_tree()` degrades
+    toward `ambiguous=True` -- fail toward asking, never toward silently
+    skipping a genuine ask."""
 
-    def _fake_step2_5_main(argv):
-        captured["argv"] = list(argv)
-        return 0
+    def _raise():
+        raise RuntimeError("synthetic classify failure")
 
-    monkeypatch.setattr(wc_brief, "_step2_5_dirty_tree_main", _fake_step2_5_main)
+    monkeypatch.setattr(wc_brief, "classify_dirty_tree", _raise)
     verdict = wc_brief._compute_dirty_tree_verdict()
-    assert captured["argv"] == ["--dry-run"]
+    assert verdict["ambiguous"] is True
+
+
+def test_dirty_tree_verdict_classification_error_is_ambiguous(monkeypatch) -> None:
+    """A classification with `error` set (not-a-repo, `git status` failure)
+    is `ambiguous=True` -- the deliberate HEAD behaviour change this plan
+    makes: HEAD's exit-1 hard error read as `ambiguous=False`, contradicting
+    the probe's own documented fail-toward-asking posture. This pin FAILS if
+    `_compute_dirty_tree_verdict` is reverted to HEAD's body (AC 3)."""
+    classification = step2_5_dirty_tree.DirtyTreeClassification(
+        needs_pm=False,
+        error="[step2.5] ERROR: not inside a git repo",
+        counters=step2_5_dirty_tree._Counters(),
+        acc=step2_5_dirty_tree._Accumulators(),
+    )
+    monkeypatch.setattr(wc_brief, "classify_dirty_tree", lambda: classification)
+    verdict = wc_brief._compute_dirty_tree_verdict()
+    assert verdict["ambiguous"] is True
+    assert verdict["evidence"] == "[step2.5] ERROR: not inside a git repo"
+
+
+def test_dirty_tree_verdict_needs_pm_is_ambiguous(monkeypatch) -> None:
+    """A clean classification with `needs_pm=True` is `ambiguous=True`."""
+    classification = step2_5_dirty_tree.DirtyTreeClassification(
+        needs_pm=True,
+        error=None,
+        counters=step2_5_dirty_tree._Counters(),
+        acc=step2_5_dirty_tree._Accumulators(),
+    )
+    monkeypatch.setattr(wc_brief, "classify_dirty_tree", lambda: classification)
+    verdict = wc_brief._compute_dirty_tree_verdict()
+    assert verdict["ambiguous"] is True
+
+
+def test_dirty_tree_verdict_clean_is_not_ambiguous(monkeypatch) -> None:
+    """A clean classification (`needs_pm=False`, `error=None`) is the ONLY
+    case that reads `ambiguous=False`."""
+    classification = step2_5_dirty_tree.DirtyTreeClassification(
+        needs_pm=False,
+        error=None,
+        counters=step2_5_dirty_tree._Counters(),
+        acc=step2_5_dirty_tree._Accumulators(),
+    )
+    monkeypatch.setattr(wc_brief, "classify_dirty_tree", lambda: classification)
+    verdict = wc_brief._compute_dirty_tree_verdict()
     assert verdict["ambiguous"] is False
+
+
+def test_no_non_test_coordinator_core_module_imports_step2_5_main() -> None:
+    """Structural guard (carried checkbox 7, docs/plans/2026-09-22-the-step-
+    2-5-dirty-tree-actor-decomposes.md § "The cross-repo unknown"): no
+    non-test `coordinator_core` module may import `main` from
+    `coordinator_core.ops.workday_complete_step2_5_dirty_tree` -- a second
+    probe path through the actor's CLI/print/exit-code contract cannot
+    reappear. AST-walk rather than a grep so a multi-line or aliased import
+    still trips it."""
+    repo_root = Path(__file__).resolve().parents[2]
+    coordinator_core_root = repo_root / "coordinator_core"
+    offenders: list[str] = []
+    for py_file in coordinator_core_root.rglob("*.py"):
+        rel = py_file.relative_to(repo_root)
+        parts = rel.parts
+        if any(part == "tests" for part in parts) or py_file.name.startswith("test_"):
+            continue
+        tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(rel))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == (
+                "coordinator_core.ops.workday_complete_step2_5_dirty_tree"
+            ):
+                for alias in node.names:
+                    if alias.name == "main":
+                        offenders.append(str(rel))
+    assert offenders == [], (
+        "non-test coordinator_core module(s) import `main` from "
+        f"workday_complete_step2_5_dirty_tree: {offenders} -- the probe must "
+        "read the typed classify_dirty_tree() return, never the actor's CLI "
+        "print/exit-code contract"
+    )
 
 
 @pytest.mark.real_home

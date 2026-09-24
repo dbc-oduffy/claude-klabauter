@@ -13,9 +13,9 @@ below used to violate this in a different, incompatible way:
   D3  cartography.py spawned `git` and `sys.exit(2)`'d outside a git tree
       to resolve a transport-only `--repo` default, for the entire
       `cartography.*` family (all scope "none").
-  D4  schema-drift-gate.py did the same git-spawn-and-bail for
-      `schema.drift_gate` (scope "none"), with no `--repo` flag to even
-      justify the spend.
+D4's own subject, schema-drift-gate.py, was retired outright (P124-C3, the
+op it fronted no longer exists); its coverage below is removed rather than
+left pointing at a deleted file.
 
 `coordinator-compute-layer-scaffold.py` (compute_layer.scaffold, scope
 "none") is the pre-existing REFERENCE implementation this fix mirrors: a
@@ -174,38 +174,6 @@ def test_cartography_module_defines_no_git_spawning_resolver():
     """D3's own regression guard: `_resolve_repo_root` (the git-spawn-and-
     sys.exit(2) helper this chunk removed) must not reappear on the module."""
     assert not hasattr(_cartography, "_resolve_repo_root")
-
-
-# ---------------------------------------------------------------------------
-# D4 — schema-drift-gate.py (schema.drift_gate, scope "none")
-# ---------------------------------------------------------------------------
-
-_schema_drift_gate = _load_by_path(
-    "test_none_scoped_schema_drift_gate_cli", "schema-drift-gate.py"
-)
-
-
-def test_schema_drift_gate_succeeds_without_resolving_a_repo_root(capsys, monkeypatch):
-    seen = {}
-
-    def _fake_route(op, params, repo_root, legacy_fn):
-        seen["op"] = op
-        seen["repo_root"] = repo_root
-        return {"ok": True, "status": "MATCH", "drifted": [], "message": None}
-
-    monkeypatch.setattr(_schema_drift_gate.cc_invoke, "route", _fake_route)
-
-    rc = _schema_drift_gate.main([])
-
-    assert rc == 0
-    assert seen["op"] == "schema.drift_gate"
-    assert seen["repo_root"] == ""
-
-
-def test_schema_drift_gate_module_defines_no_git_spawning_resolver():
-    """D4's own regression guard: `_resolve_repo_root` (the git-spawn-and-
-    bail helper this chunk removed) must not reappear on the module."""
-    assert not hasattr(_schema_drift_gate, "_resolve_repo_root")
 
 
 # ---------------------------------------------------------------------------

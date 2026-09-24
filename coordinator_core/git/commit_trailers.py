@@ -68,6 +68,10 @@ of the existing hand-mirroring gap, not silently reintroduced as a NEW one.
 that commit attribution serves review enforcement and plan-unit
 legibility only -- catching a swept stray is explicitly not a goal. See
 `docs/reference/commit-trailer-contract.md` for the surviving fields.
+
+Reading the trailer back: `git log --format='%(trailers:key=Session-Id,valueonly)'`
+(add `-1 <sha>` to scope to one commit). This is the documented read path;
+no new CLI is added for it.
 """
 
 from __future__ import annotations
@@ -169,202 +173,74 @@ def _resolve_doe_root() -> str:
     return read_doe_root_pointer_file(os.path.expanduser("~"))
 
 
-#: Per-session-id transcript path, and per-(session_id, transcript_path)
-#: resolved trailer value -- both memoized for the process's lifetime (a
-#: warm server serves many sessions, so this is keyed rather than a single
-#: cached scalar; see `_resolve_transcript_path`/`_resolve_attribution_
-#: trailer_value`).
-_ATTRIBUTION_TRANSCRIPT_MEMO: "dict[str, Optional[str]]" = {}
-_ATTRIBUTION_VALUE_MEMO: "dict[tuple, Optional[str]]" = {}
-_ATTRIBUTION_MISSING_NOTED = False
-
-#: `claude-<family>-<n>[-<n>...][-<8-digit-date>]` -- see
-#: `_display_name_from_model_id`.
-_MODEL_ID_DATE_SUFFIX_RE = re.compile(r"^\d{8}$")
+#: The one attribution line the engine stamps. Deliberately model-free: a
+#: model name is what a dispatched commit agent got wrong (klabauter#67), and
+#: some repos forbid model identifiers in commit messages outright.
+ATTRIBUTION_TRAILER_VALUE = "Claude <noreply@anthropic.com>"
 
 _CO_AUTHORED_BY_ADDRESS_RE = re.compile(r"<([^<>]+)>\s*$")
 
 
-def _resolve_transcript_path(session_id: Optional[str]) -> Optional[str]:
-    """Locate this session's own transcript `.jsonl`: Claude Code's on-disk
-    layout is `<CLAUDE_HOME or ~>/.claude/projects/<project-slug>/
-    <session-id>.jsonl`, one project directory per repo/worktree the harness
-    has ever run in, so the session's own file can sit under any one of
-    them.
+def _reconcile_anthropic_co_authored_by(commit_msg_file: Union[str, Path]) -> bool:
+    """Make `ATTRIBUTION_TRAILER_VALUE` the only `noreply@anthropic.com`
+    `Co-Authored-By:` line in `commit_msg_file`'s trailer block (see
+    `_extract_trailer_block`). Returns True iff it is already there, so the
+    caller must not append another.
 
-    Globs ONLY the immediate children of `projects/` (one level, never
-    recursive) -- bounded to the number of project directories the harness
-    has created, not the size of any one of them. Memoized per `session_id`:
-    the mapping from a session id to its transcript file cannot change
-    within a process's lifetime, so a warm server resolving many commits for
-    the same session pays this glob once.
+    Any other Anthropic-addressed line -- a model-named one written by a
+    caller or a dispatched agent -- is removed from the file in place, with
+    its continuation lines, so the engine's line replaces it. Lines for other
+    addresses are never touched.
 
-    Returns `None` when `session_id` is falsy, `projects/` does not exist,
-    or no child directory carries a `<session_id>.jsonl` file -- never
-    raises."""
-    if not session_id:
-        return None
-    if session_id in _ATTRIBUTION_TRANSCRIPT_MEMO:
-        return _ATTRIBUTION_TRANSCRIPT_MEMO[session_id]
-
-    home = os.environ.get("CLAUDE_HOME") or os.path.expanduser("~")
-    projects_dir = Path(home) / ".claude" / "projects"
-    found: Optional[str] = None
-    try:
-        for child in projects_dir.iterdir():
-            if not child.is_dir():
-                continue
-            candidate = child / f"{session_id}.jsonl"
-            if candidate.is_file():
-                found = str(candidate)
-                break
-    except OSError:
-        found = None
-
-    _ATTRIBUTION_TRANSCRIPT_MEMO[session_id] = found
-    return found
-
-
-def _display_name_from_model_id(model_id: Optional[str]) -> Optional[str]:
-    """Derive a commit-trailer display name from a raw model id MECHANICALLY
-    -- no per-model lookup table anywhere in this module, so a newly-shipped
-    model id needs no code change here to attribute correctly.
-
-    Rule (PM spec, 2026-09-23): the id must start with `claude-`; the
-    remainder splits on `-` into a leading run of non-numeric FAMILY tokens
-    followed by a run of purely-numeric VERSION tokens, with a trailing
-    8-digit date token (`YYYYMMDD`, e.g. a release-date suffix) dropped
-    before that split. The family tokens are title-cased and space-joined;
-    the version tokens are joined with `.`.
-
-        "claude-opus-5-5"                  -> "Claude Opus 5.5"
-        "claude-sonnet-5"                  -> "Claude Sonnet 5"
-        "claude-haiku-4-5-20251001"        -> "Claude Haiku 4.5"
-
-    Returns `None` -- never guesses -- when `model_id` is falsy, does not
-    start with `claude-`, has no family tokens, or has any token after the
-    family run that is not purely numeric (a shape this rule was not given
-    to parse). A caller must treat `None` as "attach nothing", never as "use
-    the raw id"."""
-    if not isinstance(model_id, str):
-        return None
-    model_id = model_id.strip()
-    if not model_id.startswith("claude-"):
-        return None
-    parts = [p for p in model_id[len("claude-") :].split("-") if p]
-    if not parts:
-        return None
-    if _MODEL_ID_DATE_SUFFIX_RE.match(parts[-1]) and len(parts) > 1:
-        parts = parts[:-1]
-
-    family: "list[str]" = []
-    i = 0
-    while i < len(parts) and not parts[i].isdigit():
-        family.append(parts[i])
-        i += 1
-    if not family:
-        return None
-
-    version = parts[i:]
-    if any(not p.isdigit() for p in version):
-        return None
-
-    display = "Claude " + " ".join(word.capitalize() for word in family)
-    if version:
-        display += " " + ".".join(version)
-    return display
-
-
-def _resolve_attribution_trailer_value(
-    session_id: Optional[str], transcript_path: Optional[str] = None
-) -> Optional[str]:
-    """The `Co-Authored-By` value the engine attaches when a caller's
-    message carries none -- resolved from THIS SESSION'S OWN transcript, the
-    per-session truth, never a harness-wide default.
-
-    Source: the most recent `type == "assistant"` record's `message.model`
-    in the session's own transcript (`transcript_tail.
-    resolve_last_assistant_model`, the shared, bounded, zero-spawn tail
-    reader also used by `hooks/block_ungranted_opus_subagent.py`). The
-    operator's configured DEFAULT model (`~/.claude/settings.json`'s
-    `model` key) was tried first and REJECTED (PM ruling, 2026-09-23): it
-    names what a session starts as, not what authored the commit, and
-    misattributes any session that ran under a different model. The
-    transcript's own record is the one place that fact is actually written.
-
-    `transcript_path`, when given, is used directly and never re-resolved
-    via the `session_id` glob -- a caller that already knows the path (it is
-    in the commit call's own context) should not pay a second lookup.
-    Otherwise resolved from `session_id` via `_resolve_transcript_path`.
-
-    The resolved model id is turned into a display name mechanically
-    (`_display_name_from_model_id`) -- no per-model table, so this never
-    hardcodes a model name.
-
-    `None` when there is no session id, no resolvable transcript path, no
-    qualifying assistant record, or the record's model id does not parse --
-    the caller then omits the trailer entirely and the commit still lands
-    (see `compute_missing_trailer_args`).
-
-    Memoized per `(session_id, transcript_path)`: the answer cannot change
-    for a given session within one process's lifetime."""
-    global _ATTRIBUTION_MISSING_NOTED
-    cache_key = (session_id, transcript_path)
-    if cache_key in _ATTRIBUTION_VALUE_MEMO:
-        return _ATTRIBUTION_VALUE_MEMO[cache_key]
-
-    path = transcript_path or _resolve_transcript_path(session_id)
-    model_id = None
-    if path:
-        from coordinator_core.transcript_tail import resolve_last_assistant_model
-
-        model_id = resolve_last_assistant_model(path)
-    display = _display_name_from_model_id(model_id) if model_id else None
-    value = f"{display} <noreply@anthropic.com>" if display else None
-
-    _ATTRIBUTION_VALUE_MEMO[cache_key] = value
-    if value is None and not _ATTRIBUTION_MISSING_NOTED:
-        _ATTRIBUTION_MISSING_NOTED = True
-        import sys
-
-        print(
-            "commit_trailers: no attribution source resolved "
-            "(no session transcript, no assistant record, or an "
-            "unparseable model id) -- Co-Authored-By omitted, commit "
-            "proceeds",
-            file=sys.stderr,
-        )
-    return value
-
-
-def _has_co_authored_by_for_address(
-    commit_msg_file: Union[str, Path], address: str
-) -> bool:
-    """True iff `commit_msg_file`'s trailer block (see
-    `_extract_trailer_block`) already contains a `Co-Authored-By:` line
-    whose `<...>` address equals `address`, case-insensitively -- the
-    dedup PM ruling 2026-09-23 asks for: ANY existing Anthropic-addressed
-    line (whatever display string it carries -- migration means a caller
-    may still pass the old hand-typed `Claude Opus 5.5 (1M context)` form)
-    counts as already satisfied, so this engine never appends a second one.
-    A `Co-Authored-By:` line for a DIFFERENT address is not matched here and
-    is therefore left untouched by the caller of this function.
-
-    Any read failure -> False, same degrade-gracefully contract as
-    `_has_trailer_line`."""
+    Any read or write failure -> True: never risk a duplicate, never block a
+    commit."""
     try:
         with open(commit_msg_file, encoding="utf-8") as fh:
             text = fh.read()
     except Exception:
+        return True
+    block = _extract_trailer_block(text)
+    if not block:
         return False
-    target = address.strip().casefold()
-    for line in _extract_trailer_block(text):
-        if not line.lower().startswith("co-authored-by:"):
+
+    lines = text.splitlines()
+    while lines and lines[-1].strip() == "":
+        lines.pop()
+    head, tail = lines[: len(lines) - len(block)], lines[len(lines) - len(block) :]
+
+    kept: List[str] = []
+    present = False
+    dropping = False
+    for line in tail:
+        if _TRAILER_CONT_RE.match(line):
+            if not dropping:
+                kept.append(line)
             continue
+        dropping = False
         match = _CO_AUTHORED_BY_ADDRESS_RE.search(line)
-        if match and match.group(1).strip().casefold() == target:
-            return True
-    return False
+        if (
+            line.lower().startswith("co-authored-by:")
+            and match
+            and match.group(1).strip().casefold() == "noreply@anthropic.com"
+        ):
+            if line.split(":", 1)[1].strip() == ATTRIBUTION_TRAILER_VALUE and not present:
+                present = True
+            else:
+                dropping = True
+                continue
+        kept.append(line)
+
+    if len(kept) == len(tail):
+        return present
+    remaining = head + kept
+    while remaining and remaining[-1].strip() == "":
+        remaining.pop()
+    try:
+        with open(commit_msg_file, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("\n".join(remaining) + "\n")
+    except Exception:
+        return True
+    return present
 
 
 def _resolve_deliverable_id_at(git_dir: str, session_id: str) -> str:
@@ -1089,7 +965,7 @@ def compute_missing_trailer_args(
     paths: Optional[Sequence[str]] = None,
     *,
     session_id_override: Optional[str] = None,
-    transcript_path: Optional[str] = None,
+    deliverable_id_override: Optional[str] = None,
 ) -> List[str]:
     """Compute the `git interpret-trailers --trailer ...` argument list for
     whichever of Session-Id / Deliverable-Id are resolvable AND not already
@@ -1108,8 +984,8 @@ def compute_missing_trailer_args(
     message may legitimately carry one without the other) and Deliverable-Id
     is only resolved (and only looked up) if it is itself missing --
     verbatim parity with the hook's ordering. `Co-Authored-By` (attribution)
-    is a THIRD, independent trailer computed unconditionally of session-id
-    resolution -- see the block below the Session-Id/Deliverable-Id gate.
+    is a THIRD, independent, constant trailer attached unconditionally of
+    session-id resolution -- see the block below the Session-Id/Deliverable-Id gate.
 
     `paths`: the pathspec of the commit being built (project-relative or
     absolute, either resolves against `cwd`), OPTIONAL and additive --
@@ -1121,6 +997,26 @@ def compute_missing_trailer_args(
     session defect this closes and the omit-rather-than-guess posture on a
     genuinely divergent pathspec (returns `""`, same as no match; nothing
     raises).
+
+    `deliverable_id_override` (P138-C1, docs/plans/2026-09-22-commit-
+    trailer-attribution-residual.md): a CALLER-KNOWN `Deliverable-Id` value
+    that bypasses the whole `_resolve_deliverable_id` ladder (tier 0's
+    pathspec-artifact read included) when the message's trailer block does
+    not already carry a `Deliverable-Id:` line. NOT a tier of the ladder and
+    NOT a validator -- it is the caller asserting a value it has ALREADY
+    resolved (mirrors the wave-commit emitter naming the executing plan's own
+    `deliverable_id`), so it wins outright rather than competing with the
+    session/pathspec tiers. Applies INDEPENDENTLY of session-id resolution:
+    it is checked before, and regardless of, the `session_id` UUID fail-safe
+    below, so a non-UUID session (which omits BOTH trailers on the ladder
+    path) does not suppress an explicit override. Never raises. A value that
+    is not `dlv-`/`pln-` prefixed (the same shape convention
+    `git_native.py`'s message-door check enforces) is treated as "no
+    override": it is ignored and resolution falls through to the ordinary
+    ladder, unchanged. A message whose trailer block already carries
+    `Deliverable-Id:` is left alone either way -- idempotency is unchanged.
+    `None` (the default) is byte-identical to HEAD for every existing
+    caller.
 
     `session_id_override` (state/bug-backlog/2026-08-18-scoped-git-commit-
     stamps-a-foreign-session-id-8d21f0c4e7b9.yaml): the invoking session's
@@ -1144,11 +1040,6 @@ def compute_missing_trailer_args(
     that read -- a caller-supplied override is not exempt from the
     invariant that a non-UUID id must never reach `Session-Id:`.
 
-    `transcript_path`, when the caller already has one in hand (it is in the
-    commit call's own context -- e.g. a harness-forwarded value), is passed
-    straight to `_resolve_attribution_trailer_value` and skips this
-    function's own `session_id`-keyed transcript glob. `None` (the default)
-    falls back to that glob.
     """
     git_dir = _resolve_git_dir(cwd)
     session_id = (
@@ -1159,16 +1050,32 @@ def compute_missing_trailer_args(
 
     trailer_args: List[str] = []
 
-    # Fail-safe: a non-UUID resolved id must OMIT both Session-Id and
-    # Deliverable-Id, never stamp a wrong Session-Id (or a Deliverable-Id
-    # keyed off it).
+    try:
+        need_deliverable_id = not _has_trailer_line(commit_msg_file, "Deliverable-Id:")
+    except Exception:
+        need_deliverable_id = False
+
+    # The override bypasses the ladder outright, independent of the
+    # session-id fail-safe below -- a caller-known id is not keyed off the
+    # session at all. Malformed (not dlv-/pln- shaped) is "no override":
+    # falls through unchanged to the ordinary ladder, same shape convention
+    # `git_native.py`'s message-door check already enforces.
+    if need_deliverable_id and deliverable_id_override and (
+        deliverable_id_override.startswith("dlv-")
+        or deliverable_id_override.startswith("pln-")
+    ):
+        trailer_args += ["--trailer", f"Deliverable-Id: {deliverable_id_override}"]
+        need_deliverable_id = False
+
+    # Fail-safe: a non-UUID resolved id must OMIT Session-Id, never stamp a
+    # wrong one -- and, for the LADDER (not the override above, which is
+    # caller-known and unrelated to session identity), Deliverable-Id too,
+    # since every ladder tier below tier 0 is session-keyed.
     if session_id and _UUID_RE.fullmatch(session_id):
         try:
             need_session_id = not _has_trailer_line(commit_msg_file, "Session-Id:")
-            need_deliverable_id = not _has_trailer_line(commit_msg_file, "Deliverable-Id:")
         except Exception:
             need_session_id = False
-            need_deliverable_id = False
 
         if need_session_id:
             trailer_args += ["--trailer", f"Session-Id: {session_id}"]
@@ -1177,30 +1084,13 @@ def compute_missing_trailer_args(
             if deliverable_id:
                 trailer_args += ["--trailer", f"Deliverable-Id: {deliverable_id}"]
 
-    # Co-Authored-By: attribution is NOT gated on the UUID check above (it is
-    # keyed on the SESSION's own transcript, not on Session-Id's validity) --
-    # it is resolvable and owed whether or not a Session-Id was. PM ruling
-    # (state/cross-repo/inbox/2026-09-23-example-game-repo-em-commit-trailers-owned-
-    # by-engine.md, reworked 2026-09-23): every trailer, this one included,
-    # is the engine's to attach, never a caller's boilerplate to remember. A
-    # caller-supplied Co-Authored-By for a DIFFERENT address is left
-    # untouched (not deduped, not replaced) -- only an existing Anthropic-
-    # addressed line (see `_has_co_authored_by_for_address`) suppresses this
-    # engine's own line, regardless of its display string (covers
-    # migration-era hand-typed lines).
-    try:
-        attribution = _resolve_attribution_trailer_value(session_id, transcript_path)
-    except Exception:
-        attribution = None
-    if attribution:
-        try:
-            already_present = _has_co_authored_by_for_address(
-                commit_msg_file, "noreply@anthropic.com"
-            )
-        except Exception:
-            already_present = True  # degrade-gracefully: never risk a duplicate
-        if not already_present:
-            trailer_args += ["--trailer", f"Co-Authored-By: {attribution}"]
+    # Co-Authored-By is NOT gated on the UUID check above: it is constant and
+    # owed on every commit. PM ruling (state/cross-repo/inbox/2026-09-23-
+    # example-game-repo-em-commit-trailers-owned-by-engine.md): every trailer is the
+    # engine's to attach, never a caller's boilerplate to remember. May
+    # mutate `commit_msg_file` -- see `_reconcile_anthropic_co_authored_by`.
+    if not _reconcile_anthropic_co_authored_by(commit_msg_file):
+        trailer_args += ["--trailer", f"Co-Authored-By: {ATTRIBUTION_TRAILER_VALUE}"]
 
     return trailer_args
 
@@ -1555,7 +1445,7 @@ def apply_missing_trailers(
     paths: Optional[Sequence[str]] = None,
     *,
     session_id_override: Optional[str] = None,
-    transcript_path: Optional[str] = None,
+    deliverable_id_override: Optional[str] = None,
 ) -> str:
     """Return `message` with every resolvable-and-missing Session-Id /
     Deliverable-Id / Co-Authored-By trailer appended -- the shared attach
@@ -1563,10 +1453,6 @@ def apply_missing_trailers(
     bypassing mechanism such as `ceremony.commit_v2`) is meant to call so
     all three land under the same resolution ladder, rather than each route
     reimplementing (and inevitably diverging on) its own copy.
-
-    `transcript_path`, when a caller already has one in hand, is forwarded
-    to `compute_missing_trailer_args` unchanged -- see that function's own
-    docstring.
 
     Pure orchestration over what this module already exposes:
     `compute_missing_trailer_args` decides WHAT is missing and resolvable
@@ -1590,6 +1476,12 @@ def apply_missing_trailers(
     fails to run -- never raises, matching every other function in this
     module's degrade-gracefully contract. A caller must not treat an
     unchanged return as an error.
+
+    `deliverable_id_override` is forwarded verbatim to
+    `compute_missing_trailer_args` -- see that function's own docstring for
+    the full semantics (caller-known, ladder-bypassing, dlv-/pln- shape
+    required, independent of session-id resolution). `None` (the default)
+    is byte-identical to HEAD.
     """
     fd, msg_path = tempfile.mkstemp(prefix="commit-trailers-stage-")
     try:
@@ -1601,8 +1493,12 @@ def apply_missing_trailers(
                 cwd,
                 paths=paths,
                 session_id_override=session_id_override,
-                transcript_path=transcript_path,
+                deliverable_id_override=deliverable_id_override,
             )
+            # A replaced foreign attribution line was removed from the
+            # staged file, not from `message`.
+            with open(msg_path, encoding="utf-8", newline="") as handle:
+                message = handle.read()
         except Exception:
             # Degrade-gracefully, same contract every resolver in this
             # module already honors -- a trailer problem must never block a

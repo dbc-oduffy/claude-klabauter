@@ -573,6 +573,140 @@ def test_idempotency_key_absent_retries_mint_different_ids(monkeypatch, tmp_path
     assert first["event"]["id"] != second["event"]["id"]
 
 
+# ---------------------------------------------------------------------------
+# P144-C4 — idempotency_key binding: a retry that differs only in a
+# volatile field (observed_at) is idempotent success; a reused key under a
+# genuinely different payload is refused via PushSuggestionKeyMisuseError.
+# ---------------------------------------------------------------------------
+
+
+def test_idempotency_key_retry_with_different_observed_at_is_idempotent_success(
+    monkeypatch, tmp_path
+):
+    """Same key, same logical payload, DIFFERENT observed_at (the ordinary
+    producer-retry shape after an ambiguous exit-code-only failure) mints a
+    DIFFERENT id (observed_at feeds `_mint_event_id`'s digest) but must
+    still be caught by `tracker_store`'s own-shard key-collision check as a
+    retry — nothing appended a second time, and the response names the
+    ORIGINAL bound event, not a new one."""
+    repo = _make_git_repo(tmp_path / "repo")
+    monkeypatch.setattr(
+        tracker_holder,
+        "registry_get",
+        _fake_registry(
+            {
+                "repo_slug.acme/self": "self_key",
+                "repos.self_key": str(repo),
+            }
+        ),
+    )
+    params = {
+        "event": _event(repo="acme/self", observed_at="2026-08-20T10:00:00.000000Z"),
+        "idempotency_key": "retry-key-1",
+    }
+    first = _run(_handler(dict(params), repo_root=repo))
+    assert first["delivered"] == "local"
+
+    retry_params = dict(params)
+    retry_params["event"] = _event(
+        repo="acme/self", observed_at="2026-08-20T10:00:05.000000Z"
+    )
+    second = _run(_handler(retry_params, repo_root=repo))
+
+    assert second["event"]["id"] == first["event"]["id"]
+
+    events = list((repo / "state" / "sovereign-tracker").glob("events.*.jsonl"))
+    assert len(events) == 1
+    lines = events[0].read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1, "the retry must append nothing"
+
+
+def test_idempotency_key_reuse_under_different_payload_is_refused(monkeypatch, tmp_path):
+    """Same key, a genuinely different logical payload (a different
+    `item_id`, not just a volatile field) is key MISUSE, not a retry —
+    refused via `PushSuggestionKeyMisuseError`, distinguishable at the wire
+    by its own pinned `refusal_class`."""
+    from coordinator_core.ops.tracker.push_suggestion import PushSuggestionKeyMisuseError
+
+    repo = _make_git_repo(tmp_path / "repo")
+    monkeypatch.setattr(
+        tracker_holder,
+        "registry_get",
+        _fake_registry(
+            {
+                "repo_slug.acme/self": "self_key",
+                "repos.self_key": str(repo),
+            }
+        ),
+    )
+    params = {
+        "event": _event(repo="acme/self", item_id="item-1"),
+        "idempotency_key": "reuse-key-1",
+    }
+    first = _run(_handler(dict(params), repo_root=repo))
+    assert first["delivered"] == "local"
+
+    misuse_params = dict(params)
+    misuse_params["event"] = _event(repo="acme/self", item_id="item-DIFFERENT")
+
+    with pytest.raises(PushSuggestionKeyMisuseError) as excinfo:
+        _run(_handler(misuse_params, repo_root=repo))
+
+    assert not isinstance(excinfo.value, PushSuggestionDuplicateDeliveryError)
+    assert str(excinfo.value).startswith(
+        f"refusal_class={push_suggestion._REFUSAL_CLASS_KEY_MISUSE}: "
+    )
+
+    events = list((repo / "state" / "sovereign-tracker").glob("events.*.jsonl"))
+    lines = events[0].read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1, "a refused misuse must append nothing"
+
+
+def test_idempotency_key_stamped_onto_local_event(monkeypatch, tmp_path):
+    """`_push_suggestion_sync` stamps `idempotency_key` onto the event
+    verbatim (only when supplied) so a later attempt's own-shard comparison
+    in `tracker_store.append_event` has a field to read."""
+    repo = _make_git_repo(tmp_path / "repo")
+    monkeypatch.setattr(
+        tracker_holder,
+        "registry_get",
+        _fake_registry(
+            {
+                "repo_slug.acme/self": "self_key",
+                "repos.self_key": str(repo),
+            }
+        ),
+    )
+    result = _run(
+        _handler(
+            {
+                "event": _event(repo="acme/self"),
+                "idempotency_key": "stamped-key-1",
+            },
+            repo_root=repo,
+        )
+    )
+    assert result["event"]["idempotency_key"] == "stamped-key-1"
+
+
+def test_idempotency_key_absent_stamps_no_field(monkeypatch, tmp_path):
+    """Absent `idempotency_key`, the stored event carries no such field —
+    today's behaviour is unchanged."""
+    repo = _make_git_repo(tmp_path / "repo")
+    monkeypatch.setattr(
+        tracker_holder,
+        "registry_get",
+        _fake_registry(
+            {
+                "repo_slug.acme/self": "self_key",
+                "repos.self_key": str(repo),
+            }
+        ),
+    )
+    result = _run(_handler({"event": _event(repo="acme/self")}, repo_root=repo))
+    assert "idempotency_key" not in result["event"]
+
+
 def test_idempotency_key_must_be_non_empty_string_when_supplied(tmp_path):
     repo = _make_git_repo(tmp_path / "repo")
     with pytest.raises(PushSuggestionMalformedError):

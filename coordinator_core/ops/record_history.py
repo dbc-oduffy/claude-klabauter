@@ -81,6 +81,7 @@ from __future__ import annotations
 import re
 import subprocess
 from pathlib import Path
+from typing import Sequence
 
 from coordinator_core.ipc import register_op
 from coordinator_core.ops import records_query
@@ -129,21 +130,7 @@ def _require_supported(record_type: str) -> None:
         raise UnsupportedRecordTypeError(record_type, sorted(supported_record_types()))
 
 
-def type_directory_pathspec(record_type: str) -> str:
-    """The short, fixed (no-wildcard) directory pathspec for ``record_type``.
-
-    Derived by taking the ``_TYPE_TO_GLOB`` value's path segments up to (not
-    including) the first segment containing a ``*``. A glob with no wildcard
-    segment at all (e.g. ``tracker``'s ``docs/project-tracker.md``) drops its
-    trailing filename segment instead, since a pathspec must name a directory
-    or a real path — never a bare filename glob it doesn't have.
-
-    This is deliberately SHORTER than the full glob (never the glob itself —
-    see module Negative-spec) so it is safe to hand to ``git log -- <pathspec>``
-    as one directory-scoped argument; callers still MUST post-filter the
-    result against `resolve_record_files`'s exact set, since this pathspec is
-    intentionally permissive, not exact.
-    """
+def _type_directory_pathspec_one(record_type: str) -> str:
     _require_supported(record_type)
     glob_pat = records_query._TYPE_TO_GLOB[record_type]
     parts = glob_pat.split('/')
@@ -160,7 +147,43 @@ def type_directory_pathspec(record_type: str) -> str:
     return '/'.join(fixed)
 
 
-def resolve_record_files(worktree_root: Path, record_type: str) -> frozenset[str]:
+def type_directory_pathspec(record_type: str | Sequence[str]) -> str | list[str]:
+    """The short, fixed (no-wildcard) directory pathspec for ``record_type``.
+
+    Derived by taking the ``_TYPE_TO_GLOB`` value's path segments up to (not
+    including) the first segment containing a ``*``. A glob with no wildcard
+    segment at all (e.g. ``tracker``'s ``docs/project-tracker.md``) drops its
+    trailing filename segment instead, since a pathspec must name a directory
+    or a real path — never a bare filename glob it doesn't have.
+
+    This is deliberately SHORTER than the full glob (never the glob itself —
+    see module Negative-spec) so it is safe to hand to ``git log -- <pathspec>``
+    as one directory-scoped argument; callers still MUST post-filter the
+    result against `resolve_record_files`'s exact set, since this pathspec is
+    intentionally permissive, not exact.
+
+    A bare string returns the single pathspec (unchanged contract). A
+    sequence returns the DEDUPLICATED UNION of each member's pathspec, order
+    preserved — the multi-type caller's one ``git log`` pass takes this list
+    directly as its pathspec argv (P083-C4).
+    """
+    if isinstance(record_type, str):
+        return _type_directory_pathspec_one(record_type)
+    pathspecs: list[str] = []
+    for one in record_type:
+        spec = _type_directory_pathspec_one(one)
+        if spec not in pathspecs:
+            pathspecs.append(spec)
+    return pathspecs
+
+
+def _resolve_record_files_one(worktree_root: Path, record_type: str) -> frozenset[str]:
+    _require_supported(record_type)
+    files = records_query._collect_files(worktree_root, record_type)
+    return frozenset(p.relative_to(worktree_root).as_posix() for p in files)
+
+
+def resolve_record_files(worktree_root: Path, record_type: str | Sequence[str]) -> frozenset[str]:
     """The EXACT set of on-disk files ``record_type``'s glob matches.
 
     Reuses ``records_query._collect_files`` (the same walker
@@ -170,11 +193,30 @@ def resolve_record_files(worktree_root: Path, record_type: str) -> frozenset[str
 
     Returns worktree-relative POSIX paths (``/``-separated on every
     platform, including Windows) so the set is directly comparable against
-    git's own path output.
+    git's own path output. A sequence of types returns the UNION across all
+    members (P083-C4); a bare string keeps the single-type contract.
     """
-    _require_supported(record_type)
-    files = records_query._collect_files(worktree_root, record_type)
-    return frozenset(p.relative_to(worktree_root).as_posix() for p in files)
+    if isinstance(record_type, str):
+        return _resolve_record_files_one(worktree_root, record_type)
+    union: frozenset[str] = frozenset()
+    for one in record_type:
+        union = union | _resolve_record_files_one(worktree_root, one)
+    return union
+
+
+def _resolve_record_files_by_type(worktree_root: Path, types: list[str]) -> dict[str, str]:
+    """Path -> owning record type, across ``types`` (P083-C4 R3).
+
+    `_FIELD_POLICY` selection and per-type `untracked` grouping both need
+    per-file attribution that the plain union in `resolve_record_files`
+    discards; this is the one place that attribution is computed, first-type
+    wins on any path collision (types' globs are not expected to overlap).
+    """
+    owner: dict[str, str] = {}
+    for one in types:
+        for path in _resolve_record_files_one(worktree_root, one):
+            owner.setdefault(path, one)
+    return owner
 
 
 def partition_known_files(
@@ -279,12 +321,19 @@ _DIFF_GIT_RE = re.compile(r'^diff --git a/(.*) b/(.*)$')
 _FRONTMATTER_LINE_BOUND = 60
 
 
-def _run_git_log_pass(worktree_root: Path, pathspec: str) -> str:
-    """The one git spawn per type (AC2): ``git log -p -U0`` over a directory
-    pathspec, sentinel-framed header, decoded permissively so a stray
-    non-UTF8 byte in old history never aborts the whole pass."""
+def _run_git_log_pass(worktree_root: Path, pathspec: str | list[str]) -> str:
+    """The one git spawn per call (AC2, widened by P083-C4 to per-CALL rather
+    than per-type): ``git log -p -U0`` over one or more directory pathspecs,
+    sentinel-framed header, decoded permissively so a stray non-UTF8 byte in
+    old history never aborts the whole pass.
+
+    Multiple pathspecs after ``--`` are a git OR, not a second walk — this is
+    the single walk P083-C4 asks for: the caller's UNION of per-type
+    pathspecs goes in argv as one list, never one invocation per type.
+    """
+    pathspecs = [pathspec] if isinstance(pathspec, str) else list(pathspec)
     result = subprocess.run(
-        ["git", "log", f"--format={_LOG_FORMAT}", "-p", "-U0", "--", pathspec],
+        ["git", "log", f"--format={_LOG_FORMAT}", "-p", "-U0", "--", *pathspecs],
         cwd=str(worktree_root),
         capture_output=True,
         check=True,
@@ -439,33 +488,53 @@ def _pair_field_transitions(removed: dict[str, str], added: dict[str, str]) -> d
     return changes
 
 
-def derive_type_history(worktree_root: Path, record_type: str) -> list[dict]:
+def derive_type_history(
+    worktree_root: Path,
+    record_type: str | Sequence[str],
+    since: str | None = None,
+) -> list[dict]:
     """Derive one event stream per current file of ``record_type`` (AC1).
 
-    Exactly one ``git log`` invocation (AC2) — the pathspec and known file
-    set come from C1a's `type_directory_pathspec`/`resolve_record_files`;
-    every event comes from parsing that single pass's patch text, never a
-    second git call and never a blob read.
+    Exactly one ``git log`` invocation PER CALL, not per type (AC2,
+    widened by P083-C4) — the pathspec union and known file set come from
+    C1a's `type_directory_pathspec`/`resolve_record_files`; every event
+    comes from parsing that single pass's patch text, never a second git
+    call and never a blob read.
 
-    Returns a list of ``{"path", "created_at", "created_by", "events"}``,
-    one per file currently in `resolve_record_files`'s set, keyed by that
-    file's rename chain (F6) rather than any one historical path. Each
-    event is ``{"sha", "author", "committed_at", "changes"}`` where
+    A bare ``record_type`` string keeps the EXISTING single-type shape
+    byte-for-byte: a list of ``{"path", "created_at", "created_by",
+    "events"}``, no per-record ``record_type`` key (P083-C4 R3 backward
+    compatibility). A sequence of types adds a ``record_type`` key to each
+    record (per-record attribution, chosen over per-type grouping of the
+    whole envelope so the record array shape stays intact for an existing
+    consumer). `_FIELD_POLICY` is looked up PER RESOLVED FILE from that
+    file's own owning type, never once for the whole call, so a
+    multi-type request never applies one type's field policy to another
+    type's files.
+
+    ``since`` bounds the EVENTS only, never the walk or `created_at`/adds
+    (P083-C4 R2): a bounded walk would null `created_at` for every
+    pre-window record and misreport it as `untracked`, which is a
+    different, wrong, answer — see the module docstring's "Wipe/restore
+    safety" and this chunk's plan body. ``since`` is compared against each
+    event's ``committed_at`` (ISO 8601, lexicographically comparable)
+    AFTER field-policy filtering, so a since-excluded event never
+    surfaces regardless of which field it touched.
+
+    Each event is ``{"sha", "author", "committed_at", "changes"}`` where
     ``changes`` maps field name to ``{"from", "to"}`` — a record with no
-    real transitions reports an empty ``events`` list by construction.
+    real transitions (or none inside the ``since`` window) reports an
+    empty ``events`` list by construction.
     """
-    _require_supported(record_type)
-    pathspec = type_directory_pathspec(record_type)
-    known_files = resolve_record_files(worktree_root, record_type)
-    # C1c's table is field SELECTION, not a gate on whether a type emits
-    # transitions at all -- the extractor above stays uniform for every
-    # type, and a type with no policy entry keeps every field it finds.
-    # Membership, never truthiness: an absent entry means "keep every field",
-    # while an entry mapping to () would mean "track none" -- an empty tuple is
-    # falsy, so a truthiness test silently turns the second into the first.
-    has_policy = record_type in _FIELD_POLICY
-    tracked = frozenset(fields_of_interest(record_type))
-    raw = _run_git_log_pass(worktree_root, pathspec)
+    is_multi = not isinstance(record_type, str)
+    types = list(record_type) if is_multi else [record_type]
+    for one in types:
+        _require_supported(one)
+
+    owner = _resolve_record_files_by_type(worktree_root, types)
+    known_files = frozenset(owner)
+    pathspecs = type_directory_pathspec(types)
+    raw = _run_git_log_pass(worktree_root, pathspecs)
 
     parsed: list[tuple[str, str, str, dict]] = []
     for sha, author, committed_at, diff_text in _iter_commit_blocks(raw):
@@ -497,20 +566,27 @@ def derive_type_history(worktree_root: Path, record_type: str) -> list[dict]:
             continue
         group = groups.setdefault(canonical, {"adds": [], "events": []})
         if info["is_new"]:
+            # `since` never bounds an add — created_at stays a whole-history
+            # fact regardless of the event window (P083-C4 R2).
             group["adds"].append((committed_at, author))
             continue
         if info["is_deleted"]:
             continue
         changes = _pair_field_transitions(info["removed"], info["added"])
-        if has_policy:
+        owning_type = owner[canonical]
+        if owning_type in _FIELD_POLICY:
+            tracked = frozenset(fields_of_interest(owning_type))
             changes = {f: c for f, c in changes.items() if f in tracked}
-        if changes:
-            group["events"].append({
-                "sha": sha,
-                "author": author,
-                "committed_at": committed_at,
-                "changes": changes,
-            })
+        if not changes:
+            continue
+        if since is not None and committed_at < since:
+            continue
+        group["events"].append({
+            "sha": sha,
+            "author": author,
+            "committed_at": committed_at,
+            "changes": changes,
+        })
 
     results: list[dict] = []
     for path in known_files:
@@ -518,26 +594,35 @@ def derive_type_history(worktree_root: Path, record_type: str) -> list[dict]:
         adds = sorted(group["adds"])
         created_at, created_by = adds[0] if adds else (None, None)
         events = sorted(group["events"], key=lambda e: e["committed_at"])
-        results.append({
+        record = {
             "path": path,
             "created_at": created_at,
             "created_by": created_by,
             "events": events,
-        })
+        }
+        if is_multi:
+            record["record_type"] = owner[path]
+        results.append(record)
     return results
 
 
-def derive(record_type: str, worktree_root: Path | None = None) -> list[dict]:
-    """AC1's named entry point: the record-history derivation for one type.
+def derive(
+    record_type: str | Sequence[str],
+    worktree_root: Path | None = None,
+    since: str | None = None,
+) -> list[dict]:
+    """AC1's named entry point: the record-history derivation for one or
+    several types (P083-C4).
 
     Thin keyword-first alias over :func:`derive_type_history`. The name and
     signature are contract, not preference: `record_history.derive(record_type=...)`
     is what AC1 specifies and what example-cockpit-repo-em was handed as the
     consumer-facing shape ahead of this surface existing, so renaming it is a
-    cross-repo break rather than a local refactor.
+    cross-repo break rather than a local refactor. A bare string keeps that
+    shape exactly; a sequence is the P083-C4 widening.
     """
     root = Path(worktree_root) if worktree_root is not None else Path.cwd()
-    return derive_type_history(root, record_type)
+    return derive_type_history(root, record_type, since=since)
 
 
 # --------------------------------------------------------------------------
@@ -656,11 +741,23 @@ def derive_across_roots(roots: list[Path], record_type: str) -> dict:
 
 @register_op("records.history")
 def _records_history(params: dict, repo_root: Path | None = None) -> dict:
-    """COMPUTE_ONLY: git-derived transition history for one record type.
+    """COMPUTE_ONLY: git-derived transition history for one or several
+    record types in a single call (P083-C4), with an optional derivation-side
+    ``since`` window and a silent-success stdout contract (no output on this
+    seam besides the envelope below -- the warm-client stderr noise a
+    consumer flagged is on the `cc_invoke` path, not this op's, per this
+    chunk's plan body).
 
     Reads git history and writes nothing, anywhere. The `_registry_map`
     entry alone does not register a handler -- this decorator is the live
     registration `ipc._REGISTRY` is populated from (AC6).
+
+    ``record_type`` accepts a bare string (existing single-type shape,
+    unchanged byte-for-byte: singular top-level ``record_type``, flat
+    ``untracked`` list, no per-record ``record_type`` key) or a sequence of
+    strings (P083-C4 widening: ``record_type`` echoes the requested list,
+    each record carries its own ``record_type``, and ``untracked`` is
+    grouped per type -- ``{"handoff": [...], "sizing-object": [...]}``).
     """
     record_type = params.get("record_type")
     if not record_type:
@@ -668,6 +765,7 @@ def _records_history(params: dict, repo_root: Path | None = None) -> dict:
             "records.history requires 'record_type'; supported: "
             + ", ".join(sorted(supported_record_types()))
         )
+    since = params.get("since")
     # No Path.cwd() fallback: warm-served handlers run in a shared server
     # process, so cwd is the SERVER's, not the caller's worktree -- a missing
     # root would silently derive against the wrong repo and return a
@@ -680,21 +778,43 @@ def _records_history(params: dict, repo_root: Path | None = None) -> dict:
             "the server's directory rather than the caller's worktree"
         )
     root = Path(root_arg)
-    records = derive(record_type=record_type, worktree_root=root)
-    # AC5b needs both halves: what is on disk now, and what the git pass
-    # actually reported history for. A record in the first and not the second
-    # is untracked, not quiet.
-    on_disk = resolve_record_files(root, record_type)
-    with_history = frozenset(
-        r["path"] for r in records if r.get("created_at") is not None
-    )
-    untracked = sorted(untracked_record_paths(on_disk, with_history))
+    is_multi = not isinstance(record_type, str)
+    records = derive(record_type=record_type, worktree_root=root, since=since)
+
+    if not is_multi:
+        # AC5b needs both halves: what is on disk now, and what the git pass
+        # actually reported history for. A record in the first and not the
+        # second is untracked, not quiet.
+        on_disk = resolve_record_files(root, record_type)
+        with_history = frozenset(
+            r["path"] for r in records if r.get("created_at") is not None
+        )
+        untracked = sorted(untracked_record_paths(on_disk, with_history))
+        return {
+            "record_type": record_type,
+            "root": root.as_posix(),
+            "records": records,
+            # AC5b: a record present on disk but untracked has NO history,
+            # which is not the same fact as a tracked record that never
+            # changed. Both would otherwise read as `events: []`; this names
+            # the first explicitly.
+            "untracked": untracked,
+        }
+
+    types = list(record_type)
+    with_history_by_type: dict[str, set[str]] = {t: set() for t in types}
+    for r in records:
+        if r.get("created_at") is not None:
+            with_history_by_type[r["record_type"]].add(r["path"])
+    untracked_by_type = {
+        t: sorted(untracked_record_paths(
+            resolve_record_files(root, t), frozenset(with_history_by_type[t]),
+        ))
+        for t in types
+    }
     return {
-        "record_type": record_type,
+        "record_type": types,
         "root": root.as_posix(),
         "records": records,
-        # AC5b: a record present on disk but untracked has NO history, which is
-        # not the same fact as a tracked record that never changed. Both would
-        # otherwise read as `events: []`; this names the first explicitly.
-        "untracked": untracked,
+        "untracked": untracked_by_type,
     }

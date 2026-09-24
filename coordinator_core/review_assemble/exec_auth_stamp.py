@@ -78,6 +78,19 @@ execution-approval, writing no authorization field at all -- see
 `_main_mark_reviewed`. By the time `stamp` runs on a plan that went through it,
 `stamp`'s own `stamp-reviewed` fire is an at-or-past rc-0 no-op.
 
+Fourth verb, `restamp` (docs/plans/2026-09-23-exec-authorized-restamp-shape.md):
+records a non-PM witness of the CURRENT body without disturbing the PM's own
+`execution_authorized_{by,at,note}` words -- see
+`restamp_execution_authorization`. It fires no rung, does not authenticate
+`--by`, and never touches `execution_authorized_{by,at,note}`. `stamp
+--append-note`/`stamp --note <identical text>` over a body that has moved
+since it was stamped is refused (`fresh_authorization=False`, the default);
+the refusal message names `restamp` as the EM-correction route and `stamp
+--note "<new words>"`/`authorize-invocation` as the fresh-PM-act route. Any
+landed write through `stamp_execution_authorization` (a genuinely new note,
+`authorize-invocation`, or a first-time stamp) clears a stale restamp
+quartet, since a landed write is itself a fresh witness of the current body.
+
 Negative-spec:
   - Does NOT enforce the write-bar (has the PM actually named execution?).
     That judgment call stays the calling skill's, per
@@ -101,6 +114,7 @@ Spec backlink: DoE-claude:pln-computed-skills-b8-review-ci-c-ffa5ad, chunk C6
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -115,6 +129,7 @@ from coordinator_core.frontmatter.primitives import (
     read_fm_field,
     read_fm_field_unquoted,
     rebuild,
+    remove_fm_field,
     replace_fm_field,
     split_frontmatter,
 )
@@ -128,6 +143,19 @@ EXEC_FIELDS: tuple[str, ...] = (
     "execution_authorized_at",
     "execution_authorized_sha",
     "execution_authorized_note",
+)
+
+#: The four-field restamp record (docs/plans/2026-09-23-exec-authorized-
+#: restamp-shape.md § Design). Optional, and written or removed together --
+#: never partially -- by `restamp_execution_authorization` and by the
+#: fresh-witness clearing this module's own `stamp_execution_authorization`
+#: does whenever a write actually lands (see its `fresh_authorization`
+#: keyword and the clearing loop at the end of its `_mutate`).
+RESTAMP_FIELDS: tuple[str, ...] = (
+    "execution_restamped_by",
+    "execution_restamped_at",
+    "execution_restamped_from_sha",
+    "execution_restamped_note",
 )
 
 EXIT_OK = 0
@@ -256,6 +284,7 @@ def stamp_execution_authorization(
     at: Optional[str] = None,
     repo_root: Optional[Path] = None,
     append_note: bool = False,
+    fresh_authorization: bool = False,
 ) -> tuple[int, dict[str, Any]]:
     """Compute the plan-body hash and write all four
     `execution_authorized_*` fields onto *plan_path*'s own frontmatter,
@@ -268,6 +297,25 @@ def stamp_execution_authorization(
     `execution_authorized_note` already holds (see `_append_note`) instead
     of replacing it outright -- for the `/execute-plan` stale-bookkeeping
     re-stamp path, which must not clobber the PM's verbatim utterance.
+
+    `fresh_authorization` (default `False`) marks this call as a genuine new
+    PM witness of the CURRENT body, rather than an EM correction collapsing
+    old PM words onto new content. It carries two refusals when `False` (the
+    plain `stamp` CLI verb's shape) and lifts them when `True`
+    (`stamp_invocation_authorization` always passes `True`, since a typed
+    `/execute-plan` is itself a fresh PM act):
+      - `append_note=True` over a body whose sha no longer matches the
+        recorded `execution_authorized_sha` is refused (exit 1) -- appending
+        re-attaches old PM words to new content. Use `restamp_execution_
+        authorization` instead.
+      - `append_note=False` with *note* identical to the existing
+        `execution_authorized_note`, over a changed body, is refused
+        (exit 1) for the same reason -- a repeated note is not a new witness.
+    Whenever a write actually lands through this function (not the
+    already-converged no-op), any existing `execution_restamped_*` quartet
+    is removed: a landed write here is by construction a fresh witness of
+    the current body, and `restamp_execution_authorization` is the only
+    producer of that quartet.
 
     Returns `(exit_code, result_dict)`:
       - `EXIT_OK` with `{"applied": bool, "sha": str, "message": str}` on
@@ -348,6 +396,31 @@ def stamp_execution_authorization(
             state["applied"] = False
             return old_text
 
+        # The append-over-changed-body and identical-note-over-changed-body
+        # refusals (docs/plans/2026-09-23-exec-authorized-restamp-shape.md
+        # design points 2-3): both collapse old PM words onto new content.
+        # `fresh_authorization=True` lifts both -- the caller (`authorize-
+        # invocation`, or a genuinely new `stamp --note`) IS itself the new
+        # witness, not a collapse.
+        existing_sha_field = read_fm_field_unquoted(fm, "execution_authorized_sha")
+        body_changed_since_stamp = (
+            existing_sha_field is not None and existing_sha_field != sha
+        )
+        if not fresh_authorization and body_changed_since_stamp:
+            if append_note:
+                raise MutateAbort(
+                    f"{plan_path}: execution_authorized_sha no longer matches the live "
+                    f"body; --append-note cannot land over a changed body. Use "
+                    f"`restamp --by <witness> --reason <text>` instead."
+                )
+            if current_note == note:
+                raise MutateAbort(
+                    f"{plan_path}: execution_authorized_sha no longer matches the live "
+                    f"body; repeating the existing note cannot re-attach it to new "
+                    f"content. Use `stamp --note \"<new words>\"` or "
+                    f"`authorize-invocation` instead."
+                )
+
         # A block-scalar note is appended INTO its block and then excluded
         # from the single-line writer below. `replace_fm_field` refuses that
         # shape by design -- correctly, since a single-line rewrite would
@@ -411,6 +484,13 @@ def stamp_execution_authorization(
             except ValueError as exc:
                 raise MutateAbort(f"{plan_path}: cannot write {field} -- {exc}") from exc
 
+        # A landed write here is by construction a fresh witness of the
+        # current body (design point 4) -- clear any stale restamp quartet
+        # so it does not keep claiming a correction the fresh act supersedes.
+        for restamp_field in RESTAMP_FIELDS:
+            if read_fm_field_unquoted(fm, restamp_field) is not None:
+                fm = remove_fm_field(fm, restamp_field)
+
         state["applied"] = True
         return rebuild(split, fm)
 
@@ -427,6 +507,173 @@ def stamp_execution_authorization(
         f"stamped execution_authorized_* onto {plan_path} (sha={sha})"
         if state["applied"]
         else f"{plan_path} already stamped with the identical execution_authorized_* fields -- no-op"
+    )
+    return EXIT_OK, {"applied": state["applied"], "sha": sha, "message": message}
+
+
+def _is_pm_shaped(by: str) -> bool:
+    """True when *by*'s first alphanumeric token casefolds to `"pm"` --
+    the shape `restamp` refuses. A restamp records a non-PM witness; a real
+    PM correction is a fresh `stamp --note`/`authorize-invocation`, not a
+    restamp, so a PM-shaped `--by` here is always a mistake."""
+    match = re.match(r"[^A-Za-z0-9]*([A-Za-z0-9]+)", by)
+    if not match:
+        return False
+    return match.group(1).casefold() == "pm"
+
+
+def restamp_execution_authorization(
+    plan_path: str,
+    by: str,
+    reason: str,
+    *,
+    at: Optional[str] = None,
+    repo_root: Optional[Path] = None,
+) -> tuple[int, dict[str, Any]]:
+    """Record a non-PM witness of the CURRENT plan body without disturbing
+    the PM's own `execution_authorized_{by,at,note}` words
+    (docs/plans/2026-09-23-exec-authorized-restamp-shape.md § Design point
+    1).
+
+    Rebinds `execution_authorized_sha` to the live body sha and writes or
+    updates the `execution_restamped_{by,at,from_sha,note}` quartet, in one
+    `locked_rmw`. `execution_restamped_from_sha` always names the last body
+    the PM actually witnessed: a CHAINED restamp (a second edit landing
+    before any fresh PM act) keeps the existing `_from_sha` rather than
+    overwriting it with the intermediate sha. `execution_restamped_note`
+    accumulates through the same `NOTE_APPEND_SEPARATOR` convergence
+    `_append_note` uses, so a repeated identical *reason* is a no-op.
+
+    A REVERT restamp -- the live body sha equals the already-recorded
+    `execution_restamped_from_sha` -- rebinds the sha and REMOVES the
+    restamp quartet instead of updating it: the PM's original witness
+    covers the body again, and keeping the quartet would leave
+    `_from_sha == execution_authorized_sha`, which
+    `_cf_execution_restamp_quartet` rejects.
+
+    Fires no rung (`stamp-reviewed`/`stamp-approved`): a restamp is not an
+    approval. Does not authenticate `--by`, and never touches
+    `execution_authorized_{by,at,note}`.
+
+    Refuses (`EXIT_USAGE`): a PM-shaped `by` (see `_is_pm_shaped`), or a
+    *reason* containing a real newline.
+    Refuses (`EXIT_BUSINESS_FAIL`, exit 1): a plan with no complete prior
+    authorization (`execution_authorized_by` and `execution_authorized_sha`
+    both needed) -- there is nothing to restamp, and `stamp` is the route.
+
+    Returns `(exit_code, result_dict)` in `stamp_execution_authorization`'s
+    own shape (`applied`, `sha`, `message`).
+    """
+    if _is_pm_shaped(by):
+        return EXIT_USAGE, {
+            "error": (
+                f"refusing to restamp: --by must name a non-PM witness (got {by!r}); "
+                f"a PM correction is a fresh `stamp --note` or `authorize-invocation`"
+            )
+        }
+    try:
+        refuse_newline_argv(
+            reason,
+            flag_name="--reason",
+            remedy=(
+                "a real line break here would be truncated by a .cmd forwarder "
+                "before it reaches this stamp; express the reason as one line"
+            ),
+        )
+    except ArgvFidelityError as exc:
+        return EXIT_USAGE, {"error": str(exc)}
+
+    root = repo_root or resolve_repo_root()
+    if root is None:
+        return EXIT_BUSINESS_FAIL, {"error": "could not resolve a git worktree root"}
+
+    live_path = Path(plan_path) if Path(plan_path).is_absolute() else root / plan_path
+    if not live_path.is_file():
+        return EXIT_BUSINESS_FAIL, {"error": f"{plan_path}: not found"}
+
+    try:
+        text = live_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return EXIT_BUSINESS_FAIL, {"error": f"{plan_path}: could not read ({exc})"}
+
+    if split_frontmatter(text) is None:
+        return EXIT_BUSINESS_FAIL, {"error": f"{plan_path}: no parseable frontmatter"}
+
+    try:
+        sha = _canonical_body_sha(text, root)
+    except RuntimeError as exc:
+        return EXIT_BUSINESS_FAIL, {"error": str(exc)}
+
+    at_value = at or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    state: dict[str, Any] = {"applied": False}
+
+    def _mutate(old_text: str) -> str:
+        split = split_frontmatter(old_text)
+        if split is None:
+            raise MutateAbort(f"{plan_path}: no parseable frontmatter (race)")
+        fm = split.fm_text
+
+        existing_by = read_fm_field_unquoted(fm, "execution_authorized_by")
+        existing_sha = read_fm_field_unquoted(fm, "execution_authorized_sha")
+        if not existing_by or not existing_sha:
+            raise MutateAbort(
+                f"{plan_path}: no prior execution authorization to restamp -- use "
+                f"`stamp` instead"
+            )
+
+        if sha == existing_sha:
+            state["applied"] = False
+            return old_text
+
+        existing_from_sha = read_fm_field_unquoted(fm, "execution_restamped_from_sha")
+
+        if existing_from_sha is not None and sha == existing_from_sha:
+            # Revert-to-witnessed-sha: the PM's own witness covers the body
+            # again, so the quartet is removed rather than rebound.
+            new_fm = replace_fm_field(fm, "execution_authorized_sha", sha, numeric_quoting=True)
+            for field in RESTAMP_FIELDS:
+                if read_fm_field_unquoted(new_fm, field) is not None:
+                    new_fm = remove_fm_field(new_fm, field)
+            state["applied"] = True
+            return rebuild(split, new_fm)
+
+        from_sha = existing_from_sha if existing_from_sha is not None else existing_sha
+        existing_note = read_fm_field_unquoted(fm, "execution_restamped_note")
+        final_note = _append_note(existing_note, reason)
+
+        new_fm = replace_fm_field(fm, "execution_authorized_sha", sha, numeric_quoting=True)
+        quartet = {
+            "execution_restamped_by": by,
+            "execution_restamped_at": at_value,
+            "execution_restamped_from_sha": from_sha,
+            "execution_restamped_note": final_note,
+        }
+        for field, value in quartet.items():
+            numeric = field == "execution_restamped_from_sha"
+            try:
+                if read_fm_field_unquoted(new_fm, field) is not None:
+                    new_fm = replace_fm_field(new_fm, field, value, numeric_quoting=numeric)
+                else:
+                    new_fm = insert_fm_field(new_fm, field, value, numeric_quoting=numeric)
+            except ValueError as exc:
+                raise MutateAbort(f"{plan_path}: cannot write {field} -- {exc}") from exc
+
+        state["applied"] = True
+        return rebuild(split, new_fm)
+
+    try:
+        locked_rmw(live_path, _mutate, repo_root=root)
+    except LockTimeout as exc:
+        return EXIT_BUSINESS_FAIL, {"error": f"lock timeout acquiring file lock: {exc}"}
+    except MutateAbort as exc:
+        return EXIT_BUSINESS_FAIL, {"error": str(exc.args[0]) if exc.args else "mutate aborted"}
+    except OSError as exc:
+        return EXIT_BUSINESS_FAIL, {"error": f"cannot read/write plan file: {exc}"}
+
+    message = (
+        f"restamped execution_authorized_sha onto {plan_path} (sha={sha}, by={by})"
+        if state["applied"]
+        else f"{plan_path} already covers the live body -- no-op"
     )
     return EXIT_OK, {"applied": state["applied"], "sha": sha, "message": message}
 
@@ -586,6 +833,7 @@ def stamp_invocation_authorization(
         at=at_value,
         repo_root=root,
         append_note=True,
+        fresh_authorization=True,
     )
     if exit_code == EXIT_OK:
         result["note"] = note
@@ -680,8 +928,53 @@ USAGE = (
     "(--note <note> | --append-note <text>) [--at <YYYY-MM-DD>]\n"
     "       review-exec-auth-stamp authorize-invocation <plan-path> "
     "--typed-command </command> [--utterance <PM's verbatim words>] [--at <YYYY-MM-DD>]\n"
-    "       review-exec-auth-stamp mark-reviewed <plan-path>"
+    "       review-exec-auth-stamp mark-reviewed <plan-path>\n"
+    "       review-exec-auth-stamp restamp <plan-path> --by <witness> "
+    "--reason <one line> [--at <YYYY-MM-DD>]"
 )
+
+
+def _main_restamp(rest: list[str]) -> int:
+    """`restamp <plan-path> --by <witness> --reason <one line> [--at
+    <YYYY-MM-DD>]` -- the non-PM correction verb (see
+    `restamp_execution_authorization`). Fires no rung."""
+    import json
+    import sys
+
+    if not rest or rest[0].startswith("--"):
+        print("review-exec-auth-stamp: missing required <plan-path>", file=sys.stderr)
+        return EXIT_USAGE
+    plan_path = rest[0]
+
+    by: Optional[str] = None
+    reason: Optional[str] = None
+    at: Optional[str] = None
+    i = 1
+    while i < len(rest):
+        arg = rest[i]
+        if arg == "--by" and i + 1 < len(rest):
+            by = rest[i + 1]
+            i += 2
+        elif arg == "--reason" and i + 1 < len(rest):
+            reason = rest[i + 1]
+            i += 2
+        elif arg == "--at" and i + 1 < len(rest):
+            at = rest[i + 1]
+            i += 2
+        else:
+            print(f"review-exec-auth-stamp: unrecognized argument: {arg}", file=sys.stderr)
+            return EXIT_USAGE
+
+    if by is None or reason is None:
+        print(
+            "review-exec-auth-stamp: --by and --reason are required",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    exit_code, result = restamp_execution_authorization(plan_path, by, reason, at=at)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return exit_code
 
 
 def _main_mark_reviewed(rest: list[str]) -> int:
@@ -817,6 +1110,9 @@ def main(argv: list[str]) -> int:
 
     if argv[:1] and argv[0] == "mark-reviewed":
         return _main_mark_reviewed(argv[1:])
+
+    if argv[:1] and argv[0] == "restamp":
+        return _main_restamp(argv[1:])
 
     if not argv or argv[0] != "stamp":
         print(USAGE, file=sys.stderr)

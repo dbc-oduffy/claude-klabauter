@@ -81,6 +81,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import os
 from pathlib import Path
 from typing import Any
 
@@ -88,9 +89,17 @@ from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
     build_judgment_point,
 )
-from coordinator_core.ops.invoke_from_argv import _ensure_bin_dir_importable
+from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
 from coordinator_core.ops.reap_in_flight_claims import survey as _reap_survey
 from coordinator_core.orient_assemble.reader_result import ReaderResult
+from coordinator_core.plugin_health import drift as _drift
+from coordinator_core.ops.ceremony.housekeeping_liveness import (
+    GIT_MAINTENANCE as _GIT_MAINTENANCE,
+    STATUS_NEVER_STAMPED as _STATUS_NEVER_STAMPED,
+    STATUS_STALE as _STATUS_STALE,
+    liveness_status as _liveness_status,
+)
+from coordinator_core.ops import workweek_trail_scope as _workweek_trail_scope
 
 #: The health-probes source CLI's absolute path — resolved relative to this
 #: file, never a literal device path (portability discipline, AC-16). This
@@ -117,7 +126,18 @@ def _load_module(name: str, path: Path):
     """Load a hyphenated-filename source CLI as an importable module (same
     pattern as `readers_handoff_triage._load_source_module` /
     `readers_branch_reconcile._load_source_module`) — a normal `import`
-    statement cannot address a `-`-containing filename."""
+    statement cannot address a `-`-containing filename.
+
+    The loaded CLI's subcommands `import lib` to reach
+    `coordinator/bin/lib`, which resolves only when `coordinator/bin` is
+    already on `sys.path`. The two sanctioned entry paths each arrange that
+    for themselves -- a directly-run script gets its own dir as
+    `sys.path[0]`, and the warm door calls
+    `bin_lib_binding.ensure_bin_lib_bound` -- but loading the CLI by file
+    location is neither, so without the call below the subcommands raise
+    `ModuleNotFoundError: No module named 'lib'` whenever no unrelated
+    caller happened to have set the path up first."""
+    ensure_bin_lib_bound(str(path.parent))
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load source module at {path}")
@@ -126,21 +146,19 @@ def _load_module(name: str, path: Path):
     return module
 
 
-# The loaded CLI's subcommands `import lib` to reach `coordinator/bin/lib`,
-# which resolves only when `coordinator/bin` is already on `sys.path`. The two
-# sanctioned entry paths each arrange that for themselves -- a directly-run
-# script gets its own dir as `sys.path[0]`, and the warm door calls this same
-# function -- but loading the CLI by file location is neither, so without this
-# the subcommands raise `ModuleNotFoundError: No module named 'lib'` whenever
-# no unrelated caller happened to have set the path up first.
-_ensure_bin_dir_importable()
-
 _health_probes = _load_module("workday_start_health_probes", _HEALTH_PROBES_PATH)
 _cmd_claude_klabauter_bin_sentinel = _health_probes.cmd_claude_klabauter_bin_sentinel
 _cmd_ceremony_hook = _health_probes.cmd_ceremony_hook
 _cmd_working_repo_registration = _health_probes.cmd_working_repo_registration
 _cmd_hook_currency = _health_probes.cmd_hook_currency
 _cmd_git_perf_currency = _health_probes.cmd_git_perf_currency
+
+#: `goal-coverage-scan.py`'s coverage logic lives IN this bin file — unlike
+#: the four `workday-start-health-probes.py` subcommands above, it is not a
+#: trampoline into a `coordinator_core` module, so it is `_load_module`-ed
+#: directly (per plan C2 body).
+_GOAL_COVERAGE_SCAN_PATH = _CLAUDE_KLABAUTER_ROOT / "coordinator" / "bin" / "goal-coverage-scan.py"
+_goal_coverage_scan = _load_module("goal_coverage_scan", _GOAL_COVERAGE_SCAN_PATH)
 
 
 def _read_claude_klabauter_bin_sentinel() -> ReaderResult:
@@ -494,6 +512,241 @@ def _read_marker_freshness(cadence: str) -> ReaderResult:
     return ReaderResult(directives=directives, judgment_points=judgment_points)
 
 
+def _read_plugin_drift() -> ReaderResult:
+    """Day-cadence: plugin drift, per
+    `docs/plans/2026-09-11-the-orient-probes-run-without-an-em-read.md` C1.
+
+    Imports `coordinator_core.plugin_health.drift` directly rather than
+    `_load_module`-ing `coordinator/bin/check-plugin-drift.py` — that bin
+    file is a three-line trampoline into exactly this module. Emits
+    `id: d-plugin-drift`, `cli: check-plugin-drift`.
+
+    Calls NO git-touching leg of `drift`, at any `check_clean_only`
+    setting. This predicate is pure file reads, scoped to `copy_install`
+    mirrors (the only mode `version.txt` sentinels apply to; `source_is_live`
+    is n/a by design and `editable_sibling_venv` drift is a venv-pin class
+    this reader does not check): the mirror set from `read_merged_mirrors`,
+    each copy_install mirror's `version.txt` sentinel (absent or malformed
+    -> drift), and the refresh-log baseline hash (`_refresh_log_baseline_hash`)
+    compared against `_pyproject_hash` of the source `pyproject.toml`
+    (changed since last refresh -> drift).
+
+    Deliberately WEAKER than the full walk `check-plugin-drift` performs
+    (which additionally diffs source HEAD against the sentinel/live tree via
+    `_run_git`): it can miss a live-tree edit that leaves the sentinel and
+    the pyproject hash intact, but cannot false-all-clear the two drifts
+    that actually recur, costs zero spawns, and the directive it emits is
+    exactly the command that performs the full walk."""
+    registry_dir = _drift._resolve_registry_dir()
+    registry_files = [
+        p
+        for p in (registry_dir / "registry.local.toml", registry_dir / "registry.toml")
+        if p.is_file()
+    ]
+    if not registry_files:
+        return ReaderResult()
+
+    try:
+        mirrors = _drift.read_merged_mirrors(registry_files)
+    except Exception:  # noqa: BLE001 — malformed registry reads as no signal, not a crash
+        return ReaderResult()
+    if not mirrors:
+        return ReaderResult()
+
+    claude_home = _drift._resolve_claude_home()
+    refresh_log = claude_home / "plugins" / ".refresh-log"
+
+    drifted: list[str] = []
+    for plugin_name, entry in mirrors.items():
+        if entry.get("propagation_mode") != "copy_install":
+            continue
+        live_path = entry.get("live_path", "")
+        if not live_path:
+            continue
+        sentinel_file = Path(live_path.replace("\\", "/")) / "version.txt"
+        if not sentinel_file.is_file():
+            continue
+        sentinel_sha = sentinel_file.read_text(encoding="utf-8", errors="replace").strip("\r\n")
+        if len(sentinel_sha) != 40 or not all(c in "0123456789abcdef" for c in sentinel_sha):
+            drifted.append(plugin_name)
+            continue
+
+        source_path = entry.get("source_path", "")
+        if not source_path:
+            continue
+        pyproject_path = Path(source_path.replace("\\", "/")) / "pyproject.toml"
+        if not pyproject_path.is_file():
+            continue
+        try:
+            current_hash = _drift._pyproject_hash(pyproject_path)
+        except OSError:
+            continue
+        baseline_hash = _drift._refresh_log_baseline_hash(refresh_log, plugin_name)
+        if baseline_hash and current_hash != baseline_hash:
+            drifted.append(plugin_name)
+
+    if not drifted:
+        return ReaderResult()
+    return ReaderResult(
+        directives=[
+            {
+                "id": "d-plugin-drift",
+                "cli": "check-plugin-drift",
+                "args": [],
+                "depends_on": None,
+                "already_satisfied": False,
+                "detail": "drifted plugin(s): " + ", ".join(sorted(drifted)),
+            }
+        ]
+    )
+
+
+def _read_git_maintenance_due(repo_root: str, cadence: str) -> ReaderResult:
+    """Day/week-cadence: git-maintenance liveness, per
+    `docs/plans/2026-09-11-the-orient-probes-run-without-an-em-read.md` C1/C2.
+
+    Reads `housekeeping_liveness.liveness_status(repo_root, [GIT_MAINTENANCE])`
+    -- never `git_maintenance.run_tier`, which spawns git and mutates the
+    repo (gc/repack), refused by `test_readers_perform_no_disk_mutation.py`.
+    The liveness stamp is the only surface on which "never ran" and "ran and
+    is fine" differ; `liveness_status` (not `check_stale`/`check_stale_detailed`)
+    is used because only it reports `STATUS_NEVER_STAMPED` as its own state.
+
+    `cadence` selects the emitted directive id/args ONLY (`d-git-maintenance-
+    daily` + `args: ["daily"]` at day cadence, `d-git-maintenance-weekly` +
+    `args: ["weekly"]` at week cadence) -- the same liveness read, registered
+    once per cadence leg in `collect()`. `repo_root` is the threaded
+    scan-scope role, never `_CLAUDE_KLABAUTER_ROOT`."""
+    statuses = _liveness_status(repo_root, [_GIT_MAINTENANCE])
+    status = statuses.get(_GIT_MAINTENANCE, _STATUS_NEVER_STAMPED)
+    if status not in (_STATUS_STALE, _STATUS_NEVER_STAMPED):
+        return ReaderResult()
+
+    directive_id = f"d-git-maintenance-{'daily' if cadence == 'day' else 'weekly'}"
+    args = ["daily" if cadence == "day" else "weekly"]
+    detail = (
+        "git-maintenance liveness: never stamped -- no successful tier run on record"
+        if status == _STATUS_NEVER_STAMPED
+        else "git-maintenance liveness: stale -- last successful tier run exceeds threshold"
+    )
+    return ReaderResult(
+        directives=[
+            {
+                "id": directive_id,
+                "cli": "coordinator-git-maintenance",
+                "args": args,
+                "depends_on": None,
+                "already_satisfied": False,
+                "detail": detail,
+            }
+        ]
+    )
+
+
+def _read_goal_coverage() -> ReaderResult:
+    """Week-cadence: zero-coverage active goals, per
+    `docs/plans/2026-09-11-the-orient-probes-run-without-an-em-read.md` C2.
+
+    `_load_module`s `coordinator/bin/goal-coverage-scan.py` (its coverage
+    logic lives in the bin file, not a trampolined `coordinator_core`
+    module) and calls its compute path directly — `_bootstrap_query_records`
+    then `_fetch_active_goals` / `compute_coverage` / `_fetch_coverage_for_goal`
+    — never `main()`.
+
+    `_fetch_active_goals` is deliberately fail-loud (raises `RuntimeError` on
+    a failed or zero-result records query — see its own docstring: a
+    silently-empty enumeration is indistinguishable from a healthy
+    all-clear). Caught here and converted to an empty `ReaderResult` rather
+    than letting it kill the whole assemble (the `_read_reaper_dry_run`
+    precedent, applied to this reader's own failure mode)."""
+    try:
+        _goal_coverage_scan._bootstrap_query_records()
+        goals = _goal_coverage_scan._fetch_active_goals()
+    except RuntimeError:
+        return ReaderResult()
+
+    coverage = _goal_coverage_scan.compute_coverage(
+        goals, _goal_coverage_scan._fetch_coverage_for_goal
+    )
+    zero_coverage_ids = sorted(
+        entry["goalId"] for entry in coverage if entry["zeroCoverage"] and entry["goalId"]
+    )
+    if not zero_coverage_ids:
+        return ReaderResult()
+    return ReaderResult(
+        directives=[
+            {
+                "id": "d-goal-coverage",
+                "cli": "goal-coverage-scan",
+                "args": ["--format", "text"],
+                "depends_on": None,
+                "already_satisfied": False,
+                "detail": "zero-coverage active goal(s): " + ", ".join(zero_coverage_ids),
+            }
+        ]
+    )
+
+
+def _read_trail_scope() -> ReaderResult:
+    """Week-cadence: workweek review-trail scope resolution, per
+    `docs/plans/2026-09-11-the-orient-probes-run-without-an-em-read.md` C2.
+
+    `workweek-start.md` § trail scope tells the EM to resolve
+    `<SID_SHORT>` "as `workweek-trail-scope.py` does"; this reader CALLS
+    `coordinator_core.ops.workweek_trail_scope`'s own resolution instead of
+    re-deriving it, so the resolution has exactly one implementation. The
+    call targets are exactly three private helpers -- `_resolve_session_id()`,
+    `_parse_week_start(header_file)` and `_trail_files()`. `main()` is NEVER
+    called here: it is the mutating entry point (`MUTATES =
+    ["state/review-trail/*.json"]`), writing a session-keyed shard on every
+    invocation, and this reader reuses only the resolution, never the write.
+
+    If `_resolve_session_id()` returns empty -- legitimate outside a live
+    session -- this returns an EMPTY `ReaderResult` and emits no directive:
+    "no session to scope" is not a trail defect, and a directive there would
+    be the false-alarm twin of the silence this plan exists to remove.
+
+    Emits `d-workweek-trail-scope` when the week-start header is missing or
+    the trail scope does not resolve (header absent, or `Week starting:`
+    unparseable). A resolution that succeeds emits nothing."""
+    session_id = _workweek_trail_scope._resolve_session_id()
+    if not session_id:
+        return ReaderResult()
+
+    header_file = Path(os.environ.get("HEADER_FILE", "state/week-changelog/HEADER.md"))
+    if not header_file.is_file():
+        return ReaderResult(
+            directives=[
+                {
+                    "id": "d-workweek-trail-scope",
+                    "cli": "workweek-trail-scope",
+                    "args": [],
+                    "depends_on": None,
+                    "already_satisfied": False,
+                    "detail": f"{header_file} not found -- run /workweek-start to initialise",
+                }
+            ]
+        )
+
+    week_start = _workweek_trail_scope._parse_week_start(header_file)
+    if not week_start:
+        return ReaderResult(
+            directives=[
+                {
+                    "id": "d-workweek-trail-scope",
+                    "cli": "workweek-trail-scope",
+                    "args": [],
+                    "depends_on": None,
+                    "already_satisfied": False,
+                    "detail": f"cannot parse 'Week starting:' YYYY-MM-DD from {header_file}",
+                }
+            ]
+        )
+
+    _workweek_trail_scope._trail_files()
+    return ReaderResult()
+
+
 def collect(cadence: str, *, repo_root: str | None = None) -> ReaderResult:
     """Compute this reader family's directives/judgment_points for `cadence`.
 
@@ -519,6 +772,12 @@ def collect(cadence: str, *, repo_root: str | None = None) -> ReaderResult:
     ]
     if cadence == "day":
         results.append(_read_reaper_dry_run(repo_root))
+        results.append(_read_plugin_drift())
+        results.append(_read_git_maintenance_due(repo_root or str(_CLAUDE_KLABAUTER_ROOT), cadence))
+    if cadence == "week":
+        results.append(_read_goal_coverage())
+        results.append(_read_trail_scope())
+        results.append(_read_git_maintenance_due(repo_root or str(_CLAUDE_KLABAUTER_ROOT), cadence))
 
     directives: list[dict[str, Any]] = []
     judgment_points: list[dict[str, Any]] = []

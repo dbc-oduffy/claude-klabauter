@@ -19,6 +19,7 @@ _target = Path(__file__).resolve().parent.parent / "coordinator" / "bin" / "dist
 _spec = importlib.util.spec_from_file_location("_distill_log_append_relocated", _target)
 _mod = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = _mod  # register before exec
+sys.path[0] = str(_target.parent)  # reproduces running the target directly: its own dir is sys.path[0]
 _spec.loader.exec_module(_mod)  # type: ignore[union-attr]
 
 if __name__ == "__main__":

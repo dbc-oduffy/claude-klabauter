@@ -16,6 +16,9 @@ from pathlib import Path
 import coordinator_core.pickup_assemble as pa
 import coordinator_core.pickup_brief as pb
 from coordinator_core.pickup_assemble.stamp_check import stamp_check
+from coordinator_core.review_assemble.exec_auth_stamp import (
+    restamp_execution_authorization,
+)
 from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
@@ -157,3 +160,45 @@ class TestStampCheckWrapper:
         assert exit_code == pa.EXIT_OK
         assert f'"computed_sha": "{expected_sha}"' in captured.out
         assert '"verdict": "match"' in captured.out
+
+    def test_stamp_check_fresh_after_restamp_agrees_with_compute_execution_stamp_match(
+        self, tmp_path
+    ):
+        # AC7 (docs/plans/2026-09-23-exec-authorized-restamp-shape.md P168-C4):
+        # stamp, edit the body, restamp -- stamp_check must report FRESH and
+        # agree with compute_execution_stamp_match, exactly as it does after
+        # today's pre-restamp re-stamp (design point 5: sha readers stay
+        # unchanged by construction).
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        plan_path, _original_sha = _seed_plan(repo)
+        rel = str(plan_path.relative_to(repo))
+
+        text = plan_path.read_text(encoding="utf-8")
+        edited = text.replace("reviewed body\n", "reviewed body, then amended\n")
+        assert edited != text
+        plan_path.write_text(edited, encoding="utf-8")
+        _git(repo, "add", rel)
+        _git(repo, "commit", "-m", "amend body")
+
+        exit_code, result = restamp_execution_authorization(
+            rel, "EM:test-session", "amended after PM review", repo_root=repo
+        )
+        assert exit_code == pa.EXIT_OK
+        assert result["applied"] is True
+
+        fm = pa._parse_fm_dict(
+            pa.split_frontmatter(plan_path.read_text(encoding="utf-8")).fm_text
+        )
+        direct_hit = pb.compute_execution_stamp_match(repo, fm, rel)
+        assert direct_hit is not None
+        expected_gate, _target = direct_hit
+
+        stamp_exit_code, gate = stamp_check(rel, repo_root=repo)
+
+        assert stamp_exit_code == pa.EXIT_OK
+        assert gate == expected_gate
+        assert gate["verdict"] == "match"
+        assert gate["delta_class"] is None
+        assert gate["computed_sha"] == result["sha"]
+        assert gate["stamped_sha"] == result["sha"]

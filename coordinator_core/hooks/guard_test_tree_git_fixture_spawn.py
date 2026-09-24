@@ -63,7 +63,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core.hooks._envelope import allow_advisory, no_advisory
+from coordinator_core.hooks._envelope import allow_advisory, no_advisory, payload_of
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.hooks.support.sentinel_write_guard import extract_target_path
 from coordinator_core.ipc import register_op
@@ -222,7 +222,7 @@ def _display_path(path: Path, root: "Optional[Path]") -> str:
         try:
             return path.relative_to(root).as_posix()
         except ValueError:
-            pass
+            pass  # path not under root; fall back to the absolute form below
     return path.as_posix()
 
 
@@ -268,6 +268,7 @@ def _advisory_reason(target: str, subcommand: str, lineno: int, anchor: "Optiona
 def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Write|Edit|MultiEdit|NotebookEdit) op: advise (never deny)
     when a proposed test-tree edit shells `git` to build fixture state."""
+    params = payload_of(params)
     if params.get("tool_name", "") not in _GUARDED_TOOLS:
         return no_advisory()
 

@@ -1028,3 +1028,135 @@ def test_commit_scoped_admits_a_pln_prefixed_authored_trailer(tmp_path):
     f = _msg(tmp_path, "C1: subject\n\nbody\n\nDeliverable-Id: pln-a-b-123456\n")
     result = git_native.commit_scoped(["f.txt"], f, tmp_path)
     assert "does not match the 'dlv-' or 'pln-' shape convention" not in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# `deliverable_id_override` -- P138-C1, docs/plans/2026-09-22-commit-
+# trailer-attribution-residual.md. A caller-known Deliverable-Id that
+# bypasses the whole ladder (including tier 0's pathspec-artifact read),
+# independent of session-id resolution.
+# ---------------------------------------------------------------------------
+
+
+def test_override_beats_a_pathspec_plan_declaring_a_different_id(tmp_path, monkeypatch):
+    """(a) The override wins even when the pathspec includes a
+    docs/plans/other.md whose own frontmatter declares a DIFFERENT dlv- id --
+    the exact Defect C shape (tier 0 would otherwise win)."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    _write_plan(repo, "docs/plans/other.md", 'deliverable_id: "dlv-other-999999"\n')
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(
+        msg,
+        repo,
+        paths=["docs/plans/other.md"],
+        deliverable_id_override="dlv-exec-111111",
+    )
+
+    joined = " ".join(args)
+    assert "Deliverable-Id: dlv-exec-111111" in joined
+    assert "dlv-other-999999" not in joined
+
+
+def test_override_applies_with_non_uuid_session(tmp_path, monkeypatch):
+    """(b) The override applies even when the session-id fail-safe would
+    omit BOTH trailers on the ordinary ladder path -- it is not keyed off
+    the session at all."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "not-a-uuid-at-all")
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(
+        msg, repo, deliverable_id_override="dlv-exec-222222"
+    )
+
+    joined = " ".join(args)
+    assert "Deliverable-Id: dlv-exec-222222" in joined
+    # The fail-safe still holds for Session-Id itself.
+    assert "Session-Id:" not in joined
+
+
+def test_malformed_override_falls_through_to_the_ladder(tmp_path, monkeypatch):
+    """(c) An override that is neither dlv-/pln- shaped is treated as no
+    override -- resolution falls through to the ordinary ladder unchanged."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    _write_shape(repo, _SID, {"pickup": {"deliverable_id": "dlv-from-pickup"}})
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(
+        msg, repo, deliverable_id_override="work/machine-a/branch-name"
+    )
+
+    joined = " ".join(args)
+    assert "Deliverable-Id: dlv-from-pickup" in joined
+    assert "work/machine-a/branch-name" not in joined
+
+
+def test_pre_existing_block_trailer_yields_no_override_arg(tmp_path, monkeypatch):
+    """(d) A message whose trailer block already carries Deliverable-Id gets
+    no second line, override present or not."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    msg = _msg_file(
+        repo,
+        "C1: subject\n\nbody\n\nDeliverable-Id: dlv-already-there\n",
+    )
+
+    args = compute_missing_trailer_args(
+        msg, repo, deliverable_id_override="dlv-exec-333333"
+    )
+
+    joined = " ".join(args)
+    assert "Deliverable-Id:" not in joined
+
+
+def test_blank_line_demoted_body_line_plus_override_yields_override(
+    tmp_path, monkeypatch
+):
+    """(e) A body Deliverable-Id line demoted (by a blank line) out of the
+    trailer block reads as absent -- the override still applies and lands
+    in the trailer block."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    msg = _msg_file(
+        repo,
+        "C1: subject\n\nDeliverable-Id: dlv-in-the-body\n\nCo-Authored-By: x <x@x>\n",
+    )
+
+    args = compute_missing_trailer_args(
+        msg, repo, deliverable_id_override="dlv-exec-444444"
+    )
+
+    joined = " ".join(args)
+    assert "Deliverable-Id: dlv-exec-444444" in joined
+
+
+def test_override_none_reproduces_prior_behaviour(tmp_path, monkeypatch):
+    """No new git spawn / no behaviour change: `deliverable_id_override=None`
+    (the default) is byte-identical to HEAD for an existing caller."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    _write_shape(repo, _SID, {"pickup": {"deliverable_id": "dlv-from-pickup"}})
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo)
+
+    joined = " ".join(args)
+    assert "Deliverable-Id: dlv-from-pickup" in joined
+
+
+def test_apply_missing_trailers_forwards_deliverable_id_override(tmp_path, monkeypatch):
+    """`apply_missing_trailers` forwards `deliverable_id_override` verbatim
+    to `compute_missing_trailer_args`."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "not-a-uuid-at-all")
+
+    result = commit_trailers.apply_missing_trailers(
+        "chore: land trailers\n",
+        repo,
+        deliverable_id_override="dlv-exec-555555",
+    )
+
+    assert "Deliverable-Id: dlv-exec-555555" in result

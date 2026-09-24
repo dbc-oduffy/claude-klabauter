@@ -158,7 +158,7 @@ def test_validate_graph_verify_then_fix_refused(tmp_path):
     doc = _minimal_doc(
         {
             "triage": {"kind": "triage", "edges": {"confirmed-bug": "fix", "not-reproduced": "refute_close"}},
-            "refute_close": {"kind": "refute-close", "edges": {"confirmed": "commit", "refuted": "commit"}},
+            "refute_close": {"kind": "refute-close", "edges": {"confirmed": "commit", "refuted": "fix"}},
             "fix": {
                 "kind": "fix",
                 "edges": {
@@ -190,7 +190,7 @@ def test_validate_graph_closing_path_without_refute_close_refused(tmp_path):
                     "done": "verify",
                     "NEEDS_WIDER_SCOPE": "widen-exhausted",
                     "PEER_DIRTY": "peer-dirty",
-                    "NOT_REPRODUCED": "verify",
+                    "NOT_REPRODUCED": "needs-judgment",
                     "baton": "baton",
                     "needs-judgment": "needs-judgment",
                 },
@@ -214,14 +214,14 @@ def test_validate_graph_non_on_fail_cycle_refused(tmp_path):
     doc = _minimal_doc(
         {
             "triage": {"kind": "triage", "edges": {"confirmed-bug": "fix", "not-reproduced": "refute_close"}},
-            "refute_close": {"kind": "refute-close", "edges": {"confirmed": "commit", "refuted": "commit"}},
+            "refute_close": {"kind": "refute-close", "edges": {"confirmed": "commit", "refuted": "fix"}},
             "fix": {
                 "kind": "fix",
                 "edges": {
                     "done": "verify",
                     "NEEDS_WIDER_SCOPE": "widen-exhausted",
                     "PEER_DIRTY": "peer-dirty",
-                    "NOT_REPRODUCED": "verify",
+                    "NOT_REPRODUCED": "needs-judgment",
                     "baton": "baton",
                     "needs-judgment": "needs-judgment",
                 },
@@ -246,8 +246,12 @@ def test_validate_graph_second_on_fail_traversal_refused(tmp_path):
     doc = _minimal_doc(
         {
             "triage": {"kind": "triage", "edges": {"confirmed-bug": "fix", "not-reproduced": "refute_close"}},
-            "refute_close": {"kind": "refute-close", "edges": {"confirmed": "commit", "refuted": "commit"}},
-            "fix": {"kind": "fix", "edges": {"done": "verify"}, "on_fail": "verify"},
+            "refute_close": {"kind": "refute-close", "edges": {"confirmed": "commit", "refuted": "fix"}},
+            "fix": {
+                "kind": "fix",
+                "edges": {"done": "verify", "NOT_REPRODUCED": "needs-judgment"},
+                "on_fail": "verify",
+            },
             "verify": {
                 "kind": "verify",
                 "verify": {"default": "agent"},
@@ -267,7 +271,7 @@ def test_validate_graph_stray_outcome_outside_stage_outcomes_refused(tmp_path):
     doc = _minimal_doc(
         {
             "triage": {"kind": "triage", "edges": {"confirmed-bug": "fix", "not-reproduced": "refute_close"}},
-            "refute_close": {"kind": "refute-close", "edges": {"confirmed": "commit", "refuted": "commit"}},
+            "refute_close": {"kind": "refute-close", "edges": {"confirmed": "commit", "refuted": "fix"}},
             "fix": {"kind": "fix", "edges": {"done": "verify", "not-a-real-outcome": "commit"}},
             "verify": {"kind": "verify", "verify": {"default": "agent"}, "edges": {"pass": "commit"}},
             "commit": {"kind": "commit", "edges": {}},
@@ -361,6 +365,74 @@ def test_validate_graph_on_fail_targeting_triage_node_refused(tmp_path):
     with pytest.raises(gp.ProfileError) as exc_info:
         gp.validate_graph(profile)
     assert exc_info.value.rule == "edge_targets_triage_node"
+
+
+# ---------------------------------------------------------------------------
+# Design item 1: refuted must revive, NOT_REPRODUCED must hand back
+# ---------------------------------------------------------------------------
+
+
+def test_refuted_straight_to_commit_refused(tmp_path):
+    # An unrevived refuted closure: `refuted` resolves to `commit`, a
+    # non-fix node -- exactly the KEPT_OPEN stranding the 2026-09-21 grind
+    # handoff measured.
+    doc = _load_fixture_doc()
+    doc["graph"]["refute_close"]["edges"]["refuted"] = "commit"
+    profile = _profile_from_doc(tmp_path, "refuted-to-commit", doc)
+    with pytest.raises(gp.ProfileError) as exc_info:
+        gp.validate_graph(profile)
+    assert exc_info.value.rule == "refuted_not_revived"
+
+
+def test_not_reproduced_to_verify_node_refused(tmp_path):
+    # A fixer's NOT_REPRODUCED closing the row on its own word by routing
+    # onward to another node, rather than handing back to a person.
+    doc = _load_fixture_doc()
+    doc["graph"]["fix"]["edges"]["NOT_REPRODUCED"] = "verify"
+    profile = _profile_from_doc(tmp_path, "not-reproduced-to-verify", doc)
+    with pytest.raises(gp.ProfileError) as exc_info:
+        gp.validate_graph(profile)
+    assert exc_info.value.rule == "not_reproduced_not_handed_back"
+
+
+def test_refuted_may_revive_via_on_fail(tmp_path):
+    # `refuted` absent from `edges`, resolved instead via `on_fail` -- still
+    # must land on a fix node.
+    doc = _load_fixture_doc()
+    del doc["graph"]["refute_close"]["edges"]["refuted"]
+    doc["graph"]["refute_close"]["on_fail"] = "fix"
+    profile = _profile_from_doc(tmp_path, "refuted-via-on-fail", doc)
+    gp.validate_graph(profile)  # must not raise
+
+
+def test_fixture_refuted_and_not_reproduced_route_legally():
+    # The fixture profile itself: refuted revives to `fix`, NOT_REPRODUCED
+    # hands back to `needs-judgment`.
+    profile = gp.load_profile("fixture", _FIXTURE_DIR)
+    assert profile.graph["refute_close"].edges["refuted"] == "fix"
+    assert profile.graph["fix"].edges["NOT_REPRODUCED"] == "needs-judgment"
+    gp.validate_graph(profile)  # must not raise
+
+
+def test_doe_queue_profiles_pass_validate_graph():
+    # census row 1: all six DoE profiles at doe-claude 15e42950 already pass
+    # both new refusals unchanged. Resolved through the fleet's existing
+    # `repos.doe_claude` machine-local registry key (the same resolution
+    # `session_start_register_doe_claude_root.py` maintains).
+    from coordinator_core.machine_resolver import registry_get
+
+    doe_root = registry_get("repos.doe_claude")
+    if not doe_root or not Path(doe_root).is_dir():
+        pytest.skip("repos.doe_claude unresolved")
+    profile_dir = Path(doe_root) / "coordinator" / "queue-profiles"
+    if not profile_dir.is_dir():
+        pytest.skip("repos.doe_claude unresolved")
+    profile_names = sorted(p.stem for p in profile_dir.glob("*.yaml"))
+    if not profile_names:
+        pytest.skip("repos.doe_claude unresolved")
+    for name in profile_names:
+        profile = gp.load_profile(name, profile_dir)
+        gp.validate_graph(profile)  # must not raise
 
 
 # ---------------------------------------------------------------------------

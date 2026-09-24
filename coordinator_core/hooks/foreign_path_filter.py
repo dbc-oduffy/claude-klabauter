@@ -58,13 +58,13 @@ def session_repo_is_plane(cwd: Union[str, Path]) -> bool:
         try:
             root = registry_get(key)
         except Exception:
-            continue
+            continue  # this registry key is unresolvable; try the next
         if not root:
             continue
         try:
             if same_path(cwd_str, root):
                 return True
         except Exception:
-            continue
+            continue  # unresolvable path comparison for this root; try the next
 
     return False

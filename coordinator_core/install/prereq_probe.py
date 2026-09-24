@@ -127,10 +127,11 @@ from __future__ import annotations
 
 import os
 import platform
+import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from coordinator_core.install.step_zero_emit import emit_line
 from coordinator_core.win_portability import no_console_creationflags
@@ -230,8 +231,82 @@ def probe_git() -> str:
 
 
 # ---------------------------------------------------------------------------
-# _co_probe_python
+# _co_probe_python — precedence assertion (C3 leg 2)
 # ---------------------------------------------------------------------------
+# Arm taken: B. C1 (docs/research/2026-09-11-appx-alias-vs-path-precedence.md,
+# this repo, claude-klabauter) recorded UNRUN — no PM-run observation was
+# supplied — so per that plan's C3 body "Arm selection, from C1", the
+# dispatched default is arm B: a live WindowsApps App Execution Alias stub is
+# treated as intercepting ahead of PATH resolution REGARDLESS of order, so a
+# user-PATH prepend cannot be trusted to protect against it. Arm A (order
+# governs, so only a stub genuinely ahead of the resolved interpreter on PATH
+# fails) is reachable only by a future PM-supplied C1 result overwriting this
+# constant — not by re-deriving the arm here.
+_ARM_TAKEN = "B"
+
+# Known stub/shim classes that must never precede the resolved interpreter on
+# PATH (plan body: "an enumerated list, named in the code and covering both
+# platforms so the guarantee is not Windows-only wearing a portable name").
+# Matched by ALL-of these lowercase substrings appearing in a PATH entry.
+_STUB_CLASS_MARKERS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("WindowsApps App Execution Alias", ("microsoft", "windowsapps")),
+    ("WinGet Links shim", ("winget", "links")),
+    ("Homebrew shim", ("homebrew",)),
+    ("pyenv shim", ("pyenv", "shims")),
+)
+_PY_ENTRY_NAMES = ("python3.exe", "python3", "python.exe", "python")
+
+
+def _classify_stub_dir(dir_path: str) -> Optional[str]:
+    """Return the stub-class label if `dir_path` matches one of
+    `_STUB_CLASS_MARKERS` by substring, else None. Case-insensitive, and
+    normalizes backslashes so the same markers match both platforms."""
+    lowered = dir_path.replace("\\", "/").lower()
+    for label, needles in _STUB_CLASS_MARKERS:
+        if all(needle in lowered for needle in needles):
+            return label
+    return None
+
+
+def _dir_has_python_entry(dir_path: str) -> bool:
+    """`os.path.lexists`, not `exists` — an AppX App Execution Alias is a
+    zero-byte reparse point that trips `lexists` but not `exists`/`is_file`,
+    and the same distinction covers a broken Homebrew/pyenv symlink."""
+    return any(os.path.lexists(os.path.join(dir_path, name)) for name in _PY_ENTRY_NAMES)
+
+
+def _stub_class_ahead_of_resolved(resolved_exe: str) -> Optional[Tuple[str, str]]:
+    """Walk PATH left-to-right, classifying every directory ahead of the one
+    containing `resolved_exe`. Returns (label, offending_dir) for the first
+    hit, or None if nothing ahead matches a known stub class.
+
+    Under arm B (see `_ARM_TAKEN`), the WindowsApps App Execution Alias class
+    is checked over the WHOLE PATH rather than only the prefix ahead of
+    `resolved_exe` — arm B's premise is that the alias intercepts regardless
+    of PATH order, so "ahead of" is not the right question for that one
+    class; it is still the right question for the other three, which arm B
+    does not concern.
+    """
+    path_entries = [e for e in os.environ.get("PATH", "").split(os.pathsep) if e]
+
+    if _ARM_TAKEN == "B":
+        for entry in path_entries:
+            if _classify_stub_dir(entry) == "WindowsApps App Execution Alias" and _dir_has_python_entry(entry):
+                return ("WindowsApps App Execution Alias", entry)
+
+    resolved_dir = os.path.dirname(os.path.abspath(resolved_exe))
+    for entry in path_entries:
+        if os.path.abspath(entry) == resolved_dir:
+            break
+        label = _classify_stub_dir(entry)
+        if label is None or not _dir_has_python_entry(entry):
+            continue
+        if label == "WindowsApps App Execution Alias" and _ARM_TAKEN == "B":
+            continue  # already handled above for arm B
+        return (label, entry)
+    return None
+
+
 def probe_python() -> str:
     from coordinator_core.install.manifest_reader import NoPythonInterpreterError, find_python
 
@@ -244,6 +319,30 @@ def probe_python() -> str:
             "Disable WindowsApps python/python3 App Execution aliases (Settings > Apps > "
             "App execution aliases) then install Python 3.11+ from https://www.python.org/downloads/",
         )
+
+    resolved_exe = shutil.which(python_bin) or python_bin
+    stub_hit = _stub_class_ahead_of_resolved(resolved_exe)
+    if stub_hit is not None:
+        label, offending_dir = stub_hit
+        if label == "WindowsApps App Execution Alias":
+            detail = (
+                f"WindowsApps App Execution Alias stub present on PATH ({offending_dir}) — "
+                "arm B (C1 spike recorded UNRUN: docs/research/2026-09-11-appx-alias-vs-path-"
+                "precedence.md): a live alias intercepts regardless of PATH order, so a "
+                "working `find_python()` result here does not mean the guarantee holds."
+            )
+            remediation = (
+                "Disable the WindowsApps python/python3 App Execution alias: Settings > Apps > "
+                "Advanced app settings > App execution aliases, then re-run install."
+            )
+        else:
+            detail = f"{label} ({offending_dir}) precedes the resolved interpreter ({resolved_exe}) on PATH."
+            remediation = (
+                f"Remove or reorder the {label} directory so it no longer precedes your intended "
+                "Python install on PATH, then re-run install."
+            )
+        return emit_line("python", "fail", "hard", detail, remediation)
+
     result = _run([python_bin, "--version"])
     detail = _first_line(result.stdout or result.stderr or "") if result else "python (version unknown)"
     return emit_line("python", "pass", "hard", detail or "python (version unknown)", "")

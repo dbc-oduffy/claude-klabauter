@@ -142,7 +142,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, FrozenSet, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from coordinator_core.bash_guards import commit_tripwires
 from coordinator_core.bash_guards._dialect import (
@@ -7339,6 +7339,11 @@ def check_validate_commit(
     # or no pathspec at all; a failed re-derivation git call below also
     # falls back to the whole index rather than guessing.
     commit_scope: List[str] = staged
+    # C2: the pathspec-matched subset, captured BEFORE the staged-deletion
+    # re-add loop below extends `commit_scope`. Used only to choose Check
+    # 5's SCOPE advisory tail clause (b) vs (c) -- never re-derived with a
+    # second git call.
+    _pathspec_matched_set: Optional[Set[str]] = None
     _bt_tokens = _bt_tokenize_full_command(command)
     _commit_seg_tokens: Optional[List[str]] = None
     if _bt_tokens is not None:
@@ -7354,6 +7359,7 @@ def check_validate_commit(
             )
             if _rc_scope == 0:
                 commit_scope = [l for l in _scoped_out.splitlines() if l]
+                _pathspec_matched_set = set(commit_scope)
             # else: extractor ambiguity/failure -> commit_scope stays the
             # whole `staged` list (fail loud, never silent).
 
@@ -7927,7 +7933,13 @@ def check_validate_commit(
                             session_id=session_id,
                             session_dir=session_dir,
                             repo_root=git_root,
-                            staged=staged,
+                            # The event's `staged` field is meant to describe
+                            # what THIS commit actually scopes, not the whole
+                            # index -- `commit_scope` narrows to the pathspec
+                            # when one is present (see its own derivation
+                            # above); passing `staged` here recorded the
+                            # whole-index list even for a scoped commit.
+                            staged=commit_scope,
                             warned_paths=_warned,
                             attribution=attribution,
                             pathspec_scoped=_pathspec_scoped,
@@ -8187,14 +8199,43 @@ def check_validate_commit(
                         })
                         continue
 
+                    # C2 tail clause: says whether THIS command sweeps
+                    # `staged_file` in, without suppressing the advisory
+                    # (NEGATIVE SPEC above `commit_scope`'s derivation --
+                    # pathspec presence must never suppress this warning).
+                    #   (a) no explicit pathspec on the commit -- the bare
+                    #       commit sweeps every staged path in, this one
+                    #       included.
+                    #   (b) the own pathspec resolved and this path is a
+                    #       staged deletion re-added outside it -- it lies
+                    #       outside this commit's pathspec, so this commit
+                    #       leaves it staged.
+                    #   (c) anything else (the commit's own pathspec names
+                    #       this path, or the pathspec could not be resolved
+                    #       statically) -- no clause, text unchanged from
+                    #       HEAD.
+                    if not _pathspec_scoped:
+                        _scope_tail = " This bare commit sweeps it in."
+                    elif (
+                        _pathspec_matched_set is not None
+                        and staged_file not in _pathspec_matched_set
+                    ):
+                        _scope_tail = (
+                            " This commit's pathspec does not name it; it "
+                            "stays staged."
+                        )
+                    else:
+                        _scope_tail = ""
+
                     warnings.append(
                         "SCOPE: %s is staged but not in this session's touch "
                         "list — likely owned by %s. Strict mode would block "
-                        "this commit.%s"
+                        "this commit.%s%s"
                         % (
                             staged_file,
                             owner_sentence,
                             _owner_name_provenance_note(owner_sentence),
+                            _scope_tail,
                         )
                     )
 
@@ -9817,15 +9858,23 @@ _HEREDOC_SCRATCH_ROOT_MARKERS = ("/appdata/local/temp/claude/",)
 def _heredoc_write_target_is_scratch(abs_path: str) -> bool:
     """True if `abs_path` (already absolute, forward-slash-normalized by the
     caller) resolves under a scratch/temp root: the coordinator scratchpad
-    shape, a bare ``/tmp``, or the live ``$TEMP``/``$TMP``/``%TEMP%``/
-    ``%TMP%`` env var's own directory. Env vars are read fresh per call
-    (never cached at module scope) for the same reason `_override` reads
-    fresh -- a test that monkeypatches ``os.environ`` must see it take
-    effect on the very next call, not a stale import-time snapshot."""
+    shape, or the live ``$TEMP``/``$TMP``/``%TEMP%``/``%TMP%`` env var's own
+    directory. Env vars are read fresh per call (never cached at module
+    scope) for the same reason `_override` reads fresh -- a test that
+    monkeypatches ``os.environ`` must see it take effect on the very next
+    call, not a stale import-time snapshot.
+
+    Deliberately does NOT treat a bare ``/tmp`` literal as scratch on its
+    own: this function's sole production caller
+    (`check_heredoc_repo_write_advise`) only reaches it AFTER confirming
+    `candidate` already resolves inside `git_root` via `_paths_match_prefix`
+    -- so a bare-/tmp check here was never distinguishing "scratch write
+    outside the repo" from "the repo checkout itself lives under /tmp"
+    (a real pytest `tmp_path` fixture, or a real cloud-container checkout),
+    and always misfired in the latter case, permanently silencing a real
+    in-repo write advisory. TF-20260923-bb-081."""
     norm = abs_path.replace("\\", "/").lower()
     if any(marker in norm for marker in _HEREDOC_SCRATCH_ROOT_MARKERS):
-        return True
-    if norm == "/tmp" or norm.startswith("/tmp/"):
         return True
     for env_var in ("TEMP", "TMP"):
         val = os.environ.get(env_var)

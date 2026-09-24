@@ -86,7 +86,7 @@ import re
 from pathlib import Path, PureWindowsPath
 from typing import Optional
 
-from coordinator_core._hook_envelope import deny, no_advisory
+from coordinator_core._hook_envelope import deny, no_advisory, payload_of
 from coordinator_core.hooks.support.message_envelope import ALTERNATIVE_MAX_LINES, compose, render
 from coordinator_core.ipc import register_op
 
@@ -190,6 +190,7 @@ def _compose_stale_candidates_message(candidates: "list[str]"):
 def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Agent) op: deny a dispatch to review-integrator whose
     prompt does not name an on-disk findings sidecar."""
+    params = payload_of(params)
     if params.get("tool_name", "") != "Agent":
         return no_advisory()
 
@@ -224,7 +225,7 @@ def _handler(params: dict, repo_root=None) -> dict:
                 if (Path(root) / spelling).is_file():
                     return no_advisory()
             except Exception:
-                continue
+                continue  # unresolvable candidate path; try the next spelling
 
     reason = render(_compose_stale_candidates_message(candidates))
     return deny("PreToolUse", reason)

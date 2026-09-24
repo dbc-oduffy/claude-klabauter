@@ -3,29 +3,36 @@
 (coordinator-doc-new.py).
 
 Finding 2 -- these batch counterparts to the old enumerate-then-`get` path
-had zero test coverage, and the underlying `dump --prefix repos --format
-json` implementation (`_machine_local.py::cmd_dump`) does NOT live in this
-repo -- it's a discovery-resolved surface owned by coordinator-claude, so
-neither this test nor a human reviewer can verify the docstring's
-byte-identical-to-`get` equivalence claim by reading its code. A stubbed
-behavioural parity test against a shared fixture registry is the only
-available guard for that claim in THIS repo, which is why it matters more
-than usual here, not less.
+had zero test coverage. Both functions now call `_machine_local.py`'s own
+in-process kernel (`resolve_one`, `_build_resolution_layers`, `_all_keys`)
+directly (P055-C3, converting the prior `subprocess.run([python, impl,
+...])` spawn) via each module's own `_load_machine_local_kernel()`. Neither
+this test nor a human reviewer can read `_machine_local.py`'s code from
+this repo -- it's a discovery-resolved surface owned by coordinator-claude
+-- so a stubbed-kernel behavioural parity test against a shared fixture
+registry is still the only available guard for the byte-identical-to-`get`
+equivalence claim, unchanged from the pre-conversion shape. Only the seam
+being stubbed moved: `_load_machine_local_kernel()` (a fake kernel object)
+instead of `subprocess.run` (a fake `CompletedProcess`).
 
-Both `subprocess.run` call sites (the `dump` batch call and the per-key
-`get` call) are monkeypatched against the SAME fixture registry
-(`_FIXTURE_REGISTRY`) so the two code paths are proven equivalent for:
+Both functions' calls into the fake kernel are checked against the SAME
+fixture registry (`_FIXTURE_REGISTRY`) so the two code paths are proven
+equivalent for:
   - present keys (ordinary case)
   - an ABSENT key that is NOT `repos.doe_claude` (the one key with an
     explicit `setdefault(...)` backstop in `resolve_from_repo` --
     precisely because the authors worried about a default-on-absent gap
     for it specifically; every other `repos.*` key has no such backstop,
     so this test deliberately covers one of those instead)
-  - a key present in the dump JSON but with a non-string value (type
-    coercion: `machine_local_dump_repos` filters non-str/falsy values the
-    same way `machine_local_get` degrades an empty/failed `get` to None)
+  - a key resolved OK but with a non-string/None value (type coercion:
+    `machine_local_dump_repos` filters non-str/falsy values the same way
+    `machine_local_get` degrades a falsy resolved value to None)
+  - one key hitting EXIT_OPERATIONAL: the whole dump must fail closed to
+    `{}` (matches `machine_local_get`'s existing fail-closed contract --
+    an operationally-failed batch is a partial/crashed dump, never a
+    value to trust)
 
-Anti-scope: this is a stubbed-subprocess unit test, never a live
+Anti-scope: this is a stubbed-kernel unit test, never a live
 `_machine_local.py` invocation (per this repo's own boundary doc --
 `_machine_local.py` is not vendored here to read or run against).
 
@@ -34,8 +41,6 @@ Run: python -m pytest coordinator/bin/tests/test_cli_shared_dump_repos_parity.py
 from __future__ import annotations
 
 import importlib.util
-import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -52,10 +57,10 @@ if str(_LIB_DIR) not in sys.path:
 
 import cli_shared  # noqa: E402
 
-# Fixture registry shared by both the `dump` stub and the per-key `get`
-# stub -- the single source of truth both code paths are checked against.
-# `repos.absent_repo` is deliberately NOT present here at all (simulating
-# an unregistered repo key) -- neither the dump JSON nor a `get` call ever
+# Fixture registry the fake kernel resolves against -- the single source of
+# truth both code paths (dump batch, per-key get) are checked against.
+# `repos.absent_repo` is deliberately NOT present here at all (simulating an
+# unregistered repo key) -- neither the dump path nor a `get` call ever
 # succeeds for it, and it is NOT `repos.doe_claude` (the one key with its
 # own setdefault backstop elsewhere in cli_shared.py).
 _FIXTURE_REGISTRY = {
@@ -65,29 +70,36 @@ _FIXTURE_REGISTRY = {
 }
 
 
-def _fake_dump_run(cmd, **_kwargs):
-    """Stands in for `python _machine_local.py dump --prefix repos --format
-    json` -- emits exactly the fixture registry as JSON, rc=0."""
-    assert "dump" in cmd
-    return subprocess.CompletedProcess(cmd, 0, json.dumps(_FIXTURE_REGISTRY), "")
+class _FakeKernel:
+    """Stands in for the in-process `_machine_local.py` module object
+    `_load_machine_local_kernel()` returns -- `EXIT_OK`/`EXIT_OPERATIONAL`
+    plus the three kernel primitives `machine_local_dump_repos` and
+    `machine_local_get` (and their coordinator-doc-new.py twins) call.
+    """
 
+    EXIT_OK = 0
+    EXIT_NOT_FOUND = 1
+    EXIT_OPERATIONAL = 2
 
-def _fake_get_run(cmd, **_kwargs):
-    """Stands in for `python _machine_local.py get <key>` -- looks the key
-    up in the SAME fixture registry, rc=1/empty stdout on a miss (the real
-    `get` CLI's contract for an unregistered key)."""
-    key = cmd[-1]
-    if key in _FIXTURE_REGISTRY:
-        return subprocess.CompletedProcess(cmd, 0, _FIXTURE_REGISTRY[key] + "\n", "")
-    return subprocess.CompletedProcess(cmd, 1, "", "")
+    def __init__(self, registry, operational_keys=frozenset()):
+        self._registry = registry
+        self._operational_keys = frozenset(operational_keys)
 
+    def _registry_dir(self):
+        return "/fake/registry"
 
-def _fake_dispatch_run(cmd, **_kwargs):
-    if "dump" in cmd:
-        return _fake_dump_run(cmd, **_kwargs)
-    if "get" in cmd:
-        return _fake_get_run(cmd, **_kwargs)
-    raise AssertionError(f"unhandled cmd: {cmd!r}")
+    def _build_resolution_layers(self, reg_dir):
+        return ["fake-layer"]
+
+    def _all_keys(self, layers):
+        return list(self._registry) + list(self._operational_keys)
+
+    def resolve_one(self, key, layers):
+        if key in self._operational_keys:
+            return (self.EXIT_OPERATIONAL, f"machine-local: fake operational failure for {key}")
+        if key in self._registry:
+            return (self.EXIT_OK, self._registry[key])
+        return (self.EXIT_NOT_FOUND, None)
 
 
 def _load_doc_new_module():
@@ -108,7 +120,7 @@ _doc_new = _load_doc_new_module()
 
 
 def test_cli_shared_dump_matches_per_key_get_for_present_keys(monkeypatch):
-    monkeypatch.setattr(cli_shared.subprocess, "run", _fake_dispatch_run)
+    monkeypatch.setattr(cli_shared, "_load_machine_local_kernel", lambda: _FakeKernel(_FIXTURE_REGISTRY))
 
     dumped = cli_shared.machine_local_dump_repos()
     per_key = {
@@ -123,7 +135,7 @@ def test_cli_shared_dump_and_get_agree_on_absent_non_doe_claude_key(monkeypatch)
     only key with its own setdefault backstop) -- both paths must treat an
     unregistered key identically: absent from the dump dict, None from
     per-key get."""
-    monkeypatch.setattr(cli_shared.subprocess, "run", _fake_dispatch_run)
+    monkeypatch.setattr(cli_shared, "_load_machine_local_kernel", lambda: _FakeKernel(_FIXTURE_REGISTRY))
 
     dumped = cli_shared.machine_local_dump_repos()
     got = cli_shared.machine_local_get("repos.absent_repo")
@@ -133,49 +145,35 @@ def test_cli_shared_dump_and_get_agree_on_absent_non_doe_claude_key(monkeypatch)
 
 
 def test_cli_shared_dump_type_coercion_matches_get_degrade_to_none(monkeypatch):
-    """A non-string / falsy dump JSON value must be filtered out by
-    `machine_local_dump_repos` exactly as a `get` call that fails or
-    returns empty stdout degrades to None -- neither path should ever hand
-    a caller a non-string or empty `repos.*` value."""
+    """A resolved-but-falsy (None) value must be filtered out by
+    `machine_local_dump_repos` exactly as `machine_local_get` degrades the
+    same resolved value to None -- neither path should ever hand a caller a
+    non-string or empty `repos.*` value."""
     registry_with_null = dict(_FIXTURE_REGISTRY, **{"repos.broken_entry": None})
+    monkeypatch.setattr(cli_shared, "_load_machine_local_kernel", lambda: _FakeKernel(registry_with_null))
 
-    def _dump_with_null(cmd, **_kwargs):
-        assert "dump" in cmd
-        return subprocess.CompletedProcess(cmd, 0, json.dumps(registry_with_null), "")
-
-    def _get_for_broken_entry(cmd, **_kwargs):
-        # The real `get` CLI never emits a JSON `null` -- an unresolvable
-        # value comes back as empty stdout, matching machine_local_get's
-        # own not-str-or-empty contract.
-        return subprocess.CompletedProcess(cmd, 0, "", "")
-
-    monkeypatch.setattr(cli_shared.subprocess, "run", _dump_with_null)
     dumped = cli_shared.machine_local_dump_repos()
     assert "repos.broken_entry" not in dumped
 
-    monkeypatch.setattr(cli_shared.subprocess, "run", _get_for_broken_entry)
     got = cli_shared.machine_local_get("repos.broken_entry")
     assert got is None
 
 
-def test_cli_shared_dump_fails_closed_on_nonzero_returncode_with_parseable_stdout(monkeypatch):
-    """Mutation-verify (Finding 1, this review): a `dump` subprocess that
-    exits non-zero but still emits parseable JSON on stdout (partial
-    write, crash after emitting some keys) must be REJECTED -- matching
-    `machine_local_get`'s existing `returncode != 0` guard. Pre-fix,
-    `machine_local_dump_repos` gated only on `stdout.strip()` truthiness
-    plus successful `json.loads`, so this exact input would have been
-    silently ACCEPTED as a partial `repos.*` table -- this test pins the
-    fix and would fail red against that pre-fix behaviour."""
-    def _nonzero_but_parseable(cmd, **_kwargs):
-        assert "dump" in cmd
-        # Partial dict -- as if the dump process crashed after emitting
-        # only one key.
-        return subprocess.CompletedProcess(
-            cmd, 1, json.dumps({"repos.claude_klabauter": "/machine/claude-klabauter"}), "boom"
-        )
-
-    monkeypatch.setattr(cli_shared.subprocess, "run", _nonzero_but_parseable)
+def test_cli_shared_dump_fails_closed_on_operational_failure_for_any_key(monkeypatch):
+    """Mutation-verify (Finding 1, this review; re-pinned P055-C3 for the
+    in-process kernel shape): a dump where every OTHER key resolves fine but
+    ONE key hits EXIT_OPERATIONAL (an ambiguous autodiscovery match, a
+    malformed registry entry) must be REJECTED as a whole -- matching
+    `machine_local_get`'s existing fail-closed contract. Pre-fix (spawn
+    shape), this was pinned as "nonzero returncode with parseable stdout";
+    the in-process kernel's equivalent failure mode is one key's
+    `EXIT_OPERATIONAL`, which this test now drives directly rather than via
+    a stubbed subprocess returncode."""
+    monkeypatch.setattr(
+        cli_shared,
+        "_load_machine_local_kernel",
+        lambda: _FakeKernel({"repos.claude_klabauter": "/machine/claude-klabauter"}, operational_keys={"repos.crashed_key"}),
+    )
     assert cli_shared.machine_local_dump_repos() == {}
 
 
@@ -186,7 +184,7 @@ def test_cli_shared_dump_fails_closed_on_nonzero_returncode_with_parseable_stdou
 
 
 def test_doc_new_dump_matches_per_key_get_for_present_keys(monkeypatch):
-    monkeypatch.setattr(_doc_new.subprocess, "run", _fake_dispatch_run)
+    monkeypatch.setattr(_doc_new, "_load_machine_local_kernel", lambda: _FakeKernel(_FIXTURE_REGISTRY))
 
     dumped = _doc_new._machine_local_dump_repos()
     per_key = {
@@ -197,7 +195,7 @@ def test_doc_new_dump_matches_per_key_get_for_present_keys(monkeypatch):
 
 
 def test_doc_new_dump_and_get_agree_on_absent_non_doe_claude_key(monkeypatch):
-    monkeypatch.setattr(_doc_new.subprocess, "run", _fake_dispatch_run)
+    monkeypatch.setattr(_doc_new, "_load_machine_local_kernel", lambda: _FakeKernel(_FIXTURE_REGISTRY))
 
     dumped = _doc_new._machine_local_dump_repos()
     got = _doc_new._machine_local_get("repos.absent_repo")
@@ -206,16 +204,14 @@ def test_doc_new_dump_and_get_agree_on_absent_non_doe_claude_key(monkeypatch):
     assert got is None
 
 
-def test_doc_new_dump_fails_closed_on_nonzero_returncode_with_parseable_stdout(monkeypatch):
+def test_doc_new_dump_fails_closed_on_operational_failure_for_any_key(monkeypatch):
     """Mutation-verify (Finding 1, this review) for the coordinator-doc-new.py
     twin: pins the same fail-closed fix as
-    `test_cli_shared_dump_fails_closed_on_nonzero_returncode_with_parseable_stdout`
-    above -- would fail red against the pre-fix (returncode-blind) behaviour."""
-    def _nonzero_but_parseable(cmd, **_kwargs):
-        assert "dump" in cmd
-        return subprocess.CompletedProcess(
-            cmd, 1, json.dumps({"repos.claude_klabauter": "/machine/claude-klabauter"}), "boom"
-        )
-
-    monkeypatch.setattr(_doc_new.subprocess, "run", _nonzero_but_parseable)
+    `test_cli_shared_dump_fails_closed_on_operational_failure_for_any_key`
+    above, re-pinned P055-C3 for the in-process kernel shape."""
+    monkeypatch.setattr(
+        _doc_new,
+        "_load_machine_local_kernel",
+        lambda: _FakeKernel({"repos.claude_klabauter": "/machine/claude-klabauter"}, operational_keys={"repos.crashed_key"}),
+    )
     assert _doc_new._machine_local_dump_repos() == {}

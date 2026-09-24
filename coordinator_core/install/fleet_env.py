@@ -96,7 +96,22 @@ every provisioning run
 pay for probing all ~250 packages. This is also documented in
 `docs/reference/fleet-shared-environment-contract.md` § Provisioning the
 environment (C4) — that is the promise this constant discharges; the two
-must not drift apart independently. `_fleet_env_healthy` also gates on the
+must not drift apart independently.
+
+Health stamp fast path (C3): `ensure_fleet_env`'s `check_only` branch and
+its unlocked already-healthy fast path go through
+`_fleet_env_healthy_stamped` rather than `_fleet_env_healthy` directly. A
+stamp file inside the generation directory (reached through the `env_root`
+junction, so a generation swap invalidates it for free) keys on everything
+the probe result depends on; a key match skips the child interpreter
+entirely, a miss runs the full unmodified probe and writes a fresh stamp on
+pass. Every other call site (post-lock re-check, post-build, the
+generation-sibling repair in `_find_torn_publish_generation`) still calls
+`_fleet_env_healthy` directly and never reads the stamp. See
+`docs/reference/fleet-shared-environment-contract.md` § Provisioning the
+environment (C4) for the key's full input list and its named residual gap
+(an in-place package upgrade that does not change the site-packages
+directory's own mtime). `_fleet_env_healthy` also gates on the
 target interpreter's own `sys.version_info` matching `LOCK_PYTHON_MINOR` —
 added as a follow-up to C6 (which flipped the minor 3.12 -> 3.14 and
 regenerated the lock without any propagation path to an already-provisioned
@@ -196,6 +211,7 @@ Spec backlink: docs/plans/2026-08-20-the-fleet-env-publishes-through-a-juncti.md
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -1097,6 +1113,139 @@ def _replay_sibling_bindings(
         BINDING_REPLAY_HOOK(env_root)
 
 
+#: C3 (this chunk) — the health-stamp fast path. Lives inside the
+#: generation directory, reached THROUGH `env_root` (never a path computed
+#: from `junction.junction_target` directly), so a generation swap
+#: invalidates it automatically: reading `_health_stamp_path(env_root)`
+#: after a retarget reads the NEW generation's stamp (or none), never the
+#: old one. See module docstring "Add a stamp file..." (C3).
+_HEALTH_STAMP_FILENAME = ".fleet-env-health-stamp.json"
+
+
+def _health_stamp_path(env_root: Path) -> Path:
+    return env_root / _HEALTH_STAMP_FILENAME
+
+
+def _health_stamp_key(python_bin: Path, env_root: Path) -> "Optional[dict]":
+    """Everything `_fleet_env_healthy`'s probe result depends on (module
+    docstring C3 list): the committed lock's content, the contracted minor,
+    the import-probe tuple, the resolved interpreter's identity (`st_size`
+    + `st_mtime_ns`, never `st_ino` alone — multi-OS), the environment's
+    site-packages directory `st_mtime_ns` (catches an add/removed top-level
+    package; an in-place upgrade that keeps the directory entry can leave
+    this unchanged, a residual gap named rather than implied covered — see
+    the contract doc paragraph this chunk adds), and the resolved generation
+    name (the junction target) so a swap to a different generation is
+    always a miss even if that generation happens to look identical on
+    every other axis.
+
+    Returns `None` when an input needed to compute the key cannot be read
+    (lock missing, interpreter unstat-able) — the caller treats that the
+    same as a stamp miss: run the real probe, and skip writing a stamp
+    (nothing to key it on)."""
+    try:
+        lock_hash = hashlib.sha256(_LOCK_PATH.read_bytes()).hexdigest()
+    except OSError:
+        return None
+    try:
+        interp_stat = python_bin.stat()
+    except OSError:
+        return None
+    try:
+        site_packages_mtime_ns = _site_packages_dir(env_root).stat().st_mtime_ns
+    except OSError:
+        site_packages_mtime_ns = None
+    generation_target = junction.junction_target(env_root)
+    return {
+        "lock_sha256": lock_hash,
+        "lock_python_minor": LOCK_PYTHON_MINOR,
+        "import_probes": list(_FLEET_ENV_IMPORT_PROBES),
+        "interpreter_path": str(python_bin),
+        "interpreter_size": interp_stat.st_size,
+        "interpreter_mtime_ns": interp_stat.st_mtime_ns,
+        "site_packages_mtime_ns": site_packages_mtime_ns,
+        "generation": str(generation_target) if generation_target is not None else None,
+    }
+
+
+def _read_health_stamp(env_root: Path) -> "Optional[dict]":
+    """`None` on anything short of a well-formed key dict — missing,
+    unreadable, or corrupt (bad JSON, or JSON that is not an object) — so
+    the caller always falls back to a real probe rather than raising."""
+    try:
+        text = _health_stamp_path(env_root).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def _write_health_stamp_atomic(env_root: Path, key: dict) -> None:
+    """Write `key` atomically (mkstemp + `os.replace`, within `env_root`'s
+    own directory so the temp file and the target are the same generation)
+    — but ONLY if `env_root`'s junction target still matches `key`'s
+    `generation` entry. Re-resolving the target here (rather than trusting
+    the one captured when `key` was built) is the guard against the race a
+    concurrent rebuild's publish opens: if the junction retargeted between
+    the probe and this call, the generation `key` was computed for may
+    already be reclaimed, and writing into `env_root` now would land the
+    stamp in the NEW generation instead — silently and wrongly marking it
+    healthy without ever having probed it. Never raises; a write failure
+    here just means the next call re-probes, same as any other stamp miss."""
+    current_target = junction.junction_target(env_root)
+    current_target_str = str(current_target) if current_target is not None else None
+    if current_target_str != key.get("generation"):
+        return
+    text = json.dumps(key, indent=2) + "\n"
+    try:
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(env_root))
+    except OSError:
+        return
+    tmp_fd_open = True
+    try:
+        os.write(tmp_fd, text.encode("utf-8"))
+        os.close(tmp_fd)
+        tmp_fd_open = False
+        os.replace(tmp_path, str(_health_stamp_path(env_root)))
+    except OSError:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+    finally:
+        if tmp_fd_open:
+            try:
+                os.close(tmp_fd)
+            except OSError:
+                pass
+
+
+def _fleet_env_healthy_stamped(python_bin: Path, env_root: Path) -> bool:
+    """Stamp-aware health predicate — used ONLY by `ensure_fleet_env`'s
+    `check_only` branch and its unlocked fast path (module docstring C3);
+    every other `_fleet_env_healthy` call site (post-lock re-check,
+    post-build, generation-sibling repair in `_find_torn_publish_generation`)
+    is unchanged and never reads the stamp.
+
+    On a key match: healthy, with no `subprocess.run` at all — the whole
+    point of the stamp. On a miss (no stamp, unreadable/corrupt stamp, or a
+    key that cannot be computed) or a stamp that does not match: falls back
+    to the real probe (`_fleet_env_healthy`) and, if it passes, writes a
+    fresh stamp for next time. A failing real probe never writes a stamp."""
+    key = _health_stamp_key(python_bin, env_root)
+    if key is not None and _read_health_stamp(env_root) == key:
+        return True
+    healthy = _fleet_env_healthy(python_bin)
+    if healthy and key is not None:
+        _write_health_stamp_atomic(env_root, key)
+    return healthy
+
+
 def _env_root_absent(env_root: Path) -> bool:
     """True iff the `env_root` NAME itself carries no directory entry at
     all — not a junction, not a real directory, nothing. This is the exact
@@ -1161,10 +1310,11 @@ def ensure_fleet_env(
     python_bin = _env_python_path(env_root)
 
     if check_only:
-        return "ready" if _fleet_env_healthy(python_bin) else "would-rebuild"
+        return "ready" if _fleet_env_healthy_stamped(python_bin, env_root) else "would-rebuild"
 
-    # Fast path: already healthy — no mutation, no lock taken (AC4).
-    if _fleet_env_healthy(python_bin):
+    # Fast path: already healthy — no mutation, no lock taken (AC4). Stamp-
+    # aware (C3): a key match skips the child import probe entirely.
+    if _fleet_env_healthy_stamped(python_bin, env_root):
         return "ready"
 
     lock_path = Path(str(env_root) + ".lock")

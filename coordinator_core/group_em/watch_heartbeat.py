@@ -51,12 +51,15 @@ from __future__ import annotations
 import calendar
 import json
 import os
+import sys
 import tempfile
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core import timestamps
 from coordinator_core.session import core as session_core
+from coordinator_core.session import day_branch_cut_lock
 
 _WATCH_RELATIVE_PATH = os.path.join("state", "group-em-watch.json")
 
@@ -122,10 +125,65 @@ def iso_instant(epoch: float) -> str:
 _iso = iso_instant
 
 
-def next_expected_by(now_epoch: float, interval_seconds: float) -> str:
-    """The deadline this tick promises the next one by, as the reader parses it."""
-    grace = max(_GRACE_FLOOR_SECONDS, interval_seconds * _GRACE_TICKS)
+def next_expected_by(
+    now_epoch: float,
+    interval_seconds: float,
+    observed_interval_seconds: Optional[float] = None,
+) -> str:
+    """The deadline this tick promises the next one by, as the reader parses it.
+
+    BASIS IS THE MEASURED CADENCE, NOT THE CALLER'S DECLARATION, WHEN ONE IS
+    AVAILABLE. A ~3.4x mismatch between `interval_seconds` (what `watch.main`
+    or `tick_once` declares) and the sensor's actual inter-tick delta was
+    measured, and every downstream freshness verdict (`is_fresh_and_foreign`,
+    which reads `next_expected_by` as its sole freshness input) is wrong by
+    that factor for as long as the deadline is sized off the declared value
+    alone. `observed_interval_seconds` is `None` on the first tick -- the
+    only tick with no prior to measure from -- and the declared interval is
+    the whole basis there, same as before this function grew the parameter.
+
+    CAPPED AT THE DECLARED INTERVAL. An observed cadence slower than declared
+    must never widen the deadline past what the declared interval alone
+    would have produced: the dangerous direction of the mismatch is a
+    monitor that ticks slower than it claims stamping a deadline further out
+    than it should, lengthening every peer's lockout window by the same
+    factor. The cap makes the observed basis strictly tighten or match the
+    declared one, never loosen it.
+    """
+    effective_interval = interval_seconds
+    if observed_interval_seconds is not None and observed_interval_seconds > 0:
+        effective_interval = min(observed_interval_seconds, interval_seconds)
+    grace = max(_GRACE_FLOOR_SECONDS, effective_interval * _GRACE_TICKS)
     return _iso(now_epoch + grace)
+
+
+def _ensure_state_dir(directory: str) -> bool:
+    """Create `directory` iff its PARENT already exists. True on success.
+
+    NEVER MINT A REPO. `makedirs` used to create the WHOLE chain, so a
+    caller handed a mangled root created a repo-shaped tree wherever that
+    path landed -- once inside a publish mirror, where it blocked the
+    round for the whole fleet. Full incident: `group_em.repo_root_arg`'s
+    module docstring.
+
+    THIS IS NOT THE SAME FIX as that module's arm-time refusal, which
+    only covers callers that came through a CLI. A writer able to conjure
+    a repo directory is doing something no correct caller needs, so the
+    root must already exist and only the `state/` leaf under it is ours
+    to create.
+
+    Shared by `write_atomic` and the P103-C2 guard -- the guard's sidecar
+    lock lands in the same directory the record itself does, so it needs
+    the identical safety check before either can create anything there.
+    """
+    parent = os.path.dirname(directory)
+    if parent and not os.path.isdir(parent):
+        return False
+    try:
+        os.makedirs(directory, exist_ok=True)
+    except OSError:
+        return False
+    return True
 
 
 def write_atomic(path: str, payload: dict) -> bool:
@@ -143,24 +201,8 @@ def write_atomic(path: str, payload: dict) -> bool:
     directory = os.path.dirname(path)
     tmp_path = None
     try:
-        # NEVER MINT A REPO. `makedirs` used to create the WHOLE chain, so a
-        # caller handed a mangled root created a repo-shaped tree wherever that
-        # path landed -- once inside a publish mirror, where it blocked the
-        # round for the whole fleet. Full incident: `group_em.repo_root_arg`'s
-        # module docstring.
-        #
-        # THIS IS NOT THE SAME FIX as that module's arm-time refusal, which
-        # only covers callers that came through a CLI. A writer able to conjure
-        # a repo directory is doing something no correct caller needs, so the
-        # root must already exist and only the `state/` leaf under it is ours
-        # to create.
-        #
-        # the fourth full retelling of one incident across this diff, reduced
-        # to a pointer plus the part that is this site's own reasoning.
-        parent = os.path.dirname(directory)
-        if parent and not os.path.isdir(parent):
+        if not _ensure_state_dir(directory):
             return False
-        os.makedirs(directory, exist_ok=True)
         handle, tmp_path = tempfile.mkstemp(
             prefix=".group-em-watch-", suffix=".tmp", dir=directory
         )
@@ -354,6 +396,132 @@ def process_confirmed_alive(liveness: dict) -> Optional[bool]:
         return None
 
 
+#: Sidecar lock suffix, placed BESIDE `state/group-em-watch.json` itself --
+#: never under a foreign watched repo's `.git` common dir. `stamp`'s
+#: `repo_root` is an arbitrary watched repo, and P103-C1's two-part gate
+#: found writing a lock sidecar under such a repo's git common dir a NO
+#: under `CLAUDE.md`'s boundary doctrine; the heartbeat file's own directory
+#: is already this module's write target (`write_atomic`), so no new write
+#: surface is opened by anchoring the guard there instead.
+_GUARD_LOCK_SUFFIX = ".lock"
+
+#: Sub-budget hold window and stale grace for the read-decide-write guard --
+#: explicit, and far below `day_branch_cut_lock`'s own 10.0s/60.0s ceilings
+#: (those size a ~30ms `git checkout -b`; this guards one JSON
+#: read-decide-write, measured at ~12ms per critical section, P103-C1
+#: research doc). A lock still held past this window names a crashed or
+#: stuck writer, not a slow one.
+_GUARD_HOLD_SECONDS = 1.0
+_GUARD_STALE_GRACE_SECONDS = 2.0
+
+
+def _guard_lock_path(watch_file: str) -> Path:
+    return Path(watch_file + _GUARD_LOCK_SUFFIX)
+
+
+def _guard_record_is_stale(record: dict, now_epoch: float) -> bool:
+    """`day_branch_cut_lock.record_is_stale`'s SHAPE (PID-liveness checked
+    first, then hold_until-plus-grace) at this guard's own sub-budget window
+    -- reused function, `day_branch_cut_lock.holder_alive`, never a second
+    liveness mechanism invented here.
+    """
+    if day_branch_cut_lock.holder_alive(record.get("holder_pid")) is False:
+        return True
+    hold_until = record.get("hold_until")
+    return isinstance(hold_until, (int, float)) and now_epoch > (
+        hold_until + _GUARD_STALE_GRACE_SECONDS
+    )
+
+
+def _read_guard_record(lock_path: Path) -> Optional[dict]:
+    try:
+        text = lock_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        record = json.loads(text)
+    except ValueError:
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def _guard_mtime_stale(lock_path: Path, now_epoch: float) -> bool:
+    """Fallback staleness signal for an UNREADABLE lock file (corrupt, or
+    caught empty mid-write) -- the file's own mtime, past the guard's hold
+    window PLUS its grace, same as `_guard_record_is_stale`'s hold_until
+    arm but read off the filesystem when the JSON content cannot be. A
+    file that has genuinely vanished by the time this is checked (`OSError`
+    from `stat`) is treated as stale too -- there is nothing left to wait
+    out.
+    """
+    try:
+        mtime = lock_path.stat().st_mtime
+    except OSError:
+        return True
+    return now_epoch > mtime + _GUARD_HOLD_SECONDS + _GUARD_STALE_GRACE_SECONDS
+
+
+def _acquire_guard(watch_file: str, now_epoch: float, guard_pid: int) -> bool:
+    """One racer wins this tick's read-decide-write window; the loser NEVER
+    blocks or retries -- `stamp` never gates (module docstring) -- it
+    declines the tick instead. Reuses `day_branch_cut_lock._try_create`, the
+    `O_CREAT | O_EXCL` atomic-create-or-fail primitive this whole guarantee
+    rests on, rather than inventing a second one.
+    """
+    lock_path = _guard_lock_path(watch_file)
+    payload = {"holder_pid": guard_pid, "hold_until": now_epoch + _GUARD_HOLD_SECONDS}
+    if day_branch_cut_lock._try_create(lock_path, payload):
+        return True
+    record = _read_guard_record(lock_path)
+    if isinstance(record, dict) and _guard_record_is_stale(record, now_epoch):
+        # POSITIVELY CONFIRMED stale (dead holder, or grace elapsed) --
+        # unlink then re-create; exactly one racer's unlink-plus-create wins.
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
+        return day_branch_cut_lock._try_create(lock_path, payload)
+    if record is None:
+        # UNREADABLE IS NOT PROOF OF ABSENCE, and unlinking on that belief
+        # alone is the exact bug this note exists to name: `_try_create`'s
+        # own `O_CREAT` then `os.write` is two syscalls, not one, so a
+        # concurrent reader can catch the file freshly created but still
+        # EMPTY by its legitimate holder -- that reads back as an
+        # unparseable record, identically to "the file is gone". Measured:
+        # unconditionally unlinking here let a second racer take over the
+        # first racer's still-forming lock and both proceed to write -- the
+        # exact collision this guard exists to prevent, reintroduced one
+        # level down. So the file's own mtime is the fallback staleness
+        # witness when content cannot be: within the hold-plus-grace
+        # window, decline without touching it (the ordinary transient
+        # case, resolved by NOT unlinking); past it, treat it the same as a
+        # confirmed-stale record and take over -- otherwise a genuinely
+        # corrupt leftover (e.g. a crash mid-write) would wedge this guard
+        # forever, which is worse than the clobber it exists to prevent.
+        if _guard_mtime_stale(lock_path, now_epoch):
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
+        return day_branch_cut_lock._try_create(lock_path, payload)
+    return False
+
+
+def _release_guard(watch_file: str, guard_pid: int) -> None:
+    """Drop the guard iff this process still holds it. Never raises -- a
+    lock that outlives its own process is exactly what `_guard_record_is_stale`
+    exists to take over, not a reason to crash the tick that just wrote.
+    """
+    lock_path = _guard_lock_path(watch_file)
+    record = _read_guard_record(lock_path)
+    if record is not None and record.get("holder_pid") != guard_pid:
+        return
+    try:
+        lock_path.unlink()
+    except OSError:
+        pass
+
+
 def stamp(
     repo_root: str,
     holder_session_id: str,
@@ -386,22 +554,38 @@ def stamp(
     explicitly, same as before; only an omitted argument now reads back as
     `None` instead of a fabricated `1`.
 
-    NO LOCK SPANS READ-DECIDE-WRITE, AND THIS IS A KNOWN, UNCLOSED GAP.
-    `write_atomic` makes the WRITE atomic; it does not make the sequence
-    "read `prior_record`, decide via `is_fresh_and_foreign`, write" atomic.
-    Two crowns racing inside that window both read the same pre-replacement
-    record, both pass the decline, and the later `os.replace` wins: its
-    `prior_*` keys name the record it actually read, which by the time it
-    lands is no longer the record on disk -- a THIRD instrument's write, the
-    first racer's, is destroyed with no trace naming it at all. `send_pass`'s
-    `build_send_digest` documents an analogous race and bounds it because
-    that record is caller-scoped (one path, one writer at a time in
-    practice); this record is repo-scoped and SHARED across every crown in
-    the fleet, so that bound does not apply here. No lock is added: this
-    module sits on a hot path under a hard sub-500ms budget, and a lock
-    spanning a read-decide-write across a shared file is a bigger change
-    than a heartbeat writer warrants. The residual cost is exactly the
-    clobber described above, on every tick, for as long as this gap stands.
+    THE READ-DECIDE-WRITE WINDOW IS NOW GUARDED (`_acquire_guard`/
+    `_release_guard`, landed e45c43a772) -- THIS IS NO LONGER AN OPEN GAP.
+    `write_atomic` makes the WRITE atomic; on its own it does not make the
+    sequence "read `prior_record`, decide via `is_fresh_and_foreign`, write"
+    atomic, and two crowns racing inside that window would both read the
+    same pre-replacement record, both pass the decline, and the later
+    `os.replace` would win with no trace naming the destroyed racer.
+    `send_pass`'s `build_send_digest` documents an analogous race and bounds
+    it because that record is caller-scoped (one path, one writer at a time
+    in practice); this record is repo-scoped and SHARED across every crown
+    in the fleet, so that bound did not apply here. MEASURED RATE
+    (`docs/research/2026-09-11-group-em-heartbeat-collision-rate-and-candidate-cost.md`):
+    the natural cadence could not be measured under a process-time bar, so
+    the window's forced-simultaneous duration was measured instead
+    (≈12.0ms average critical-section process time) and extrapolated to the
+    real cadences -- ≈6.7x10⁻⁴ per monitor x monitor tick-pair (18s), which
+    accumulates to an expected ≈3.2 lost records/day for a repo watched by
+    two concurrent monitor crowns, consistent with DoE-claude's reported
+    hits. That rate is what justified a guard rather than accept-and-document
+    (the anti-scope's forbidden shortcut is arguing collisions "seem
+    unlikely"; this is a cited number showing the opposite). The guard reuses
+    `day_branch_cut_lock`'s `O_CREAT | O_EXCL` + PID-liveness-takeover
+    primitive (measured at 0.10ms create+release, well under the 200ms
+    per-process bar) rather than a new lock or `locked_write.locked_rmw`/
+    `held_lock` (disqualified for this call site: `_lock_dir_path` anchors
+    under the WATCHED repo's own git-common-dir, a foreign tree this module
+    does not own, and its default wait ceilings are 20x-360x over budget --
+    see the research doc's two-part gate). The guard never blocks or
+    retries: the losing racer declines the tick and this module's caller
+    sees a `POLL-ERROR watch_heartbeat.stamp` line naming the loss, never a
+    silent clobber; `stamp` still returns `False` rather than raising on
+    every guard failure path (module contract, unchanged).
 
     WHAT THE EXTENDED TRACE DOES AND DOES NOT DO (DEFECT 1). `prior_*`
     (including `prior_subscribed_peers` and `prior_declination_count`, added
@@ -441,76 +625,138 @@ def stamp(
         pid, pid_start_epoch = _self_process_identity()
 
     watch_file = watch_path(repo_root)
-    prior_record = _read_record(watch_file)
 
-    # DECLINE ON FRESH-AND-FOREIGN, checked BEFORE the trace/write. Shares
-    # `is_fresh_and_foreign` with the arm-time refusal in `group_em.watch` --
-    # one predicate, two call sites. Decline is falsey-return only, never a
-    # raise: a writer that raises where it used to write turns a reporting
-    # defect into a tick that dies (see module docstring, NEVER RAISES, NEVER
-    # GATES). The record on disk is left untouched.
-    if is_fresh_and_foreign(
-        prior_record, now_epoch, holder_session_id, writer_session_id
-    ):
+    # The guard's sidecar lock lands beside `watch_file`, so the directory
+    # must exist before the FIRST file operation, not only before
+    # `write_atomic`'s own write -- same "never mint a repo" safety check
+    # either way (`_ensure_state_dir`). A directory that cannot be ensured is
+    # a missed tick, never a raise.
+    if not _ensure_state_dir(os.path.dirname(watch_file)):
         return False
 
-    payload: dict[str, Any] = {
-        "holder_session_id": holder_session_id,
-        "holder_name": holder_name,
-        "last_tick_at": _iso(now_epoch),
-        "tick_source": tick_source,
-        "next_expected_by": next_expected_by(now_epoch, interval_seconds),
-        "subscribed_peers": subscribed_peers,
-        "declinations": list(declinations) if declinations is not None else None,
-        "writer_session_id": writer_session_id,
-        # ITEM 2 (`--status` false-alive with no process check). Additive
-        # keys the DoE reader never asked for and ignores by name -- see
-        # this module's own `_READER_KEYS` pin docstring on the reader's
-        # by-name-not-by-shape contract. `pid_start_epoch` is `None` when
-        # `psutil` could not be consulted -- `process_confirmed_alive`
-        # reads a bare `pid` with no epoch as UNCONFIRMED, never as a
-        # weaker-but-usable witness (see that function's own docstring for
-        # why: `stable_pid_alive` reads a missing epoch AND lstart as
-        # unconditionally dead).
-        "pid": pid,
-        "pid_start_epoch": pid_start_epoch,
-    }
-
-    # PRIOR-HOLDER TRACE (C1). Whenever the record about to be replaced was
-    # written by a DIFFERENT instrument -- any of holder, writer, or
-    # tick_source differing, one disjunction with tick_source a first-class
-    # arm -- carry that instrument's identity forward as `prior_*` keys.
-    # Additive only: never reorders, renames, or drops an existing key, and
-    # never changes the timestamp format (the record shape is a cross-plane
-    # contract -- see module docstring). Never refuses, never raises. A
-    # record with no prior write (first stamp) carries no `prior_*` keys at
-    # all -- absent, not null.
-    if isinstance(prior_record, dict) and _writer_identity(prior_record) != (
-        holder_session_id,
-        writer_session_id,
-        tick_source,
-    ):
-        payload["prior_holder_session_id"] = prior_record.get("holder_session_id")
-        payload["prior_holder_name"] = prior_record.get("holder_name")
-        payload["prior_tick_source"] = prior_record.get("tick_source")
-        payload["prior_last_tick_at"] = prior_record.get("last_tick_at")
-        # DEFECT 1 FIX. The trace above names WHO wrote the destroyed record;
-        # these two scalars name WHAT it counted. `subscribed_peers` and
-        # `declinations` are the substantive product of a tick -- without
-        # these, the trace answers "whose record did I replace" but not "what
-        # did I destroy". `declinations` itself is not carried (a list, and
-        # this trace is deliberately additive scalars only -- see the module
-        # docstring's "prior_* keys" note); its length is. An older-format
-        # prior record that lacks either key (pre-this-fix) reads back `None`
-        # via `.get`, not a crash -- the trace degrades to "unknown" rather
-        # than inventing a count that was never written.
-        prior_declinations = prior_record.get("declinations")
-        payload["prior_subscribed_peers"] = prior_record.get("subscribed_peers")
-        payload["prior_declination_count"] = (
-            len(prior_declinations) if isinstance(prior_declinations, list) else None
+    # GUARD THE READ-DECIDE-WRITE WINDOW (P103-C2). `write_atomic` makes the
+    # WRITE atomic; this makes the SEQUENCE atomic across concurrent
+    # `stamp()` callers on the same `watch_file`, closing the gap the module
+    # docstring's predecessor text described. The loser NEVER waits for the
+    # winner -- `stamp` never gates (module docstring) -- it declines this
+    # tick and REPORTS the contention on stderr; the next tick (~18s away at
+    # the monitor cadence) tries again. This is "prevented", not "detected
+    # after the fact": the second racer never reads a record the first is
+    # about to replace.
+    guard_pid = os.getpid()
+    if not _acquire_guard(watch_file, now_epoch, guard_pid):
+        print(
+            "POLL-ERROR watch_heartbeat.stamp declined a concurrent write: "
+            f"the read-decide-write window for {watch_file!r} was already "
+            f"held (holder_session_id={holder_session_id!r}, "
+            f"writer_session_id={writer_session_id!r}); this tick is "
+            "skipped, not lost silently.",
+            file=sys.stderr,
+            flush=True,
         )
+        return False
+    try:
+        prior_record = _read_record(watch_file)
 
-    return write_atomic(watch_file, payload)
+        # DECLINE ON FRESH-AND-FOREIGN, checked BEFORE the trace/write. Shares
+        # `is_fresh_and_foreign` with the arm-time refusal in `group_em.watch`
+        # -- one predicate, two call sites. Decline is falsey-return only,
+        # never a raise: a writer that raises where it used to write turns a
+        # reporting defect into a tick that dies (see module docstring, NEVER
+        # RAISES, NEVER GATES). The record on disk is left untouched.
+        if is_fresh_and_foreign(
+            prior_record, now_epoch, holder_session_id, writer_session_id
+        ):
+            return False
+
+        # OBSERVED INTER-TICK DELTA. Measured off the record ABOUT TO BE
+        # REPLACED, whichever instrument wrote it -- what a reader actually
+        # experiences as "how often does this file change" is exactly this
+        # gap, regardless of which crown/tick_source produced the previous
+        # write. `None` when there is no prior tick to measure from (first
+        # stamp) or its timestamp cannot be parsed; `next_expected_by` falls
+        # back to the declared `interval_seconds` in both cases.
+        observed_interval_seconds = None
+        if isinstance(prior_record, dict):
+            prior_last_tick_at = prior_record.get("last_tick_at")
+            if isinstance(prior_last_tick_at, str):
+                try:
+                    prior_epoch = calendar.timegm(
+                        time.strptime(prior_last_tick_at, _STAMP_FORMAT)
+                    )
+                    delta = now_epoch - prior_epoch
+                    if delta > 0:
+                        observed_interval_seconds = delta
+                except (ValueError, TypeError):
+                    pass
+
+        payload: dict[str, Any] = {
+            "holder_session_id": holder_session_id,
+            "holder_name": holder_name,
+            "last_tick_at": _iso(now_epoch),
+            "tick_source": tick_source,
+            "next_expected_by": next_expected_by(
+                now_epoch, interval_seconds, observed_interval_seconds
+            ),
+            "subscribed_peers": subscribed_peers,
+            "declinations": list(declinations) if declinations is not None else None,
+            "writer_session_id": writer_session_id,
+            # ITEM 2 (`--status` false-alive with no process check). Additive
+            # keys the DoE reader never asked for and ignores by name -- see
+            # this module's own `_READER_KEYS` pin docstring on the reader's
+            # by-name-not-by-shape contract. `pid_start_epoch` is `None` when
+            # `psutil` could not be consulted -- `process_confirmed_alive`
+            # reads a bare `pid` with no epoch as UNCONFIRMED, never as a
+            # weaker-but-usable witness (see that function's own docstring for
+            # why: `stable_pid_alive` reads a missing epoch AND lstart as
+            # unconditionally dead).
+            "pid": pid,
+            "pid_start_epoch": pid_start_epoch,
+        }
+
+        # PRIOR-HOLDER TRACE (C1). Whenever the record about to be replaced
+        # was written by a DIFFERENT instrument -- any of holder, writer, or
+        # tick_source differing, one disjunction with tick_source a
+        # first-class arm -- carry that instrument's identity forward as
+        # `prior_*` keys. Additive only: never reorders, renames, or drops an
+        # existing key, and never changes the timestamp format (the record
+        # shape is a cross-plane contract -- see module docstring). Never
+        # refuses, never raises. A record with no prior write (first stamp)
+        # carries no `prior_*` keys at all -- absent, not null.
+        if isinstance(prior_record, dict) and _writer_identity(prior_record) != (
+            holder_session_id,
+            writer_session_id,
+            tick_source,
+        ):
+            payload["prior_holder_session_id"] = prior_record.get("holder_session_id")
+            payload["prior_holder_name"] = prior_record.get("holder_name")
+            payload["prior_tick_source"] = prior_record.get("tick_source")
+            payload["prior_last_tick_at"] = prior_record.get("last_tick_at")
+            # DEFECT 1 FIX. The trace above names WHO wrote the destroyed
+            # record; these two scalars name WHAT it counted.
+            # `subscribed_peers` and `declinations` are the substantive
+            # product of a tick -- without these, the trace answers "whose
+            # record did I replace" but not "what did I destroy".
+            # `declinations` itself is not carried (a list, and this trace is
+            # deliberately additive scalars only -- see the module
+            # docstring's "prior_* keys" note); its length is. An
+            # older-format prior record that lacks either key (pre-this-fix)
+            # reads back `None` via `.get`, not a crash -- the trace degrades
+            # to "unknown" rather than inventing a count that was never
+            # written.
+            prior_declinations = prior_record.get("declinations")
+            payload["prior_subscribed_peers"] = prior_record.get("subscribed_peers")
+            payload["prior_declination_count"] = (
+                len(prior_declinations) if isinstance(prior_declinations, list) else None
+            )
+
+        return write_atomic(watch_file, payload)
+    finally:
+        # RELEASE UNCONDITIONALLY, on every return path above (decline or
+        # write) -- a guard left held by a process that already finished its
+        # tick would starve every peer for `_GUARD_HOLD_SECONDS` +
+        # `_GUARD_STALE_GRACE_SECONDS` for nothing.
+        _release_guard(watch_file, guard_pid)
 
 
 def displacement_record(
@@ -775,15 +1021,27 @@ def human_verdict(liveness: dict, now_epoch: Optional[float] = None) -> str:
             if age is not None
             else f"at {timestamps.with_age(liveness.get('last_tick_at'))}"
         )
-        lines = [
-            f"ALIVE - a watch is running and checked the fleet {when}.",
-            f"  Held by: {holder}",
-        ]
-        if liveness.get("subscribed_peers") or liveness.get("declinations"):
+        # WHAT ACTUALLY LOOKED. An `entry` stamp never polled the fleet -- it
+        # is a stand-in tick a session writes on its own way in, not a
+        # sensor read -- so the headline must not claim a check that did not
+        # happen just because every OTHER tick_source performs one.
+        if liveness.get("tick_source") == "entry":
+            headline = f"ALIVE - a watch entry was stamped {when} (an entry tick does not check the fleet)."
+        else:
+            headline = f"ALIVE - a watch is running and checked the fleet {when}."
+        lines = [headline, f"  Held by: {holder}"]
+        # GATE ON THE POPULATION ACTUALLY WATCHED, NOT ON DECLINATIONS ALONE.
+        # `declinations` are peers this tick chose not to nudge -- they are
+        # not coverage, and an entry tick's declinations by themselves used
+        # to vouch for a watch that had subscribed to nobody.
+        declinations = liveness.get("declinations")
+        declination_count = len(declinations) if isinstance(declinations, list) else 0
+        if liveness.get("subscribed_peers"):
             lines.append("  Quiet is the normal state between checks; it is not a fault.")
         else:
             lines.append(
-                "  Reported on nobody: 0 subscribed peers and 0 declinations this tick."
+                f"  Reported on nobody: 0 subscribed peers and {declination_count} "
+                "declinations this tick."
             )
             lines.append(
                 "  This is NOT a healthy quiet fleet -- nothing was watched, not nothing found."

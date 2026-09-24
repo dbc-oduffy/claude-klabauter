@@ -16,6 +16,7 @@ from coordinator_core.review_assemble.exec_auth_stamp import (
     EXIT_OK,
     EXIT_USAGE,
     main,
+    restamp_execution_authorization,
     stamp_execution_authorization,
     stamp_invocation_authorization,
 )
@@ -1134,3 +1135,298 @@ def test_cli_authorize_invocation_never_passes_through_reviewed(tmp_path: Path) 
     log = _git(tmp_path, "log", "--oneline", "-n", "10")
     assert "-> reviewed" not in log.stdout
     assert '"draft" -> approved' in log.stdout
+
+
+def _stamp_then_edit_body(plan_path: Path, tmp_path: Path, new_body_line: str) -> str:
+    """Stamp *plan_path* against `_PLAN_TEXT`, then append *new_body_line*
+    to its body -- the common "PM authorized, then the body moved" setup
+    for the restamp tests. Returns the pre-edit (originally stamped) sha."""
+    exit_code, result = stamp_execution_authorization(
+        str(plan_path), "PM", "make it so", at="2026-07-24", repo_root=tmp_path
+    )
+    assert exit_code == EXIT_OK
+    original_sha = result["sha"]
+    edited = plan_path.read_text(encoding="utf-8") + new_body_line
+    plan_path.write_text(edited, encoding="utf-8")
+    return original_sha
+
+
+def test_restamp_rebinds_sha_and_records_witness(tmp_path: Path) -> None:
+    """AC1: restamp rebinds execution_authorized_sha to the live body,
+    records the pre-edit sha as execution_restamped_from_sha, and leaves
+    execution_authorized_{by,at,note} byte-identical."""
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-07-24-test-plan.md"
+    plan_path.write_text(_PLAN_TEXT, encoding="utf-8")
+
+    original_sha = _stamp_then_edit_body(plan_path, tmp_path, "\nMore body.\n")
+    edited_text = plan_path.read_text(encoding="utf-8")
+    new_sha = _canonical_body_sha(tmp_path, edited_text)
+    assert new_sha != original_sha
+
+    exit_code, result = restamp_execution_authorization(
+        str(plan_path), "EM:session-1", "EM correction", at="2026-07-26", repo_root=tmp_path
+    )
+    assert exit_code == EXIT_OK
+    assert result["applied"] is True
+    assert result["sha"] == new_sha
+
+    written = plan_path.read_text(encoding="utf-8")
+    assert f"execution_authorized_sha: {new_sha}" in written
+    assert "execution_authorized_by: PM" in written
+    assert 'execution_authorized_note: "make it so"' in written or "execution_authorized_note: make it so" in written
+    assert f"execution_restamped_from_sha: {original_sha}" in written
+    assert "execution_restamped_by: 'EM:session-1'" in written or "execution_restamped_by: EM:session-1" in written
+    assert "EM correction" in written
+
+
+def test_restamp_chained_keeps_original_from_sha(tmp_path: Path) -> None:
+    """AC2: a second edit plus a second restamp leaves _from_sha unchanged
+    (the first PM-witnessed sha) and appends the second reason to _note.
+    Repeating that second restamp is applied: false."""
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-07-24-test-plan.md"
+    plan_path.write_text(_PLAN_TEXT, encoding="utf-8")
+
+    original_sha = _stamp_then_edit_body(plan_path, tmp_path, "\nMore body.\n")
+
+    exit_code, result = restamp_execution_authorization(
+        str(plan_path), "EM:session-1", "first correction", at="2026-07-26", repo_root=tmp_path
+    )
+    assert exit_code == EXIT_OK
+    first_restamp_sha = result["sha"]
+
+    # A second edit.
+    plan_path.write_text(plan_path.read_text(encoding="utf-8") + "\nEven more body.\n", encoding="utf-8")
+
+    exit_code2, result2 = restamp_execution_authorization(
+        str(plan_path), "EM:session-2", "second correction", at="2026-07-27", repo_root=tmp_path
+    )
+    assert exit_code2 == EXIT_OK
+    assert result2["applied"] is True
+    second_restamp_sha = result2["sha"]
+    assert second_restamp_sha != first_restamp_sha
+
+    written = plan_path.read_text(encoding="utf-8")
+    assert f"execution_restamped_from_sha: {original_sha}" in written
+    assert f"execution_authorized_sha: {second_restamp_sha}" in written
+    assert "first correction" in written
+    assert "second correction" in written
+
+    # Repeating the second restamp (unchanged body) is a no-op.
+    exit_code3, result3 = restamp_execution_authorization(
+        str(plan_path), "EM:session-2", "second correction", at="2026-07-27", repo_root=tmp_path
+    )
+    assert exit_code3 == EXIT_OK
+    assert result3["applied"] is False
+
+
+def test_stamp_append_note_over_changed_body_refuses_and_names_restamp(tmp_path: Path) -> None:
+    """AC3: `stamp --append-note` over a changed body exits 1, leaves the
+    file byte-identical, and names `restamp` in the message. The identical
+    call on an unchanged body still succeeds."""
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-07-24-test-plan.md"
+    plan_path.write_text(_PLAN_TEXT, encoding="utf-8")
+
+    _stamp_then_edit_body(plan_path, tmp_path, "\nMore body.\n")
+    before = plan_path.read_text(encoding="utf-8")
+
+    exit_code, result = stamp_execution_authorization(
+        str(plan_path),
+        "PM",
+        "Y",
+        at="2026-07-25",
+        repo_root=tmp_path,
+        append_note=True,
+    )
+    assert exit_code == EXIT_BUSINESS_FAIL
+    assert "restamp" in result["error"]
+    after = plan_path.read_text(encoding="utf-8")
+    assert after == before
+
+    # The same call on a plan whose body never moved since its stamp still
+    # succeeds -- the refusal is keyed on body drift, not the flag alone.
+    plan_path_b = plan_dir / "2026-07-24-test-plan-unchanged.md"
+    plan_path_b.write_text(_PLAN_TEXT, encoding="utf-8")
+    exit_code2, first_result = stamp_execution_authorization(
+        str(plan_path_b), "PM", "make it so", at="2026-07-24", repo_root=tmp_path
+    )
+    assert exit_code2 == EXIT_OK
+    exit_code3, result3 = stamp_execution_authorization(
+        str(plan_path_b),
+        "PM",
+        "Y",
+        at="2026-07-25",
+        repo_root=tmp_path,
+        append_note=True,
+    )
+    assert exit_code3 == EXIT_OK
+    assert result3["applied"] is True
+
+
+def test_stamp_identical_note_over_changed_body_refuses_and_names_escape_routes(
+    tmp_path: Path,
+) -> None:
+    """AC4: `stamp --note <existing note>` over a changed body exits 1,
+    leaves the file byte-identical, and the message names both escape
+    routes (a new note, or authorize-invocation)."""
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-07-24-test-plan.md"
+    plan_path.write_text(_PLAN_TEXT, encoding="utf-8")
+
+    _stamp_then_edit_body(plan_path, tmp_path, "\nMore body.\n")
+    before = plan_path.read_text(encoding="utf-8")
+
+    exit_code, result = stamp_execution_authorization(
+        str(plan_path), "PM", "make it so", at="2026-07-25", repo_root=tmp_path
+    )
+    assert exit_code == EXIT_BUSINESS_FAIL
+    assert "stamp --note" in result["error"]
+    assert "authorize-invocation" in result["error"]
+    after = plan_path.read_text(encoding="utf-8")
+    assert after == before
+
+
+def test_fresh_authorization_clears_restamp_quartet(tmp_path: Path) -> None:
+    """AC5: `authorize-invocation` and `stamp --note <new words>` on a
+    restamped plan each exit 0 and leave no execution_restamped_* key."""
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-07-24-test-plan-a.md"
+    plan_path.write_text(_PLAN_TEXT, encoding="utf-8")
+
+    _stamp_then_edit_body(plan_path, tmp_path, "\nMore body.\n")
+    exit_code, _ = restamp_execution_authorization(
+        str(plan_path), "EM:session-1", "correction", at="2026-07-26", repo_root=tmp_path
+    )
+    assert exit_code == EXIT_OK
+    assert "execution_restamped_by" in plan_path.read_text(encoding="utf-8")
+
+    exit_code2, result2 = stamp_execution_authorization(
+        str(plan_path), "PM", "genuinely new words", at="2026-07-27", repo_root=tmp_path
+    )
+    assert exit_code2 == EXIT_OK
+    assert result2["applied"] is True
+    written = plan_path.read_text(encoding="utf-8")
+    assert "execution_restamped_by" not in written
+    assert "execution_restamped_at" not in written
+    assert "execution_restamped_from_sha" not in written
+    assert "execution_restamped_note" not in written
+
+    # Same, via authorize-invocation on a second restamped plan.
+    plan_path_b = plan_dir / "2026-07-24-test-plan-b.md"
+    plan_path_b.write_text(_PLAN_TEXT, encoding="utf-8")
+    _stamp_then_edit_body(plan_path_b, tmp_path, "\nMore body.\n")
+    restamp_execution_authorization(
+        str(plan_path_b), "EM:session-1", "correction", at="2026-07-26", repo_root=tmp_path
+    )
+    assert "execution_restamped_by" in plan_path_b.read_text(encoding="utf-8")
+
+    exit_code3, result3 = stamp_invocation_authorization(
+        str(plan_path_b), None, "/execute-plan", repo_root=tmp_path
+    )
+    assert exit_code3 == EXIT_OK
+    written_b = plan_path_b.read_text(encoding="utf-8")
+    assert "execution_restamped_by" not in written_b
+
+
+def test_restamp_refuses_pm_shaped_by_and_newline_reason_and_missing_prior(
+    tmp_path: Path,
+) -> None:
+    """AC6: `restamp` refuses --by PM, --by "pm-example-operator" and a reason with a
+    real newline, each exit 2. It exits 1 on a plan with no prior
+    authorization. None of these calls fires stamp-reviewed/stamp-approved."""
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-07-24-test-plan.md"
+    plan_path.write_text(_PLAN_TEXT, encoding="utf-8")
+
+    # No prior authorization at all -> exit 1.
+    exit_code, result = restamp_execution_authorization(
+        str(plan_path), "EM:session-1", "correction", repo_root=tmp_path
+    )
+    assert exit_code == EXIT_BUSINESS_FAIL
+
+    _stamp_then_edit_body(plan_path, tmp_path, "\nMore body.\n")
+
+    exit_code2, _ = restamp_execution_authorization(
+        str(plan_path), "PM", "correction", repo_root=tmp_path
+    )
+    assert exit_code2 == EXIT_USAGE
+
+    exit_code3, _ = restamp_execution_authorization(
+        str(plan_path), "pm-example-operator", "correction", repo_root=tmp_path
+    )
+    assert exit_code3 == EXIT_USAGE
+
+    exit_code4, _ = restamp_execution_authorization(
+        str(plan_path), "EM:session-1", "line one\nline two", repo_root=tmp_path
+    )
+    assert exit_code4 == EXIT_USAGE
+
+    written = plan_path.read_text(encoding="utf-8")
+    assert "status: reviewed" not in written
+    assert "status: approved" not in written
+
+
+def test_restamp_revert_to_witnessed_sha_removes_quartet(tmp_path: Path) -> None:
+    """AC11: a restamp whose live body sha equals the existing
+    execution_restamped_from_sha (edit, restamp, revert, restamp) rebinds
+    execution_authorized_sha and leaves no execution_restamped_* key."""
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-07-24-test-plan.md"
+    plan_path.write_text(_PLAN_TEXT, encoding="utf-8")
+
+    original_text = _PLAN_TEXT
+    original_sha = _stamp_then_edit_body(plan_path, tmp_path, "\nMore body.\n")
+
+    exit_code, _ = restamp_execution_authorization(
+        str(plan_path), "EM:session-1", "correction", at="2026-07-26", repo_root=tmp_path
+    )
+    assert exit_code == EXIT_OK
+    written = plan_path.read_text(encoding="utf-8")
+    assert "execution_restamped_from_sha" in written
+
+    # Revert the body back to exactly what the PM originally witnessed.
+    # The frontmatter fields written by the stamp/restamp calls above are
+    # preserved; only the BODY (below the second `---`) is reverted, by
+    # splicing in the original text's own body after the live frontmatter's
+    # own second `---` delimiter.
+    def _body_after_second_delim(text: str) -> str:
+        parts = text.split("---\n", 2)
+        return parts[2]
+
+    current = plan_path.read_text(encoding="utf-8")
+    fm_part = current[: len(current) - len(_body_after_second_delim(current))]
+    plan_path.write_text(fm_part + _body_after_second_delim(original_text), encoding="utf-8")
+
+    reverted_text = plan_path.read_text(encoding="utf-8")
+    reverted_sha = _canonical_body_sha(tmp_path, reverted_text)
+    assert reverted_sha == original_sha
+
+    exit_code2, result2 = restamp_execution_authorization(
+        str(plan_path), "EM:session-2", "revert correction", at="2026-07-28", repo_root=tmp_path
+    )
+    assert exit_code2 == EXIT_OK
+    assert result2["applied"] is True
+    assert result2["sha"] == original_sha
+
+    final_written = plan_path.read_text(encoding="utf-8")
+    assert f"execution_authorized_sha: {original_sha}" in final_written
+    assert "execution_restamped_by" not in final_written
+    assert "execution_restamped_at" not in final_written
+    assert "execution_restamped_from_sha" not in final_written
+    assert "execution_restamped_note" not in final_written

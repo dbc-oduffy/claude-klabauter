@@ -249,7 +249,7 @@ def same_path(a: StrPath, b: StrPath) -> bool:
     try:
         return os.path.samefile(a, b)
     except Exception:
-        pass
+        pass  # path absent/unreadable; fall through to the realpath comparison below
     try:
         return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
     except Exception:

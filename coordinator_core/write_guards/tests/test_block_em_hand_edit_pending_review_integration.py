@@ -203,7 +203,19 @@ class TestScopeIsEmInlineOnly:
 
 
 class TestAgentTypeGate:
-    def test_non_reviewer_sidecar_never_trips_guard(self, tmp_path):
+    def test_non_reviewer_sidecar_never_trips_guard(self, tmp_path, monkeypatch):
+        """An enumerated persona type must stay out of scope even under
+        this suite's HOME-quarantined roster resolution (which otherwise
+        fails-closed, per the Design decision, and would put EVERY
+        non-empty-typed sidecar in scope) -- so this now stubs the roster
+        to include the type, matching its real-roster membership."""
+        from coordinator_core.bash_guards import _helpers
+
+        monkeypatch.setattr(
+            _helpers,
+            "resolve_roster",
+            lambda: (frozenset({"coordinator:review-integrator"}), None),
+        )
         _write_sidecar(
             tmp_path,
             "sess-abc",
@@ -212,6 +224,149 @@ class TestAgentTypeGate:
             body=_findings_body(),
         )
         _allow(_payload(tmp_path))
+
+
+# ---------------------------------------------------------------------------
+# Roster-keyed in-scope predicate
+# (docs/plans/2026-09-23-sidecar-guard-keying.md AC1-AC4, AC6)
+# ---------------------------------------------------------------------------
+
+
+def _stub_roster(monkeypatch, roster, error=None, calls: list | None = None):
+    """Monkeypatch the `resolve_roster` seam both guards' `_LazyRoster`
+    resolve through -- the seam the bash_guards confinement tests already
+    use (see module docstring)."""
+    from coordinator_core.bash_guards import _helpers
+
+    def _resolve():
+        if calls is not None:
+            calls.append(1)
+        return (roster, error)
+
+    monkeypatch.setattr(_helpers, "resolve_roster", _resolve)
+
+
+class TestRosterKeyedInScope:
+    _STUB_ROSTER = frozenset({"coordinator:staff-eng", "coordinator:enricher"})
+
+    def test_invented_type_off_roster_advises(self, tmp_path, monkeypatch):
+        """AC1: at HEAD this returns None (the bug row's repro); after this
+        change it fires."""
+        _stub_roster(monkeypatch, self._STUB_ROSTER)
+        _write_sidecar(
+            tmp_path,
+            "sess-abc",
+            "codereview-sliceA.md",
+            agent_type="some-invented-type",
+            body=_findings_body(),
+        )
+        _advise(_payload(tmp_path))
+
+    def test_missing_and_empty_agent_type_still_allowed_zero_roster_calls(
+        self, tmp_path, monkeypatch
+    ):
+        """AC2: an empty/missing agent_type stays out of scope, matching
+        HEAD and the helper's own empty-type rule, and never touches the
+        roster."""
+        calls: list = []
+        _stub_roster(monkeypatch, self._STUB_ROSTER, calls=calls)
+
+        _write_sidecar(
+            tmp_path,
+            "sess-abc",
+            "no-type.md",
+            agent_type="",
+            body=_findings_body(),
+        )
+        _allow(_payload(tmp_path))
+        assert calls == []
+
+        # No `agent_type:` line at all.
+        sidecar_dir = tmp_path / ".coordinator-local" / "subagent-share" / "sess-abc"
+        (sidecar_dir / "missing-type.md").write_text(
+            "---\nstatus: open\n---\n\n" + _findings_body(), encoding="utf-8"
+        )
+        _allow(_payload(tmp_path))
+        assert calls == []
+
+    def test_enumerated_persona_on_roster_stays_out_of_scope(self, tmp_path, monkeypatch):
+        """AC3: preserves the persona Negative-spec."""
+        _stub_roster(monkeypatch, self._STUB_ROSTER)
+        _write_sidecar(
+            tmp_path,
+            "sess-abc",
+            "codereview-sliceA.md",
+            agent_type="coordinator:staff-eng",
+            body=_findings_body(),
+        )
+        _allow(_payload(tmp_path))
+
+    def test_roster_load_failure_fails_closed_for_off_roster_type(self, tmp_path, monkeypatch):
+        """AC4: a roster-load failure fails CLOSED -- an off-roster type is
+        in scope."""
+        _stub_roster(monkeypatch, None, error="roster source unreadable")
+        _write_sidecar(
+            tmp_path,
+            "sess-abc",
+            "codereview-sliceA.md",
+            agent_type="some-invented-type",
+            body=_findings_body(),
+        )
+        _advise(_payload(tmp_path))
+
+    def test_roster_load_failure_fails_closed_for_enumerated_persona_too(
+        self, tmp_path, monkeypatch
+    ):
+        """AC4: fail-closed makes EVERY non-empty-typed sidecar in scope
+        during a roster-load failure, including an enumerated persona --
+        not merely extra advisories on already-off-roster types."""
+        _stub_roster(monkeypatch, None, error="roster source unreadable")
+        _write_sidecar(
+            tmp_path,
+            "sess-abc",
+            "codereview-sliceA.md",
+            agent_type="coordinator:staff-eng",
+            body=_findings_body(),
+        )
+        _advise(_payload(tmp_path))
+
+    def test_roster_resolved_at_most_once_per_check_call(self, tmp_path, monkeypatch):
+        """AC6: two persona-typed sidecars both covering the target still
+        cost at most one roster resolution for the whole `check()` call."""
+        calls: list = []
+        _stub_roster(monkeypatch, self._STUB_ROSTER, calls=calls)
+        _write_sidecar(
+            tmp_path,
+            "sess-abc",
+            "codereview-sliceA.md",
+            agent_type="coordinator:staff-eng",
+            body=_findings_body(),
+        )
+        _write_sidecar(
+            tmp_path,
+            "sess-abc",
+            "codereview-sliceB.md",
+            agent_type="coordinator:enricher",
+            body=_findings_body(),
+        )
+        _allow(_payload(tmp_path))
+        assert len(calls) <= 1
+
+    def test_no_candidate_covering_target_calls_roster_zero_times(self, tmp_path, monkeypatch):
+        """AC6: only `coordinator:code-reviewer` sidecars in the dir --
+        the cheaper legs resolve every candidate before the type leg, so
+        the roster is never touched."""
+        calls: list = []
+        _stub_roster(monkeypatch, self._STUB_ROSTER, calls=calls)
+        _write_sidecar(
+            tmp_path,
+            "sess-abc",
+            "codereview-sliceA.md",
+            agent_type="coordinator:code-reviewer",
+            body=_findings_body(),
+        )
+        _advise(_payload(tmp_path))
+        assert calls == []
 
 
 class TestCoverageHeuristic:

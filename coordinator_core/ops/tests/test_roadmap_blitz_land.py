@@ -57,9 +57,9 @@ def test_shipped_in_reaches_land_wave(monkeypatch, repo):
     monkeypatch.setattr(mod, "land_wave", _capturing_land_wave(seen))
 
     mod._handler(
-            {"wave_result": {"waveIndex": 0}, "shipped_in": "d434d54fb"},
-            repo_root=repo,
-        )
+        {"wave_result": {"waveIndex": 0}, "shipped_in": "d434d54fb"},
+        repo_root=repo,
+    )
 
     assert seen.get("shipped_in") == "d434d54fb"
 
@@ -85,9 +85,9 @@ def test_an_empty_shipped_in_is_refused_at_the_wire(monkeypatch, repo):
 
     with pytest.raises(ValueError, match="shipped_in"):
         mod._handler(
-                {"wave_result": {"waveIndex": 0}, "shipped_in": "  "},
-                repo_root=repo,
-            )
+            {"wave_result": {"waveIndex": 0}, "shipped_in": "  "},
+            repo_root=repo,
+        )
 
 
 def test_branch_and_limit_still_reach_land_wave(monkeypatch, repo):
@@ -97,9 +97,9 @@ def test_branch_and_limit_still_reach_land_wave(monkeypatch, repo):
     monkeypatch.setattr(mod, "land_wave", _capturing_land_wave(seen))
 
     mod._handler(
-            {"wave_result": {"waveIndex": 0}, "branch": "work/x", "limit": 3},
-            repo_root=repo,
-        )
+        {"wave_result": {"waveIndex": 0}, "branch": "work/x", "limit": 3},
+        repo_root=repo,
+    )
 
     assert seen.get("branch") == "work/x"
     assert seen.get("limit") == 3

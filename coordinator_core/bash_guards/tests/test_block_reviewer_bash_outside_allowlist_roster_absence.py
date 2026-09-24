@@ -144,3 +144,30 @@ def test_already_confined_type_unaffected_by_roster_leg(monkeypatch):
     verdict = guard.check(payload)
     assert verdict is not None
     assert verdict["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+# ---------------------------------------------------------------------------
+# Harness built-ins -- rostered by construction, never confined by this leg
+# ---------------------------------------------------------------------------
+
+
+def test_workflow_subagent_can_run_verification(monkeypatch):
+    """An agent a Workflow script spawns without an ``agentType`` reaches this
+    guard as ``workflow-subagent``. It is a harness built-in, so it must not
+    be confined by roster absence: a workflow executor has to be able to run
+    the tests and typecheck that verify its own edits. Roster is the real
+    built-in constant alone -- no policy or plugin leg props it up."""
+    from coordinator_core.bash_guards import _helpers
+    from coordinator_core.hooks import block_unenumerated_agent_type as roster_mod
+
+    monkeypatch.setattr(
+        _helpers, "resolve_roster",
+        lambda: (roster_mod._HARNESS_BUILTIN_TYPES, None))
+    assert _helpers.is_confined_by_roster_absence("workflow-subagent") is False
+
+    _wire_identity(monkeypatch, subagent_type="")
+    monkeypatch.setattr(guard, "is_confined_by_roster_absence",
+                        _helpers.is_confined_by_roster_absence)
+    payload = _payload("pnpm exec vitest run src/x.test.ts 2>&1 | tail -60",
+                       agent_type="workflow-subagent")
+    assert guard.check(payload) is None

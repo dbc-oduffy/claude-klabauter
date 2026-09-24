@@ -163,6 +163,69 @@ def _read_field(text: str, field: str) -> Optional[str]:
     return value or None
 
 
+def _read_supersedes(text: str) -> List[str]:
+    """The `supersedes:` targets a plan's frontmatter authors, scalar or list.
+
+    Mirrors the emit-side edge (`ops/emit/sections/plans.py::_apply_superseded_by`):
+    `supersedes:` names another plan's path, scalar or a `[a, b]` list, and this
+    module needs the forward edge itself — landing is what actually stamps the
+    target, where emit only ever derives a read-only reverse pointer.
+    """
+    span = _frontmatter_span(text)
+    if span is None:
+        return []
+    body = text[span[0] : span[1]]
+    match = re.search(r"^supersedes:[ \t]*(.*)$", body, re.MULTILINE)
+    if not match:
+        return []
+    raw = match.group(1).strip()
+    if not raw or raw in ("null", "~"):
+        return []
+    if raw.startswith("[") and raw.endswith("]"):
+        items = [item.strip().strip("\"'") for item in raw[1:-1].split(",")]
+        return [item for item in items if item]
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
+        raw = raw[1:-1]
+    return [raw] if raw else []
+
+
+def _supersede_named_plans(
+    worktree_root: Path, plan_path: str, plan_abs: Path
+) -> List[Dict[str, Any]]:
+    """Stamp `status: superseded` on every plan this plan's own `supersedes:` names.
+
+    Read from the plan as authored, not gated on whether THIS landing's own
+    approval stamp succeeded — an idempotent re-land of an already-`approved`
+    plan must still repair a supersession its authors added since. Self-targets
+    are dropped (mirrors the emit-side self-supersession guard) so a plan naming
+    its own path can never stamp itself terminal via this path.
+    """
+    text = plan_abs.read_text(encoding="utf-8")
+    results: List[Dict[str, Any]] = []
+    for rel in _read_supersedes(text):
+        if rel == plan_path:
+            continue
+        target_abs = worktree_root / rel
+        if not target_abs.is_file():
+            results.append(
+                {"path": rel, "superseded": False, "note": "plan does not exist on disk"}
+            )
+            continue
+
+        def _stamp(old: str) -> str:
+            current = (_read_field(old, "status") or "").lower()
+            if current == "superseded":
+                raise MutateAbort("already status: superseded")
+            return _set_field(old, "status", "superseded")
+
+        try:
+            locked_rmw(target_abs, _stamp, repo_root=worktree_root)
+            results.append({"path": rel, "superseded": True, "note": None})
+        except MutateAbort as exc:
+            results.append({"path": rel, "superseded": False, "note": str(exc)})
+    return results
+
+
 def pivoting_reviewers(entry: Dict[str, Any]) -> List[str]:
     """Name the reviewers whose verdict pivots this entry, or an empty list.
 
@@ -268,12 +331,15 @@ def approve_ready(
         stamped = False
         note = str(exc)
 
+    superseded = _supersede_named_plans(worktree_root, plan_path, plan_abs)
+
     return {
         "baton": baton_path,
         "plan": plan_path,
         "link_repaired": repaired,
         "stamped": stamped,
         "note": note,
+        "superseded": superseded,
     }
 
 

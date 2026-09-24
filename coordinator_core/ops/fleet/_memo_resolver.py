@@ -1428,6 +1428,6 @@ def never_inbox_mirror_refusal(
         return None
     return (
         f"memo: {receiver_em_id!r} resolves to a publish mirror, which has no inbox.\n"
-        "  Send coordinator/doctrine topics to claude-central-em; "
-        "engine/klabauter topics to claude-klabauter-em."
+        f"  Send coordinator/doctrine topics to {_repo_key_to_self_em_id('repos.doe_claude')}; "
+        f"engine/klabauter topics to {_repo_key_to_self_em_id('repos.claude_klabauter')}."
     )

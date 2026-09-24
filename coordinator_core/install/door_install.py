@@ -1070,8 +1070,38 @@ def named_forwarder_path(bin_dst: Path, name: str) -> Path:
     return Path(bin_dst) / f"{name}{suffix}"
 
 
+def _forwarder_already_current(dest: Path, source: Path) -> bool:
+    """True iff `dest` already carries `source`'s image, so
+    `install_named_forwarder` must not unlink/link it.
+
+    Two shapes, both checked before any write: `os.path.samefile` catches
+    the ordinary hardlinked slot (the common case, one stat each, no
+    read); the copy-fallback shape (a filesystem without hardlink support,
+    or a name mid-relink) is never the same file, so it falls to a size
+    check followed by a full byte-equal compare against `source` --
+    `filecmp.cmp(..., shallow=False)`, same primitive `_replace_possibly_
+    running_image` already uses for the identical question one level up.
+    Any `OSError` (permissions, a concurrent remover) reads as "not
+    current" -- the caller's own unlink/link path is what re-establishes
+    an answerable state, not this predicate."""
+    if not dest.exists():
+        return False
+    try:
+        if os.path.samefile(dest, source):
+            return True
+    except OSError:
+        pass
+    try:
+        if dest.stat().st_size != source.stat().st_size:
+            return False
+        return filecmp.cmp(source, dest, shallow=False)
+    except OSError:
+        return False
+
+
 def install_named_forwarder(
-    bin_dst: Path, engine_root: Path, name: str, *, check_only: bool = False
+    bin_dst: Path, engine_root: Path, name: str, *, check_only: bool = False,
+    source: "Optional[Path]" = None,
 ) -> Path:
     """Installs a per-name native door forwarder image at
     `named_forwarder_path(bin_dst, name)` -- additive to `install_door()`'s
@@ -1094,6 +1124,20 @@ def install_named_forwarder(
     `check_only=True` verifies presence only, mirroring `install_door`'s
     own `check_only` convention -- never re-derives content equality, and
     never calls `install_door` (no mutation permitted in check-only mode).
+
+    `source` (C5 part b) lets a caller looping over many names install the
+    door ONCE and pass the resolved path down, instead of paying
+    `install_door`'s own idempotent-but-not-free re-copy/currency-check once
+    per name (P175-C5: 445 names, 445 redundant `install_door` calls
+    measured). Defaults to `None`, which reaches `install_door` exactly as
+    before -- `forwarder_self_heal.py` and any other caller that never
+    passes it keeps today's per-call behaviour unchanged.
+
+    ALREADY-CURRENT NAMES ARE NEVER TOUCHED (C5 part a). Before any
+    unlink/link, `dest` is checked against `source`: same-file (the
+    ordinary hardlinked case) or, on the copy-fallback shape, a size match
+    followed by a byte-equal compare. Either match returns `dest` with no
+    unlink and no link -- see `_forwarder_already_current`.
     """
     dest = named_forwarder_path(bin_dst, name)
 
@@ -1104,7 +1148,8 @@ def install_named_forwarder(
             f"door_install: named forwarder check failed -- {dest} missing (would install)"
         )
 
-    source = install_door(bin_dst, engine_root, check_only=False)
+    if source is None:
+        source = install_door(bin_dst, engine_root, check_only=False)
 
     # SELF-COLLISION GUARD. `coordinator-invoke` is itself a member of the
     # door-eligible population, and for that one name `named_forwarder_path`
@@ -1126,6 +1171,9 @@ def install_named_forwarder(
     # case-sensitive even on Windows and would miss a `bin_dst` spelled with
     # different case than `install_door` returned.
     if os.path.normcase(os.path.abspath(dest)) == os.path.normcase(os.path.abspath(source)):
+        return dest
+
+    if _forwarder_already_current(dest, source):
         return dest
 
     displaced: Optional[Path] = None

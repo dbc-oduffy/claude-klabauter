@@ -72,6 +72,7 @@ def _commit(repo, message: str, fname: str) -> str:
 def _write_stub(
     repo, filename: str, deliverable_id: str, roadmap_id: str, stub_id: str, state: str,
     status: str = "claimed",
+    kind: str = "spinoff-roadmap",
 ):
     handoffs = repo / "state" / "handoffs"
     handoffs.mkdir(parents=True, exist_ok=True)
@@ -82,7 +83,7 @@ created: "2026-07-11"
 branch: "work/test/2026-07-11"
 status: {status}
 predecessor: none
-kind: spinoff-roadmap
+kind: {kind}
 category: infra
 summary: "fixture stub for test_promote_shipped_in_flight_stubs.py"
 deployment_state: {state}
@@ -141,6 +142,35 @@ def test_t1_shipped_deliverable_promotes_stub(git_fixture, monkeypatch, capsys):
     assert _fm_field(stub, "deployment_state") == "shipped"
     shipped_in = _fm_field(stub, "shipped_in")
     assert shipped_in != ""
+    assert shipped_in == sha[:8]
+    assert "1 in_flight spinoff-roadmap stubs promoted to shipped" in out
+
+
+# ---------------------------------------------------------------------------
+# kind: spinoff (handoff.schema.json's own enum member, distinct from the
+# roadmap-baton family canonical_kind normalizes) is a second eligible shape
+# — a shipped spinoff stub must promote the same way a shipped roadmap-baton
+# fork does.
+# ---------------------------------------------------------------------------
+
+
+def test_kind_spinoff_shipped_deliverable_promotes_stub(git_fixture, monkeypatch, capsys):
+    repo = git_fixture
+    monkeypatch.chdir(repo)
+    sha = _commit(repo, "finish spinoff deliverable\n\nResolves: dlv-spinoff-01", "spinoff.txt")
+    _run("git", "push", "-q", "origin", "main", cwd=repo)
+
+    stub = _write_stub(
+        repo, "2026-07-11_1_spinoff.md", "dlv-spinoff-01", "", "spinoff-01", "in_flight",
+        kind="spinoff",
+    )
+
+    rc = main([], repo_root=str(repo))
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert _fm_field(stub, "deployment_state") == "shipped"
+    shipped_in = _fm_field(stub, "shipped_in")
     assert shipped_in == sha[:8]
     assert "1 in_flight spinoff-roadmap stubs promoted to shipped" in out
 

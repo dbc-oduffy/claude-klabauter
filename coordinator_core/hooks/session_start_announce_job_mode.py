@@ -35,8 +35,8 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
-from typing import Mapping
 
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core._settings_home import settings_home
 from coordinator_core.hooks._envelope import context_only, no_advisory
 from coordinator_core.ipc import register_op
@@ -56,9 +56,7 @@ def _append_durable_line(line: str) -> None:
 
 @register_op("hooks.session_start_announce_job_mode")
 def _handler(params: dict, repo_root=None) -> dict:
-    payload = params.get("payload")
-    if not isinstance(payload, Mapping):
-        payload = {}
+    payload = payload_of(params)
     session_id = payload.get("session_id")
     session_id = session_id if isinstance(session_id, str) and session_id else "unknown"
 
@@ -93,6 +91,6 @@ def _handler(params: dict, repo_root=None) -> dict:
             f"{timestamp} session={session_id} job_mode={mode} ({provenance})"
         )
     except Exception:
-        pass
+        pass  # durable-log append is best-effort; the banner still reports the mode either way
 
     return context_only("SessionStart", banner)

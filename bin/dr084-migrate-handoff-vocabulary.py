@@ -301,7 +301,7 @@ def _atomic_write(path, lines):
         try:
             os.remove(tmp_path)
         except OSError:
-            pass
+            pass  # tmp file already gone or unremovable; original write error re-raises below
         raise
 
 

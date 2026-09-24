@@ -232,6 +232,31 @@ def test_subagent_share_id_pattern_does_not_match_a_foreign_bucket():
         assert pat.search(path) is None, path
 
 
+def test_machinery_path_prefixes_covers_current_and_legacy_roots():
+    """P143-T50: the legacy root is not retired (T6: DoE's
+    `_plan_path_bridge.py` and reviewer-sidecar writers still cite/match
+    `state/subagent-share/`), so a name-based census excluder must skip
+    both roots, not just `.coordinator-local`.
+    """
+    prefixes = machinery_paths.machinery_path_prefixes()
+    assert machinery_paths._MACHINERY_ROOT_LEAF in prefixes
+    assert machinery_paths.LEGACY_SHARE_RELDIR in prefixes
+    assert machinery_paths.LEGACY_MEMO_OUTBOX_RELDIR in prefixes
+
+
+def test_machinery_path_prefixes_returns_bare_relative_strings():
+    """No `repo_root` join -- a name-based excluder tests a repo-relative
+    candidate string, it never resolves a filesystem path.
+    """
+    for prefix in machinery_paths.machinery_path_prefixes():
+        assert not os.path.isabs(prefix)
+        assert "\\" not in prefix
+
+
+def test_machinery_path_prefixes_is_a_tuple():
+    assert isinstance(machinery_paths.machinery_path_prefixes(), tuple)
+
+
 def test_subagent_share_id_pattern_is_cached():
     """Compiled once per process, not per call: this module is on the
     per-turn Stop-family hook path its own docstring names.

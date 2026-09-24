@@ -123,23 +123,22 @@ def test_known_non_scoped_ops_not_in_worktree_scoped_ops():
 
 
 def test_per_repo_state_writers_are_common_dir_scoped():
-    """backlog.record / goal.append must be common_dir-scoped (2026-07-07 cutover).
+    """goal.append must be common_dir-scoped (2026-07-07 cutover).
 
-    Prior to 2026-07-07 these were classified "central" — bypassing the per-request
-    repo key entirely. The per-repo-emission-cutover plan (chunk C3) reclassified them
-    to "common_dir" so each calling repo's _origin_worktree is used to derive the
-    per-repo state root. They REQUIRE _origin_worktree and appear in
-    WORKTREE_SCOPED_OPS. A regression here would silently route them to
+    Prior to 2026-07-07 this was classified "central" — bypassing the per-request
+    repo key entirely. The per-repo-emission-cutover plan (chunk C3) reclassified it
+    to "common_dir" so the calling repo's _origin_worktree is used to derive the
+    per-repo state root. It REQUIRES _origin_worktree and appears in
+    WORKTREE_SCOPED_OPS. A regression here would silently route it to
     repo_root=None and re-introduce the hardlocked-to-~/.claude bug.
 
-    `artifact.emit` and `emit.cadence` were pinned here too until 2026-08-22, when the
-    emission artifact was CUT — see docs/problems/2026-08-22-artifact-emit-cannot-be-
-    earned-back-in-its-current-shape.md. The surviving writers keep the invariant.
+    `artifact.emit`, `emit.cadence`, and the readerless backlog-depth recorder were
+    pinned here too until they were CUT (see docs/problems/2026-08-22-artifact-emit-
+    cannot-be-earned-back-in-its-current-shape.md and the backlog-history shard
+    gravestone under docs/decisions/). The surviving writer keeps the invariant.
     Spec: docs/plans/2026-07-07-per-repo-emission-cutover.md § C3 / AC1
     """
-    assert _OP_KEY_SCOPE.get("backlog.record") == "common_dir"
     assert _OP_KEY_SCOPE.get("goal.append") == "common_dir"
-    assert "backlog.record" in WORKTREE_SCOPED_OPS
     assert "goal.append" in WORKTREE_SCOPED_OPS
 
 

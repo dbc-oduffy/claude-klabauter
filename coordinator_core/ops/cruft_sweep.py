@@ -1025,6 +1025,7 @@ def _scan_empty_subtree(root: Path) -> Tuple[bool, int]:
         try:
             max_mtime = max(max_mtime, int(dp.stat().st_mtime))
         except OSError:
+            # stat unavailable (removed mid-walk); leave max_mtime unchanged
             pass
 
         for fname in filenames:
@@ -1032,6 +1033,7 @@ def _scan_empty_subtree(root: Path) -> Tuple[bool, int]:
             try:
                 max_mtime = max(max_mtime, int((dp / fname).lstat().st_mtime))
             except OSError:
+                # lstat unavailable (removed mid-walk); leave max_mtime unchanged
                 pass
 
         for dname in dirnames:
@@ -1041,6 +1043,7 @@ def _scan_empty_subtree(root: Path) -> Tuple[bool, int]:
                 try:
                     max_mtime = max(max_mtime, int(dpath.lstat().st_mtime))
                 except OSError:
+                    # lstat unavailable (removed mid-walk); leave max_mtime unchanged
                     pass
 
     return (not has_content and not unreadable), max_mtime

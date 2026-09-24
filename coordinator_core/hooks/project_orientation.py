@@ -16,8 +16,11 @@ are already unreachable" waste `docs/reference/warm-hook-migration.md`
 names. `resolve_repo_root`, `handle_cache_present`, `full_mode`,
 `_count_lines`, `_pointer_doc`, `_resolve_scc_cmd` have no analogue here.
 
-Every input comes from `params["payload"]` — never `os.environ` or this
-process's own `cwd`/session. The resident engine serves ~50 concurrent
+`params` reaches this op in either shape a `hooks.*` handler receives —
+wrapped as `params["payload"]` by both engine doors, flat by the cold chain;
+`_envelope.payload_of` reads both. Every input comes from that payload —
+never from `os.environ` or this process's own `cwd`/session. The resident
+engine serves ~50 concurrent
 sessions; env/cwd reads that the source script (a per-invocation CLI) took
 from its own process now read `payload["env"]`/`payload["cwd"]` instead,
 matching the sibling `hooks.*` ops in this family
@@ -114,7 +117,7 @@ from coordinator_core.engine_root import (
 )
 from coordinator_core.git.git_state import head_branch, head_sha
 from coordinator_core.git.repo_root import show_toplevel
-from coordinator_core.hooks._envelope import context_only
+from coordinator_core.hooks._envelope import context_only, payload_of
 from coordinator_core.ipc import register_op
 
 _GENERATED_AT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
@@ -321,7 +324,7 @@ def _peer_recheck_staleness_banner(out: List[str], env: Mapping[str, Any], repo_
             try:
                 text = entry.read_text(encoding="utf-8", errors="replace")
             except Exception:
-                continue
+                continue  # per-peer-file probe; one unreadable entry must not abort the scan
             raw = _extract_cache_field(text, "last_checked")
             epoch = _parse_peer_last_checked_epoch(raw)
             if oldest_epoch is None or epoch < oldest_epoch:
@@ -473,7 +476,7 @@ def _local_install_surface_banner(out: List[str], env: Mapping[str, Any], repo_r
             target_path = home_dir() / relative_path
             cache_key = str(target_path)
         except Exception:
-            continue
+            continue  # per-surface probe entry; a malformed path must not abort the scan
 
         if cache_key not in file_cache:
             try:
@@ -811,7 +814,7 @@ def _orientation_staleness_grace_minutes(env: Mapping[str, Any]) -> float:
         try:
             return float(raw)
         except ValueError:
-            pass
+            pass  # malformed env override; fall through to the default below
     return float(_ORIENTATION_STALENESS_GRACE_MINUTES_DEFAULT)
 
 
@@ -821,7 +824,7 @@ def _orientation_staleness_drift_max_entries(env: Mapping[str, Any]) -> int:
         try:
             return int(raw)
         except ValueError:
-            pass
+            pass  # malformed env override; fall through to the default below
     return int(_ORIENTATION_STALENESS_DRIFT_MAX_ENTRIES_DEFAULT)
 
 
@@ -926,14 +929,14 @@ def _handler(params: dict, repo_root=None) -> dict:
     banner sequence, ported from the source script's `main()` --lightweight
     branch verbatim in ordering (module docstring: SCOPE FENCE).
 
-    `params["payload"]` carries `cwd` and `env` (a flat string->string
-    mapping) — the shape `warm/hook_http.py :: payload_from_event` builds.
+    `payload_of(params)` carries `cwd` and `env` (a flat string->string
+    mapping), reading either shape `params` reaches this handler in —
+    wrapped as `params["payload"]` (the shape `warm/hook_http.py ::
+    payload_from_event` builds) or flat, from the cold chain.
     Every banner below is independently fail-open, matching the source
     script's own per-call `try/except: pass` wrapping in `main()`.
     """
-    payload = params.get("payload")
-    if not isinstance(payload, Mapping):
-        payload = {}
+    payload = payload_of(params)
 
     env = payload.get("env")
     if not isinstance(env, Mapping):
@@ -959,53 +962,53 @@ def _handler(params: dict, repo_root=None) -> dict:
     try:
         _repomap_staleness_banner(out, env, session_repo_root)
     except Exception:
-        pass
+        pass  # one optional banner failing must not block SessionStart output
     try:
         _exec_summary_staleness_banner(out, env, session_repo_root)
     except Exception:
-        pass
+        pass  # one optional banner failing must not block SessionStart output
     try:
         _peer_recheck_staleness_banner(out, env, session_repo_root)
     except Exception:
-        pass
+        pass  # one optional banner failing must not block SessionStart output
     try:
         _harness_version_drift_banner(out, env, session_repo_root)
     except Exception:
-        pass
+        pass  # one optional banner failing must not block SessionStart output
     try:
         _orientation_cache_staleness_banner(out, env, session_repo_root, cache_text)
     except Exception:
-        pass
+        pass  # one optional banner failing must not block SessionStart output
     try:
         _engine_resolution_banner(out)
     except Exception:
-        pass
+        pass  # one optional banner failing must not block SessionStart output
     try:
         _local_install_surface_banner(out, env, session_repo_root)
     except Exception:
-        pass
+        pass  # one optional banner failing must not block SessionStart output
     try:
         _install_currency_banner(out, env)
     except Exception:
-        pass
+        pass  # one optional banner failing must not block SessionStart output
     try:
         _corpus_currency_banner(out, env)
     except Exception:
-        pass
+        pass  # one optional banner failing must not block SessionStart output
     try:
         _tier_currency_banner(out, env, session_repo_root)
     except Exception:
-        pass
+        pass  # one optional banner failing must not block SessionStart output
 
     try:
         if _handle_cache_present_boot(out, cache_text):
             return context_only("SessionStart", "".join(out))
     except Exception:
-        pass
+        pass  # cache-present short-circuit is optional; fall through to lightweight branch
 
     try:
         _lightweight_branch(out, session_repo_root)
     except Exception:
-        pass
+        pass  # final optional banner failing must not block SessionStart output
 
     return context_only("SessionStart", "".join(out))

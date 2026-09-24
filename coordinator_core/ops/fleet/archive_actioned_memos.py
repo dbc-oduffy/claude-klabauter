@@ -133,13 +133,17 @@ _FAMILY = "memo"
 # The op key this module registers under.
 _OP_KEY = "fleet.archive_actioned_memos"
 
-# Terminal `status:` values a memo may sit in and still be sweepable. All
-# three are terminal-committed states of the memo_transition lifecycle
-# (action -> actioned/superseded, close -> closed) — none of them is
-# in_progress or open, and none is further mutated by memo_transition except
-# an already-actioned memo's own append-only supersede-reversal path, which
-# leaves `status:` itself unchanged.
-_TERMINAL_MEMO_STATUSES = frozenset({"actioned", "superseded", "closed"})
+# Terminal `status:` values a memo may sit in and still be sweepable. Four
+# are terminal-committed states of the memo_transition lifecycle
+# (action -> actioned/superseded, close -> closed, withdraw -> withdrawn) —
+# none of them is in_progress or open, and none is further mutated by
+# memo_transition except an already-actioned memo's own append-only
+# supersede-reversal path, which leaves `status:` itself unchanged.
+# `withdrawn` was missing here (item 52): a withdrawn memo is as terminal as
+# a closed one, and its absence meant this sweep never archived it — it sat
+# in cross-repo/inbox/ forever, indistinguishable from a genuinely open memo
+# to every reader that trusts this frozenset.
+_TERMINAL_MEMO_STATUSES = frozenset({"actioned", "superseded", "closed", "withdrawn"})
 
 # Refusal reasons — same "every rail names itself" discipline as the
 # handoff precedent's `_SCAN_REASON_*` block.

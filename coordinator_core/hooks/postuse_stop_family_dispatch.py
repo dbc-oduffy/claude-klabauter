@@ -38,8 +38,11 @@ The other three land as their own `hooks.<name>` ops in sibling W4 chunks
 a not-yet-landed sibling degrades that one leg to silence (never crashes
 this op) rather than requiring load-order between concurrent chunks.
 
-Op contract: `params["payload"]` is the flat PostToolUse payload dict
-(`tool_name`, `tool_input`, `session_id`, `cwd`, ...). Returns one
+Op contract: `params` reaches this op in either shape a `hooks.*` handler
+receives — wrapped as `params["payload"]` by both engine doors, flat by the
+cold chain; `_envelope.payload_of` reads both, supplying the flat
+PostToolUse payload dict (`tool_name`, `tool_input`, `session_id`, `cwd`,
+...). Returns one
 `hookSpecificOutput` envelope: `post_advisory(<joined text>)` when one or
 more composed leg fires (mirrors the source dispatcher's own stderr
 concatenation — the Stop-family shape has no deny/advisory class split,
@@ -55,9 +58,9 @@ DoE source: coordinator/hooks/scripts/postuse-stop-family-dispatch.py
 from __future__ import annotations
 
 import inspect
-from typing import Mapping, Optional
+from typing import Optional
 
-from coordinator_core.hooks._envelope import no_advisory, post_advisory
+from coordinator_core.hooks._envelope import no_advisory, payload_of, post_advisory
 from coordinator_core.ipc import register_op
 
 # One (module_path, op_attr) pair per composed leg — lazy per-call import so
@@ -113,9 +116,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     such in their own sibling W4 chunks); this handler is `async` too and
     awaits each in turn.
     """
-    payload = params.get("payload")
-    if not isinstance(payload, Mapping):
-        payload = {}
+    payload = payload_of(params)
     leg_params = dict(params)
     leg_params["payload"] = dict(payload)
 

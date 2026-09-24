@@ -24,6 +24,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _GUARDED_MODULES = (
     "coordinator_core/git/tree_spine.py",
     "coordinator_core/git/argv_batch.py",
+    "coordinator_core/git/published_tree_classification.py",
 )
 
 

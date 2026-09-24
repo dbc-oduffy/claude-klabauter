@@ -82,7 +82,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from coordinator_core._hook_envelope import deny
+from coordinator_core._hook_envelope import deny, payload_of
 from coordinator_core.hooks._envelope import allow_advisory, no_advisory
 from coordinator_core.hooks.doctrine_changelog_prose import new_violations, scope_class
 from coordinator_core.hooks.support.message_envelope import compose, render
@@ -146,6 +146,7 @@ def _deny_reason(target: str, violations: list) -> str:
 def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Write|Edit|MultiEdit) op: advise on new changelog-shaped
     doctrine prose, deny new changelog-shaped config debt."""
+    params = payload_of(params)
     if params.get("tool_name", "") not in _GUARDED_TOOLS:
         return no_advisory()
 

@@ -174,16 +174,18 @@ def run(
     error propagates unmodified -- the whole run stops rather than silently
     dropping an op.
     """
-    declare_benchmark_origin()
-    target_ops = ops if ops is not None else _default_target_ops()
-
     # Fail loud on a plausible fat-finger
-    # (`--n 0`) before any subprocess spawn, naming the bad param, instead of an
+    # (`--n 0`) before any subprocess spawn -- and before declare_benchmark_origin()'s
+    # os.environ mutation below, which is process-lifetime and un-rollback-able on this
+    # path (setdefault, no caller-owned undo) -- naming the bad param, instead of an
     # opaque IndexError deep in the sample-collection loop below.
     if n < 1:
         raise ValueError(f"harness.run: n must be >= 1, got {n!r}")
     if warmup < 0:
         raise ValueError(f"harness.run: warmup must be >= 0, got {warmup!r}")
+
+    declare_benchmark_origin()
+    target_ops = ops if ops is not None else _default_target_ops()
 
     code_sha = _capture_code_sha()
     run_id = str(uuid.uuid4())

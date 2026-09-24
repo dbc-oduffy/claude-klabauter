@@ -80,6 +80,17 @@ Negative-spec (faithful reproduction of the JS oracle's behavior):
       big-port-wave-b-verify-coverage-refresh-queries, Finding 1); this
       Negative-spec entry + the corrected Invariants wording above are the
       fix (oracle-parity gap, not a port regression).
+    - Item 37 (docs/plans/2026-09-22-inbox-blitz-bundled-xs-s-fixes-2026-09-11.md,
+      T37) named four false-orphan legs. Three landed here: line numbers now
+      report against the original file (strip_code_fences preserves line
+      count instead of deleting stripped regions), a hard-wrapped hyphen
+      inside a `<plugin>:<name>` ref no longer truncates the match
+      (qualified_re's name group consumes a "-\\n" hard-wrap point), and
+      `fork` is in BUILTIN_AGENT_TYPES. The fourth leg -- telling a MENTION
+      of a name (prose citing it, not dispatching it) apart from a genuine
+      REFERENCE -- is deliberately NOT landed in this pass per the item's own
+      body ("spin off the mention/reference leg if it grows past S"); it
+      remains open.
 """
 
 from __future__ import annotations
@@ -253,14 +264,30 @@ def strip_code_fences(content: str) -> str:
 
     Inline backticks (`...`) are KEPT -- many references live in them (e.g.,
     `coordinator:plan`).
+
+    Stripped regions are replaced with an equal count of blank lines (never
+    deleted outright) so the transformed body's line count -- and every
+    downstream `body.count("\\n", 0, pos)` line-number computation in
+    `extract_references` -- stays in parity with `content`'s real line
+    numbers. Deleting the matched text outright (the prior behavior) shifted
+    every reported violation line number by the removed frontmatter/fence
+    line count, which is itself one of this module's false-orphan legs (a
+    correct ref reported at the wrong line reads as unresolvable to a human
+    checking that line -- see docs/plans/2026-09-22-inbox-blitz-bundled-xs-s-
+    fixes-2026-09-11.md T37).
     """
     out = content
     if out.startswith("---"):
         second_dash = out.find("\n---", 3)
         if second_dash != -1:
-            out = out[second_dash + 4:]
-    out = re.sub(r"```[\s\S]*?```", "", out)
-    out = re.sub(r"~~~[\s\S]*?~~~", "", out)
+            frontmatter = out[:second_dash + 4]
+            out = "\n" * frontmatter.count("\n") + out[second_dash + 4:]
+
+    def _blank(m: "re.Match[str]") -> str:
+        return "\n" * m.group(0).count("\n")
+
+    out = re.sub(r"```[\s\S]*?```", _blank, out)
+    out = re.sub(r"~~~[\s\S]*?~~~", _blank, out)
     return out
 
 
@@ -376,8 +403,20 @@ def extract_references(content: str, valid_plugin_prefixes: List[str]) -> List[d
     # Faithful to the JS oracle: an empty prefix_pattern (no plugins discovered)
     # still compiles -- `(...)` with an empty alternation matches an empty string,
     # same behavior new RegExp('()') exhibits in JS.
+    # Name-portion char group allows a hard-wrap: a hyphen immediately
+    # followed by a newline, itself immediately followed by another alnum
+    # char, is consumed as a single unit ("-\n") rather than terminating the
+    # match -- a markdown doc hard-wrapped at the column limit splits a
+    # hyphenated name across two lines ("coordinator:multi-\nline-skill"),
+    # and without this the regex stopped at the newline (not in the old
+    # `[a-z0-9\-]` class), yielding a truncated ref ("coordinator:multi-")
+    # that never resolves -- a false orphan, not a real one. A plain
+    # trailing hyphen with no following newline+alnum (e.g. the documented
+    # truncated-glob allowlist entry "coordinator:research-") still matches
+    # via the plain `[a-z0-9\-]` alternative, unchanged from before.
     qualified_re = re.compile(
-        r"(?<![\w\-/:.])/?(" + prefix_pattern + r"):([a-z][a-z0-9\-]+)(?![\w\-:])"
+        r"(?<![\w\-/:.])/?(" + prefix_pattern + r"):"
+        r"([a-z](?:-\n(?=[a-z0-9])|[a-z0-9\-])*)(?![\w\-:])"
     )
 
     # Pattern 3 -- worker bullets inside "## Worker Dispatch Recommendations" blocks.
@@ -397,31 +436,28 @@ def extract_references(content: str, valid_plugin_prefixes: List[str]) -> List[d
     for m in qualified_re.finditer(body):
         line_num = body.count("\n", 0, m.start()) + 1
         leading_slash = m.group(0).startswith("/")
+        # The name group may embed a literal "\n" when the ref was
+        # hard-wrapped across two lines (see qualified_re above) -- strip it
+        # before building the ref string so a wrapped
+        # "coordinator:multi-\nline-skill" resolves as "coordinator:multi-
+        # line-skill", matching the artifact name the file actually has.
+        ref_name = m.group(2).replace("\n", "")
         if not leading_slash:
-            line_text = lines[line_num - 1]
-            # Only inspect the window immediately TRAILING the matched ref on
-            # its line (not the whole line) -- both real marker-documentation
+            # Only inspect the window immediately TRAILING the matched ref
+            # (not the whole line) -- both real marker-documentation
             # examples put the noun right after the closing backtick, and
             # bounding the window avoids dropping a genuine dispatch
             # reference whose surrounding prose happens to mention a marker
             # noun elsewhere on the same line (see extract_references
-            # docstring). The matched ref's own text is still excluded first
-            # so a token that itself contains a marker-noun word (e.g. a
-            # hypothetical `coordinator:sentinel-check`) is only suppressed
-            # by trailing prose describing it as one, not by its own name.
-            match_start_in_line = line_text.find(m.group(0))
-            if match_start_in_line != -1:
-                trailing_start = match_start_in_line + len(m.group(0))
-                trailing_window = line_text[
-                    trailing_start:trailing_start + _MARKER_NOUN_WINDOW_CHARS
-                ]
-            else:
-                trailing_window = line_text.replace(m.group(0), "", 1)
+            # docstring). Sliced directly off `body` at the match end (not
+            # re-located inside a single line's text) so this still works
+            # correctly when the match itself spans a hard-wrap newline.
+            trailing_window = body[m.end():m.end() + _MARKER_NOUN_WINDOW_CHARS]
             if _MARKER_NOUN_RE.search(trailing_window):
                 continue
         refs.append({
             "kind": "command" if leading_slash else "qualified",
-            "ref": f"{m.group(1)}:{m.group(2)}",
+            "ref": f"{m.group(1)}:{ref_name}",
             "line": line_num,
         })
     for m in _SUBAGENT_RE.finditer(body):
@@ -448,6 +484,7 @@ BUILTIN_AGENT_TYPES: Set[str] = {
     "Explore",
     "Plan",
     "statusline-setup",
+    "fork",
 }
 """Built-in harness `subagent_type` values with no on-disk artifact -- checked
 ahead of the agents-map lookup in `resolve()` for subagent/worker refs."""

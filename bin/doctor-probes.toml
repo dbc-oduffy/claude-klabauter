@@ -93,8 +93,8 @@ id = "claude-klabauter.root.pointer"
 cluster = "registry"
 weight = "cheap"
 interactivity = "assert"
-fix = "none (run the install-time pointer writer gen-claude-klabauter-root-pointer.py to populate the pointer file)"
-symptom_keywords = ["claude-klabauter-live-root pointer absent", "stale pointer", "bash-fallback subprocess hang", "Windows per-invoke latency", "5s timeout", "gen-claude-klabauter-root-pointer.py"]
+fix = "none (on a cold box, run scripts/setup.py --claude-klabauter-live-root <path>; on a warm/registry-resolved box, gen-claude-klabauter-root-pointer.py is the install-time alternative)"
+symptom_keywords = ["claude-klabauter-live-root pointer absent", "stale pointer", "bash-fallback subprocess hang", "Windows per-invoke latency", "5s timeout", "gen-claude-klabauter-root-pointer.py", "cold box no registry", "setup.py --claude-klabauter-live-root"]
 # triage=true: file-read-only presence/content check (no subprocess, no network) is
 # cheap enough for every bare invocation, and surfaces the dominant Windows per-invoke
 # latency cause (bash-fallback engine-root resolution) as early as possible.
@@ -102,7 +102,7 @@ triage = true
 body = "bin/claude-klabauter-doctor-probe.py:_run_probe_root_pointer"
 required = false
 severity_if_fail = "degraded"
-remediation = "Run the install-time pointer writer (gen-claude-klabauter-root-pointer.py) to populate <settings-home>/machine-local/.claude-klabauter-live-root with the resolved CLAUDE_KLABAUTER_ROOT path"
+remediation = "On a cold box (no registry to resolve from), run scripts/setup.py --claude-klabauter-live-root <path> to populate <settings-home>/machine-local/.claude-klabauter-live-root; on a warm/registry-resolved box, gen-claude-klabauter-root-pointer.py is the install-time alternative"
 
 # claude-klabauter.root.channels_reconciled -- do the several places this box writes a
 # root down AGREE, and does each name a path that is actually here? Distinct

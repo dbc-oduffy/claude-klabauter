@@ -17,7 +17,10 @@ mode this file exists to catch (see the dispatch brief's own framing).
 Coverage (one section per named edge):
   - unborn branch                              -- loud refusal, no arm runs
   - detached HEAD                               -- in-process
-  - ref only in packed-refs (no loose file)     -- ladder
+  - ref only in packed-refs (no loose file)     -- in-process (`_resolve_cas_
+                                                    ref_target` resolves a
+                                                    packed-only ref directly;
+                                                    see its own docstring)
   - linked worktree (`git worktree add`)        -- in-process
   - index v3 / v4 present                       -- in-process (index is
                                                     never read by this
@@ -214,19 +217,21 @@ def test_detached_head_commits_via_in_process_arm(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# ref only in packed-refs (no loose file) -- ladder
+# ref only in packed-refs (no loose file) -- in-process
 # ---------------------------------------------------------------------------
 
 
-def test_ref_only_in_packed_refs_falls_back_to_ladder(tmp_path, monkeypatch):
+def test_ref_only_in_packed_refs_resolves_in_process(tmp_path, monkeypatch):
     repo = real_git_repo(tmp_path)
     (repo / "file.txt").write_text("orig\n", encoding="utf-8")
     _git(["add", "--", "file.txt"], repo)
     _git(["commit", "-q", "-m", "baseline"], repo)
     # Pack the branch ref -- removes the loose refs/heads/<branch> file,
-    # leaving only a packed-refs entry. `_resolve_cas_ref_target` refuses
-    # to CAS against a non-loose ref (its own docstring), so this must take
-    # the ladder.
+    # leaving only a packed-refs entry. `_resolve_cas_ref_target` resolves a
+    # packed-only ref directly (its own docstring: matches the sibling
+    # `coordinator_core.git.commit._cas_target`, since a freshly-gc'd repo's
+    # branch ref is packed and must still be CAS-able), so this stays
+    # in-process -- it does NOT force the ladder.
     _git(["pack-refs", "--all"], repo)
     branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], repo).stdout.strip()
     loose_ref = repo / ".git" / "refs" / "heads" / branch
@@ -237,7 +242,7 @@ def test_ref_only_in_packed_refs_falls_back_to_ladder(tmp_path, monkeypatch):
     result, fast_result = _run_authored_commit(repo, "file.txt", "NEW\n", msg_file, monkeypatch)
 
     assert result.ok, result.stderr
-    _assert_ladder(fast_result)
+    _assert_in_process(fast_result)
     assert _committed_content_at_head(repo, "file.txt") == "NEW\n"
     _assert_ac2_oracle(repo)
 
@@ -561,8 +566,13 @@ def test_reflog_survives_ladder_arm(tmp_path, monkeypatch):
     (repo / "file.txt").write_text("orig\n", encoding="utf-8")
     _git(["add", "--", "file.txt"], repo)
     _git(["commit", "-q", "-m", "baseline"], repo)
-    # Force the ladder the same way the packed-refs test above does.
-    _git(["pack-refs", "--all"], repo)
+    # Force the ladder directly -- packed-refs no longer does this (see
+    # `test_ref_only_in_packed_refs_resolves_in_process` above): a `None`
+    # return from `_resolve_cas_ref_target` is the one thing that sends
+    # `_commit_via_head_spine` to the ladder (`git_native.py`'s own
+    # `ref_target is None: return None` check), same forced-failure
+    # pattern this file's delta-chain-depth-guard test uses.
+    monkeypatch.setattr(git_native, "_resolve_cas_ref_target", lambda root: None)
     before = _reflog_lines(repo)
     msg_file = _write_msg(tmp_path)
     _sync_worktree(repo, "file.txt", "NEW\n")

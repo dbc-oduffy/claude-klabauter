@@ -57,7 +57,7 @@ import time
 from typing import Any, Mapping, Optional
 
 from coordinator_core.ipc import register_op
-from coordinator_core.hooks._envelope import no_advisory, post_advisory
+from coordinator_core.hooks._envelope import no_advisory, payload_of, post_advisory
 from coordinator_core.hooks._payload import field
 from coordinator_core.hooks import nudge_unauthorized_handoff
 from coordinator_core.session.autonomous_sentinel import sentinel_path  # noqa: F401 -- back-compat monkeypatch target, see below
@@ -1177,7 +1177,8 @@ def _check_runtime_tripwire_sync(session_id: str, agent_id: str) -> str:
 # New (no bash-era equivalent): a one-time-per-session advisory telling the
 # dispatching EM that coordinator-themed subagents write their full findings
 # to an on-disk sidecar as part of their design — a fact the EM would
-# otherwise only learn by chance (a manual `ls` of state/subagent-share/)
+# otherwise only learn by chance (a manual `ls` of the share bucket --
+# session.machinery_paths.share_dir)
 # after concluding a dispatched agent's work was lost when its return
 # message was merely lost or truncated.
 #
@@ -1202,10 +1203,18 @@ def _check_first_agent_dispatch_sync(session_id: str, tool_name: str) -> str:
     message. Fires once, on the first Agent-tool PostToolUse of a session.
 
     Returns non-empty advisory text when it fires; "" on every early-exit path
-    (non-Agent tool call, sentinel already present/written, or session_id
-    absent). Never raises — fail-open on all I/O errors, same posture as the
-    other two checks in this module (see the durable-state comment above
-    _advisory_state_path).
+    (non-Agent tool call, sentinel already present, session_id absent, or the
+    sentinel write itself failed). Never raises — fail-open on all I/O errors,
+    same posture as the other two checks in this module (see the durable-state
+    comment above _advisory_state_path).
+
+    Sentinel written BEFORE the advisory is returned, not after: this leg (unlike
+    workflow_monitor_arm's) composes only a static string once the sentinel
+    write itself succeeds, so there is no later step that can raise and leave
+    the sentinel on disk while the caller gets nothing. A write that fails
+    (open() raises, or write() raises mid-write leaving a partial file on
+    disk) is cleaned up with a best-effort remove so a later Agent dispatch in
+    the same session can retry rather than staying silent forever.
     """
     if not session_id or tool_name != "Agent":
         return ""
@@ -1216,11 +1225,28 @@ def _check_first_agent_dispatch_sync(session_id: str, tool_name: str) -> str:
     if os.path.isfile(sentinel):
         return ""
 
+    try:
+        with open(sentinel, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(str(int(time.time())))
+    except Exception:
+        # Write failed (open() raised, or write() raised mid-write and left a
+        # partial file) -- best-effort remove so a later call in this session
+        # can retry rather than seeing a stray sentinel and staying silent
+        # forever. Swallow any error from the remove itself, keeping this
+        # path fail-open.
+        try:
+            os.remove(sentinel)
+        except Exception:
+            pass
+        return ""
+
+    from coordinator_core.session.machinery_paths import SHARE_RELDIR
+
     return (
         "COORDINATOR SIDECAR ADVISORY: coordinator-themed subagents write their"
         " full findings to a sidecar file on disk as part of their design, not"
         " only in their return message to you."
-        f" Sidecar directory for this session: .coordinator-local/subagent-share/{session_id}/"
+        f" Sidecar directory for this session: {SHARE_RELDIR}/{session_id}/"
         " If a dispatched agent's reply is missing, truncated, or it goes idle"
         " without reporting, read the sidecar there before assuming the work"
         " was lost or re-dispatching it."
@@ -1934,6 +1960,8 @@ async def _handler(params: dict, repo_root=None) -> dict:
     # asyncio deferred to first use here (not module scope) — this is the only function
     # in the module touching the asyncio namespace at runtime. Spec:
     # docs/plans/2026-07-24-canonical-resolution-engine.md task W0-1.
+    params = payload_of(params)
+
     import asyncio
 
     session_id = field(params, "session_id")

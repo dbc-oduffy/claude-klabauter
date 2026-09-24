@@ -48,6 +48,7 @@ from coordinator_core.bash_guards.tests.test_bump_outside_repo_write import (
     _clean_bump_env,  # noqa: F401 -- reused fixture (C4 owns the fix; AC13/finding #6).
     requires_powershell_grammar,
 )
+from coordinator_core.subagent_sandbox import engine as _sandbox_engine
 from coordinator_core.testing.home_sandbox import sandbox_home
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -85,6 +86,22 @@ def _init_repo(tmp_path: Path, name: str) -> Path:
     _git(str(root), "add", "README.md")
     _git(str(root), "commit", "-q", "-m", "init")
     return root
+
+
+@pytest.fixture(autouse=True)
+def _reset_git_root_cache():
+    """Resets the process-local `resolve_git_root` memo before AND after every
+    test in this file (AC5, docs/plans/2026-09-07-foreign-write-guard-mixed-
+    separator-and-publish.md, C2). The memo remembers only successful
+    resolutions, so a warm hit left over from a prior test can silently mask
+    the exact unresolved-root path this guard's whole defect family rides on
+    -- the suspected source of a measured ~1-in-6 flake. Matches the pattern
+    already in test_dispatch_latency_bound.py,
+    test_bump_foreign_repo_write_root_spawn_budget.py, and
+    test_confinement_is_cwd_invariant.py."""
+    _sandbox_engine.reset_resolve_git_root_cache()
+    yield
+    _sandbox_engine.reset_resolve_git_root_cache()
 
 
 @pytest.fixture()

@@ -8,18 +8,17 @@ verdict; it never actually fired one (see the kill-ledger entry for the measured
 verdict logic, its cross-handoff attribution guard, its explicit-ship-claim path, its plan-
 corroboration gate, and every helper reachable only from `evaluate_commit_reality` are deleted.
 
-What survives is helper residue two OTHER modules import directly, independent of the killed
+What survives is helper residue one OTHER module imports directly, independent of the killed
 verdict:
 
   - `archive_stamp.py:175` imports `_DEFAULT_MECHANICAL_DENYLIST` and `_is_mechanical_subject`
     (mechanical-commit-subject filtering for its own ship-SHA walk-back — unrelated to the
     deleted three-signal matcher).
-  - `ops/completion_ops.py:77` imports `_git` (as `_reality_git`) — a read-only git subprocess
-    choke point, reused rather than re-spawning a second copy.
 
-`_git` is scheduled for rehoming out of this module (its generic-git-wrapper shape no longer fits
-a module whose thesis is "this subsystem runs no git" now that the matcher is gone) — filed as a
-backlog item by the EM, not authored in this chunk.
+The read-only git subprocess choke point `ops/completion_ops.py` formerly imported from here is
+deleted (R3, `docs/plans/2026-09-22-spawn-budget-and-census.md`): `ops/completion_ops.py` now
+spawns git through `coordinator_core.git.run.run_git` directly, and this module runs no git at
+all, matching its thesis.
 
 Spec backlink: pln-claude-klabauter-auto-reconcile-pass-off-425848 § C2 (DEC-1) — historical; the DEC-1
 verdict this module implemented is deleted, not the plan's other chunks.
@@ -27,12 +26,13 @@ verdict this module implemented is deleted, not the plan's other chunks.
 Negative-spec:
   - Does NOT expose `evaluate_commit_reality` or any commit-reality shipped-ness verdict — that
     surface is deleted (`state/kill-ledger.md`, this chunk's entry).
-  - Does NOT write any file, git object, or repo state — pure read-only git subprocess helper.
+  - Does NOT write any file, git object, or repo state.
+  - Does NOT spawn git or define a git subprocess runner — `_git` is deleted (R3); a caller
+    needing git goes through `coordinator_core.git.run.run_git`.
 """
 
 from __future__ import annotations
 
-import subprocess
 from typing import Sequence
 
 
@@ -69,23 +69,6 @@ _SUBSTRING_FAMILY_TOKENS: frozenset = frozenset({
     "migrate_handoff_vocabulary",
     "migrate handoff corpus",
 })
-
-
-def _git(worktree_root, args: Sequence[str]) -> "subprocess.CompletedProcess[str]":
-    """Run a read-only git subcommand from worktree_root and return the CompletedProcess.
-
-    Purpose: single choke point for this module's git subprocess invocations. Never passes a
-    mutating verb — COMPUTE_ONLY-safe. Reused by `ops/completion_ops.py` (as `_reality_git`)
-    rather than re-spawning a second copy of the same pattern.
-    """
-    return subprocess.run(
-        ["git", *args],
-        capture_output=True,
-        text=True,
-        check=False,
-        cwd=str(worktree_root),
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
 
 
 def _is_mechanical_subject(subject: str, denylist: Sequence[str]) -> bool:

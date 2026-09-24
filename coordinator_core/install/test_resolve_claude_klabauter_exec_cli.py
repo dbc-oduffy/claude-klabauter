@@ -266,6 +266,18 @@ def _invoke_posix_subprocess(
 
     env = dict(os.environ)
     env["COORDINATOR_SETTINGS_HOME"] = str(settings_home)
+    # Rung 0 of `_resolve_claude_klabauter_root`'s ladder reads COORDINATOR_ENGINE_ROOT
+    # directly, ahead of and independent of the settings-home override above
+    # -- a real session env that exports it (as this box's does, pointed at
+    # the actual klabauter checkout) hijacks every case here to that real
+    # root instead of the tmp fixture tree, uniformly returning 127 ("fixture
+    # -cli is missing") regardless of what each test's own tmp fixture set
+    # up. MACHINE_LOCAL_REGISTRY_DIR would similarly bypass the tmp
+    # settings-home's machine-local/ wholesale (`_ml_dir`'s own override,
+    # read ahead of COORDINATOR_SETTINGS_HOME); stripped for the same
+    # hermeticity reason even though this box does not currently export it.
+    env.pop("COORDINATOR_ENGINE_ROOT", None)
+    env.pop("MACHINE_LOCAL_REGISTRY_DIR", None)
 
     result = subprocess.run(
         [sys.executable, str(forwarder_path), *argv],
@@ -371,12 +383,19 @@ def test_posix_forwarder_execs_no_shebang_no_exec_bit_target_via_real_subprocess
 
 
 @pytest.mark.skipif(
-    os.name == "nt",
+    os.name == "nt"
+    or (hasattr(os, "geteuid") and os.geteuid() == 0),
     reason="os.chmod(path, 0o000) cannot deny the owner read access on "
     "NTFS -- os.access(path, os.R_OK) still reports True for one's own "
     "file regardless of the mode bits passed (verified empirically), so "
     "there is no way to construct an actually-unreadable-to-self target "
-    "on Windows for this falsifier to exercise",
+    "on Windows for this falsifier to exercise. Same miss for a different "
+    "reason as root (routine for a cloud container's own process): the "
+    "kernel skips DAC permission checks for uid 0 entirely, so root's own "
+    "open() of a 0o000 file still succeeds regardless of mode bits -- "
+    "surfaced only once the COORDINATOR_ENGINE_ROOT env leak this module's "
+    "other tests were fixed for (see _invoke_posix_subprocess) stopped "
+    "masking every case here behind a uniform 127",
 )
 def test_posix_forwarder_execs_unreadable_target_via_real_subprocess(tmp_path):
     """A real generated forwarder,

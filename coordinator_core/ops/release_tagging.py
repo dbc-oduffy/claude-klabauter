@@ -259,7 +259,7 @@ def _publish_release(tag: str, repo_root: Path, release_notes: str) -> tuple[boo
             try:
                 Path(notes_file).unlink(missing_ok=True)
             except OSError:
-                pass
+                pass  # best-effort tempfile cleanup; a leaked release-notes tempfile is harmless
 
 
 def cut_tag(repo_root: Union[str, Path], merge_sha: str, tag_prefix: str) -> dict:

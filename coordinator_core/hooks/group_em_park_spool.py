@@ -19,8 +19,11 @@ by path, which has no analogue on this side of the port; see
 `coordinator_core/receiver_state_reader.py`'s own module docstring for why
 the two readers are a distinct surface).
 
-Op contract: `params["payload"]` is the Stop payload dict (`session_id`,
-`cwd`, ...) — never `os.environ` or this process's own `cwd`. Always
+Op contract: `params` reaches this op in either shape a `hooks.*` handler
+receives — wrapped as `params["payload"]` by both engine doors, flat by the
+cold chain; `_envelope.payload_of` reads both, supplying the Stop payload
+dict (`session_id`, `cwd`, ...) — never `os.environ` or this process's own
+`cwd`. Always
 returns `no_advisory()` (empty dict): this producer never surfaces advisory
 text and never blocks a Stop, matching the source script's own
 stdout-always-empty, exit-0-on-every-path contract.
@@ -38,10 +41,10 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Mapping, Optional
+from typing import Optional
 
 from coordinator_core.git.repo_root import show_toplevel
-from coordinator_core.hooks._envelope import no_advisory
+from coordinator_core.hooks._envelope import no_advisory, payload_of
 from coordinator_core.ipc import register_op
 from coordinator_core.session.receiver_state import read_receiver_state
 
@@ -110,11 +113,8 @@ def _handler(params: dict, repo_root=None) -> dict:
     body is wrapped fail-open, matching the source script's own "exit 0 on
     EVERY path" contract.
     """
+    payload = payload_of(params)
     try:
-        payload = params.get("payload")
-        if not isinstance(payload, Mapping):
-            payload = {}
-
         session_id = payload.get("session_id") or ""
         if not isinstance(session_id, str) or not session_id:
             return no_advisory()

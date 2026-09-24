@@ -232,6 +232,7 @@ def scan(root: str) -> Tuple[Dict[str, List[str]], Dict[str, List[Tuple[str, str
             with open(full, "r", encoding="utf-8", errors="replace") as fh:
                 content = fh.read()
         except OSError:
+            # unreadable candidate file cannot be scanned for citations; skip it
             continue
 
         for match in _UUID_CITATION_RE.finditer(content):

@@ -69,23 +69,6 @@ def _load_module():
 
 _mod = _load_module()
 
-# `_SCOPED_GIT_COMMIT` was removed from percolate-round.py when scoped-git-commit
-# was killed (DR-344); this file still names it in 19 places. The references sat
-# harmless only because the tests reaching them were skipped or returned before
-# the fake `_run`'s if-chain walked that far -- the first decline-path `_run` call
-# added to the module (`_pending_removal_warning`) made four of them evaluate it
-# and die on AttributeError, which reads as a failure in the new code rather than
-# as harness rot.
-#
-# A sentinel that matches no real argv keeps the chain walkable and keeps the
-# rot HONEST: a test asserting a commit fired now fails on its own assertion,
-# naming what it expected, instead of on a missing attribute. Retiring the 19
-# references against `commit_pipeline.run_commit_pipeline` is its own piece of
-# work -- see the bug-backlog entry filed alongside this change.
-_SCOPED_GIT_COMMIT_KILLED = getattr(
-    _mod, "_SCOPED_GIT_COMMIT", "<scoped-git-commit-killed-DR-344-never-matches>"
-)
-
 
 def _completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
@@ -260,13 +243,6 @@ class _SubprocessSpy:
             return _completed(0, self._parse2_stdout, "")
         if str(_mod._PARSE_DRYRUN) in joined:
             return _completed(0, self._parse1_stdout, "")
-        if str(_SCOPED_GIT_COMMIT_KILLED) in joined:
-            if "--pathspec-from-file" in cmd:
-                idx = cmd.index("--pathspec-from-file")
-                self.pathspec_from_file_content = (
-                    Path(str(cmd[idx + 1])).read_text(encoding="utf-8").splitlines()
-                )
-            return _completed(0, self._commit_stdout, "")
         if "run-all-checks.py" in joined:
             return _completed(self._ci_returncode, self._ci_stdout, "")
 
@@ -469,6 +445,21 @@ def _install_commit_pipeline_stub(monkeypatch, *, result=None) -> list:
     return calls
 
 
+def _commit_call_summary(call: tuple) -> "Tuple[List[str], List[str], str]":
+    """Reduce one `_install_commit_pipeline_stub` call `(args, kwargs)` to
+    what the round asked `commit_paths` to commit: the paths, the
+    deleted_paths, and the message subject (its first line). C11-C13 read
+    this instead of grepping the retired commit sentinel out of `spy.calls`
+    -- the commit leg is an in-process call now, so it never reaches the
+    subprocess spy at all."""
+    args, kwargs = call
+    paths = list(args[1])
+    message = args[2]
+    subject = message.splitlines()[0] if message else ""
+    deleted_paths = list(kwargs.get("deleted_paths", ()))
+    return paths, deleted_paths, subject
+
+
 def _run_round(tmp_path, monkeypatch, *, ci_returncode=0, ci_exists=True, gate_fires=False, yes=True,
                 scan_returncode=0, commit_stdout='{"status": "ok"}', dest_status_stdout="",
                 dest_status_returncode=0, no_publish=False, push_returncode=0,
@@ -548,8 +539,6 @@ def _run_round(tmp_path, monkeypatch, *, ci_returncode=0, ci_exists=True, gate_f
 # at the subprocess boundary and on the filesystem — not via source grep.
 # ---------------------------------------------------------------------------
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_no_publish_flag_prints_notice_and_does_not_push(tmp_path, monkeypatch):
     """`--no-publish` keeps the old print-and-stop terminus: no `git push`
     argv is ever spawned, and the printed command names the short
@@ -573,6 +562,15 @@ def test_no_publish_flag_prints_notice_and_does_not_push(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "system", _forbidden_system)
     monkeypatch.setattr(_mod.subprocess, "Popen", _forbidden_popen)
 
+    # The commit leg is an in-process call to `commit_paths` now, not a
+    # subprocess.run boundary -- stub it so the round actually lands (a
+    # real call would fail: `dest` here is a bare tmp_path dir, not a git
+    # repo) and patch `Path.exists` so the fixture's synthetic change-line
+    # paths (never actually written to disk) read as present rather than
+    # declined by `_partition_pathspec_for_commit`.
+    _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch, no_publish=True)
     assert rc == _mod._EXIT_OK
     for call in spy.calls:
@@ -581,11 +579,12 @@ def test_no_publish_flag_prints_notice_and_does_not_push(tmp_path, monkeypatch):
     assert f"git -C {dest} push" not in out
 
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_clean_round_pushes_by_default(tmp_path, monkeypatch):
     """AC2: a clean round publishes with no `--no-publish` opt-out and no
     operator step after the first command."""
+    commit_calls = _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
     assert rc == _mod._EXIT_OK
 
@@ -594,11 +593,12 @@ def test_clean_round_pushes_by_default(tmp_path, monkeypatch):
     assert push_calls[0] == ["git", "-C", str(dest), "push"]
     assert f"Published: pushed to {dest}." in out
 
-    commit_idx = next(
-        i for i, c in enumerate(spy.calls) if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)
-    )
-    push_idx = spy.calls.index(push_calls[0])
-    assert commit_idx < push_idx
+    # The commit leg no longer shares `push`'s subprocess call-order list --
+    # it is an in-process `commit_paths` call, reached and returned before
+    # `_cmd_round_default`'s own linear body ever gets to the push
+    # subprocess call below it. One landed commit plus one successful push
+    # IS the ordering claim; there is no longer a shared index to compare.
+    assert len(commit_calls) == 1
 
 
 def test_source_scan_no_allow_xrepo_write_marker_creation():
@@ -618,9 +618,10 @@ def test_source_scan_no_allow_xrepo_write_marker_creation():
         ), f"allow-xrepo-write appears in a path/write construction: {stripped!r}"
 
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_never_writes_allow_xrepo_write_marker(tmp_path, monkeypatch):
+    _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
     assert rc == _mod._EXIT_OK
     hits = list(tmp_path.rglob("*allow-xrepo-write*"))
@@ -635,22 +636,21 @@ def test_never_writes_allow_xrepo_write_marker(tmp_path, monkeypatch):
 # REAL run's change lines, not the dry-run's.
 # ---------------------------------------------------------------------------
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_commit_pathspec_derived_from_real_run_not_dry_run(tmp_path, monkeypatch):
+    commit_calls = _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
     assert rc == _mod._EXIT_OK
 
-    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
+    # AC (WinError 206 fix, re-derived): the commit leg is now an in-process
+    # `commit_paths` call, not a `subprocess.run` argv at all -- there is no
+    # `--pathspec-from-file` flag or bare `--` separator to assert on any
+    # more. What still applies is AC7's actual claim: the PATHS handed to
+    # the commit come from the real run, not the dry run, and carry no
+    # directory element.
     assert len(commit_calls) == 1
-    commit_cmd = commit_calls[0]
-
-    # AC (WinError 206 fix): the pathspec never rides argv — no bare `--`
-    # separator is emitted by `_cmd_round` anymore, only a file reference.
-    assert "--" not in commit_cmd
-    assert "--pathspec-from-file" in commit_cmd
-    assert spy.pathspec_from_file_content is not None
-    pathspec = spy.pathspec_from_file_content
+    pathspec, _deleted, _subject = _commit_call_summary(commit_calls[0])
 
     # `5858489a8` (repo-relative pathspec entries) predates these
     # assertions; `_run_round`'s default `repo_root` echoes `dest` itself
@@ -677,97 +677,48 @@ def test_commit_pathspec_derived_from_real_run_not_dry_run(tmp_path, monkeypatch
 
 
 # ---------------------------------------------------------------------------
-# WinError 206 regression pin: a several-thousand-path pathspec must never
-# ride the commit subprocess's argv. Windows CreateProcess caps a command
-# line at 32767 characters, which a full-publish ~2000-path pathspec
-# exceeds outright (the actual live-round failure this fix addresses). This
-# cannot portably assert the Windows limit itself (this suite runs
-# cross-platform) -- instead it asserts the argv this code hands
-# `subprocess.run` stays small and bounded regardless of pathspec size,
-# with every path routed through `--pathspec-from-file` instead.
+# `test_large_pathspec_commit_argv_stays_bounded_not_on_argv` DELETED (C11,
+# R5): it pinned a WinError 206 regression -- a several-thousand-path
+# pathspec must never ride the commit subprocess's argv -- by asserting on
+# the `subprocess.run` argv shape (`--pathspec-from-file`, a bounded token
+# count). C3 (docs/plans/2026-08-29-the-push-subsystem-leaves-and-then-the-
+# pipeline-can-go.md) repointed the commit leg onto `coordinator_core.git.
+# commit.commit_paths`, which is an in-process Python call with "Zero git
+# spawns" (its own docstring) -- there is no argv at all for a pathspec to
+# ride, bounded or not, so the property this test asserted no longer
+# exists. The WinError 206 exposure it guarded against is now structurally
+# impossible rather than merely bounded.
 # ---------------------------------------------------------------------------
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
-def test_large_pathspec_commit_argv_stays_bounded_not_on_argv(tmp_path, monkeypatch):
-    large_real_stdout = "".join(
-        f"NEW: generated/file-{i:05d}.md\n" for i in range(4000)
-    )
 
-    dest = tmp_path / "dest"
-    dest.mkdir()
-    ci_dir = dest / ".github" / "scripts"
-    ci_dir.mkdir(parents=True)
-    (ci_dir / "run-all-checks.py").write_text("", encoding="utf-8")
-    source_dir = tmp_path / "source"
-    source_dir.mkdir()
-    percolate_root = tmp_path / "percolate-root"
-    (percolate_root / "setup").mkdir(parents=True)
-
-    spy = _SubprocessSpy(
-        dryrun_stdout=_dryrun_stdout(),
-        real_stdout=large_real_stdout,
-        parse1_stdout=_parse1_stdout(),
-        parse2_stdout=_parse2_stdout(False),
-    )
-    _install_manifest_stub(monkeypatch, spy)
-    _install_sibling_cli_stub(monkeypatch, spy)
-    monkeypatch.setattr(_mod.subprocess, "run", spy)
-    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
-    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
-    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
-
-    parser = _mod._build_parser()
-    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
-    monkeypatch.setattr(_mod.sys.stdin, "isatty", lambda: True)
-
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        rc = _mod._cmd_round(args)
-    assert rc == _mod._EXIT_OK
-
-    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
-    assert len(commit_calls) == 1
-    commit_cmd = commit_calls[0]
-
-    # The regression this pins: 4000 individual path tokens must NOT appear
-    # in the subprocess argv this code constructs — only a short file path
-    # naming where they live.
-    assert len(commit_cmd) < 20
-    assert "--pathspec-from-file" in commit_cmd
-    assert not any("generated/file-" in str(tok) for tok in commit_cmd)
-
-    assert spy.pathspec_from_file_content is not None
-    assert len(spy.pathspec_from_file_content) == 4000
-    assert "generated/file-00000.md" in spy.pathspec_from_file_content
-    assert "generated/file-03999.md" in spy.pathspec_from_file_content
-
-
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_commit_ordered_after_ci_smoke_is_false_ci_runs_after_commit(tmp_path, monkeypatch):
     """AC8: CI smoke is ordered AFTER the commit."""
+    commit_calls = _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
     assert rc == _mod._EXIT_OK
 
-    def _first_index(marker: str) -> int:
-        for i, call in enumerate(spy.calls):
-            if marker in " ".join(str(c) for c in call):
-                return i
-        raise AssertionError(f"no call matched {marker!r}: {spy.calls!r}")
-
-    commit_idx = _first_index(str(_SCOPED_GIT_COMMIT_KILLED))
-    ci_idx = _first_index("run-all-checks.py")
-    assert commit_idx < ci_idx
+    # Re-derived: the commit leg is now an in-process `commit_paths` call,
+    # so it no longer shares CI smoke's subprocess call-order list to
+    # compare indices against. `_cmd_round_default`'s own Step 4 comment
+    # ("CI smoke (after the commit)") is the ordering guarantee -- the
+    # commit block runs and returns, unconditionally, before that step is
+    # reached in the same linear function body. One landed commit plus one
+    # CI-smoke subprocess call IS that claim.
+    assert len(commit_calls) == 1
+    ci_calls = [c for c in spy.calls if "run-all-checks.py" in " ".join(str(x) for x in c)]
+    assert len(ci_calls) == 1
 
 
 # ---------------------------------------------------------------------------
 # AC8 — a red CI exit means no push command is printed and exit is non-zero.
 # ---------------------------------------------------------------------------
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_red_ci_prints_no_push_command_and_fails(tmp_path, monkeypatch):
+    commit_calls = _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch, ci_returncode=1)
     assert rc == _mod._EXIT_FAIL
     assert "git -C" not in out
@@ -779,7 +730,6 @@ def test_red_ci_prints_no_push_command_and_fails(tmp_path, monkeypatch):
     # The commit itself must still have landed (locally) before the red CI
     # was even observed -- CI-after-commit ordering holds on the FAIL path
     # too, not just the PASS path.
-    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
     assert len(commit_calls) == 1
 
 
@@ -790,40 +740,39 @@ def test_red_ci_prints_no_push_command_and_fails(tmp_path, monkeypatch):
 # silently ignored, since the gate never fired to exercise it.
 # ---------------------------------------------------------------------------
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_gate_fires_with_yes_skips_input_and_prints_evidence(tmp_path, monkeypatch):
     """gate_fires=True, --yes: the evidence is printed, input() is never
     called (--yes's actual job), and the round proceeds to a real publish
     and commit."""
     input_calls = []
     monkeypatch.setattr("builtins.input", lambda *a, **k: input_calls.append(1) or "n")
+    commit_calls = _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
 
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch, gate_fires=True, yes=True)
 
     assert rc == _mod._EXIT_OK
     assert input_calls == []
     assert "Step 3 gate fired: 1 medium hit(s)" in out
-    assert "Proceed with real publish? [y/N] y (--yes)" in out
+    assert "Proceed with commit + publish? [y/N] y (--yes)" in out
 
-    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
     assert len(commit_calls) == 1
 
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_gate_fires_with_no_publish_falls_through_and_skips_only_push(tmp_path, monkeypatch):
     """gate_fires=True, --no-publish (--yes stays at `_run_round`'s default
     True): control falls through the gate to the real run, commits land,
     and `--no-publish` skips only the final `git push` -- it does not
     re-block on the gate a second time or skip the commit (DR-301)."""
+    commit_calls = _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch, gate_fires=True, no_publish=True)
 
     assert rc == _mod._EXIT_OK
     assert "Step 3 gate fired: 1 medium hit(s)" in out
-    assert "Proceed with real publish? [y/N] y (--yes)" in out
+    assert "Proceed with commit + publish? [y/N] y (--yes)" in out
 
-    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
     assert len(commit_calls) == 1
 
     for call in spy.calls:
@@ -878,8 +827,6 @@ def test_gate_fires_without_yes_declined_cancels_before_real_run(tmp_path, monke
 # isatty() check), else a cron/nested-agent caller could auto-proceed.
 # ---------------------------------------------------------------------------
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_gate_fires_with_invocation_authorized_skips_input_and_proceeds(tmp_path, monkeypatch):
     """--invocation-authorized (the skill-wrapper token): input() is never
     called and the round proceeds to a real publish and commit, exactly
@@ -887,6 +834,8 @@ def test_gate_fires_with_invocation_authorized_skips_input_and_proceeds(tmp_path
     interactive PM session per the invoking skill's own rules)."""
     input_calls = []
     monkeypatch.setattr("builtins.input", lambda *a, **k: input_calls.append(1) or "n")
+    commit_calls = _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
 
     rc, out, spy, dest = _run_round(
         tmp_path, monkeypatch, gate_fires=True, yes=False, invocation_authorized=True,
@@ -895,9 +844,8 @@ def test_gate_fires_with_invocation_authorized_skips_input_and_proceeds(tmp_path
     assert rc == _mod._EXIT_OK
     assert input_calls == []
     assert "Step 3 gate fired: 1 medium hit(s)" in out
-    assert "Proceed with real publish? [y/N] y (--invocation-authorized)" in out
+    assert "Proceed with commit + publish? [y/N] y (--invocation-authorized)" in out
 
-    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
     assert len(commit_calls) == 1
 
 
@@ -1003,33 +951,20 @@ def test_high_tier_scan_hit_aborts_before_step3(tmp_path, monkeypatch, capsys):
 
 
 # ---------------------------------------------------------------------------
-# The `committed and declined_paths` partial-landed
-# branch had no test; the default `commit_stdout` has no `committed`/
-# `declined_paths` keys, so this whole `if` block was dead in the suite.
+# `test_commit_landed_with_declined_paths_reports_partial_and_fails` DELETED
+# (C11, R5): it drove the "committed but some paths declined" outcome by
+# feeding a `commit_stdout` JSON payload with `committed`/`declined_paths`
+# keys -- the shape the old subprocess-based commit CLI printed to stdout.
+# C3 (docs/plans/2026-08-29-the-push-subsystem-leaves-and-then-the-pipeline-
+# can-go.md) moved the commit leg onto the in-process `commit_paths`
+# (returns a `CommitOutcome`, no stdout JSON at all) and moved declined-path
+# computation OUT of the commit leg entirely, into `_cmd_round_default`'s own
+# real filesystem/`.gitignore` pre-check ahead of the call
+# (`_partition_pathspec_for_commit`). The property this test asserted --
+# commit lands, declined paths still fail the round, CI smoke never runs --
+# is already covered by `test_declined_paths_refuses_with_reason_and_no_push`
+# (this file), which drives that same real pre-check directly.
 # ---------------------------------------------------------------------------
-
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
-def test_commit_landed_with_declined_paths_reports_partial_and_fails(tmp_path, monkeypatch):
-    commit_stdout = json.dumps(
-        {
-            "status": "partial",
-            "committed": True,
-            "sha": "abc123def456",
-            "declined_paths": [{"path": "some/declined.md", "reason": "outside allowlist"}],
-        }
-    )
-    rc, out, spy, dest = _run_round(tmp_path, monkeypatch, commit_stdout=commit_stdout)
-
-    assert rc == _mod._EXIT_FAIL
-
-    # The commit itself must have run exactly once — it DID land locally.
-    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
-    assert len(commit_calls) == 1
-
-    # CI smoke must never run past a partial-landed commit report.
-    ci_calls = [c for c in spy.calls if "run-all-checks.py" in " ".join(str(x) for x in c)]
-    assert ci_calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -1289,12 +1224,13 @@ def test_real_run_partial_row_failure_via_stderr_only_still_fails(tmp_path, monk
     assert "Rows succeeded: 3/5" in out
 
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_all_rows_succeeded_still_exits_ok_with_verdict(tmp_path, monkeypatch):
     """A clean all-rows-succeeded run keeps exiting 0 and still prints its
     (PASS) verdict — the partial-failure fix must not regress the happy
     path into a false failure."""
+    _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch, ci_returncode=0, gate_fires=False)
 
     assert rc == _mod._EXIT_OK
@@ -1384,10 +1320,11 @@ def test_generic_commit_failure_returns_fail(tmp_path, monkeypatch):
 # ci_exists=False branch were untested.
 # ---------------------------------------------------------------------------
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_review_warnings_yield_pass_with_warnings_verdict(tmp_path, monkeypatch):
     real_stdout_with_warning = _real_stdout() + "REVIEW WARNING: check this file\n"
+
+    _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
 
     percolate_root = tmp_path / "percolate-root2"
     (percolate_root / "setup").mkdir(parents=True)
@@ -1403,6 +1340,15 @@ def test_review_warnings_yield_pass_with_warnings_verdict(tmp_path, monkeypatch)
         parse2_stdout=_parse2_stdout(),
     )
     _install_manifest_stub(monkeypatch, spy2)
+    # Missing before this row's re-derivation: Step 2b's gate runs IN-PROCESS
+    # (`_run_step` -> `module.main(argv)`, the spawn-elimination change §
+    # `_install_sibling_cli_stub`'s own docstring) -- without this stub the
+    # gate's real `percolate-gate.py inverse-drift` runs for real against
+    # `dest2`, which is not a git repository, and fails outright. Every
+    # other harness in this file installs it; this one predates the
+    # spawn-elimination change and was never updated (only reachable once
+    # the commit leg below stopped being skipped).
+    _install_sibling_cli_stub(monkeypatch, spy2)
     monkeypatch.setattr(_mod.subprocess, "run", spy2)
     monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir2))
     monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest2))
@@ -1422,8 +1368,10 @@ def test_review_warnings_yield_pass_with_warnings_verdict(tmp_path, monkeypatch)
 
 
 @pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_no_ci_script_at_dest_skips_ci_smoke(tmp_path, monkeypatch):
+    _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch, ci_exists=False)
 
     assert rc == _mod._EXIT_OK
@@ -1434,11 +1382,12 @@ def test_no_ci_script_at_dest_skips_ci_smoke(tmp_path, monkeypatch):
     assert ci_calls == []
 
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_gate_fires_without_yes_accepted_proceeds(tmp_path, monkeypatch):
     """gate_fires=True, no --yes, operator accepts: input() is consulted
-    and the round proceeds through commit."""
+    and the round proceeds through commit. Re-derived (C12): the commit leg
+    is now an in-process `commit_paths` call, so it is counted via §
+    `_install_commit_pipeline_stub` rather than sniffed off the killed
+    sentinel's subprocess argv."""
     input_calls = []
 
     def _fake_input(prompt=""):
@@ -1446,14 +1395,15 @@ def test_gate_fires_without_yes_accepted_proceeds(tmp_path, monkeypatch):
         return "y"
 
     monkeypatch.setattr("builtins.input", _fake_input)
+    commit_calls = _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
 
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch, gate_fires=True, yes=False)
 
     assert rc == _mod._EXIT_OK
     assert len(input_calls) == 1
-    assert "Proceed with real publish?" in input_calls[0]
+    assert "Proceed with commit + publish?" in input_calls[0]
 
-    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
     assert len(commit_calls) == 1
 
 
@@ -1484,11 +1434,12 @@ class _RecordingLockCtx:
         return False
 
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_lock_spans_real_run_and_commit(tmp_path, monkeypatch):
     """The held lock's acquire happens before Step 4's real-run subprocess
-    and its release happens after the commit subprocess — not narrower."""
+    and its release happens after the commit call — not narrower.
+    Re-derived (C12): the commit leg is now an in-process `commit_paths`
+    call, not a subprocess -- record its call directly instead of sniffing
+    subprocess argv for the killed sentinel."""
     order: List[str] = []
 
     dest = tmp_path / "dest"
@@ -1505,16 +1456,21 @@ def test_lock_spans_real_run_and_commit(tmp_path, monkeypatch):
         parse2_stdout=_parse2_stdout(),
     )
     _install_manifest_stub(monkeypatch, spy)
+    _install_sibling_cli_stub(monkeypatch, spy)
 
     def _recording_run(cmd, **kwargs):
         joined = " ".join(str(c) for c in cmd)
         if str(_mod._PUBLISH) in joined and "--dry-run" not in cmd:
             order.append("real-run")
-        elif str(_SCOPED_GIT_COMMIT_KILLED) in joined:
-            order.append("commit")
         return spy(cmd, **kwargs)
 
+    def _recording_commit(*args, **kwargs):
+        order.append("commit")
+        return _default_commit_outcome()
+
     monkeypatch.setattr(_mod.subprocess, "run", _recording_run)
+    monkeypatch.setattr(_commit_mod, "commit_paths", _recording_commit)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
     monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
     monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
     monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
@@ -1544,13 +1500,13 @@ def test_advance_lastsync_marker_anchors_inverse_drift_on_the_rounds_own_commit(
     assert marker.read_text(encoding="utf-8") == "50febb6ce9b279ed6b4fc7608b59b21c5dcce3c4\n"
 
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_clean_dest_proceeds_through_commit(tmp_path, monkeypatch):
+    commit_calls = _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch, dest_status_stdout="")
 
     assert rc == _mod._EXIT_OK
-    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
     assert len(commit_calls) == 1
 
 
@@ -1638,6 +1594,7 @@ def test_lock_timeout_fails_loud_before_real_run(tmp_path, monkeypatch):
         parse2_stdout=_parse2_stdout(),
     )
     _install_manifest_stub(monkeypatch, spy)
+    commit_calls = _install_commit_pipeline_stub(monkeypatch)
 
     class _TimeoutLockCtx:
         def __init__(self, target, **kwargs):
@@ -1683,7 +1640,6 @@ def test_lock_timeout_fails_loud_before_real_run(tmp_path, monkeypatch):
         c for c in spy.calls
         if str(_mod._PUBLISH) in " ".join(str(x) for x in c) and "--dry-run" not in c
     ]
-    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
     assert real_run_calls == []
     assert commit_calls == []
 
@@ -1720,6 +1676,7 @@ def test_failed_row_refuses_with_reason_and_no_push(tmp_path, monkeypatch):
         parse2_stdout=_parse2_stdout(),
     )
     _install_manifest_stub(monkeypatch, spy)
+    commit_calls = _install_commit_pipeline_stub(monkeypatch)
 
     def _real_fail(cmd, **kwargs):
         joined = " ".join(str(c) for c in cmd)
@@ -1750,7 +1707,6 @@ def test_failed_row_refuses_with_reason_and_no_push(tmp_path, monkeypatch):
         ci_exit=None,
     ) == "the real publish run did not succeed"
 
-    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
     ci_calls = [c for c in spy.calls if "run-all-checks.py" in " ".join(str(x) for x in c)]
     assert commit_calls == []
     assert ci_calls == []
@@ -1828,13 +1784,14 @@ def test_declined_paths_refuses_with_reason_and_no_push(tmp_path, monkeypatch):
         assert not any(str(token) == "push" for token in call)
 
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_ci_red_refuses_with_named_reason_and_no_push(tmp_path, monkeypatch):
     """CI-red is the one refusing condition that actually reaches
     `_round_refusal_reason`'s own call site in `_cmd_round` (the other two
     already returned early) — the terminal message names the CI failure
     instead of a generic "not clean"."""
+    _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch, ci_returncode=1)
 
     assert rc == _mod._EXIT_FAIL
@@ -1861,22 +1818,27 @@ def _marker_path(percolate_root: Path, target: str = "alpha") -> Path:
     return percolate_root / "setup" / "percolate-state" / f"{target}.round-failed.json"
 
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_declined_paths_failure_writes_round_failure_marker(tmp_path, monkeypatch):
+    """Re-derived (C12): declined paths are now computed by a real
+    filesystem/`.gitignore` pre-check ahead of `commit_paths`, not reported
+    back by a killed `commit_pipeline` stage result -- the same
+    present/absent fixture split `test_declined_paths_refuses_with_reason_
+    and_no_push` (C11) drives: `added-file.md` present (lands via a stubbed
+    `commit_paths`), `changed-file.md` absent (material decline)."""
+    def _fake_exists(self):
+        return self.name != "changed-file.md"
+
+    monkeypatch.setattr(Path, "exists", _fake_exists)
+    monkeypatch.setattr(
+        _commit_mod,
+        "commit_paths",
+        lambda *a, **k: _default_commit_outcome(sha="abc123def456"),
+    )
+
     percolate_root = tmp_path / "percolate-root"
     (percolate_root / "setup").mkdir(parents=True)
-    commit_stdout = json.dumps(
-        {
-            "status": "partial",
-            "committed": True,
-            "sha": "abc123def456",
-            "declined_paths": [{"path": "some/declined.md", "reason": "outside allowlist"}],
-        }
-    )
-    rc, out, spy, dest = _run_round(
-        tmp_path, monkeypatch, commit_stdout=commit_stdout, percolate_root=percolate_root
-    )
+
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch, percolate_root=percolate_root)
     assert rc == _mod._EXIT_FAIL
 
     marker = _marker_path(percolate_root)
@@ -1887,14 +1849,14 @@ def test_declined_paths_failure_writes_round_failure_marker(tmp_path, monkeypatc
     assert "timestamp" in data
 
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_ci_red_failure_writes_round_failure_marker(tmp_path, monkeypatch):
     percolate_root = tmp_path / "percolate-root"
     (percolate_root / "setup").mkdir(parents=True)
-    commit_stdout = json.dumps({"status": "ok", "committed": True, "sha": "deadbeef0001"})
+    _install_commit_pipeline_stub(monkeypatch, result=_default_commit_outcome(sha="deadbeef0001"))
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+
     rc, out, spy, dest = _run_round(
-        tmp_path, monkeypatch, ci_returncode=1, commit_stdout=commit_stdout, percolate_root=percolate_root
+        tmp_path, monkeypatch, ci_returncode=1, percolate_root=percolate_root
     )
     assert rc == _mod._EXIT_FAIL
 
@@ -1906,8 +1868,6 @@ def test_ci_red_failure_writes_round_failure_marker(tmp_path, monkeypatch):
     assert "timestamp" in data
 
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_subsequent_clean_round_clears_marker_before_publishing(tmp_path, monkeypatch):
     percolate_root = tmp_path / "percolate-root"
     (percolate_root / "setup" / "percolate-state").mkdir(parents=True)
@@ -1916,6 +1876,20 @@ def test_subsequent_clean_round_clears_marker_before_publishing(tmp_path, monkey
         json.dumps({"reason": "ci_red", "sha": "stale0001", "timestamp": "2026-08-01T00:00:00Z"}),
         encoding="utf-8",
     )
+
+    _install_commit_pipeline_stub(monkeypatch)
+    # Narrow patch, not blanket `True`: this test asserts the marker is
+    # ABSENT after a clean round, so `Path.exists` must still answer
+    # honestly for the marker path itself -- only the fixture pathspec
+    # entries need to read as present on disk.
+    _orig_exists = Path.exists
+
+    def _fake_exists(self):
+        if self.name in ("added-file.md", "changed-file.md"):
+            return True
+        return _orig_exists(self)
+
+    monkeypatch.setattr(Path, "exists", _fake_exists)
 
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch, percolate_root=percolate_root)
 
@@ -1935,16 +1909,16 @@ def test_subsequent_clean_round_clears_marker_before_publishing(tmp_path, monkey
 # itself pushes.
 # ---------------------------------------------------------------------------
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_crash_after_commit_before_ci_smoke_leaves_marker_standing(tmp_path, monkeypatch):
     """A process death between the commit landing and CI smoke completing
     must leave the marker in place — simulated here by making the CI-smoke
     subprocess call raise, so the round never reaches the clear-marker
-    branch at all."""
+    branch at all. Re-derived (C12): the commit leg is now an in-process
+    `commit_paths` call, so its outcome is driven via §
+    `_install_commit_pipeline_stub` rather than a `commit_stdout` JSON
+    payload the killed subprocess sentinel used to answer."""
     percolate_root = tmp_path / "percolate-root"
     (percolate_root / "setup").mkdir(parents=True)
-    commit_stdout = json.dumps({"status": "ok", "committed": True, "sha": "cafebabe0001"})
 
     dest = tmp_path / "dest"
     dest.mkdir()
@@ -1959,9 +1933,11 @@ def test_crash_after_commit_before_ci_smoke_leaves_marker_standing(tmp_path, mon
         real_stdout=_real_stdout(),
         parse1_stdout=_parse1_stdout(),
         parse2_stdout=_parse2_stdout(),
-        commit_stdout=commit_stdout,
     )
     _install_manifest_stub(monkeypatch, spy)
+    _install_sibling_cli_stub(monkeypatch, spy)
+    _install_commit_pipeline_stub(monkeypatch, result=_default_commit_outcome(sha="cafebabe0001"))
+    monkeypatch.setattr(Path, "exists", lambda self: True)
 
     class _SimulatedCrash(Exception):
         pass
@@ -1993,11 +1969,20 @@ def test_crash_after_commit_before_ci_smoke_leaves_marker_standing(tmp_path, mon
     assert push_calls == []
 
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_clean_round_clears_marker_before_pushing_itself(tmp_path, monkeypatch):
     percolate_root = tmp_path / "percolate-root"
     (percolate_root / "setup").mkdir(parents=True)
+
+    _install_commit_pipeline_stub(monkeypatch)
+    # Narrow patch: the marker's own `exists()` must still answer honestly.
+    _orig_exists = Path.exists
+
+    def _fake_exists(self):
+        if self.name in ("added-file.md", "changed-file.md"):
+            return True
+        return _orig_exists(self)
+
+    monkeypatch.setattr(Path, "exists", _fake_exists)
 
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch, percolate_root=percolate_root)
 
@@ -2008,14 +1993,23 @@ def test_clean_round_clears_marker_before_pushing_itself(tmp_path, monkeypatch):
     assert len(push_calls) == 1
 
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_clean_round_with_no_publish_still_clears_marker(tmp_path, monkeypatch):
     """`--no-publish` only defers the push, not certification — a genuinely
     clean round must clear the marker even though it doesn't push itself,
     so a subsequent manual `percolate-push` is not falsely refused."""
     percolate_root = tmp_path / "percolate-root"
     (percolate_root / "setup").mkdir(parents=True)
+
+    _install_commit_pipeline_stub(monkeypatch)
+    # Narrow patch: the marker's own `exists()` must still answer honestly.
+    _orig_exists = Path.exists
+
+    def _fake_exists(self):
+        if self.name in ("added-file.md", "changed-file.md"):
+            return True
+        return _orig_exists(self)
+
+    monkeypatch.setattr(Path, "exists", _fake_exists)
 
     rc, out, spy, dest = _run_round(
         tmp_path, monkeypatch, no_publish=True, percolate_root=percolate_root
@@ -2028,25 +2022,27 @@ def test_clean_round_with_no_publish_still_clears_marker(tmp_path, monkeypatch):
     assert push_calls == []
 
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_review_warnings_refusal_leaves_marker_standing_even_with_no_publish(tmp_path, monkeypatch):
     """A `refusal_reason`-refused round (unacknowledged review warnings)
     leaves the marker standing regardless of `--no-publish` — that commit
-    is genuinely uncertified, not merely deferred."""
+    is genuinely uncertified, not merely deferred. Re-derived (C12): the
+    commit leg is now an in-process `commit_paths` call, driven via §
+    `_install_commit_pipeline_stub` rather than a `commit_stdout` JSON
+    payload."""
     real_stdout_with_warning = _real_stdout() + "REVIEW WARNING: check this file\n"
     percolate_root = tmp_path / "percolate-root"
     (percolate_root / "setup").mkdir(parents=True)
-    commit_stdout = json.dumps({"status": "ok", "committed": True, "sha": "deadbeefcafe"})
 
     spy = _SubprocessSpy(
         dryrun_stdout=_dryrun_stdout(),
         real_stdout=real_stdout_with_warning,
         parse1_stdout=_parse1_stdout(),
         parse2_stdout=_parse2_stdout(),
-        commit_stdout=commit_stdout,
     )
     _install_manifest_stub(monkeypatch, spy)
+    _install_sibling_cli_stub(monkeypatch, spy)
+    _install_commit_pipeline_stub(monkeypatch, result=_default_commit_outcome(sha="deadbeefcafe"))
+    monkeypatch.setattr(Path, "exists", lambda self: True)
     dest = tmp_path / "dest"
     dest.mkdir()
     source_dir = tmp_path / "source"
@@ -2076,8 +2072,6 @@ def test_review_warnings_refusal_leaves_marker_standing_even_with_no_publish(tmp
         assert not any(str(token) == "push" for token in call)
 
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_review_warnings_refuse_publish_and_print_notice_naming_reason(tmp_path, monkeypatch):
     """PASS-WITH-WARNINGS is a refusing condition (C2) — `_print_push_notice`
     names it rather than pushing or failing silently."""
@@ -2089,6 +2083,9 @@ def test_review_warnings_refuse_publish_and_print_notice_naming_reason(tmp_path,
         parse2_stdout=_parse2_stdout(),
     )
     _install_manifest_stub(monkeypatch, spy)
+    _install_sibling_cli_stub(monkeypatch, spy)
+    _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
     dest = tmp_path / "dest"
     dest.mkdir()
     source_dir = tmp_path / "source"
@@ -2205,9 +2202,12 @@ def test_realrun_noop_with_unpushed_dest_commits_still_publishes(tmp_path, monke
 # state/audits/2026-08-13-percolate-round-race-repro.md, extended by C3).
 # ---------------------------------------------------------------------------
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_push_happens_inside_held_lock(tmp_path, monkeypatch):
+    """The push must run before the held lock releases -- the same order
+    guard as `test_lock_spans_real_run_and_commit` (C12), extended one leg
+    further to the push. Re-derived: the commit leg is now an in-process
+    `commit_paths` call, so it is recorded directly instead of being
+    sniffed off the retired commit sentinel's subprocess argv."""
     order: List[str] = []
 
     dest = tmp_path / "dest"
@@ -2224,18 +2224,23 @@ def test_push_happens_inside_held_lock(tmp_path, monkeypatch):
         parse2_stdout=_parse2_stdout(),
     )
     _install_manifest_stub(monkeypatch, spy)
+    _install_sibling_cli_stub(monkeypatch, spy)
 
     def _recording_run(cmd, **kwargs):
         joined = " ".join(str(c) for c in cmd)
         if str(_mod._PUBLISH) in joined and "--dry-run" not in cmd:
             order.append("real-run")
-        elif str(_SCOPED_GIT_COMMIT_KILLED) in joined:
-            order.append("commit")
         elif cmd and str(cmd[0]) == "git" and any(str(t) == "push" for t in cmd):
             order.append("push")
         return spy(cmd, **kwargs)
 
+    def _recording_commit(*args, **kwargs):
+        order.append("commit")
+        return _default_commit_outcome()
+
     monkeypatch.setattr(_mod.subprocess, "run", _recording_run)
+    monkeypatch.setattr(_commit_mod, "commit_paths", _recording_commit)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
     monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
     monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
     monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
@@ -2267,13 +2272,6 @@ def _publish_call_kwargs(spy):
     ]
 
 
-def _commit_call_kwargs(spy):
-    return [
-        kw
-        for c, kw in zip(spy.calls, spy.call_kwargs)
-        if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)
-    ]
-
 
 # `_non_publish_call_kwargs` was deleted with the assertion it served
 # ("every other leg carries the shared default"). There is no shared
@@ -2284,13 +2282,16 @@ def _commit_call_kwargs(spy):
 # at once.
 
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_delta_default_is_the_engine_s_not_forwarded_per_call(tmp_path, monkeypatch):
     """PM ruling 2026-08-19: delta is `publish.py`'s own default, so no caller
     has to remember to ask for it. The round therefore forwards NEITHER flag on
     a default run — passing `--delta` here would just re-state the engine's
-    default, and every new caller would have to know to do the same."""
+    default, and every new caller would have to know to do the same.
+    Re-derived: the commit leg is now an in-process `commit_paths` call, so
+    it needs its own stub to keep the round green -- unrelated to this
+    test's own claim about the publish call's flags."""
+    _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
 
     assert rc == _mod._EXIT_OK
@@ -2301,12 +2302,15 @@ def test_delta_default_is_the_engine_s_not_forwarded_per_call(tmp_path, monkeypa
         assert "--no-delta" not in call, call
 
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_no_delta_flag_forwards_the_opt_out_to_every_publish_call(tmp_path, monkeypatch):
     """The opt-out MUST be forwarded explicitly. Once the engine defaults delta
     on, a round that merely withheld `--delta` would silently fail to opt out —
-    `--no-delta` would become a no-op flag that reads as if it worked."""
+    `--no-delta` would become a no-op flag that reads as if it worked.
+    Re-derived: the commit leg is now an in-process `commit_paths` call, so
+    it needs its own stub to keep the round green -- unrelated to this
+    test's own claim about the publish call's flags."""
+    _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch, no_delta=True)
 
     assert rc == _mod._EXIT_OK
@@ -2404,12 +2408,15 @@ def test_run_takes_its_bound_as_a_required_keyword():
         _mod._run(["git", "--version"])
 
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_every_leg_bound_comes_from_a_declared_family(tmp_path, monkeypatch):
     """Every spawn a round makes must carry one of the module's named
     family constants — never a bare literal, and never a bound inherited
-    from a sibling leg with an unrelated cost model."""
+    from a sibling leg with an unrelated cost model. Re-derived: the commit
+    leg no longer spawns at all (in-process `commit_paths`), so it needs a
+    stub to keep the round green and contributes no `subprocess.run` call
+    for this loop to check."""
+    _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
 
     assert rc == _mod._EXIT_OK
@@ -2420,8 +2427,6 @@ def test_every_leg_bound_comes_from_a_declared_family(tmp_path, monkeypatch):
         assert kw["timeout"] in declared, (call, kw["timeout"])
 
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_local_git_legs_carry_the_plumbing_bound_not_a_publish_bound(tmp_path, monkeypatch):
     """The purest specimen G1 names: a local `git` spawn against dest
     answering one question. Measured process time at the live mirror is
@@ -2430,7 +2435,11 @@ def test_local_git_legs_carry_the_plumbing_bound_not_a_publish_bound(tmp_path, m
     local-git budget — never the publish legs' runaway guard, and never
     the bare 2.0 either (see the module's unit-mismatch block: a
     `subprocess` timeout is wall clock, and the same spawn measured a
-    4,588ms wall maximum on this box under its design load)."""
+    4,588ms wall maximum on this box under its design load). Re-derived:
+    the commit leg needs a stub to keep the round green -- it no longer
+    spawns, so it contributes no `git` call this test would see anyway."""
+    _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
 
     assert rc == _mod._EXIT_OK
@@ -2444,50 +2453,65 @@ def test_local_git_legs_carry_the_plumbing_bound_not_a_publish_bound(tmp_path, m
         assert kw.get("timeout") == _mod._GIT_PLUMBING_TIMEOUT_SECS, kw
 
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_publish_legs_use_the_publish_bound(tmp_path, monkeypatch):
     """`_SubprocessSpy` previously
     discarded `**kwargs`, so no test asserted `timeout=_PUBLISH_LEG_TIMEOUT_SECS`
-    actually reached the two `publish.py` legs (`519cc8baf7`'s whole point).
+    actually reached the `publish.py` leg (`519cc8baf7`'s whole point).
 
     Its companion assertion (every other leg carries the shared default)
     was deleted, not weakened: there is no shared default any more, and
     `test_every_leg_bound_comes_from_a_declared_family` covers the same
-    ground without licensing one."""
+    ground without licensing one. Re-derived twice: the commit leg needs a
+    stub to keep the round green (unrelated to this test's own claim about
+    the publish leg's bound), and the count is now ONE call, not two --
+    `--dry-run-first` (the second publish leg this test used to see) was
+    retired 2026-08-23 (PM ruling, § the module's own "one sync, not two"
+    comment above), so a default round only ever calls `publish.py` once."""
+    _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
 
     assert rc == _mod._EXIT_OK
     publish_kwargs = _publish_call_kwargs(spy)
-    assert len(publish_kwargs) == 2, publish_kwargs
+    assert len(publish_kwargs) == 1, publish_kwargs
     for kw in publish_kwargs:
         assert kw.get("timeout") == _mod._PUBLISH_LEG_TIMEOUT_SECS, kw
 
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
-def test_commit_leg_has_its_own_bound_not_the_publish_leg_s(tmp_path, monkeypatch):
-    """The `scoped-git-commit` leg carries `_COMMIT_LEG_TIMEOUT_SECS`, its
-    own bound, not the two `publish.py` legs' runaway guard.
+def test_commit_leg_makes_no_subprocess_call(tmp_path, monkeypatch):
+    """Re-derived from `test_commit_leg_has_its_own_bound_not_the_publish_leg_s`:
+    that test asserted `timeout=_COMMIT_LEG_TIMEOUT_SECS` on a subprocess
+    call, but the commit leg was repointed onto the in-process
+    `coordinator_core.git.commit.commit_paths` (C4, docs/plans/2026-08-29-
+    the-push-subsystem-leaves-and-then-the-pipeline-can-go.md) and
+    `_COMMIT_LEG_TIMEOUT_SECS` is retired along with the subprocess call it
+    used to bound -- asserting a `timeout` kwarg on it now asserts something
+    that no longer exists.
 
-    Staging and committing a round's changed paths is a different cost
-    model from re-walking the whole source tree — measured, one row's
-    `publish.py --dry-run` costs 88.75s of process time across 211 spawns,
-    which is what the publish bound is sized against and what a commit is
-    not. Sharing one number across the two is the same inheritance defect
-    G1 names, one level down, so this pins that they stay distinct.
-
-    `--dry-run-first` (a second call site carrying its own copy of this
-    bound) was retired 2026-08-23 (PM ruling) -- `_cmd_round_default` is
-    the only call site left."""
-    assert _mod._COMMIT_LEG_TIMEOUT_SECS != _mod._PUBLISH_LEG_TIMEOUT_SECS
-
+    No sibling test asserts the commit leg's absence from `subprocess.run`
+    directly:
+    `test_percolate_round_step_legs_do_not_spawn_interpreters.py` only
+    guards interpreter-spawning STEP CLIs, not this leg. This test carries
+    that claim instead: the commit leg lands entirely through the in-process
+    `commit_paths` call, and no `subprocess.run` call the round makes names
+    anything commit-shaped. Checked on each call's argv token and script
+    BASENAME only, never the full joined argv string -- a flag
+    (`publish.py`'s own `--no-commit`) or an incidental substring in a
+    `tmp_path`-derived fixture directory (this very test's own name)
+    would otherwise false-positive."""
+    commit_calls = _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
     assert rc == _mod._EXIT_OK
 
-    commit_kwargs = _commit_call_kwargs(spy)
-    assert len(commit_kwargs) == 1, commit_kwargs
-    assert commit_kwargs[0].get("timeout") == _mod._COMMIT_LEG_TIMEOUT_SECS, commit_kwargs[0]
+    assert len(commit_calls) == 1, commit_calls
+    for call in spy.calls:
+        tokens = [str(x) for x in call]
+        assert "commit" not in tokens, call
+        for tok in tokens:
+            if tok.startswith("-"):
+                continue
+            assert "commit" not in os.path.basename(tok).lower(), call
 
 
 # ---------------------------------------------------------------------------
@@ -2496,28 +2520,28 @@ def test_commit_leg_has_its_own_bound_not_the_publish_leg_s(tmp_path, monkeypatc
 # worktree root rather than `dest` itself.
 # ---------------------------------------------------------------------------
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_commit_uses_resolved_worktree_root_not_dest(tmp_path, monkeypatch):
-    """`dest` is a `dest_subdir` beneath the worktree root -- `--repo` on
-    the `scoped-git-commit` invocation must be the RESOLVED root, not
-    `dest`, and it must be the identical value used to build the
-    pathspec."""
+    """`dest` is a `dest_subdir` beneath the worktree root -- the
+    `commit_paths` call's `repo_root` (its first positional argument) must
+    be the RESOLVED root, not `dest`, and it must be the identical value
+    used to build the pathspec. Re-derived: the commit leg is now an
+    in-process `commit_paths` call, so its `repo_root` argument is read
+    directly from `_install_commit_pipeline_stub`'s recorded call rather
+    than a `--repo` argv token off a killed `scoped-git-commit` subprocess
+    invocation."""
     # `_run_round`'s own fixture `dest` is `tmp_path / "dest"` -- bind the
     # fake worktree root to its parent so `dest` genuinely resolves beneath
     # it, matching the real `dest_subdir` shape this finding describes.
     worktree_root = tmp_path
+    commit_calls = _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
     rc, out, spy, _dest = _run_round(
         tmp_path, monkeypatch,
         toplevel_stdout=f"{worktree_root}\n",
     )
-    # `_run_round` hard-codes its own fixture `dest`; re-derive the commit
-    # call directly rather than relying on its returned `dest`.
-    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
-    assert commit_calls, "expected a scoped-git-commit invocation"
-    commit_cmd = commit_calls[0]
-    repo_idx = commit_cmd.index("--repo")
-    assert commit_cmd[repo_idx + 1] == str(worktree_root)
+    assert commit_calls, "expected a commit_paths invocation"
+    args, _kwargs = commit_calls[0]
+    assert args[0] == str(worktree_root)
     assert rc == _mod._EXIT_OK
 
 
@@ -2888,8 +2912,6 @@ def test_inherited_root_malformed_token_still_locked(tmp_path, monkeypatch):
     assert rows_reached == []
 
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_step4_inherited_lock_token_uses_producer_own_pid(tmp_path, monkeypatch):
     """Producer-side pin for the § `_INHERITED_LOCK_ROOTS_ENV` wire format.
 
@@ -2913,6 +2935,8 @@ def test_step4_inherited_lock_token_uses_producer_own_pid(tmp_path, monkeypatch)
     suite still green."""
     orig_environ = dict(os.environ)
 
+    _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
     rc, _out, spy, dest = _run_round(tmp_path, monkeypatch)
     assert rc == _mod._EXIT_OK
 
@@ -2948,11 +2972,14 @@ def test_step4_inherited_lock_token_uses_producer_own_pid(tmp_path, monkeypatch)
 # The tests below cover the one remaining mode.
 # ---------------------------------------------------------------------------
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_default_never_invokes_publish_with_dry_run_flag(tmp_path, monkeypatch):
     """`publish.py` is invoked exactly once (the real run) -- `--dry-run`
-    never appears in any `_PUBLISH` call."""
+    never appears in any `_PUBLISH` call. Re-derived: the commit leg is now
+    an in-process `commit_paths` call, so it needs its own stub to keep the
+    round green -- unrelated to this test's own claim about the publish
+    call's flags."""
+    _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
 
     assert rc == _mod._EXIT_OK
@@ -2964,15 +2991,18 @@ def test_default_never_invokes_publish_with_dry_run_flag(tmp_path, monkeypatch):
     assert "Step 2b: inverse-drift detection" in out
 
 
-@pytest.mark.pending_fix
-@pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_default_gate_fires_evidence_sourced_from_real_run(tmp_path, monkeypatch):
     """The Step 3 gate fires on the real run's own evidence, and the printed
     change summary/first-10-paths come from that single real run's own
-    change lines -- never a second materialization."""
+    change lines -- never a second materialization. Re-derived: the commit
+    leg's own invocation is now read off `_install_commit_pipeline_stub`'s
+    recorded calls rather than sniffed off the retired commit sentinel's
+    subprocess argv."""
     input_calls = []
     monkeypatch.setattr("builtins.input", lambda *a, **k: input_calls.append(1) or "n")
 
+    commit_calls = _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
     rc, out, spy, dest = _run_round(
         tmp_path, monkeypatch, gate_fires=True, yes=True,
     )
@@ -2986,7 +3016,6 @@ def test_default_gate_fires_evidence_sourced_from_real_run(tmp_path, monkeypatch
     publish_calls = [c for c in spy.calls if str(_mod._PUBLISH) in " ".join(str(x) for x in c)]
     assert len(publish_calls) == 1
 
-    commit_calls = [c for c in spy.calls if str(_SCOPED_GIT_COMMIT_KILLED) in " ".join(str(x) for x in c)]
     assert len(commit_calls) == 1
 
 

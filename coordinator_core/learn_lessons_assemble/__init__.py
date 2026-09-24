@@ -492,7 +492,9 @@ def main(argv: list[str]) -> int:
             },
             EXIT_TRANSPORT_FAIL,
         )
-        print(json.dumps(failure.decision_object, indent=2))
+        # Transport failure: compute never ran, so nothing goes on stdout —
+        # the exit code is the only evidence (completion-evidence contract,
+        # DR-442). Matches `backlog_grind_assemble.main`'s shape.
         return failure.exit_code
 
     print(json.dumps(result.decision_object, indent=2))

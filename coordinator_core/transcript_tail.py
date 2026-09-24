@@ -1,17 +1,8 @@
 """coordinator_core.transcript_tail -- shared bounded tail-read of a Claude
-Code session transcript (`.jsonl`), and the one derived fact two independent
-callers both need from it: the most recent `type == "assistant"` record's
-`message.model`.
-
-LIFTED, NOT REDERIVED (PM ruling, commit-trailer attribution rework,
-2026-09-23): `coordinator_core.hooks.block_ungranted_opus_subagent` carried
-this exact chunked-read-plus-newest-first-scan shape as a private, un-shared
-utility (see that module's own former "PARENT-MODEL RESOLUTION" docstring
-section, which explicitly reasoned FOR keeping every hook's reader private --
-a stance this module's second caller, `coordinator_core.git.commit_trailers`,
-retires: a third independent reimplementation of the identical byte-for-byte
-chunked scan is the duplication that stance was accepting, not preventing).
-Both callers now import from here; neither hand-rolls its own copy.
+Code session transcript (`.jsonl`), and the one derived fact read from it:
+the most recent `type == "assistant"` record's `message.model`, used by
+`coordinator_core.hooks.block_ungranted_opus_subagent` to resolve the parent
+session's model.
 
 ZERO SPAWN, BOUNDED READ (DR-344): reads at most `_TAIL_MAX_CHUNKS *
 _TAIL_CHUNK_BYTES` (~256KiB) from EOF, never the whole file, and never

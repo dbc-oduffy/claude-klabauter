@@ -844,30 +844,12 @@ class TestAutoCommitSession:
         ).stdout
         assert status == ""  # nothing left dirty
 
-    def test_commit_group_carries_co_authored_by(self, tmp_path, monkeypatch):
+    def test_commit_group_carries_co_authored_by(self, tmp_path):
         """`apply_missing_trailers` is wired into `_commit_group`'s own
         `commit_paths` call (state/cross-repo/inbox/2026-09-23-example-game-repo-em-
         commit-trailers-owned-by-engine.md) -- pinned end-to-end against a
-        real commit, using a UUID `session_id` (so the attribution
-        resolver's override actually validates) to locate a fake
-        transcript."""
-        from coordinator_core.git import commit_trailers as ct
-
-        ct._ATTRIBUTION_TRANSCRIPT_MEMO.clear()
-        ct._ATTRIBUTION_VALUE_MEMO.clear()
-
+        real commit."""
         sid = "67676767-6767-4767-8767-676767676767"
-        claude_home = tmp_path / "fake-claude-home"
-        proj = claude_home / ".claude" / "projects" / "p"
-        proj.mkdir(parents=True)
-        (proj / f"{sid}.jsonl").write_text(
-            json.dumps(
-                {"type": "assistant", "message": {"model": "claude-haiku-4-5-20251001"}}
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         repo = _make_repo(tmp_path)
         core.init(sid, cwd=str(repo))
@@ -888,10 +870,73 @@ class TestAutoCommitSession:
             text=True,
             **no_console_creationflags(),
         ).stdout
-        assert "Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>" in body
+        assert "Co-Authored-By: Claude <noreply@anthropic.com>" in body
 
-        ct._ATTRIBUTION_TRANSCRIPT_MEMO.clear()
-        ct._ATTRIBUTION_VALUE_MEMO.clear()
+    def test_commit_group_attaches_session_id_trailer(self, tmp_path):
+        """`_commit_group` calls `commit_paths` with no `apply_missing_
+        trailers` step -- Item 7 (docs/plans/2026-09-22-inbox-blitz-bundled-
+        xs-s-fixes-2026-09-11.md, P143-T7). Same shape as `ceremony.commit_v2`
+        and `fleet.memo_send`: the landed commit message carries a
+        Session-Id trailer resolvable from the `session_id` this function was
+        handed, because `commit_paths` hand-writes commit objects and fires
+        no `prepare-commit-msg` hook -- the only attach point is this call.
+
+        Not mocked, same posture as the sibling real-commit test above: a
+        stubbed `apply_missing_trailers` cannot show the trailer actually
+        lands in the object git reads back."""
+        valid_uuid = "0b4efa23-3132-4861-9b79-4bbfa64c0e17"
+        repo = _make_repo(tmp_path)
+        core.init(valid_uuid, cwd=str(repo))
+        (repo / "a.py").write_text("a")
+        scope.touch(valid_uuid, "a.py", cwd=str(repo))
+
+        result = asyncio.run(
+            safe_commit_offer._commit_group(
+                str(repo), {"paths": ["a.py"], "message": "regression guard"},
+                valid_uuid,
+            )
+        )
+        assert result["committed"] is True
+        assert result["sha"]
+
+        landed_message = subprocess.run(
+            ["git", "show", "--format=%B", "--no-patch", result["sha"]],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            **no_console_creationflags(),
+        ).stdout
+        assert f"Session-Id: {valid_uuid}" in landed_message, landed_message
+
+    def test_commit_group_forwards_session_id_as_override(self, tmp_path, monkeypatch):
+        """Plumbing-only spy, mirroring `test_commit_v2_session_id_override.
+        py`'s `_spy_apply_missing_trailers` pattern -- the SEMANTICS of the
+        override belong to `apply_missing_trailers` itself (pinned in
+        `git/tests/test_commit_trailers*.py`); this only pins that
+        `_commit_group` forwards its own `session_id` argument as
+        `session_id_override` rather than, say, omitting it or passing it
+        as a different kwarg."""
+        seen: dict = {}
+
+        def fake_apply_missing_trailers(*args, **kwargs):
+            seen.update(kwargs)
+            raise AssertionError("stop-after-capture")
+
+        monkeypatch.setattr(
+            safe_commit_offer, "apply_missing_trailers", fake_apply_missing_trailers
+        )
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        (repo / "a.py").write_text("a")
+        scope.touch("mine", "a.py", cwd=str(repo))
+
+        with pytest.raises(AssertionError, match="stop-after-capture"):
+            asyncio.run(
+                safe_commit_offer._commit_group(
+                    str(repo), {"paths": ["a.py"], "message": "m"}, "mine"
+                )
+            )
+        assert seen["session_id_override"] == "mine"
 
     # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
     # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
@@ -2148,6 +2193,10 @@ class TestMemoSendDeclaresOutboxWrites:
         monkeypatch.setenv("CLAUDE_SESSION_ID", "mine")
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+        # The fixture receiver's inbox has no drain history, so memo.send's
+        # one-shot no-reader warning would refuse the first send before the
+        # ledger write this test guards.
+        monkeypatch.setenv("COORDINATOR_CAP_PEER_EMS_REACHABLE", "1")
 
         outbox = sender / "state" / "memo-outbox"
         outbox.mkdir(parents=True, exist_ok=True)
@@ -2306,10 +2355,11 @@ class TestNothingToCommitDistinguishesSeenFromClean:
         assert "Nothing to commit for session mine" in rendered
         assert "seen and declined" in rendered
         assert "working tree clean" not in rendered
-        assert "coordinator-safe-commit" in rendered, (
+        assert "git commit -F <msgfile> -- <paths>" in rendered, (
             "an operator told nothing was committed must be given the route "
             "that does commit it by name"
         )
+        assert "coordinator-safe-commit" not in rendered
 
     def test_clean_tree_says_clean(self):
         report = _report(_group())

@@ -8,10 +8,6 @@ lesson-summary.schema.json:135-151; context.py:_GIT_BACKED_SOURCE_KINDS) that re
 be null for non-git-backed source kinds, and threw a ZodError (90 identical
 provenance.ref violations) in DoE's SnapshotEnvelope.parse().
 
-Sibling regression: test_backlog_history.py::test_provenance_uses_canonical_contract_enums
-(landed 48d3c29) — same failure shape (non-null-only coverage let a canonical-value drift
-ship undetected), different section porter.
-
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P09
 """
 

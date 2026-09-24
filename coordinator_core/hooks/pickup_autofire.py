@@ -86,7 +86,7 @@ import time
 from pathlib import Path, PureWindowsPath
 from typing import List, Optional, Tuple
 
-from coordinator_core.hooks._envelope import context_only, no_advisory
+from coordinator_core.hooks._envelope import context_only, no_advisory, payload_of
 from coordinator_core.hooks.support.forwarder_resolve import forwarder_argv, resolve_forwarder
 from coordinator_core.hooks.support.skill_invocation import read_invocation
 from coordinator_core.ipc import register_op
@@ -590,7 +590,7 @@ def _log_probe_event(payload: dict) -> None:
         with log_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, sort_keys=True) + "\n")
     except OSError:
-        pass
+        pass  # best-effort probe log; never raises
 
 
 def _log_producer_capture_failure(session_id: str, typed_command: Optional[str], reason: str) -> None:
@@ -608,7 +608,7 @@ def _log_producer_capture_failure(session_id: str, typed_command: Optional[str],
         with log_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, sort_keys=True) + "\n")
     except Exception:
-        pass
+        pass  # best-effort probe log; never raises
 
 
 def _capture_producer(payload: dict, command_name: str, session_id: str, cwd: Optional[str]) -> None:
@@ -658,7 +658,7 @@ def _fire_apply(script_path: Path, artifact_path: str, session_id: str) -> None:
             _APPLY_TIMEOUT_SECONDS,
         )
     except _TransportFailure:
-        pass
+        pass  # best-effort apply; never raises, never surfaces its own exit code
 
 
 # --- Entry point --------------------------------------------------------------
@@ -743,8 +743,9 @@ def _handler(params: dict, repo_root=None) -> dict:
     """UserPromptExpansion / PreToolUse(Skill) op: compute and inject the
     `/pickup`/baton-grab brief; fire the mutating `apply` half on a clear
     coast. `params` IS the raw payload dict."""
+    params = payload_of(params)
     try:
-        additional_context = compute_context(params if isinstance(params, dict) else {})
+        additional_context = compute_context(params)
     except Exception:
         # Total-function guard (AC9c) -- must never raise into the caller;
         # every internal step already fails open on its own.

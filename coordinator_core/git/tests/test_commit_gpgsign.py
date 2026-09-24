@@ -177,7 +177,8 @@ def test_commit_paths_signs_via_commit_tree_when_gpgsign_true(tmp_path, isolated
         repo / ".git" / "config",
         "[commit]\n\tgpgsign = true\n"
         "[gpg]\n\tformat = ssh\n"
-        f"[user]\n\tsigningkey = {keyfile}\n",
+        # as_posix: a Windows path's backslashes are git-config escape sequences.
+        f"[user]\n\tsigningkey = {keyfile.as_posix()}\n",
     )
     (repo / "new.txt").write_text("new\n", encoding="utf-8", newline="\n")
 

@@ -215,7 +215,7 @@ def compute_repo_identity_gate(repo_root: Path, sid: Optional[str]) -> dict[str,
                         f"(registry holds {file_count} file(s), {parsed_count} parsed)"
                     )
         except Exception:
-            pass
+            pass  # detail enrichment is best-effort; UNRESOLVED verdict stands regardless
         return _verdict(_REPO_IDENTITY_UNRESOLVED, None, detail)
 
     # --- 2. trust check (AC10) -- sessionId equality (tautological on the

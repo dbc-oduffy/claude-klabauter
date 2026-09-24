@@ -55,6 +55,7 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
+from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
 from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.draft_plan_aging import AGING_THRESHOLD_DAYS, list_orphaned
@@ -187,6 +188,7 @@ def _load_source_module():
     imports) still resolves correctly, since it derives from the module's
     own `__file__`, unaffected by how it was loaded.
     """
+    ensure_bin_lib_bound(str(_SOURCE_PATH.parent))
     spec = importlib.util.spec_from_file_location(
         "workday_start_handoff_triage", _SOURCE_PATH
     )

@@ -372,7 +372,7 @@ def surface_of(path: Path) -> "str | None":
         try:
             rel = resolved.relative_to(root)
         except ValueError:
-            continue
+            continue  # path not under this doctrine root; try the next
         if _EXEMPT_PATH_SEGMENTS.intersection(rel.parts[:-1]):
             return None
         return root.name
@@ -404,7 +404,7 @@ def scope_class(path: Path) -> "str | None":
             try:
                 rel = resolved.relative_to(root)
             except ValueError:
-                continue
+                continue  # path not under this doctrine root; try the next
             if _EXEMPT_PATH_SEGMENTS.intersection(rel.parts[:-1]):
                 return None
             return "doctrine"

@@ -229,6 +229,54 @@ class TestBucketing:
         assert summary["unreadable"] == []
         assert _trigger(candidates)["fires"] is False
 
+    def test_non_open_memos_reported_not_silently_dropped(self, tmp_path):
+        # Item 52, fix 1: a non-open memo (terminal, or an unrecognized
+        # status:) is COUNTED in non_open[], never dropped via a bare
+        # `continue` with no trace on the envelope.
+        inbox = tmp_path / "inbox"
+        inbox.mkdir()
+        _write_memo(inbox, "2026-07-20-a-em-open.md", sender="a-em")
+        _write_memo(inbox, "2026-07-20-a-em-done.md", sender="a-em", status="actioned")
+        _write_memo(inbox, "2026-07-20-a-em-weird.md", sender="a-em", status="quux")
+        summary = _summary(_build_candidates(inbox, 10, 7, TODAY))
+        assert summary["open_count"] == 1
+        non_open_ids = {entry["id"]: entry["status"] for entry in summary["non_open"]}
+        assert non_open_ids == {
+            "2026-07-20-a-em-done.md": "actioned",
+            "2026-07-20-a-em-weird.md": "quux",
+        }
+
+    def test_missing_status_reported_in_non_open(self, tmp_path):
+        # A memo with no status: field at all is also counted, with
+        # status: None rather than being indistinguishable from "readable
+        # and open".
+        inbox = tmp_path / "inbox"
+        inbox.mkdir()
+        path = inbox / "2026-07-20-a-em-nostatus.md"
+        path.write_text(
+            "---\n"
+            'title: "No status"\n'
+            'from: "a-em"\n'
+            'to: "doe-claude-em"\n'
+            "created: 2026-07-20\n"
+            "delivery_mode: receiver-repo\n"
+            'kind: "ask"\n'
+            "---\n\nSome body.\n",
+            encoding="utf-8",
+        )
+        summary = _summary(_build_candidates(inbox, 10, 7, TODAY))
+        assert summary["open_count"] == 0
+        assert summary["non_open"] == [
+            {"id": "2026-07-20-a-em-nostatus.md", "status": None},
+        ]
+
+    def test_non_open_empty_when_every_memo_is_open(self, tmp_path):
+        inbox = tmp_path / "inbox"
+        inbox.mkdir()
+        _write_memo(inbox, "2026-07-20-a-em-open.md", sender="a-em")
+        summary = _summary(_build_candidates(inbox, 10, 7, TODAY))
+        assert summary["non_open"] == []
+
 
 # ---------------------------------------------------------------------------
 # space:

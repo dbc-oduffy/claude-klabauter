@@ -292,6 +292,41 @@ def test_leg_a_does_not_reap_a_broken_symlink(tmp_path):
     assert not any(p.endswith("link.txt") for p in pathspec)
 
 
+def test_stranded_root_swap_prior_stands_down_the_removal_side(tmp_path, monkeypatch):
+    """AC7: with `_REMOVAL_SIDE_ENABLED` true and a stranded root-swap
+    `.prior` sitting at dest root, the removal side must raise BEFORE naming
+    any removal -- the strand's subtree is absent from the worktree but still
+    tracked at HEAD, which the removal side would otherwise read as retired
+    payload (§ P146-C3, `surface.stranded_swap_priors`)."""
+    _no_filter_side_effects(monkeypatch)
+    repo_root = tmp_path / "repo"
+    _init_repo_with_files(repo_root, {"row_a/foo.txt": "hello"})
+    (repo_root / "docs.prior").mkdir()
+    manifest = _mod._RoundManifest(
+        round_id="r1",
+        declared_payload=frozenset({"row_a/foo.txt"}),
+        published_dest_dirs=frozenset({"row_a"}),
+    )
+    with pytest.raises(_mod.RemovalCandidateOnDiskError) as excinfo:
+        _mod._pathspec_from_manifest(manifest, str(repo_root))
+    assert "docs.prior" in str(excinfo.value)
+
+
+def test_stranded_prior_removed_lets_the_round_proceed_as_before(tmp_path, monkeypatch):
+    """AC7's second half: with the strand removed, the same fixture proceeds
+    exactly as it would have without this guard."""
+    _no_filter_side_effects(monkeypatch)
+    repo_root = tmp_path / "repo"
+    _init_repo_with_files(repo_root, {"row_a/foo.txt": "hello"})
+    manifest = _mod._RoundManifest(
+        round_id="r1",
+        declared_payload=frozenset({"row_a/foo.txt"}),
+        published_dest_dirs=frozenset({"row_a"}),
+    )
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))[0]
+    assert pathspec == []
+
+
 def test_percolate_bookkeeping_tracked_at_head_is_never_a_removal_candidate(
     tmp_path, monkeypatch
 ):
@@ -338,3 +373,70 @@ def test_percolate_bookkeeping_tracked_at_head_is_never_a_removal_candidate(
     pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))[0]
     assert not any("round-manifest.json" in p for p in pathspec)
     assert not any(".percolate" in p for p in pathspec)
+
+
+def test_source_retired_path_still_on_disk_is_left_to_leg_a_not_leg_b(
+    tmp_path, monkeypatch, capsys
+):
+    """AC8 -- the Leg A/B deadlock (§ P146-C4). `whoami/a.md` .. `whoami/c.md`
+    are tracked at dest HEAD, present on disk, absent from `declared_payload`,
+    inside `row_scope`, and all in `manifest.removed`. Without the
+    `retired_on_disk` subtraction, Leg B's `_refuse_removals_present_on_disk`
+    raises for the same three paths Leg A already reports and would abort
+    every round against this mirror forever. With it: no raise, none of the
+    three named in the pathspec, and Leg A's existing still-on-disk stderr
+    line fires with count 3."""
+    _no_filter_side_effects(monkeypatch)
+    repo_root = tmp_path / "repo"
+    _init_repo_with_files(
+        repo_root,
+        {
+            "row_a/foo.txt": "hello",
+            "whoami/a.md": "a",
+            "whoami/b.md": "b",
+            "whoami/c.md": "c",
+        },
+    )
+    manifest = _mod._RoundManifest(
+        round_id="r1",
+        declared_payload=frozenset({"row_a/foo.txt"}),
+        published_dest_dirs=frozenset({"row_a", "whoami"}),
+        removed=frozenset({"whoami/a.md", "whoami/b.md", "whoami/c.md"}),
+    )
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))[0]
+    assert not any("whoami" in p for p in pathspec)
+    stderr = capsys.readouterr().err
+    assert "3 path(s)" in stderr and "still present in dest's worktree" in stderr
+
+
+def test_undeclared_on_disk_path_not_in_removed_still_raises(tmp_path, monkeypatch):
+    """AC9 -- the same fixture as AC8 plus `live.md`: tracked, on disk,
+    undeclared, inside `row_scope`, but NOT in `manifest.removed`. This one
+    is not this round's own positive retirement, so it must still raise,
+    naming only `live.md` and none of the `whoami/` paths -- AC6's recurrence
+    catch stays intact."""
+    _no_filter_side_effects(monkeypatch)
+    repo_root = tmp_path / "repo"
+    _init_repo_with_files(
+        repo_root,
+        {
+            "row_a/foo.txt": "hello",
+            "whoami/a.md": "a",
+            "whoami/b.md": "b",
+            "whoami/c.md": "c",
+            "whoami/live.md": "still needed",
+        },
+    )
+    manifest = _mod._RoundManifest(
+        round_id="r1",
+        declared_payload=frozenset({"row_a/foo.txt"}),
+        published_dest_dirs=frozenset({"row_a", "whoami"}),
+        removed=frozenset({"whoami/a.md", "whoami/b.md", "whoami/c.md"}),
+    )
+    with pytest.raises(_mod.RemovalCandidateOnDiskError) as excinfo:
+        _mod._pathspec_from_manifest(manifest, str(repo_root))
+    message = str(excinfo.value)
+    assert "live.md" in message
+    assert "whoami/a.md" not in message
+    assert "whoami/b.md" not in message
+    assert "whoami/c.md" not in message

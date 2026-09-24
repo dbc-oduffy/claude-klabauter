@@ -14,10 +14,37 @@ THE OP TAKES A TIER, NEVER A SCHEDULE OR A TASK LIST. The mapping, and the
 measured cost of each (spike figures, n=1, lower bounds — see § below):
 
   hourly  -> git maintenance run --task=commit-graph      40.6 ms,  2.0 procs
-  daily   -> git maintenance run --schedule=daily        392.6 ms,  7.0 procs
+  daily   -> git maintenance run --task=commit-graph      ~190   ms (derived,
+             --task=incremental-repack                    see below)
   weekly  -> git prune --expire=2.weeks.ago              175.0 ms,  1.0 proc
              then git maintenance run --task=pack-refs    53.1 ms,  2.0 procs
              then sweep_orphan_packs()                    ~2 s (one window)
+
+DAILY DROPPED `loose-objects` (R9 / P153-C24, viable, candidate (a):
+docs/research/spike-verdicts/2026-09-22-maintenance-reaper-after-daily-pack.md).
+`loose-objects` packs loose objects, unreachable ones included, and once an
+unreachable object is packed the weekly tier's plain `git prune` — which only
+ever removes LOOSE objects — reaps nothing: filed as
+state/bug-backlog/2026-08-30-the-daily-tier-packs-unreachable-objects-309a82437447.yaml.
+The spike's kill criteria confirmed candidate (a) reaps the planted blob 5/5
+both daily-then-weekly and weekly-alone, and candidate (b) (repack the pack
+with `--cruft-expiration` on weekly instead) does not: the cruft pack stamps
+a fresh mtime at pack-creation time, so the object never ages out from
+inside a pack. Re-ordering does not recover this once the object is
+packed — the fix is to stop daily from ever packing it, not to reap it
+differently afterwards.
+Removing `loose-objects` leaves daily's own measured 392.6 ms figure minus
+the 203.1 ms `loose-objects` was measured to cost, ~190 ms — the module's
+own decomposition comment, not a fresh spike measurement; the acceptance
+guard's own run is the first real data point for this shape.
+NAMED RESIDUAL, PER THE SPIKE: `incremental-repack` alone does not touch
+loose objects, so dropping `loose-objects` from daily means nothing packs
+*reachable* loose objects either; under `gc.auto=0` those accumulate
+without bound unless something eventually packs them. Requirement question,
+left open rather than silently dropped: does the weekly tier need a
+loose-objects-equivalent pass for the reachable set, ordered so it can never
+re-introduce this same trap for the unreachable set (never running any
+loose-objects/full-repack task ahead of that same run's own prune leg)?
 
 THE WEEKLY TIER WAS `--schedule=weekly` AND IT WENT OVER THE BAR. Measured at
 515.6 ms mean / 9 procs (N=8 independent COLD repos, each registered through
@@ -34,14 +61,17 @@ Numbers above are means over N independent COLD registered repos. Do not
 restore figures measured against UNREGISTERED repos or a single warm sample --
 both under-measure, and both were tried and retracted.
 
-THE WEEKLY ORDER IS STILL LOAD-BEARING, BUT ACROSS TIERS NOW, NOT WITHIN ONE
--- `--task=pack-refs` packs nothing, so prune-before-pack-refs is no longer
-load-bearing on its own. The order survives because the DAILY tier's
-`loose-objects` task packs loose objects, unreachable ones included, and
-`git prune` only ever removes LOOSE objects: on a day both tiers fire, a
-weekly prune sequenced after that daily run reaps nothing and exits 0. Filed
-as state/bug-backlog/2026-08-30-the-daily-tier-packs-unreachable-objects-309a82437447.yaml.
-See `run_tier` for the full note.
+WEEKLY'S OWN PRUNE-BEFORE-PACK-REFS ORDER IS NO LONGER LOAD-BEARING ON ITS
+OWN -- `--task=pack-refs` packs nothing. It used to also carry a cross-tier
+duty: the daily tier's `loose-objects` task packed loose objects, unreachable
+ones included, so a weekly prune sequenced after a daily run that already
+fired would reap nothing and exit 0 (filed as
+state/bug-backlog/2026-08-30-the-daily-tier-packs-unreachable-objects-309a82437447.yaml).
+Daily no longer runs `loose-objects` (R9 / P153-C25, see above), so that
+cross-tier trap is closed at the source rather than worked around by
+ordering, and prune-before-pack-refs is kept only because it is still
+harmless, not because anything still depends on it. See `run_tier` for the
+full note.
 
 The ~2 s is a SLEEP, not process time, and the brightline is process time. That
 distinction is exactly why the sweep is weekly-tier work and never commit-path
@@ -154,16 +184,21 @@ _ORPHAN_PACK_STABILITY_SEC = 2.0
 # `maintenance.strategy=incremental` (which install sets), which is what put
 # it at 515.6ms/9 procs -- 328ms of that was daily's work, done twice.
 #
-# DAILY IS STILL `--schedule=daily`, UNLIKE THE OTHER TWO. It was not the tier
-# that breached, so it was never re-derived from first principles the way
-# weekly was -- this is the one exemption in this map that rests on nothing
-# measured beyond its own total. It sits at 392.6ms against the 500ms bar,
-# ~107ms of margin, on a keyword whose task set is git's to change between
-# versions rather than ours to name. Kept as-is because nothing forced the
-# question, not because the question was asked and answered.
+# DAILY IS NO LONGER `--schedule=daily`. It was not the tier that breached
+# the 500ms bar, but it was the tier the R9 spike found silently defeating
+# weekly's prune leg: `--schedule=daily` includes `loose-objects`, which
+# packs loose objects -- unreachable ones included -- and once an
+# unreachable object is packed, weekly's plain `git prune` (LOOSE objects
+# only) reaps nothing (state/bug-backlog/2026-08-30-the-daily-tier-packs-
+# unreachable-objects-309a82437447.yaml). The R9 spike
+# (docs/research/spike-verdicts/2026-09-22-maintenance-reaper-after-daily-
+# pack.md) found candidate (a) -- daily drops `loose-objects`, weekly stays
+# prune-only -- viable: the planted unreachable blob was reaped 5/5 both
+# daily-then-weekly and weekly-alone, at a derived ~190ms for daily (392.6ms
+# measured total minus the 203.1ms `loose-objects` was measured to cost).
 _TIER_ARGV = {
     "hourly": ("maintenance", "run", "--task=commit-graph"),
-    "daily": ("maintenance", "run", "--schedule=daily"),
+    "daily": ("maintenance", "run", "--task=commit-graph", "--task=incremental-repack"),
     "weekly": ("maintenance", "run", "--task=pack-refs"),
 }
 
@@ -427,23 +462,29 @@ def run_tier(repo: Path, tier: Optional[str]) -> MaintenanceResult:
         result.deferred = reason
         return result
 
-    # PRUNE RUNS BEFORE THE MAINTENANCE RUN, NOT AFTER, and the order is
-    # load-bearing rather than stylistic.
+    # PRUNE RUNS BEFORE THE MAINTENANCE RUN, NOT AFTER. It is no longer
+    # load-bearing against daily -- daily's `loose-objects` task is gone
+    # (R9 / P153-C25: docs/research/spike-verdicts/2026-09-22-maintenance-
+    # reaper-after-daily-pack.md), so nothing upstream of weekly packs an
+    # unreachable object out from under `git prune` (LOOSE objects only) any
+    # more. It is kept prune-first anyway, harmlessly, because `git gc` is
+    # still the alternative it is never worth reaching for -- kill-bar item
+    # here (10,068ms/9 procs against prune's 40.6ms/1 proc) -- and because
+    # weekly's own `--task=pack-refs` packs nothing, so this order costs
+    # nothing to keep.
     #
-    # The daily tier's `loose-objects` task PACKS loose objects -- unreachable
-    # ones included -- and on a day the weekly tier also fires, daily runs
-    # first. `git prune` only ever removes LOOSE objects; once garbage has
-    # been packed, dropping it needs a full
-    # `repack -A -d` or a `gc`, and `gc` is a kill-bar item here (10,068ms/9
-    # procs against prune's 40.6ms/1 proc). So a prune sequenced after the
-    # maintenance run silently reaps nothing: `loose-objects` has already
-    # swept the evidence into a pack, prune exits 0, and unreachable history
-    # accumulates forever behind a green tier.
-    #
-    # This is the same trap git's own docs describe when they contraindicate
-    # `gc` beside `loose-objects` -- it bites the prune leg too, and the plan's
-    # § Anti-scope names only the `gc` half of it. Found by the plan's
-    # falsifier, whose conjunct 4 read FAIL with the legs in the other order.
+    # THE TRAP THIS ORDER USED TO GUARD AGAINST, for the record: on a day
+    # both tiers fired, `loose-objects` packed unreachable loose objects
+    # (including ones young enough that a run last week did not yet catch
+    # them) before a prune sequenced after it could see them loose, so that
+    # prune reaped nothing and exited 0 -- unreachable history accumulating
+    # forever behind a green tier
+    # (state/bug-backlog/2026-08-30-the-daily-tier-packs-unreachable-objects-
+    # 309a82437447.yaml). The R9 spike also confirmed repacking the pack
+    # afterwards (`--cruft-expiration` on weekly) cannot recover this once an
+    # object is packed -- packing itself resets the age signal a later reap
+    # would need -- so the fix is daily never packing it, not a different
+    # reap strategy downstream.
     if tier == "weekly":
         prune = run_git(["prune", f"--expire={_PRUNE_EXPIRE}"], cwd=str(repo))
         if prune.returncode != 0:

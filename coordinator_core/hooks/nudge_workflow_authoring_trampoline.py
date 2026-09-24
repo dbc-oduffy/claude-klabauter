@@ -170,6 +170,6 @@ def _handler(params: dict, repo_root=None) -> dict:
         ensure_session_dir(session_dir, session_id)
         nudged_sentinel.touch()
     except Exception:
-        pass
+        pass  # best-effort marker; must never block the advisory below
 
     return allow_advisory("PreToolUse", message)

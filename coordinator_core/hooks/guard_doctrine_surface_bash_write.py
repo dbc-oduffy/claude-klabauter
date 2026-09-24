@@ -85,7 +85,7 @@ from __future__ import annotations
 
 import re
 
-from coordinator_core.hooks._envelope import deny, no_advisory
+from coordinator_core.hooks._envelope import deny, no_advisory, payload_of
 from coordinator_core.hooks.claude_md_ledger import GOVERNED_AUTHORING_SURFACES
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.ipc import register_op
@@ -1134,6 +1134,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     SINK writes a `_claude_md_ledger.GOVERNED_AUTHORING_SURFACES` file,
     closing the Bash escape from the Write/Edit/MultiEdit-only C7 admission
     gate."""
+    params = payload_of(params)
     message = evaluate(params)
     if message is None:
         return no_advisory()

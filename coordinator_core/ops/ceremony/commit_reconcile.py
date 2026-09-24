@@ -31,10 +31,6 @@ from coordinator_core.ops.ceremony import git_native
 #: not a full commit-shaped op).
 _DIVERGENCE_CHECK_TIMEOUT_SECS = 5.0
 
-#: Same one-chunk argv bound as the success path's own search reused here --
-#: see `git_native._chunk_paths`'s own docstring for the packer itself.
-_chunk_paths = git_native._chunk_paths
-
 #: Commits searched backwards from HEAD when `commit()` has no `pre_sha` to
 #: bound the range with -- i.e. when the pre-commit `git rev-parse HEAD` itself
 #: failed, which at this repo's load norm (CLAUDE.md, 50-70 concurrent LLM
@@ -95,7 +91,6 @@ def _reconcile_landed_despite_failure(
     root: Path,
     token_trailer: str,
     pre_sha: Optional[str],
-    commit_paths: Sequence[str],
 ) -> ReconcileProbe:
     """The sha this call's own commit landed under DESPITE `commit_scoped()`
     reporting failure, as a `ReconcileProbe` whose `sha` is `None` -- with a
@@ -131,11 +126,10 @@ def _reconcile_landed_despite_failure(
     search key is this call's own `Commit-Token:` trailer, whose match
     `_FULL_SHA_RE`'s own docstring already establishes as collision-free by
     construction: no peer can author this exact token string. That is the
-    same key, over the same `pre_sha..HEAD` range, with the same
-    `--full-history` merge-pruning guard, that the SUCCESS path one screen
-    down already uses to name its sha -- deliberately reused rather than
-    re-derived, so both paths agree on what "this call's commit" means. A
-    bare `rev-parse HEAD` fallback is NOT used and must never be added here:
+    same key, over the same `pre_sha..HEAD` range, that the SUCCESS path one
+    screen down already uses to name its sha -- deliberately reused rather
+    than re-derived, so both paths agree on what "this call's commit" means.
+    A bare `rev-parse HEAD` fallback is NOT used and must never be added here:
     HEAD moves under concurrent peers, and adopting whatever sits there is
     precisely the misattribution the token search exists to prevent.
 
@@ -155,7 +149,7 @@ def _reconcile_landed_despite_failure(
     Two shapes, two costs:
 
       `pre_sha` present -- exactly ONE `git log --grep=<token> --fixed-
-      strings <pre_sha>..HEAD -- <pathspec>` call, a real revision range and
+      strings <pre_sha>..HEAD` call, a real revision range and
       therefore a true walk bound (unlike a filtered `-n`/`--max-count`,
       which bounds OUTPUT, never the WALK -- see `_RECONCILE_FALLBACK_
       WINDOW_COMMITS`'s own comment for the measurement). A miss here is
@@ -203,21 +197,13 @@ def _reconcile_landed_despite_failure(
     message merely QUOTES a token in prose (this defect's own investigation
     notes do, repeatedly) must not be adopted as a match once the search is
     no longer confined to a tight, freshly-opened range."""
-    # Same one-chunk argv bound as the success path's own search, and the
-    # same reasoning: this call's commit touched every path in `commit_
-    # paths`, so it touched every path in any non-empty subset too.
-    chunks = _chunk_paths(list(commit_paths)) if commit_paths else []
-    pathspec = ["--", *chunks[0]] if (chunks and chunks[0]) else []
-
     def _search(pattern: str, range_args: Sequence[str], *, literal: bool):
         """One `git log --grep` pass. Returns `(status, candidates)`, status
         being "ok", "raised" or "failed"."""
         extra_args = [
             "--fixed-strings" if literal else "--extended-regexp",
             "--format=%H",
-            "--full-history",
             *range_args,
-            *pathspec,
         ]
         try:
             match_result = git_native.log_grep(root, pattern, extra_args=extra_args)

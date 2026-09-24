@@ -93,6 +93,7 @@ from coordinator_core.frontmatter.primitives import (
     read_fm_field,
     read_fm_field_unquoted,
     rebuild,
+    remove_fm_field,
     replace_fm_field,
     split_frontmatter,
 )
@@ -117,6 +118,19 @@ _EXEC_FIELDS = (
     "execution_authorized_at",
     "execution_authorized_sha",
     "execution_authorized_note",
+)
+
+#: The optional four-field restamp record (docs/plans/2026-09-23-exec-
+#: authorized-restamp-shape.md § Design; C3). Present on the plan only when an
+#: EM restamp has landed on top of the PM authorization. Copied onto the
+#: execution handoff verbatim, all-or-none, beside _EXEC_FIELDS — mirrors
+#: exec_auth_stamp.RESTAMP_FIELDS byte-for-byte (not imported, to keep this
+#: op's plan-read free of a review_assemble dependency).
+_RESTAMP_FIELDS = (
+    "execution_restamped_by",
+    "execution_restamped_at",
+    "execution_restamped_from_sha",
+    "execution_restamped_note",
 )
 
 #: Vendored handoff schema path — relative to this file's package location
@@ -166,14 +180,22 @@ def _validate_fm(fm_text: str) -> list:
 # ---------------------------------------------------------------------------
 
 
-def _read_plan_exec_fields(plan_path: Path) -> dict:
-    """Read the four execution_authorized_* fields off a plan's frontmatter.
+def _read_plan_exec_fields(plan_path: Path) -> tuple[dict, dict]:
+    """Read the execution_authorized_* quartet, and the optional restamp
+    quartet, off a plan's frontmatter.
 
-    execution_authorized_sha is read as an OPAQUE STRING FIELD and never
-    recomputed / git-hash-object'd (anti-scope, load-bearing — that content-
-    binding check is /pickup's premise-verification job). Raises MutateAbort
-    (via the caller, translated to exit_code=1) if the plan file cannot be
-    parsed or any of the four values is missing/empty.
+    execution_authorized_sha (and, when present, execution_restamped_from_sha)
+    are read as OPAQUE STRING FIELDS and never recomputed / git-hash-object'd
+    (anti-scope, load-bearing — that content-binding check is /pickup's
+    premise-verification job). Raises MutateAbort (via the caller, translated
+    to exit_code=1) if the plan file cannot be parsed or any of the four
+    execution_authorized_* values is missing/empty.
+
+    Returns (exec_values, restamp_values). restamp_values is empty when the
+    plan carries none of the four execution_restamped_* fields (the common
+    case — no EM restamp has landed); schema_validate's
+    _cf_execution_restamp_quartet already enforces all-or-none on the plan
+    itself, so a present field implies the other three are present too.
     """
     try:
         text = plan_path.read_text(encoding="utf-8")
@@ -203,7 +225,14 @@ def _read_plan_exec_fields(plan_path: Path) -> dict:
             f"present-and-non-empty on the plan frontmatter — missing/empty: "
             f"{missing} on {plan_path}"
         )
-    return values
+
+    restamp_values: dict = {}
+    for field in _RESTAMP_FIELDS:
+        value = read_fm_field_unquoted(split.fm_text, field)
+        if value is not None and str(value).strip():
+            restamp_values[field] = value
+
+    return values, restamp_values
 
 
 class _PlanReadError(Exception):
@@ -332,10 +361,11 @@ def _stamp_phase(
     plan-read failure fails loud without ever touching the handoff file.
     """
     exec_values: dict = {}
+    restamp_values: dict = {}
     if phase == "execution":
         assert plan_path is not None  # guaranteed by caller when phase=execution
         try:
-            exec_values = _read_plan_exec_fields(plan_path)
+            exec_values, restamp_values = _read_plan_exec_fields(plan_path)
         except _PlanReadError as exc:
             return _err(str(exc))
 
@@ -368,6 +398,22 @@ def _stamp_phase(
                 if read_fm_field_unquoted(split.fm_text, field) != intended:
                     already_converged = False
                     break
+        # D1 convergence, extended (C3): the restamp quartet is part of full
+        # target state too. When the plan carries the quartet, the handoff
+        # must carry the same four values; when the plan carries none, the
+        # handoff must carry none (a stale quartet from a prior restamp that
+        # has since been cleared on the plan is not converged).
+        if already_converged and phase == "execution":
+            if restamp_values:
+                for field, intended in restamp_values.items():
+                    if read_fm_field_unquoted(split.fm_text, field) != intended:
+                        already_converged = False
+                        break
+            else:
+                for field in _RESTAMP_FIELDS:
+                    if read_fm_field(split.fm_text, field) is not None:
+                        already_converged = False
+                        break
         if already_converged:
             _state["applied"] = False
             _state["message"] = (
@@ -412,6 +458,30 @@ def _stamp_phase(
                 else:
                     fm = insert_fm_field(fm, field, value, after_key=anchor)
                 anchor = field
+
+            # Restamp quartet (C3): copy it onto the handoff when the plan
+            # carries it, or remove any stale copy when the plan carries
+            # none. The quartet stays optional throughout — a plan without
+            # one stamps exactly as today.
+            if restamp_values:
+                for field in _RESTAMP_FIELDS:
+                    value = restamp_values.get(field)
+                    if value is None:
+                        raise MutateAbort(
+                            f"handoff.stamp_phase: restamp_values missing field "
+                            f"{field!r} — _read_plan_exec_fields is expected to "
+                            f"guarantee all _RESTAMP_FIELDS present-and-non-empty "
+                            f"together before _mutate is entered; {handoff_path_raw}"
+                        )
+                    if read_fm_field(fm, field) is not None:
+                        fm = replace_fm_field(fm, field, value)
+                    else:
+                        fm = insert_fm_field(fm, field, value, after_key=anchor)
+                    anchor = field
+            else:
+                for field in _RESTAMP_FIELDS:
+                    if read_fm_field(fm, field) is not None:
+                        fm = remove_fm_field(fm, field)
 
         # Post-mutation schema validation gate — raise MutateAbort to skip the
         # write (mirrors handoff.transition; handoff.stamp has no such gate).

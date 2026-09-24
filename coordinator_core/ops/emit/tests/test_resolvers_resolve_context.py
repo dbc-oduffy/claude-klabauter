@@ -159,7 +159,7 @@ class TestResolveContextLegacyNoArg:
 # ---------------------------------------------------------------------------
 
 class TestParamlessCallersImportCleanly:
-    """Param-less callers (goal_append, recorder) import without TypeError.
+    """Param-less callers (goal_append) import without TypeError.
 
     `artifact_emit` was the third until 2026-08-22, when the emission artifact was
     CUT — docs/problems/2026-08-22-artifact-emit-cannot-be-earned-back-in-its-current-
@@ -172,14 +172,6 @@ class TestParamlessCallersImportCleanly:
         # 'or True' was vacuously always-true; assert real callable.
         assert callable(getattr(ga, "append_goal", None)), (
             "goal_append module must expose a callable append_goal"
-        )
-
-    def test_recorder_imports(self) -> None:
-        """recorder.py imports cleanly — resolve_context() is param-less there."""
-        import coordinator_core.ops.emit.recorder as rec  # noqa: F401
-        # 'or True' was vacuously always-true; assert real callable.
-        assert callable(getattr(rec, "record", None)), (
-            "recorder module must expose a callable record function"
         )
 
 

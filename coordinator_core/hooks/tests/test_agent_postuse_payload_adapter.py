@@ -18,6 +18,7 @@ Spec backlink: docs/plans/2026-08-31-the-door-reads-stdin-and-the-payload-lands-
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -80,11 +81,10 @@ def _nested_payload(**overrides):
     return payload
 
 
-@pytest.mark.asyncio
-async def test_nested_payload_is_flattened_for_both_legs(legs):
+def test_nested_payload_is_flattened_for_both_legs(legs):
     calls = legs(("first", no_advisory()), ("second", no_advisory()))
 
-    result = await apd._handler(_nested_payload(), repo_root="/repo")
+    result = asyncio.run(apd._handler(_nested_payload(), repo_root="/repo"))
 
     assert result == no_advisory()
     assert [label for label, _p, _r in calls] == ["first", "second"]
@@ -98,14 +98,13 @@ async def test_nested_payload_is_flattened_for_both_legs(legs):
         assert flat["dispatched_model"] == "claude-sonnet-5"
 
 
-@pytest.mark.asyncio
-async def test_dispatched_model_cascades_when_resolved_model_absent(legs):
+def test_dispatched_model_cascades_when_resolved_model_absent(legs):
     calls = legs(("only", no_advisory()))
 
     payload = _nested_payload(
         tool_response={"agentId": "abcdef1234567890", "model": "fallback-model"}
     )
-    await apd._handler(payload, repo_root="/repo")
+    asyncio.run(apd._handler(payload, repo_root="/repo"))
 
     _label, flat, _repo_root = calls[0]
     assert flat["dispatched_model"] == "fallback-model"
@@ -117,32 +116,29 @@ async def test_dispatched_model_cascades_when_resolved_model_absent(legs):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_non_object_tool_input_raises_caller_facing_validation_error(legs):
+def test_non_object_tool_input_raises_caller_facing_validation_error(legs):
     legs(("first", no_advisory()), ("second", no_advisory()))
 
     payload = {"tool_input": "not-an-object", "tool_response": {}}
 
     with pytest.raises(CallerFacingValidationError):
-        await apd._handler(payload, repo_root="/repo")
+        asyncio.run(apd._handler(payload, repo_root="/repo"))
 
 
-@pytest.mark.asyncio
-async def test_non_object_tool_response_raises_caller_facing_validation_error(legs):
+def test_non_object_tool_response_raises_caller_facing_validation_error(legs):
     legs(("first", no_advisory()))
 
     payload = {"tool_input": {}, "tool_response": ["not", "an", "object"]}
 
     with pytest.raises(CallerFacingValidationError):
-        await apd._handler(payload, repo_root="/repo")
+        asyncio.run(apd._handler(payload, repo_root="/repo"))
 
 
-@pytest.mark.asyncio
-async def test_non_dict_params_raises_caller_facing_validation_error(legs):
+def test_non_dict_params_raises_caller_facing_validation_error(legs):
     legs(("first", no_advisory()))
 
     with pytest.raises(CallerFacingValidationError):
-        await apd._handler(["not", "a", "dict"], repo_root="/repo")  # type: ignore[arg-type]
+        asyncio.run(apd._handler(["not", "a", "dict"], repo_root="/repo"))  # type: ignore[arg-type]
 
 
 def test_caller_facing_validation_error_is_a_value_error():
@@ -158,8 +154,7 @@ def test_caller_facing_validation_error_is_a_value_error():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_flat_union_shape_is_passed_through_unchanged(legs):
+def test_flat_union_shape_is_passed_through_unchanged(legs):
     """No `tool_input`/`tool_response` key -- today's caller-side-stub shape.
 
     Identity-checked (`is`), not just equality: the adapter must not even copy
@@ -174,19 +169,18 @@ async def test_flat_union_shape_is_passed_through_unchanged(legs):
         "subagent_type": "coordinator:executor",
         "dispatched_agent_id": "abcdef1234567890",
     }
-    await apd._handler(params, repo_root="/repo")
+    asyncio.run(apd._handler(params, repo_root="/repo"))
 
     assert all(p is params for _l, p, _r in calls)
 
 
-@pytest.mark.asyncio
-async def test_flat_union_shape_with_no_fields_at_all_still_works(legs):
+def test_flat_union_shape_with_no_fields_at_all_still_works(legs):
     """Both legs already treat an empty/absent flat payload as fully optional
     (agent_completion_log/track_dispatched_agents default-and-drop) -- the
     adapter must not turn an all-absent flat payload into a validation error."""
     calls = legs(("first", no_advisory()), ("second", no_advisory()))
 
-    result = await apd._handler({}, repo_root=None)
+    result = asyncio.run(apd._handler({}, repo_root=None))
 
     assert result == no_advisory()
     assert [label for label, _p, _r in calls] == ["first", "second"]

@@ -246,6 +246,7 @@ def _collect_sidecar_files(subagent_share_dir: str, plan_slug: str) -> List[str]
         try:
             file_entries = list(os.scandir(session_entry.path))
         except OSError:
+            # session dir unreadable/gone; nothing to fold from it
             continue
         for file_entry in file_entries:
             # fnmatch.fnmatch() case-normalizes via

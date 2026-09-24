@@ -330,6 +330,7 @@ import yaml
 
 _LOG = logging.getLogger(__name__)
 
+from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
 from coordinator_core.frontmatter.body_blocks import (
     LocateStatus,
     _compile_heading_re,
@@ -1113,6 +1114,7 @@ def _load_harvest_module() -> ModuleType:
     with held_during_load(module_name):
         if _HARVEST_MODULE is not None:
             return _HARVEST_MODULE
+        ensure_bin_lib_bound(str(_HARVEST_CLI_PATH.parent))
         spec = importlib.util.spec_from_file_location(module_name, _HARVEST_CLI_PATH)
         if spec is None or spec.loader is None:
             raise MutateAbort(
@@ -1156,7 +1158,7 @@ def _find_evidence_file(key: str, search_dirs: list) -> Optional[str]:
                 with open(path, encoding="utf-8") as fh:
                     content = fh.read()
             except OSError:
-                continue
+                continue  # per-file loop; one unreadable yaml file is skipped, not fatal to the evidence-key search
             for line in content.splitlines():
                 if line.strip().startswith("evidence:") and key in line:
                     return path

@@ -1344,7 +1344,7 @@ def _run_probe_worktree_bloat(claude_klabauter_root: Path | None) -> _ProbeResul
                         continue
                     size = entry.stat(follow_symlinks=False).st_size
                 except OSError:
-                    continue
+                    continue  # entry vanished or unreadable mid-scan; skip it, not fatal
                 if size >= threshold_bytes:
                     rel_path = os.path.relpath(entry.path, root_str)
                     large_files.append({"path": rel_path, "size_bytes": size})
@@ -3114,18 +3114,27 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
       - Pointer present AND content matches resolved root -> PASS.
       - Pointer present but content diverges from resolved root -> DEGRADED (actionable,
         not hard FAIL) — stale pointer, same remediation as absent.
-      - Pointer absent -> DEGRADED (actionable, not hard FAIL) — remediation points at
-        the install-time writer (gen-claude-klabauter-root-pointer.py).
-      - claude_klabauter_root is None (probe 1 unresolved) -> pointer existence is still checked;
-        content-match is skipped (nothing to compare against) but presence alone is
-        reported PASS/DEGRADED.
+      - Pointer absent -> DEGRADED (actionable, not hard FAIL) — remediation names the
+        cold-path-valid writer, `scripts/setup.py --claude-klabauter-live-root <path>`, first, with
+        gen-claude-klabauter-root-pointer.py kept only as the warm/registry-case alternative.
+      - claude_klabauter_root is None (probe 1 unresolved, the cold box): pointer existence is
+        still checked, and — because there is no resolved root to compare against —
+        the pointer content itself is validated as a single line naming an EXISTING
+        directory. Valid single-line existing-dir content -> PASS. Absent, multi-line,
+        or naming a path that does not exist -> DEGRADED with a finding saying which.
 
     Negative-spec:
-      - Does NOT write the pointer file — read-only diagnostic; the writer is a
-        separate install-time step (gen-claude-klabauter-root-pointer.py, DoE-claude C1b).
-      - Does NOT emit BROKEN/hard-fail on absence — a missing pointer degrades
-        per-invoke latency, it does not break correctness (the ladder fallback still
-        resolves COORDINATOR_ENGINE_ROOT, just slowly).
+      - Does NOT write the pointer file — read-only diagnostic. On a registry-resolved
+        (warm) box the writer is `gen-claude-klabauter-root-pointer.py`; on a cold box with no
+        registry to resolve from, the cold-path-valid writer is
+        `scripts/setup.py --claude-klabauter-live-root <path>` (DoE-claude C1b names the warm writer;
+        this plan's C2 supplies the cold one).
+      - Does NOT emit BROKEN/hard-fail on absence on a warm box — a missing pointer
+        degrades per-invoke latency there, it does not break correctness (the ladder
+        fallback still resolves COORDINATOR_ENGINE_ROOT, just slowly). REQUIRED stays
+        false even on the cold-box content-validation arm: an invalid pointer with no
+        resolved root is still only a latency/actionability concern, not a correctness
+        break for a box where the registry DOES resolve.
 
     Probe-authoring invariant: wraps all logic so unexpected exceptions become
     a BROKEN verdict, never an unhandled crash.
@@ -3147,8 +3156,10 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
                     "per-invoke/hook round-trips."
                 ),
                 remediation=(
-                    "Run the install-time pointer writer (gen-claude-klabauter-root-pointer.py) to "
-                    f"populate {str(pointer_path)!r} with the resolved COORDINATOR_ENGINE_ROOT path."
+                    "On a cold box (no registry to resolve from), run "
+                    f"scripts/setup.py --claude-klabauter-live-root <path> to populate {str(pointer_path)!r}. "
+                    "On a warm/registry-resolved box, gen-claude-klabauter-root-pointer.py is the "
+                    "install-time alternative."
                 ),
                 required=False,
                 data={"pointer_path": str(pointer_path), "present": False},
@@ -3170,12 +3181,51 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
             )
 
         if claude_klabauter_root is None:
+            # Cold box: nothing resolved to compare against, so the pointer content
+            # itself is the only signal — it must be a single line naming an
+            # existing directory, else there is nothing a cold-path caller could use.
+            content_lines = pointer_content.splitlines()
+            if len(content_lines) != 1:
+                return _ProbeResult(
+                    probe=_ROOT_POINTER_PROBE,
+                    status=_DEGRADED,
+                    detail=(
+                        f"claude-klabauter-live-root pointer at {str(pointer_path)!r} is not a single "
+                        f"line ({len(content_lines)} lines) — cannot be used as a "
+                        "cold-box COORDINATOR_ENGINE_ROOT source."
+                    ),
+                    remediation=(
+                        "Run scripts/setup.py --claude-klabauter-live-root <path> to rewrite "
+                        f"{str(pointer_path)!r} as a single line naming an existing "
+                        "directory."
+                    ),
+                    required=False,
+                    data={"pointer_path": str(pointer_path), "present": True, "content": pointer_content},
+                )
+            if not Path(content_lines[0]).is_dir():
+                return _ProbeResult(
+                    probe=_ROOT_POINTER_PROBE,
+                    status=_DEGRADED,
+                    detail=(
+                        f"claude-klabauter-live-root pointer at {str(pointer_path)!r} names "
+                        f"{content_lines[0]!r}, which is not an existing directory — "
+                        "COORDINATOR_ENGINE_ROOT unresolved (see claude-klabauter.root.resolve)."
+                    ),
+                    remediation=(
+                        "Run scripts/setup.py --claude-klabauter-live-root <path> to rewrite "
+                        f"{str(pointer_path)!r} with a path to an existing CLAUDE_KLABAUTER_ROOT "
+                        "checkout."
+                    ),
+                    required=False,
+                    data={"pointer_path": str(pointer_path), "present": True, "content": pointer_content},
+                )
             return _ProbeResult(
                 probe=_ROOT_POINTER_PROBE,
                 status=_PASS,
                 detail=(
                     f"claude-klabauter-live-root pointer present at {str(pointer_path)!r} "
-                    f"(content: {pointer_content!r}); content-match skipped — "
+                    f"(content: {pointer_content!r}), naming an existing directory; "
+                    "content-match against a resolved root skipped — "
                     "COORDINATOR_ENGINE_ROOT unresolved (see claude-klabauter.root.resolve)."
                 ),
                 remediation="—",
@@ -3203,8 +3253,10 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
                         f"resolved COORDINATOR_ENGINE_ROOT {resolved_str!r} — stale pointer."
                     ),
                     remediation=(
-                        "Re-run the install-time pointer writer (gen-claude-klabauter-root-pointer.py) "
-                        f"to refresh {str(pointer_path)!r} with the current COORDINATOR_ENGINE_ROOT."
+                        "Run scripts/setup.py --claude-klabauter-live-root <path> to refresh "
+                        f"{str(pointer_path)!r} with the current COORDINATOR_ENGINE_ROOT. "
+                        "On a warm/registry-resolved box, gen-claude-klabauter-root-pointer.py is the "
+                        "install-time alternative."
                     ),
                     required=False,
                     data={
@@ -3876,12 +3928,12 @@ def _run_probe_orphaned_execnet_gateways() -> _ProbeResult:
             except StopIteration:
                 break
             except Exception:
-                continue
+                continue  # process vanished mid-enumeration; skip it, not fatal
 
             try:
                 cmdline = proc.info.get("cmdline") or []
             except Exception:
-                continue
+                continue  # process vanished before cmdline read; skip it, not fatal
             if not any(_EXECNET_GATEWAY_SIGNATURE in part for part in cmdline):
                 continue
 
@@ -4011,7 +4063,7 @@ def _warm_check_pipe_reachable(pipe_name: str) -> tuple[bool | None, bool]:
         try:
             fh.close()
         except Exception:
-            pass
+            pass  # handle already unusable; the pipe-open result stands regardless
         return True, False
 
 
@@ -4094,11 +4146,11 @@ def _iter_python_processes(psutil_module: Any, attrs: list[str]):
         except StopIteration:
             return
         except Exception:
-            continue
+            continue  # process vanished mid-enumeration; skip it, not fatal
         try:
             name = (proc.info.get("name") or "").lower()
         except Exception:
-            continue
+            continue  # process vanished before name read; skip it, not fatal
         if name and not name.startswith("python"):
             continue
         missing = [a for a in attrs if a not in proc.info]
@@ -4149,12 +4201,12 @@ def _enumerate_resident_warm_servers(psutil_module: Any) -> list[dict[str, Any]]
         except StopIteration:
             break
         except Exception:
-            continue
+            continue  # process vanished mid-enumeration; skip it, not fatal
 
         try:
             cmdline = proc.info.get("cmdline") or []
         except Exception:
-            continue
+            continue  # process vanished before cmdline read; skip it, not fatal
 
         script_arg = None
         for part in cmdline:
@@ -5337,6 +5389,16 @@ def _apply_selector(
             skipped=False,
         )
 
+    # --required-only, when combined with --triage/--cluster, already narrowed
+    # `selected` (hence `results`) to the intersection BEFORE the run (main()).
+    # The stub-synthesis loops below must apply that same narrowing to the
+    # manifest ids they walk, or they will treat a deliberately-dropped
+    # non-required id as a mis-wired call site and raise via _stub_or_raise.
+    required_only = bool(getattr(args, "required_only", False))
+
+    def _passes_required_only(meta: dict) -> bool:
+        return (not required_only) or meta.get("required", True)
+
     if args.triage:
         # Probes whose id appears in results but is absent from the manifest get
         # manifest.get(r.probe, {}) → {}, so .get("triage", False) → False, and they
@@ -5347,7 +5409,7 @@ def _apply_selector(
         # yet implemented, matching the --cluster branch behaviour and honouring
         # the "NEVER returns an empty list" invariant.
         for pid, meta in manifest.items():
-            if meta.get("triage", False) and pid not in implemented_ids:
+            if meta.get("triage", False) and pid not in implemented_ids and _passes_required_only(meta):
                 filtered.append(_stub_or_raise(pid))
         return filtered
 
@@ -5356,7 +5418,7 @@ def _apply_selector(
         filtered = [r for r in results if manifest.get(r.probe, {}).get("cluster") == cluster_name]
         # Synthesise INFO stubs for unimplemented probes declared in this cluster.
         for pid, meta in manifest.items():
-            if meta.get("cluster") == cluster_name and pid not in implemented_ids:
+            if meta.get("cluster") == cluster_name and pid not in implemented_ids and _passes_required_only(meta):
                 filtered.append(_stub_or_raise(pid))
         return filtered
 
@@ -5860,7 +5922,7 @@ def _sentinel_vendor_drift(envelope: dict[str, Any]) -> dict[str, Any]:
                 "indeterminate": list(data.get("indeterminate") or []),
             }
     except Exception:
-        pass
+        pass  # breadcrumb missing or unreadable; fall through to the UNKNOWN default below
     return {"status": "UNKNOWN", "checked": None, "drifted": [], "indeterminate": []}
 
 
@@ -6095,6 +6157,20 @@ def main() -> int:
         ),
     )
 
+    # Not part of the mutually-exclusive mode group — orthogonal opt-in, combinable
+    # with a selector (intersects) or alone (narrows the default run). A scalpel
+    # run like --probe/--cluster/--triage: never writes the doctor sentinel.
+    parser.add_argument(
+        "--required-only",
+        action="store_true",
+        help=(
+            "Narrow the run to manifest ids with required=true (4 of 26 today). "
+            "Combined with --probe/--cluster/--triage it intersects with that "
+            "selection; alone it narrows the default (selected=None) run. Never "
+            "writes the doctor sentinel."
+        ),
+    )
+
     args = parser.parse_args()
 
     # -----------------------------------------------------------------------
@@ -6178,6 +6254,14 @@ def main() -> int:
     else:
         selected = None
 
+    # --required-only narrows AFTER the selector above, before the run: intersect
+    # with an existing selection, or apply directly to a bare (selected=None) run.
+    if args.required_only:
+        required_ids = {
+            pid for pid, meta in manifest.items() if meta.get("required", True)
+        }
+        selected = required_ids if selected is None else selected & required_ids
+
     results, claude_klabauter_root, known_ids = run_probes(
         include_live_roundtrip=args.include_live_roundtrip,
         selected=selected,
@@ -6195,9 +6279,13 @@ def main() -> int:
     # Sentinel write — ONLY --triage and full-run (no selector at all) write
     # state/doctor-last-run.json. --cluster and --probe are scalpel runs and must
     # not touch the fleet-facing sentinel. --step-zero already returned above.
-    is_full_run = not (args.triage or args.cluster or args.probe)
-    if (args.triage or is_full_run) and claude_klabauter_root is not None:
-        _write_doctor_sentinel(envelope, claude_klabauter_root)
+    # --required-only ALSO makes a --triage run a scalpel run: the sentinel
+    # represents the manifest's own triage set, not a required-only-narrowed
+    # subset of it, so the combination must not overwrite it either.
+    is_full_run = not (args.triage or args.cluster or args.probe or args.required_only)
+    if (args.triage and not args.required_only) or is_full_run:
+        if claude_klabauter_root is not None:
+            _write_doctor_sentinel(envelope, claude_klabauter_root)
 
     sys.stdout.write(json.dumps(envelope, indent=2, default=str) + "\n")
     sys.stdout.flush()

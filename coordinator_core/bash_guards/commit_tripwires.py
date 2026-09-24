@@ -911,6 +911,51 @@ def _log_pathspec_divergence_override(cmd: str, cwd: Optional[str], session_id: 
         )
 
 
+def _index_only_removed_paths(paths: List[str], cwd: Optional[str]) -> List[str]:
+    """The subset of `paths` staged as an INDEX-ONLY removal (`git rm
+    --cached`, or any staging that drops a path from the index while HEAD
+    still carries it) whose worktree copy is still present on disk.
+
+    This is a distinct divergence shape from `_diverging_paths`'s own: that
+    predicate requires the path to still HAVE an index entry to reason about
+    (`diverging_paths` excludes a path with no index entry as "not staged" --
+    see that module's own `staged = [p for p in paths if relative[p] in
+    index_snapshot]` gate). An untracked-from-the-index path never reaches
+    that gate at all, so the deliberate "stop tracking this, keep the file"
+    intent an operator expresses via `git rm --cached` was invisible to this
+    check -- a trailing-pathspec `git commit -- <path>` would silently
+    re-`add` the worktree content back into the index, reverting the untrack
+    the operator just staged, with no warning of any kind.
+
+    Detected via one `git diff --cached --name-status -- <paths>` scoped to
+    the candidate paths (a `D` record with no accompanying `R`-shaped rename
+    entry -- `--name-status` is not run with `-M` here, so a genuine rename
+    reports as `D`+`A` on two different paths rather than one `R` record;
+    this is fine, because both the D-side and A-side are members of `paths`
+    only when the caller's own pathspec named them, and a rename's D-side
+    target is gone from the worktree by construction, so `os.path.exists`
+    below excludes it anyway). Returns `[]` on any git failure (fail open,
+    matching every other predicate in this module)."""
+    if not paths:
+        return []
+    rc, out = _run_git(["diff", "--cached", "--name-status", "--", *paths], cwd=cwd)
+    if rc != 0:
+        return []
+    removed: List[str] = []
+    for line in out.splitlines():
+        if not line.startswith("D\t"):
+            continue
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[1]:
+            removed.append(parts[1])
+    still_on_disk: List[str] = []
+    for rel in removed:
+        abs_path = os.path.join(cwd, rel) if cwd else rel
+        if os.path.exists(abs_path):
+            still_on_disk.append(rel)
+    return sorted(still_on_disk)
+
+
 def check_staged_pathspec_divergence(
     cmd: str,
     cwd: Optional[str] = None,
@@ -989,32 +1034,48 @@ def check_staged_pathspec_divergence(
             ),
         )
 
-    if not diverging:
+    untracked_removed = _index_only_removed_paths(all_paths, cwd)
+
+    if not diverging and not untracked_removed:
         return None
 
     if _override("COORDINATOR_OVERRIDE_PATHSPEC_DIVERGENCE"):
         _log_pathspec_divergence_override(cmd, cwd, session_id)
         return None
 
-    paths_list = ", ".join(diverging)
+    untrack_note = ""
+    if untracked_removed:
+        untrack_note = (
+            "\n\nOf these, {untrack_paths} are staged as an INDEX-ONLY removal "
+            "(e.g. `git rm --cached`) whose worktree copy is still on disk -- a "
+            "trailing pathspec here reads the worktree, so this commit would "
+            "silently re-`add` that content back into the index and revert the "
+            "untrack you just staged.\n\n"
+        ).format(untrack_paths=", ".join(untracked_removed))
+
+    paths_list = ", ".join(sorted(set(diverging) | set(untracked_removed)))
     return (
         "OFFER: this `git commit` has a trailing `--` pathspec covering {paths}, "
         "and the STAGED content there differs from the WORKTREE content -- the "
         "trailing pathspec reads the worktree, so this commit would silently "
         "discard what you staged there and substitute the worktree instead "
-        "(SC-DR-015).\n\n"
+        "(SC-DR-015).{untrack_note}\n"
         "A bare no-pathspec commit is NOT the fix -- the shared index can gain a "
         "peer's staged file between your check and your commit (that TOCTOU has "
         "hit for real -- 7 files swept, including another "
         "session's in-flight agent definitions). Usually simplest: don't "
         "partial-stage on a shared "
         "tree at all -- make the worktree at {paths} match only your change, "
-        "then commit normally. Genuinely diverged and need to commit anyway? "
-        "Isolate the commit in a private GIT_INDEX_FILE (write-tree + "
-        "commit-tree) rather than the shared index (SC-DR-015).\n\n"
+        "then commit normally. Staged an index-only removal you meant to keep? "
+        "`git reset -q -- {paths}` restores those paths to HEAD's tracked state "
+        "in the index without touching the worktree, so the pathspec commit no "
+        "longer re-adds what you meant to untrack. Genuinely diverged and need "
+        "to commit anyway? Isolate the commit in a private GIT_INDEX_FILE "
+        "(write-tree + commit-tree) rather than the shared index (SC-DR-015).\n\n"
         "{override_note}"
     ).format(
         paths=paths_list,
+        untrack_note=untrack_note,
         override_note=operator_override_note(
             "COORDINATOR_OVERRIDE_PATHSPEC_DIVERGENCE", payload=payload
         ),

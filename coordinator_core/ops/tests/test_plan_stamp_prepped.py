@@ -32,12 +32,8 @@ OP_KEY = "plan.stamp_prepped"
 BY = "test-session-01"
 
 
-def _run(result):
-    return result
-
-
 def _stamp(params: dict, repo_root: Path) -> dict:
-    return _run(mod._handler(params, repo_root))
+    return mod._handler(params, repo_root)
 
 
 def _repo(tmp_path: Path) -> Path:
@@ -119,7 +115,7 @@ def test_the_op_declares_the_noun_it_mutates():
 
 def test_absent_repo_root_refuses(tmp_path):
     with pytest.raises(ValueError, match="requires a resolved repo_root"):
-        _run(mod._handler({"plan": REL, "by": BY}, None))
+        mod._handler({"plan": REL, "by": BY}, None)
 
 
 def test_a_plan_outside_the_worktree_is_refused(tmp_path):

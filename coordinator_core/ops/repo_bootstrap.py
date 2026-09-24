@@ -59,7 +59,7 @@ here; this op has no DoE-side trampoline in its call chain. A `repos.<slug>` key
 `registry.local.toml` -- that `machine_resolver.registry_get` alone does not
 reproduce (2026-08-16 review finding, generalizing the
 `check_machine_local_regeneratability.py:277` correctness exception to the
-whole `repos.*` key class). `_machine_local_get` below tries `registry_get`
+whole `repos.*` key class). `_machine_local_registry_get` below tries `registry_get`
 first, zero-spawn, and falls back to the CLI only on a miss, so the
 `already_registered` idempotency check in `clone_and_register_sibling_repo`
 still sees a sibling repo the CLI would find via autodiscovery or
@@ -119,7 +119,7 @@ def _resolve_machine_local_bin() -> Optional[str]:
     return resolve_machine_local_cli()
 
 
-def _machine_local_get(machine_local_bin: str, key: str) -> Optional[str]:
+def _machine_local_registry_get(machine_local_bin: str, key: str) -> Optional[str]:
     """Resolve `key` via `machine_resolver.registry_get` first -- zero-spawn,
     in-process read of the same registry.local.toml over registry.toml chain
     the `machine-local get <key>` CLI's final rung consults. Falls back to
@@ -141,7 +141,7 @@ def _machine_local_get(machine_local_bin: str, key: str) -> Optional[str]:
             **_CREATIONFLAGS,
         )
     except (OSError, subprocess.TimeoutExpired):
-        print(f"skip: _machine_local_get: proc = subprocess.run(...) failed: {sys.exc_info()[1]}", file=sys.stderr)
+        print(f"skip: _machine_local_registry_get: proc = subprocess.run(...) failed: {sys.exc_info()[1]}", file=sys.stderr)
         return None
     if proc.returncode != 0:
         return None
@@ -189,7 +189,7 @@ def clone_and_register_sibling_repo(repo_key: str, clone_url: str, dest_path: st
             "or at $CLAUDE_HOME/.claude/bin/machine-local — none found"
         )
 
-    already_registered = _machine_local_get(machine_local_bin, repo_key) is not None
+    already_registered = _machine_local_registry_get(machine_local_bin, repo_key) is not None
     already_on_disk = (target / ".git").is_dir()
 
     if already_registered and already_on_disk:
@@ -214,7 +214,7 @@ def clone_and_register_sibling_repo(repo_key: str, clone_url: str, dest_path: st
                 "repo is on disk but unregistered; re-run to retry registration "
                 "(the clone step is idempotent and will be skipped on retry)"
             )
-        confirmed = _machine_local_get(machine_local_bin, repo_key)
+        confirmed = _machine_local_registry_get(machine_local_bin, repo_key)
         if confirmed != clone_result["path"]:
             raise RepoBootstrapError(
                 f"repo.clone_and_register: post-register confirm mismatch for "

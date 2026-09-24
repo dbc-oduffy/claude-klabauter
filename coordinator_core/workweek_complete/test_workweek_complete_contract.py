@@ -59,6 +59,62 @@ def test_every_manifest_entry_is_named_by_at_least_one_directive() -> None:
         )
 
 
+def test_version_consistency_directive_carries_resolved_repo_root(monkeypatch) -> None:
+    """P124-C1 AC4: `d_step4b_4k_version_consistency`'s `args` ==
+    `["--repo-root", <resolved root>]` when the repo root resolves --
+    threaded through the SAME single-resolution helper as cruft-sweep and
+    detect-initiative-candidates, not re-derived independently."""
+    monkeypatch.setattr(
+        wwc_brief, "_resolve_repo_root_for_doc_staleness", lambda: "/resolved/repo/root"
+    )
+    directives = {d["id"]: d for d in wwc_brief._build_directives()}
+    entry = directives["d_step4b_4k_version_consistency"]
+    assert entry["cli"] == "check-version-consistency"
+    assert entry["args"] == ["--repo-root", "/resolved/repo/root"]
+
+
+def test_version_consistency_directive_omits_repo_root_when_unresolved(monkeypatch) -> None:
+    """A resolution failure (None) degrades to an empty args list -- never a
+    literal 'None' string reaching the CLI's argv."""
+    monkeypatch.setattr(wwc_brief, "_resolve_repo_root_for_doc_staleness", lambda: None)
+    directives = {d["id"]: d for d in wwc_brief._build_directives()}
+    entry = directives["d_step4b_4k_version_consistency"]
+    assert entry["args"] == []
+
+
+def test_cruft_sweep_and_initiative_candidates_share_the_same_resolved_root(monkeypatch) -> None:
+    """The three repo-root-needing directives in `_build_directives` --
+    cruft-sweep, detect-initiative-candidates, and version-consistency --
+    all thread the ONE value `_build_directives` resolves per call, rather
+    than each calling `_resolve_repo_root_for_doc_staleness()` on its own
+    (P124-C1's spawn-collapse claim)."""
+    calls = {"n": 0}
+
+    def _once() -> str:
+        calls["n"] += 1
+        return "/resolved/repo/root"
+
+    monkeypatch.setattr(wwc_brief, "_resolve_repo_root_for_doc_staleness", _once)
+    directives = {d["id"]: d for d in wwc_brief._build_directives()}
+    assert calls["n"] == 1, (
+        f"_resolve_repo_root_for_doc_staleness called {calls['n']} times in one "
+        "_build_directives() call, expected exactly 1 (collapsed, not re-derived per directive)"
+    )
+    assert directives["d_step4_counts_cruft_sweep"]["args"] == [
+        "--repo-root",
+        "/resolved/repo/root",
+    ]
+    assert directives["d_step4_counts_initiative_candidates"]["args"] == [
+        "--no-stdin",
+        "--root",
+        "/resolved/repo/root",
+    ]
+    assert directives["d_step4b_4k_version_consistency"]["args"] == [
+        "--repo-root",
+        "/resolved/repo/root",
+    ]
+
+
 def test_step2_directive_names_the_validate_gate_cli_fast_subcommand() -> None:
     """`d_step2_resolve_validation_cmd` must be repointed at the validate
     gate CLI's `fast` subcommand (`validate-fast-and-packageability`,
@@ -99,13 +155,26 @@ def test_drift_guards_bundle_split_carries_correct_per_directive_hard_block() ->
         "d_step4b_4k_description_length": ("description-length", False),
         "d_step4b_4k_enabled_plugins": ("enabled-plugins", False),
         "d_step4b_4k_cve_recheck": ("cve-recheck", False),
-        "d_step4b_4k_schema_drift": ("schema-drift-gate", True),
     }
     for directive_id, (subcommand, hard_block) in expected.items():
         directive = directives[directive_id]
         assert directive["cli"] == "workweek-complete-drift-guards"
         assert directive["args"] == [subcommand]
         assert directive["hard_block"] is hard_block
+
+
+def test_no_directive_emits_schema_drift_gate() -> None:
+    """P124-C2: the vendored-schema-drift directive is retired -- the
+    requirement it served moved to the doctor probe's `vendor_drift`
+    sentinel key, not to any ceremony-time directive. No directive's args
+    may name `schema-drift-gate`, and the old directive id must not exist."""
+    directives = wwc_brief._build_directives()
+    assert "d_step4b_4k_schema_drift" not in {d["id"] for d in directives}
+    for directive in directives:
+        assert "schema-drift-gate" not in directive["args"], (
+            f"directive {directive['id']!r} still names schema-drift-gate: "
+            f"{directive['args']!r}"
+        )
 
 
 def test_no_directive_bundles_drift_guards_with_empty_args() -> None:

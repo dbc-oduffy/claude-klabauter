@@ -75,7 +75,6 @@ _SWEPT_HELP_ENTRYPOINTS = (
     "review-assemble.py",
     "review-exec-auth-stamp.py",
     "roadmap-number-stubs.py",
-    "schema-drift-gate.py",
     "sizing-assemble.py",
     "snippet-registry.py",
     "staff-session-assemble.py",

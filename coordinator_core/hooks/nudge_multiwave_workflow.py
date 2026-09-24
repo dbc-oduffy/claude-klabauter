@@ -114,9 +114,9 @@ def _read_int_lines(path: Path) -> "list[int]":
             try:
                 out.append(int(line))
             except ValueError:
-                continue
+                continue  # malformed timestamp line; skip it
     except Exception:
-        pass
+        pass  # unreadable/absent dispatch log is the cold-start case
     return out
 
 
@@ -166,7 +166,7 @@ def _handler(params: dict, repo_root=None) -> dict:
             if ensure_session_dir(session_dir, session_id):
                 (session_dir / "workflow-launched").touch()
         except Exception:
-            pass
+            pass  # best-effort marker; must never block the advisory below
         return no_advisory()
 
     if tool_name != "Agent":
@@ -219,14 +219,14 @@ def _handler(params: dict, repo_root=None) -> dict:
     try:
         ensure_session_dir(session_dir, session_id)
     except Exception:
-        pass
+        pass  # best-effort dir creation; a later write below simply no-ops if absent
 
     now = int(time.time())
     try:
         with dispatch_log.open("a", encoding="utf-8") as fh:
             fh.write(f"{now}\n")
     except Exception:
-        pass
+        pass  # best-effort dispatch-log append; must never block the nudge below
 
     cutoff = now - window_secs
     lines = _read_int_lines(dispatch_log)
@@ -239,7 +239,7 @@ def _handler(params: dict, repo_root=None) -> dict:
         try:
             tmp_path.unlink()
         except Exception:
-            pass
+            pass  # best-effort tmp-file cleanup after a failed replace
 
     in_window_count = len(pruned)
 
@@ -249,7 +249,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     try:
         nudged_sentinel.touch()
     except Exception:
-        pass
+        pass  # best-effort marker; must never block the advisory below
 
     message = _compose_workflow_offer(in_window_count, env)
     return allow_advisory("PreToolUse", message)

@@ -87,7 +87,7 @@ import sys
 from dataclasses import dataclass
 from typing import FrozenSet, List, Optional, Tuple
 
-from coordinator_core.hooks._envelope import context_only, no_advisory
+from coordinator_core.hooks._envelope import context_only, no_advisory, payload_of
 from coordinator_core.hooks.support.skill_invocation import read_invocation
 from coordinator_core.ipc import register_op
 
@@ -164,8 +164,7 @@ async def _run_leg(leg: SkillLeg, params: dict) -> Optional[str]:
 async def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Skill) op: run every verb-matched leg and concatenate
     their advisory text into one context-only envelope."""
-    if not isinstance(params, dict):
-        return no_advisory()
+    params = payload_of(params)
 
     inv = read_invocation(params)
     if inv is None:
@@ -187,7 +186,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
                     file=sys.stderr,
                 )
             except Exception:
-                pass
+                pass  # stderr write failed; the fail-open skip above still stands
             continue
         if text:
             parts.append(text)

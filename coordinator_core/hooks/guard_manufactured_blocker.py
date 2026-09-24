@@ -23,9 +23,12 @@ this script directly) rather than folding into the `stop_dispatch` fan-in;
 that registration edit is DoE's, not this chunk's (per the plan's own exit
 criterion).
 
-Op contract: `params["payload"]` is the Stop payload dict (`session_id`,
-`transcript_path`, `cwd`, `stop_hook_active`, `agent_id`, ...) — never
-`os.environ` or this process's own `cwd`. Returns one `hookSpecificOutput`
+Op contract: `params` reaches this op in either shape a `hooks.*` handler
+receives — wrapped as `params["payload"]` by both engine doors, flat by the
+cold chain; `_envelope.payload_of` reads both, supplying the Stop payload
+dict (`session_id`, `transcript_path`, `cwd`, `stop_hook_active`,
+`agent_id`, ...) — never `os.environ` or this process's own `cwd`. Returns
+one `hookSpecificOutput`
 envelope: `deny("Stop", text)` at a blocking posture (`default`/
 `substrate-free`) when the C5 altitude check fires unexempted; `post_advisory(text)`
 for every other text-carrying verdict (C5 at `precision`, the unconditional
@@ -50,7 +53,7 @@ import sys
 from typing import Mapping, Optional
 
 from coordinator_core import block_discharge as _block_discharge
-from coordinator_core.hooks._envelope import deny, no_advisory, post_advisory
+from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, post_advisory
 from coordinator_core.hooks.support.posture import resolve_posture
 from coordinator_core.hooks.support.touch_record import _touch_lines
 from coordinator_core.ipc import register_op
@@ -227,7 +230,7 @@ def _final_assistant_text(transcript_path: str) -> str:
         try:
             entry = json.loads(line)
         except ValueError:
-            continue
+            continue  # malformed transcript line; skip it
         if not isinstance(entry, dict) or entry.get("type") != "assistant":
             continue
         msg = entry.get("message")
@@ -496,9 +499,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     op resolves its own repo root from `params["payload"]["cwd"]`, matching
     every other payload-cwd-resolving `hooks.*` op in this family.
     """
-    payload = params.get("payload")
-    if not isinstance(payload, Mapping):
-        payload = {}
+    payload = payload_of(params)
 
     if payload.get("agent_id"):
         return no_advisory()

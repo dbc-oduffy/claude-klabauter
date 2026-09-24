@@ -200,9 +200,6 @@ def _claim_offer_marker(cwd: str, session_id: str) -> bool:
 
 
 def _handle(params: dict) -> dict:
-    if not isinstance(params, dict):
-        return no_advisory()
-
     if params.get("tool_name") != "Agent":
         return no_advisory()
 
@@ -237,10 +234,8 @@ def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Agent) op: offer an unnamed Explore dispatch (never
     block/deny) for a read-only-shaped dispatch to a doctrine-carrying
     agent, once per session."""
+    params = payload_of(params)
     try:
-        # Normalize the two params
-        # shapes both engine doors and the cold chain send (see
-        # block_worktree_tool).
-        return _handle(payload_of(params))
+        return _handle(params)
     except Exception:
         return no_advisory()

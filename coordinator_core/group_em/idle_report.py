@@ -297,6 +297,17 @@ _COMPLETION_COMMAND = re.compile(
 _COMPLETION_WINDOW = 40
 
 VERDICT_BETWEEN_TURNS = "between-turns"
+#: An idle-AGE band (FLOOR_MINUTES..THRESHOLD_MINUTES since last turn), NEVER
+#: a watch-ROLE classification -- no code path anywhere in group_em classifies
+#: a session by whether it is running a watch command. This VALUE is compared
+#: inside this module and emitted verbatim into every `peers[].verdict` row
+#: this module hands to its consumer (module docstring's "THE CONSUMER OWNS
+#: THE OUTPUT SHAPE"), so it does NOT change here -- a peer EM misread a
+#: rendered "watch" row as a role and filed a false bug report on it (P103-C5,
+#: docs/research/2026-09-11-group-em-watch-drops-named-live-peers.md); the fix
+#: for THAT is the human-facing render annotation in `_render_row`, not a
+#: value rename, which is filed instead at
+#: state/debt-backlog/2026-09-11-verdict-watch-value-reads-as-a-role.yaml.
 VERDICT_WATCH = "watch"
 VERDICT_ESCALATE = "ESCALATE"
 VERDICT_OUT_OF_WORK = "OUT-OF-WORK"
@@ -1042,7 +1053,13 @@ def build_report(
             # states -- it does not also inflate the population a crown routes
             # on. Excluded here, never dropped from `rows` above (omission is
             # still impossible; the row itself is the load-bearing half).
-            "peers": sum(1 for row in rows if row["registry"] != "absent"),
+            # Item 63: EXITED is also excluded -- `exited` below already
+            # counts these rows, so a naive `peers` total double-counts a
+            # corpse as a live peer. Mirrors `live`'s filter, just above.
+            "peers": sum(
+                1 for row in rows
+                if row["registry"] != "absent" and row["verdict"] != VERDICT_EXITED
+            ),
             "escalate": count(VERDICT_ESCALATE),
             "out-of-work": count(VERDICT_OUT_OF_WORK),
             "unknown": count(VERDICT_UNKNOWN),
@@ -1060,6 +1077,30 @@ def build_report(
             "live": sum(
                 1 for row in rows
                 if row["registry"] != "absent" and row["verdict"] != VERDICT_EXITED
+            ),
+            # P103-C4: `peers` still merges two distinct populations that a
+            # crown routing on a single number cannot tell apart -- a
+            # shrinking fleet (fewer `actionable`) reads identically to a
+            # narrowing filter (more `quiet`). Every row still in `peers`
+            # (`registry != "absent"`, `verdict != EXITED`, per Item 63) falls
+            # into EXACTLY ONE of: `quiet` (BETWEEN-TURNS/WATCH -- nothing to
+            # act on) or `actionable` (ESCALATE/OUT-OF-WORK/UNKNOWN -- the
+            # Group-EM has a decision to make). `escalate`/`out-of-work`/
+            # `unknown` above already name the actionable split further; this
+            # is the missing name for the quiet half, so `quiet + actionable
+            # == peers == live` holds and nothing is merged without a name.
+            # `summary_line`'s field set stays untouched for the same reason
+            # `live` did: it is DoE-owned fixed-form, additive fields land on
+            # this dict only.
+            "quiet": sum(
+                1 for row in rows
+                if row["registry"] != "absent"
+                and row["verdict"] in (VERDICT_BETWEEN_TURNS, VERDICT_WATCH)
+            ),
+            "actionable": sum(
+                1 for row in rows
+                if row["registry"] != "absent"
+                and row["verdict"] in (VERDICT_ESCALATE, VERDICT_OUT_OF_WORK, VERDICT_UNKNOWN)
             ),
         },
         # THE STRUCK INSTANT, in the return DICT only -- never on `summary_line`
@@ -1113,8 +1154,19 @@ def _render_row(row: dict) -> list:
     divergence = row["divergence"]
     if divergence != DIVERGENCE_NONE and row["divergence-minutes"] is not None:
         divergence = "%s(%.0fm)" % (divergence, row["divergence-minutes"])
-    lines = ["  %-8s %-13s content=%s mtime=%s divergence=%s" % (
-        row["session"][:8], row["verdict"],
+    # Human-facing label only, C5: `row["verdict"]` (the wire value, unchanged
+    # -- see VERDICT_WATCH's own docstring) reads as a role to a human unless
+    # it is disambiguated where a human actually reads it. A peer EM read a
+    # rendered `watch` row as "this peer is running the watch" and filed a
+    # false bug report on it. `VERDICT_WATCH` alone is annotated; every other
+    # verdict word already reads as what it means (`ESCALATE`, `EXITED`,
+    # `UNKNOWN`, `OUT-OF-WORK`, `between-turns`).
+    verdict_label = (
+        row["verdict"] + " (idle-age band, not a role)"
+        if row["verdict"] == VERDICT_WATCH else row["verdict"]
+    )
+    lines = ["  %-8s %-30s content=%s mtime=%s divergence=%s" % (
+        row["session"][:8], verdict_label,
         "n/a" if row["content-age"] is None else "%.1fm" % row["content-age"],
         "n/a" if row["mtime-age"] is None else "%.1fm" % row["mtime-age"],
         divergence,

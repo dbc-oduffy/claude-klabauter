@@ -165,6 +165,7 @@ from coordinator_core.ceremony_common.json_payload_flag import (
     detect_conflicting_payload_channels,
     resolve_json_payload_flag,
 )
+from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
 from coordinator_core.archive_stamp import (
     cs_action_memo,
     cs_claim_handoff,
@@ -299,6 +300,7 @@ def _load_tasks_mirror_module():
     global _tasks_mirror_module
     if _tasks_mirror_module is not None:
         return _tasks_mirror_module
+    ensure_bin_lib_bound(str(_TASKS_MIRROR_SCRIPT.parent))
     spec = importlib.util.spec_from_file_location(
         "_coordinator_tasks_mirror_impl", _TASKS_MIRROR_SCRIPT
     )

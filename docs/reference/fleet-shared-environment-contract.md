@@ -340,6 +340,21 @@ gates every mutation, and only an unhealthy or absent environment takes the buil
 Concurrent callers on a 50-70-session box are serialised through the same fail-loud,
 no-polling build-lock contract `ensure_venv` uses (`FleetEnvContention` on contention, not a hang).
 
+**Health-stamp fast path.** `ensure_fleet_env`'s `check_only` branch and its unlocked
+already-healthy fast path skip the child import probe when a stamp file inside the generation
+directory (reached through the `env_root` junction, so a generation swap invalidates it for free)
+has a key matching the environment's current inputs. The key covers: the sha256 of the committed
+lock (`docs/install/fleet-env.lock`); `LOCK_PYTHON_MINOR`; the `_FLEET_ENV_IMPORT_PROBES` tuple;
+the resolved interpreter's `st_size` and `st_mtime_ns`; the `st_mtime_ns` of the environment's
+site-packages directory (an install or uninstall of a top-level package changes this — an
+in-place reinstall or upgrade that keeps the directory entry can leave it unchanged, a residual
+gap this section names rather than implying full coverage); and the resolved generation name (the
+junction target). The probe set itself is unchanged — the stamp only skips running it, never
+narrows it — and the stamp is written only after a real probe passes, atomically, and only if the
+junction still points at the generation the key was computed for. Every other health-probe call
+site (post-lock re-check, post-build, the generation-sibling repair) always runs the real probe and
+never reads the stamp.
+
 **Binding-replay seam, for C6.** `fleet_env.BINDING_REPLAY_HOOK: Optional[Callable[[Path], None]]`
 — `None` by default. C4's provisioning calls it (if set) unconditionally after every rebuild, via
 `fleet_env._replay_sibling_bindings(env_root)`, never on the healthy fast path. C6 sets this hook to

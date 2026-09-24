@@ -6369,6 +6369,10 @@
       "_PROSE_BODY"
     ],
     [
+      "coordinator_core/write_guards/tests/test_nudge_handoff_author_lint.py",
+      "_LEDGER_FORMAT_COMMENT"
+    ],
+    [
       "coordinator_core/write_guards/tests/test_nudge_outbox_draft_frontmatter_shape.py",
       "_VALID_DRAFT"
     ],

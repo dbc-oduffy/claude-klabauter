@@ -515,7 +515,18 @@ def resolve_cli(
     `invoke_cli_main`) — the shared implementation each trio member's
     private copy is a candidate to converge onto (see that module's own
     docstring), additive-only as of this writing and not yet load-bearing
-    for any of the three."""
+    for any of the three.
+
+    Population (b)'s `Path` now comes from one of TWO producer roots
+    (docs/plans/2026-09-07-directive-resolution-reaches-a-plugin-local-
+    cli.md) — the ENGINE root every trio member always had, and a second,
+    optional DoE-anchored root for a `_PLUGIN_LOCAL_CLIS` member. Which
+    root supplies a given `cli_name`'s `Path` is decided entirely inside
+    the trio member's own `_CLI_DISPATCH` construction, before this
+    function ever sees the table — this function's own body is unchanged
+    and knows nothing about either root. See
+    `docs/reference/plugin-local-cli-dispatch.md` for the full two-root
+    model."""
     handler = dispatch_table.get(cli_name)
     if handler is None:
         raise UnrecognizedDirective(f"unrecognized directive cli {cli_name!r}")

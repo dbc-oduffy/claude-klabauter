@@ -7,17 +7,21 @@ through any of the trio's own `apply.py` (untouched in this chunk)."""
 
 from __future__ import annotations
 
+import inspect
 import sys
 from pathlib import Path
 
 import pytest
 
 from coordinator_core.ceremony_common.cli_dispatch import (
+    UNRESOLVED_PLUGIN_CLI_ROOT,
     invoke_cli_main,
     load_cli_module,
     resolve_cli_script_root,
+    resolve_plugin_cli_script_root,
 )
 from coordinator_core.ceremony_common.cli_rejection import CliExitClass
+from coordinator_core.ops import coordinator_doe_root as _doe_root_mod
 
 
 def _write_script(tmp_path: Path, name: str, body: str) -> Path:
@@ -254,3 +258,139 @@ def _module_with_main(body: str):
     module.__dict__["main"] = None
     exec(compile(body, "<test_cli_dispatch_inline>", "exec"), module.__dict__)
     return module
+
+
+# ---------------------------------------------------------------------------
+# resolve_plugin_cli_script_root() -- AC1, AC2, AC2b (P036-T1).
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _plugin_cli_clean_env(monkeypatch, tmp_path):
+    """Isolates every test in this module from the operator's real DoE
+    resolution state and resets both `coordinator_doe_root` memo pairs before
+    and after -- same discipline as
+    `coordinator_core/ops/test_coordinator_doe_root.py`'s own `_clean_env`."""
+    _doe_root_mod._reset_doe_root_cache()
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    empty_registry = tmp_path / "ml-registry"
+    empty_registry.mkdir()
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(empty_registry))
+    yield
+    _doe_root_mod._reset_doe_root_cache()
+
+
+def test_ac1_resolve_plugin_cli_script_root_takes_zero_parameters():
+    assert inspect.signature(resolve_plugin_cli_script_root).parameters == {}
+
+
+def test_ac1_resolve_cli_script_root_unchanged(tmp_path: Path):
+    """`resolve_cli_script_root`'s signature and body are untouched by this
+    plan (AC1) -- the existing test above already pins its return value;
+    this pins the zero-parameter signature stays a TypeError on a positional
+    arg, unchanged."""
+    with pytest.raises(TypeError):
+        resolve_cli_script_root(tmp_path)  # type: ignore[call-arg]
+
+
+def test_ac2_i_resolves_from_a_fixture_doe_root_with_coordinator_bin(tmp_path, monkeypatch):
+    fixture_root = tmp_path / "doe-root"
+    (fixture_root / "coordinator" / "bin").mkdir(parents=True)
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(fixture_root))
+
+    result = resolve_plugin_cli_script_root()
+
+    assert result == fixture_root / "coordinator" / "bin"
+
+
+def test_ac2_ii_every_rung_unresolvable_returns_none_and_raises_nothing(tmp_path, monkeypatch):
+    empty_bin = tmp_path / "empty-bin"
+    empty_bin.mkdir()
+    fake_home = tmp_path / "empty-home"
+    fake_home.mkdir()
+    monkeypatch.setenv("CLAUDE_HOME", str(fake_home))
+    monkeypatch.setenv("PATH", str(empty_bin))
+
+    assert resolve_plugin_cli_script_root() is None
+
+
+def test_ac2_iii_stale_clone_root_with_no_coordinator_bin_returns_none(tmp_path, monkeypatch):
+    """The stale/moved-clone case: the ladder resolves a real, existing root
+    that has no `coordinator/bin` subdirectory under it."""
+    stale_root = tmp_path / "stale-doe-root"
+    stale_root.mkdir()
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(stale_root))
+
+    assert resolve_plugin_cli_script_root() is None
+
+
+def test_ac2_iv_rung_cut_spawns_zero_processes(tmp_path, monkeypatch):
+    """With every in-process rung unresolvable, the resolver never descends
+    to rung 3's `resolve_coordinator_clone.resolve_clone_root()` and its
+    `subprocess.run` -- patching both raising is the cheapest proof."""
+    empty_bin = tmp_path / "empty-bin"
+    empty_bin.mkdir()
+    fake_home = tmp_path / "empty-home"
+    fake_home.mkdir()
+    monkeypatch.setenv("CLAUDE_HOME", str(fake_home))
+    monkeypatch.setenv("PATH", str(empty_bin))
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("resolve_plugin_cli_script_root must not spawn a subprocess")
+
+    monkeypatch.setattr(
+        _doe_root_mod._resolve_coordinator_clone, "resolve_clone_root", _boom
+    )
+
+    assert resolve_plugin_cli_script_root() is None
+
+
+def test_ac2_iv_reset_clears_both_memo_pairs(tmp_path, monkeypatch):
+    _doe_root_mod.coordinator_doe_root_in_process()
+    _doe_root_mod.coordinator_doe_root()
+    _doe_root_mod._reset_doe_root_cache()
+
+    assert _doe_root_mod._IN_PROCESS_DOE_ROOT_RESOLVED is False
+    assert _doe_root_mod._DOE_ROOT_RESOLVED is False
+
+
+def test_ac2_v_flat_layout_root_is_not_an_admissible_source(tmp_path, monkeypatch):
+    """A rung-2.75 flat OSS/marketplace root (`schemas/` and `bin/` directly
+    under it, no `coordinator/` subdirectory) resolves at
+    `coordinator_doe_root_in_process()` but is not admissible here -- the
+    join is deliberately not layout-aware."""
+    empty_bin = tmp_path / "empty-bin"
+    empty_bin.mkdir()
+    fake_home = tmp_path / "flat-fake-home"
+    flat_root = fake_home / ".claude" / "plugins" / "coordinator-claude"
+    (flat_root / ".claude-plugin").mkdir(parents=True)
+    (flat_root / ".claude-plugin" / "plugin.json").write_text("{}")
+    (flat_root / "schemas").mkdir()
+    (flat_root / "schemas" / "coordinator-registry.manifest.json").write_text("{}")
+    (flat_root / "bin").mkdir()
+
+    monkeypatch.setenv("CLAUDE_HOME", str(fake_home))
+    monkeypatch.setenv("PATH", str(empty_bin))
+
+    root, rung = _doe_root_mod.coordinator_doe_root_in_process()
+    assert root == str(flat_root)
+    assert rung == "codename-free"
+
+    _doe_root_mod._reset_doe_root_cache()
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("must not spawn a subprocess")
+
+    monkeypatch.setattr(
+        _doe_root_mod._resolve_coordinator_clone, "resolve_clone_root", _boom
+    )
+
+    assert resolve_plugin_cli_script_root() is None
+
+
+def test_ac2b_unresolved_plugin_cli_root_sentinel_shape():
+    assert isinstance(UNRESOLVED_PLUGIN_CLI_ROOT, Path)
+    assert UNRESOLVED_PLUGIN_CLI_ROOT.name == "bin"
+    assert UNRESOLVED_PLUGIN_CLI_ROOT.exists() is False

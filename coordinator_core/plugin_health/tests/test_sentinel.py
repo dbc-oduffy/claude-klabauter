@@ -1194,54 +1194,37 @@ def test_no_probe_spawn_carries_a_hand_typed_timeout():
     )
 
 
-def test_whoami_unrunnable_reports_inconclusive_not_a_red_import_failure():
-    """A spawn that never ran says nothing about whether coordinator_whoami
-    imports. Collapsing that into False made P-5 assert RED about an import
-    it never performed."""
-    (note,) = S.probe_p5(None, "python 3.11 at /usr/bin/python3", Path("/sh"))
-    assert note.severity == "amber"
-    assert note.message.startswith("inconclusive(")
-    assert "not importable" not in note.message
+def test_p5_p6_p6s_retired_no_probe_body_or_manifest_entry():
+    """coordinator_whoami is RETIRED (scripts/setup.py: "no provisioning step
+    creates it"), so P-5/P-6/P-6s (the import + envelope probes) and the
+    coordinator_whoami.machine registry-read are retired alongside it —
+    permanent false REDs whose printed remedy (bin/ensure-coordinator-venv.sh)
+    had already been deleted. See
+    state/cross-repo/archive/2026-09-11-doe-claude-em-doctor-p5-probes-retired-whoami.md.
+    Neither a probe body nor a source reference to coordinator_whoami may
+    survive; the manifest (doctor-probes.toml, this test's own SSOT check
+    below) must not declare them either."""
+    for name in (
+        "probe_p5",
+        "probe_p6",
+        "probe_p6s",
+        "_whoami_importable",
+        "_whoami_plugin_modules",
+        "_fetch_machine_json",
+        "_py_ident",
+    ):
+        assert not hasattr(S, name), f"{name} should have been retired, not just orphaned"
 
-    (note,) = S.probe_p6(None, "python3", [], "python 3.11", Path("/nonexistent-sh"))
-    assert note.message.startswith("inconclusive(")
-    (note,) = S.probe_p6s(None, "python3", [], "python 3.11")
-    assert note.message.startswith("inconclusive(")
-
-
-def test_whoami_observed_import_failure_is_still_red():
-    """Guardrail on the tri-state: False is an OBSERVED failure and must not
-    have been softened into an inconclusive along with None."""
-    (note,) = S.probe_p5(False, "python 3.11 at /usr/bin/python3", Path("/sh"))
-    assert note.severity == "red"
-    assert "not importable" in note.message
-
-
-def test_p6_module_name_is_discovered_never_a_source_literal(tmp_path):
-    """P-6's envelope module name must be read from disk, never written here.
-
-    `coordinator_whoami` installs OUTSIDE the engine tree, so publish's
-    depersonalization rewrote a hardcoded `coordinator_whoami.<repo>` reference
-    and renamed nothing at the other end: the mirror every box resolves spawned
-    an import that could not succeed. Discovery is what makes that
-    unrepresentable, so both halves are pinned -- the enumeration works, and no
-    per-plugin module name survives as a literal in the sentinel source.
-    """
-    pkg = tmp_path / "coordinator-whoami" / "coordinator_whoami"
-    for name in ("some_plugin", "session", "schemas", "_private"):
-        (pkg / name).mkdir(parents=True)
-    for name in ("some_plugin", "session", "_private"):
-        (pkg / name / "__main__.py").write_text("", encoding="utf-8")
-
-    # `session` is a generic envelope with its own probe (P-6s); `schemas` is
-    # not runnable; `_private` is not a public subpackage.
-    assert S._whoami_plugin_modules(tmp_path) == ["some_plugin"]
-
-    # An absent package is inconclusive-shaped (empty), never a fabricated pass.
-    assert S._whoami_plugin_modules(tmp_path / "nope") == []
-
+    # Gravestone comments cite the retired package name deliberately; only a
+    # live spawn of it would be a defect, which the hasattr checks above
+    # already rule out (no probe body remains that could construct one).
     source = Path(S.__file__).read_text(encoding="utf-8")
-    assert "coordinator_whoami.example_retrieval_repo" not in source
+    assert "import coordinator_whoami" not in source
+    assert "-m coordinator_whoami" not in source
+
+    manifest_path = Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "doctor-probes.toml"
+    manifest_ids = {p["id"] for p in S.load_probes(manifest_path)}
+    assert not manifest_ids & {"P-5", "P-6", "P-6s"}
 
 
 def test_p22_absent_checker_on_a_published_engine_is_not_a_finding(tmp_path):

@@ -240,6 +240,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Mapping, NamedTuple, Optional, Sequence
 
+from coordinator_core.bin_lib_binding import exec_module_bin_bound
 from coordinator_core.frontmatter.body_blocks import LocateStatus
 from coordinator_core.wire_paths import plans_dir as _plans_dir
 from coordinator_core.ops.plan_tasks_render import load_rows
@@ -404,6 +405,16 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     "freeze-review-diff",
     "fan-out-integrator",
     "classify-dispatch-shape",
+    # Plugin-local barewords (docs/plans/2026-09-07-directive-resolution-
+    # reaches-a-plugin-local-cli.md, T1b): added here only. No payload, no
+    # gate, no `next_move` builder yet -- those land in T3, in this same
+    # file. Known intermediate red until T4/T5 land (see this constant's
+    # own docstring above): `test_every_manifest_entry_is_named_by_at_least_
+    # one_directive` refuses these two rows until then. Do not "fix" that by
+    # deleting either row or widening `_DISPATCHED_WORKER_ONLY_MANIFEST_
+    # MEMBERS`.
+    "baton-chain-closure",
+    "plan-reversibility-eligibility",
 )
 
 
@@ -610,65 +621,17 @@ def _load_bin_module(claude_klabauter_bin: str, filename: str, module_name: str)
     cached = _BIN_MODULE_CACHE.get(cache_key)
     if cached is not None:
         return cached
-    _ensure_bin_lib_importable(claude_klabauter_bin)
     script_path = Path(claude_klabauter_bin) / filename
     spec = importlib.util.spec_from_file_location(module_name, script_path)
     if spec is None or spec.loader is None:
         raise TransportFailure(f"could not build an import spec for {script_path}")
     module = importlib.util.module_from_spec(spec)
     try:
-        spec.loader.exec_module(module)
+        exec_module_bin_bound(spec.loader, module, claude_klabauter_bin)
     except FileNotFoundError as exc:
         raise TransportFailure(f"{script_path} not found: {exc}") from exc
     _BIN_MODULE_CACHE[cache_key] = module
     return module
-
-
-
-def _ensure_bin_lib_importable(claude_klabauter_bin: str) -> None:
-    """Make a bare `import lib` inside a loaded bin script resolve to
-    `coordinator/bin/lib` -- the package whose `__init__` is the single
-    declared `sys.path` bootstrap for the bin CLIs.
-
-    Why this is not the loaded script's own problem: those scripts resolve
-    their siblings with a bare `import lib`, which the lib package's own
-    docstring documents as working "because a script's own directory is
-    `sys.path[0]`". That holds when a CLI is EXECUTED. It does not hold when
-    the engine loads one by file path, which is precisely what
-    `_load_bin_module` does -- and the failure is not a clean
-    ModuleNotFoundError for `lib`. On any box with pywin32 installed,
-    `site-packages/win32/lib` is an importable PEP 420 namespace package, so
-    the bare import SUCCEEDS, binds a third-party directory, runs no
-    bootstrap, and the error surfaces one line later on an unrelated-looking
-    `import cc_invoke`. A successful import that does nothing is the same
-    fail-open shape as a reader pointed at a retired root.
-
-    Two things are needed, and the second is the one that is easy to miss:
-    the bin directory has to be on `sys.path` AHEAD of site-packages, and any
-    foreign `lib` already bound in `sys.modules` has to be evicted -- once
-    win32's is cached, no amount of path repair changes what `import lib`
-    returns. Eviction is scoped to a `lib` that is NOT ours; a correctly
-    bound one is left alone, so this stays idempotent and cannot thrash a
-    warm server that ~50 sessions share.
-
-    Warm-path twin: `ops/invoke_from_argv._ensure_bin_dir_importable`, which
-    does the path half for the entrypoint route. It is not shared code
-    because the two resolve the bin directory differently -- that one from
-    `_ENGINE_ROOT`, this one from the operator config's `claude_klabauter_bin` -- and
-    folding them together would force one caller onto the other's root.
-    """
-    bin_dir = str(Path(claude_klabauter_bin))
-    if bin_dir not in sys.path:
-        sys.path.insert(0, bin_dir)
-
-    bound = sys.modules.get("lib")
-    if bound is None:
-        return
-    bound_paths = [os.path.normcase(os.path.abspath(p)) for p in getattr(bound, "__path__", [])]
-    ours = os.path.normcase(os.path.abspath(os.path.join(bin_dir, "lib")))
-    if ours in bound_paths:
-        return
-    del sys.modules["lib"]
 
 
 def _resolve_claude_klabauter_bin() -> str:
@@ -1293,6 +1256,93 @@ def _lesson_capture_route_payload() -> dict[str, Any]:
     }
 
 
+#: The two plugin-local barewords T1b added to `CONSUMES_MANIFEST` and T2
+#: hand-typed into `workstream_complete.apply._PLUGIN_LOCAL_CLIS` (docs/
+#: plans/2026-09-07-directive-resolution-reaches-a-plugin-local-cli.md,
+#: T3) -- keyed here to their own per-step hand-run command line for
+#: `_plugin_cli_resolution_payload`'s `fallback`. A literal, hand-typed
+#: duplicate of `apply.py`'s own `_PLUGIN_LOCAL_CLIS` membership, never an
+#: import of it: `apply.py` imports THIS module (`CONSUMES_MANIFEST`,
+#: `TransportFailure`, `brief`) at module scope, so a module-scope import
+#: the other way would be circular. Both argv lines pass the repo root
+#: explicitly, per this plan's own finding that `cli_dispatch`'s ambient-
+#: cwd gap is load-bearing for a plugin-local script whose `__file__` sits
+#: in DoE's tree, not the ceremony's.
+_PLUGIN_LOCAL_CLI_HAND_RUN: dict[str, str] = {
+    "baton-chain-closure": "baton-chain-closure.py --repo <repo_root> signal <handoff-path>",
+    "plan-reversibility-eligibility": (
+        "plan-reversibility-eligibility.py <governing-plan-path> --json --repo-root <repo_root>"
+    ),
+}
+
+
+def _plugin_cli_reachable() -> bool:
+    """Whether the second, DoE-anchored `coordinator/bin` root resolves --
+    the single verdict both plugin-local barewords share (a root either
+    has `coordinator/bin` or it does not; there is no per-script partial
+    case, AC6). Deferred import: `cli_dispatch` does not import this
+    module, so no cycle, but the import stays local here to mirror
+    `_plugin_cli_resolution_payload`'s own deferred imports rather than
+    adding a third module-scope import for a two-line function."""
+    from coordinator_core.ceremony_common.cli_dispatch import resolve_plugin_cli_script_root
+
+    return resolve_plugin_cli_script_root() is not None
+
+
+def _plugin_cli_resolution_payload() -> dict[str, Any]:
+    """`preflight.plugin_cli_resolution` -- republished unchanged at
+    `gates.plugin_cli_reachability` (AC6/AC6b, docs/plans/2026-09-07-
+    directive-resolution-reaches-a-plugin-local-cli.md, T3), the same
+    "provenance plus a loud fallback" shape `_lesson_capture_route_payload`
+    already carries for the other producer this module cannot always
+    reach. `root`/`source` come from `resolve_plugin_cli_script_root()`'s
+    own verdict and `coordinator_doe_root_in_process()`'s own memoized
+    tuple -- never a second ladder run, and never a per-name `.exists()`
+    stat inside this function: the resolver already checked the directory
+    once (AC6), and re-checking here would spend this module's own
+    4-open headroom on a question already answered.
+
+    `reachable` is a per-name mapping because the envelope names both
+    barewords by id, even though both share the one resolver verdict.
+
+    On a resolvable root this is a thin "both reachable" reading; on an
+    unresolvable one it adds `reason` (why the ladder came up empty) and
+    `fallback` (a hand-run command line per omitted mandated step) --
+    the same "instructions instead of a shrug" shape
+    `_lesson_capture_route_payload`'s own `fallback` uses.
+
+    ADVISORY ONLY (AC10): never passed to
+    `completion_verdict.compose_completion_verdict` -- see that function's
+    own explicit-readings contract in `brief()` below. This payload gains
+    no blocking force by being read here.
+    """
+    from coordinator_core.ceremony_common.cli_dispatch import resolve_plugin_cli_script_root
+    from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root_in_process
+
+    script_root = resolve_plugin_cli_script_root()
+    _doe_root, rung = coordinator_doe_root_in_process()
+    reachable = script_root is not None
+    payload: dict[str, Any] = {
+        "root": str(script_root) if reachable else None,
+        "source": rung,
+        "reachable": {name: reachable for name in _PLUGIN_LOCAL_CLI_HAND_RUN},
+    }
+    if not reachable:
+        payload["reason"] = (
+            "resolve_plugin_cli_script_root() resolved no DoE-anchored "
+            "coordinator/bin directory -- coordinator_doe_root_in_process() "
+            "exhausted rungs 1, 2, 2.5 and 2.75 (env, repos.doe_claude, "
+            "plugin.mirrors.live_path, codename-free) with no admissible "
+            "root, or the joined coordinator/bin at the resolved root is not "
+            "a directory (a stale or moved clone)."
+        )
+        payload["fallback"] = {
+            name: f"Run by hand at the DoE-claude clone: {cmd}"
+            for name, cmd in _PLUGIN_LOCAL_CLI_HAND_RUN.items()
+        }
+    return payload
+
+
 def build_deletion_blocks_check_directive(
     msg_file: Optional[str], stage_paths: Optional[Sequence[str]] = None
 ) -> Optional[dict[str, Any]]:
@@ -1529,15 +1579,24 @@ def build_directives(
         )
 
     # -- Step 2.6/2.6.7/2.6.8/2.6b (C2b): completion-entry cluster --
-    directives.extend(
-        directives_completion.build_directives(
-            sid=gate.sid,
-            disposition=gate.disposition,
-            consumed_handoff=gate.consumed_handoff,
-            repo_root=repo_root,
-            decisions=effective_decisions,
-        )
+    _completion_directives = directives_completion.build_directives(
+        sid=gate.sid,
+        disposition=gate.disposition,
+        consumed_handoff=gate.consumed_handoff,
+        repo_root=repo_root,
+        decisions=effective_decisions,
     )
+    # T3 (docs/plans/2026-09-07-directive-resolution-reaches-a-plugin-local-
+    # cli.md): emission gating for the two plugin-local barewords lives
+    # HERE, not in `directives_completion.py` -- on an unresolvable second
+    # root, no plugin-local directive reaches `directives[]` (AC6), by
+    # filtering this builder's own return rather than threading a
+    # reachability flag into its signature.
+    if not _plugin_cli_reachable():
+        _completion_directives = [
+            d for d in _completion_directives if d.get("cli") not in _PLUGIN_LOCAL_CLI_HAND_RUN
+        ]
+    directives.extend(_completion_directives)
 
     # -- Step 2.65/2.66/2.67 (C2c): memo lifecycle + deletion blocks --
     directives.extend(directives_memo_lifecycle.build_directives(decisions))
@@ -2913,7 +2972,19 @@ _LANDED_RECONCILIATION_NOT_APPLICABLE_SUMMARY = (
 
 _LANDED_RECONCILIATION_INDETERMINATE_SUMMARY = (
     "Landed-plan reconciliation: INDETERMINATE — {reason}; this is not a clean-close "
-    "signal, check by hand whether this session's governing plan is landed with open ACs"
+    "signal, and whether this session's governing plan is landed with open ACs could "
+    "not be determined here"
+)
+
+# Unlike the generic template above, this arm already KNOWS the plan is
+# `status: landed` -- `compute_landed_reconciliation_gate` only reaches the
+# unreadable-AC-row branch after that check has already passed. Asking the
+# operator to hand-check "is it landed" there would ask them to re-derive a
+# fact this module already computed; state it instead.
+_LANDED_RECONCILIATION_INDETERMINATE_KNOWN_LANDED_SUMMARY = (
+    "Landed-plan reconciliation: INDETERMINATE — {reason}; this session's governing "
+    "plan IS confirmed status: landed — what remains is resolving the unreadable "
+    "Acceptance Criteria row(s), not whether it is landed"
 )
 
 # A `landed` plan carrying NO `## Acceptance Criteria` grammar at all is
@@ -2971,13 +3042,18 @@ class LandedReconciliationGate(NamedTuple):
     verdict: str = "not-applicable"
 
 
-def _landed_reconciliation_indeterminate(reason: str) -> LandedReconciliationGate:
+def _landed_reconciliation_indeterminate(reason: str, *, known_landed: bool = False) -> LandedReconciliationGate:
+    template = (
+        _LANDED_RECONCILIATION_INDETERMINATE_KNOWN_LANDED_SUMMARY
+        if known_landed
+        else _LANDED_RECONCILIATION_INDETERMINATE_SUMMARY
+    )
     return LandedReconciliationGate(
         applies=False,
         open_count=0,
         total_count=0,
         warn_text=None,
-        summary_line=_LANDED_RECONCILIATION_INDETERMINATE_SUMMARY.format(reason=reason),
+        summary_line=template.format(reason=reason),
         verdict="indeterminate",
     )
 
@@ -3066,7 +3142,8 @@ def compute_landed_reconciliation_gate(
         return _landed_reconciliation_indeterminate(
             f"governing plan {governing_plan_slug} is status: landed but "
             f"{unreadable} of {parsed['total']} Acceptance Criteria rows could not be read "
-            "(unrecognised status token or a row with no identifiable status column)"
+            "(unrecognised status token or a row with no identifiable status column)",
+            known_landed=True,
         )
     if parsed["open"] == 0:
         return LandedReconciliationGate(
@@ -3405,10 +3482,12 @@ def build_consumed_handoff_completeness_judgment_point(
                 guidance=(
                     "The work IS finished; what the gate found is a record that was never "
                     "written — typically a governing plan left at a non-terminal `status:` "
-                    "that `d-stamp-plan-implemented` is itself the remedy for. Pick this only "
-                    "after checking each criterion above against HEAD by hand; the ceremony "
-                    "has no AC-reconciliation step and this disposition does not verify "
-                    "anything on your behalf. Same directives as "
+                    "that `d-stamp-plan-implemented` is itself the remedy for. The reason(s) "
+                    "computed above are the only gap the gate found: "
+                    + "; ".join(line.strip().lstrip("- ") for line in lines)
+                    + ". Pick this only if that computed reason is the sole outstanding gap; "
+                    "the ceremony has no AC-reconciliation step and this disposition does not "
+                    "verify anything beyond what is already listed above. Same directives as "
                     "`override-known-in-flight` — the difference is which claim the record "
                     "carries."
                 ),
@@ -3676,6 +3755,35 @@ def _read_consumed_handoff_text(repo_root: Path, gate: SessionShapeGate) -> Opti
         return None
 
 
+def _newest_consumed_handoff_raw_path(gate: SessionShapeGate) -> str:
+    """`gate.consumed_handoff_paths` is `primary_consumed_handoff_scan`'s
+    sorted-oldest-first `matches` list (date-prefixed filenames); its LAST
+    element is the chain HEAD (the newest consumed handoff), not its first
+    (the chain root). The scalar `gate.consumed_handoff` keeps the
+    unmigrated oldest-first convention for callers that have not moved to
+    the plural field — do not use it here. Falls back to that scalar only
+    when the plural tuple is empty (the same degrade
+    `_predecessor_lacks_distill_fate` uses)."""
+    paths = gate.consumed_handoff_paths
+    if paths:
+        return paths[-1]
+    return gate.consumed_handoff
+
+
+def _read_newest_consumed_handoff_text(repo_root: Path, gate: SessionShapeGate) -> Optional[str]:
+    """The newest-handoff twin of `_read_consumed_handoff_text` — same
+    read-only, never-raises contract, resolved against the chain HEAD (see
+    `_newest_consumed_handoff_raw_path`) rather than the oldest-first
+    scalar."""
+    candidate = _resolve_handoff_path_str(repo_root, _newest_consumed_handoff_raw_path(gate))
+    if candidate is None:
+        return None
+    try:
+        return candidate.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
 def _governing_plan_field_from_consumed_handoff(repo_root: Path, gate: SessionShapeGate) -> Optional[str]:
     """Step 2's disk-resolvable third precedence leg (see
     `directives_lessons_plan.resolve_governing_plan_with_source`): the
@@ -3685,8 +3793,10 @@ def _governing_plan_field_from_consumed_handoff(repo_root: Path, gate: SessionSh
     assembler regressed on until this fix. Best-effort: an unparsed or
     frontmatter-less handoff yields `None`, matching `resolve_governing_
     plan_with_source`'s own "absent, don't guess" convention rather than
-    raising."""
-    text = _read_consumed_handoff_text(repo_root, gate)
+    raising. Reads the NEWEST consumed handoff (`_read_newest_consumed_
+    handoff_text`), not the chain root the scalar `gate.consumed_handoff`
+    names."""
+    text = _read_newest_consumed_handoff_text(repo_root, gate)
     if not text:
         return None
     parsed = parse_frontmatter(text)
@@ -3710,8 +3820,10 @@ def _deliverable_id_from_consumed_handoff(repo_root: Path, gate: SessionShapeGat
     frontmatter legs, never a replacement for them — an explicit EM
     decision still wins. Best-effort by the same convention as its sibling:
     an unparsed or frontmatter-less handoff yields `None` rather than
-    raising."""
-    text = _read_consumed_handoff_text(repo_root, gate)
+    raising. Reads the NEWEST consumed handoff (`_read_newest_consumed_
+    handoff_text`), not the chain root the scalar `gate.consumed_handoff`
+    names."""
+    text = _read_newest_consumed_handoff_text(repo_root, gate)
     if not text:
         return None
     parsed = parse_frontmatter(text)
@@ -5379,6 +5491,26 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # measured live at 18,555 entries, which wedged this op past a 7-minute
     # client timeout on a close whose own file set was already committed.
     measurement_paths = decisions.get("stage_paths")
+    if isinstance(measurement_paths, Mapping):
+        # A nested `{"disposition": [...]}` shape is the judgment-point idiom
+        # (`build_decisions_template`'s own `{"disposition": ..., "options":
+        # [...]}` pre-fill) -- `stage_paths` is not a judgment point and never
+        # was; it is the EM's own flat pathspec list (see this function's
+        # `A caller-supplied stage_paths...` comment above). Passed as a
+        # mapping it was previously accepted and silently ignored downstream
+        # (every consumer does `decisions.get("stage_paths") or []`/`or ()`,
+        # which is truthy-but-wrong for a non-empty dict and produces no
+        # signal that the caller's answer never took effect). Named refusal,
+        # mirroring `review_partition`'s own shape guard above, rather than
+        # a second silent no-op.
+        raise ValueError(
+            f"decisions['stage_paths'] must be a flat list of path strings, got "
+            f"{measurement_paths!r} ({type(measurement_paths).__name__}) — this is "
+            "NOT a judgment-point-shaped decision; there is no jp-stage-paths "
+            "disposition to resolve here, only the EM's own reviewed-and-"
+            "narrowed file set, e.g. decisions['stage_paths'] = ['a.py', 'b.py'] "
+            "(or [] to answer 'no uncommitted files')"
+        )
     # THE REVIEW SCOPE OF A COMMIT CANNOT BE MEASURED BEFORE THE CALLER HAS
     # SAID WHAT IS IN IT. Measured 2026-08-26, n=3 interleaved A/B, real repo,
     # hooks live, job-accounted
@@ -5877,6 +6009,18 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
         gate, directives, judgment_points, reported_judgment_points
     )
 
+    # T3 (docs/plans/2026-09-07-directive-resolution-reaches-a-plugin-local-
+    # cli.md): the loud half. `next_move` names the omitted mandated
+    # step(s) rather than leaving the two `gates.plugin_cli_reachability`/
+    # `preflight.plugin_cli_resolution` keys below as the only trace.
+    _plugin_cli_payload = _plugin_cli_resolution_payload()
+    if any(not v for v in _plugin_cli_payload["reachable"].values()):
+        next_move = (
+            f"{next_move} Also: {', '.join(sorted(_PLUGIN_LOCAL_CLI_HAND_RUN))} could not run this "
+            "session (see gates.plugin_cli_reachability.reason) -- run the fallback command "
+            "line(s) there by hand."
+        )
+
     # `detection` defaults to `None` (no shared mutable default); the wire
     # shape for "no structured detection" stays `{}`, so consumers never have
     # to distinguish null from empty.
@@ -6014,6 +6158,7 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             "session_shape": session_shape_fact,
             "consumes_manifest": list(CONSUMES_MANIFEST),
             "lesson_capture_route": _lesson_capture_route_payload(),
+            "plugin_cli_resolution": _plugin_cli_payload,
             "governing_plan_resolution": {
                 "source": governing_plan_source,
                 "slug": governing_plan.slug if governing_plan else None,
@@ -6031,6 +6176,7 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             "review_scale": review_scale_payload,
             "repo_identity": repo_identity_gate,
             "completion_verdict": completion_verdict_payload,
+            "plugin_cli_reachability": _plugin_cli_payload,
         },
         directives=directives,
         judgment_points=judgment_points,
@@ -6092,14 +6238,10 @@ def _main_brief(rest: list[str]) -> int:
         print(json.dumps(dict(failure)))
         return EXIT_BUSINESS_FAIL
     except TransportFailure as exc:
+        # Transport failure: compute never ran, so nothing goes on stdout —
+        # the exit code is the only evidence (completion-evidence contract,
+        # DR-442). Matches `backlog_grind_assemble.main`'s shape.
         print(f"workstream-complete-assemble: transport failure: {exc}", file=sys.stderr)
-        failure = emit(
-            build_envelope(
-                narration=f"Could not compute a brief: {exc}.",
-                next_move="Confirm the command is run from inside a git worktree, then retry.",
-            )
-        )
-        print(json.dumps(dict(failure)))
         return EXIT_TRANSPORT_FAIL
     except Exception as exc:  # noqa: BLE001 - structural backstop, mirrors pickup_assemble Finding 4b
         # The traceback goes to stderr HERE because `next_move` below asks the
@@ -6113,18 +6255,10 @@ def _main_brief(rest: list[str]) -> int:
         # learns nothing. Naming the shape of the cause is what makes the
         # retry advice honest.
         traceback.print_exc()
+        # Transport failure: compute never ran, so nothing goes on stdout —
+        # the exit code is the only evidence (completion-evidence contract,
+        # DR-442). Matches `backlog_grind_assemble.main`'s shape.
         print(f"workstream-complete-assemble: unexpected failure: {exc}", file=sys.stderr)
-        failure = emit(
-            build_envelope(
-                narration=f"brief() raised an unexpected exception: {exc}.",
-                next_move=(
-                    "Traceback is on stderr. A structural backstop, not an enumerated failure "
-                    "mode: if it repeats identically, the cause is an artifact this close reads, "
-                    "not the invocation — re-running will not clear it."
-                ),
-            )
-        )
-        print(json.dumps(dict(failure)))
         return EXIT_TRANSPORT_FAIL
 
     try:

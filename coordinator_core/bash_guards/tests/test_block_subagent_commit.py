@@ -2394,6 +2394,37 @@ def test_pathspec_element_is_sweeping_windows_drive_path_not_a_false_positive():
     assert guard._pathspec_element_is_sweeping(candidate, _FAKE_REPO_ROOT) is False
 
 
+def test_pathspec_element_is_sweeping_literal_bracket_path_on_disk_is_not_sweeping(
+    tmp_path,
+):
+    """A literal on-disk name containing ``[`` (e.g. Next.js's ``[slug]``
+    directory convention) resolves against the filesystem, not as a glob --
+    item 61. The element is accepted once the filesystem confirms it is a
+    real path, not a bracket-expression glob pattern.
+    """
+    (tmp_path / "[slug]").mkdir()
+    assert guard._pathspec_element_is_sweeping("[slug]", str(tmp_path)) is False
+
+
+def test_pathspec_element_is_sweeping_bracket_path_not_on_disk_still_a_glob(
+    tmp_path,
+):
+    """The literal-bracket carve-out is existence-gated: a bracket element
+    that does NOT exist on disk is still treated as a glob pattern and
+    rejected, same as before this change.
+    """
+    assert guard._pathspec_element_is_sweeping("[slug]", str(tmp_path)) is True
+
+
+def test_pathspec_element_is_sweeping_bracket_glob_with_star_still_a_glob(tmp_path):
+    """A ``[`` element combined with an actual glob metacharacter (``*`` or
+    ``?``) is never eligible for the literal-existence carve-out, even if a
+    same-named path happens to exist on disk.
+    """
+    (tmp_path / "[slug]*").mkdir()
+    assert guard._pathspec_element_is_sweeping("[slug]*", str(tmp_path)) is True
+
+
 def test_resolve_git_commit_agent_pathspec_no_matching_invocation_returns_none():
     assert guard._resolve_git_commit_agent_pathspec('git commit -m "x"') is None
 

@@ -165,17 +165,18 @@ def test_f2_private_layout_still_wins_when_both_would_resolve(tmp_path, monkeypa
 def test_f6_marketplace_cache_rung_claude_home_matches_registry_twin(tmp_path, monkeypatch) -> None:
     """F6 regression (2026-08-08, hermetic-ac-reverify) -- with `CLAUDE_HOME`
     set, `_cdr_marketplace_cache_rung()` must probe the SAME directory
-    `coordinator_registry.py::_mp_marketplace_cache_rung()` does (`claude_home()`
-    returns `CLAUDE_HOME` as-is, not `<CLAUDE_HOME>/.claude`). Before the fix,
-    this module inlined a `CLAUDE_HOME or HOME or USERPROFILE` ladder and then
-    always joined `.claude`, so with `CLAUDE_HOME` set the two probed
-    different directories."""
-    claude_home_dir = tmp_path / "f6-claude-home-set-directly"
-    version_dir = claude_home_dir / "plugins" / "cache" / "coordinator-claude" / "coordinator" / "4.0.0"
+    `coordinator_registry.py::_mp_marketplace_cache_rung()` does. Convention A
+    (P174-C2): `claude_home()` treats `CLAUDE_HOME` as a `$HOME` substitute
+    and derives `<CLAUDE_HOME>/.claude` -- both modules must probe under that
+    derived `.claude` dir, not under `CLAUDE_HOME` directly."""
+    claude_home_env = tmp_path / "f6-claude-home-set-directly"
+    claude_dir = claude_home_env / ".claude"
+    version_dir = claude_dir / "plugins" / "cache" / "coordinator-claude" / "coordinator" / "4.0.0"
     (version_dir / "schemas").mkdir(parents=True)
     (version_dir / "schemas" / "coordinator-registry.manifest.json").write_text("{}")
 
-    monkeypatch.setenv("CLAUDE_HOME", str(claude_home_dir))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home_env))
     monkeypatch.delenv("HOME", raising=False)
     monkeypatch.delenv("USERPROFILE", raising=False)
 
@@ -193,13 +194,14 @@ def test_cdr_marketplace_cache_rung_excludes_unparseable_version_dirs(tmp_path, 
     Pre-fix, `021d0d725330` parsed as (21, 0, 0) and `0371a29ed35d` as
     (371, 0, 0), so the hash with the longer leading-digit run won on an
     ordering that reflects nothing about install recency."""
-    claude_home_dir = tmp_path / "hash-shaped-cache"
-    cache_parent = claude_home_dir / "plugins" / "cache" / "coordinator-claude" / "coordinator"
+    claude_home_env = tmp_path / "hash-shaped-cache"
+    cache_parent = claude_home_env / ".claude" / "plugins" / "cache" / "coordinator-claude" / "coordinator"
     (cache_parent / "0371a29ed35d").mkdir(parents=True)
     (cache_parent / "021d0d725330").mkdir(parents=True)
     (cache_parent / "1.2.3").mkdir(parents=True)
 
-    monkeypatch.setenv("CLAUDE_HOME", str(claude_home_dir))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home_env))
     monkeypatch.delenv("HOME", raising=False)
     monkeypatch.delenv("USERPROFILE", raising=False)
 
@@ -208,13 +210,15 @@ def test_cdr_marketplace_cache_rung_excludes_unparseable_version_dirs(tmp_path, 
 
 def test_f6_flat_layout_rung_claude_home_matches_registry_twin(tmp_path, monkeypatch) -> None:
     """F6 regression: same convergence for `_cdr_flat_layout_probe_rung()` /
-    `_mp_flat_layout_probe_rung()`."""
-    claude_home_dir = tmp_path / "f6-flat-claude-home-set-directly"
-    flat_root = claude_home_dir / "plugins" / "coordinator-claude"
+    `_mp_flat_layout_probe_rung()`. Convention A (P174-C2): the fixture lives
+    under `<CLAUDE_HOME>/.claude`, not under `CLAUDE_HOME` directly."""
+    claude_home_env = tmp_path / "f6-flat-claude-home-set-directly"
+    flat_root = claude_home_env / ".claude" / "plugins" / "coordinator-claude"
     (flat_root / ".claude-plugin").mkdir(parents=True)
     (flat_root / ".claude-plugin" / "plugin.json").write_text("{}")
 
-    monkeypatch.setenv("CLAUDE_HOME", str(claude_home_dir))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home_env))
     monkeypatch.delenv("HOME", raising=False)
     monkeypatch.delenv("USERPROFILE", raising=False)
 

@@ -2,14 +2,16 @@
 """bin/tests/test_workweek_complete_drift_guards.py
 
 Purpose: unit tests for coordinator/bin/workweek-complete-drift-guards.py —
-the M3 chunk WWC-3 port of five genuine bash-logic fences out of
+the M3 chunk WWC-3 port of four genuine bash-logic fences out of
 DoE-claude's `coordinator/commands/workweek-complete.md`:
 description-length/enabledPlugins-drift advisory dispatch, the change-aware
-dep-manifest CVE-recheck (manifest-presence gate + 14-day window), the
-schema-drift-gate three-way rc branch, and the console-flash /
-multi-event-hook guard dispatch pairs. The repo-wide ShellCheck sweep
-(`shellcheck-sweep` subcommand) was removed 2026-08-16 as advisory prose
-that could not pay for its spawn cost — see state/kill-ledger.md K-102.
+dep-manifest CVE-recheck (manifest-presence gate + 14-day window), and the
+console-flash / multi-event-hook guard dispatch pairs. The repo-wide
+ShellCheck sweep (`shellcheck-sweep` subcommand) was removed 2026-08-16 as
+advisory prose that could not pay for its spawn cost — see
+state/kill-ledger.md K-102. The schema-drift-gate subcommand and its
+three-way rc branch were retired outright (P124-C3) — the fact it served
+moved to the doctor's vendor_drift sentinel.
 
 Coverage:
   test_enabled_plugins_skips_when_settings_json_absent
@@ -17,11 +19,6 @@ Coverage:
   test_cve_recheck_no_tracked_manifests_skips
   test_cve_recheck_manifest_untouched_in_window_skips
   test_cve_recheck_manifest_changed_in_window_dispatches
-  test_schema_drift_gate_pass
-  test_schema_drift_gate_block
-  test_schema_drift_gate_error
-  test_schema_drift_gate_unexpected_rc_treated_as_error
-  test_schema_drift_gate_missing_sibling_is_error
   test_console_flash_guard_missing_sibling_skips_cleanly
   test_multi_event_hook_guard_missing_sibling_skips_cleanly
 """
@@ -168,61 +165,6 @@ def test_cve_recheck_manifest_changed_in_window_dispatches(
     out = capsys.readouterr().out
     assert "dispatching dep-cve-auditor" in out
     assert "package.json" in out
-
-
-# ---------------------------------------------------------------------------
-# schema-drift-gate — three-way rc branch
-# ---------------------------------------------------------------------------
-
-
-def _install_fake_sibling(bin_dir: Path, name: str, rc: int, message: str = "") -> None:
-    script = bin_dir / name
-    script.write_text(
-        "#!/usr/bin/env python3\n"
-        "import sys\n"
-        f"sys.stdout.write({message!r})\n"
-        f"sys.exit({rc})\n",
-        encoding="utf-8",
-    )
-    script.chmod(0o755)
-
-
-def test_schema_drift_gate_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_fake_sibling(tmp_path, "schema-drift-gate.py", 0, "PASS\n")
-    monkeypatch.setattr(_mod, "_BIN_DIR", str(tmp_path))
-    rc = _mod.main(["schema-drift-gate"])
-    assert rc == 0
-
-
-def test_schema_drift_gate_block(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_fake_sibling(tmp_path, "schema-drift-gate.py", 1, "drift found\n")
-    monkeypatch.setattr(_mod, "_BIN_DIR", str(tmp_path))
-    rc = _mod.main(["schema-drift-gate"])
-    assert rc == 1
-
-
-def test_schema_drift_gate_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_fake_sibling(tmp_path, "schema-drift-gate.py", 2, "transport failure\n")
-    monkeypatch.setattr(_mod, "_BIN_DIR", str(tmp_path))
-    rc = _mod.main(["schema-drift-gate"])
-    assert rc == 2
-
-
-def test_schema_drift_gate_unexpected_rc_treated_as_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _install_fake_sibling(tmp_path, "schema-drift-gate.py", 7, "")
-    monkeypatch.setattr(_mod, "_BIN_DIR", str(tmp_path))
-    rc = _mod.main(["schema-drift-gate"])
-    assert rc == 2
-
-
-def test_schema_drift_gate_missing_sibling_is_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(_mod, "_BIN_DIR", str(tmp_path))
-    rc = _mod.main(["schema-drift-gate"])
-    assert rc == 2
 
 
 # ---------------------------------------------------------------------------

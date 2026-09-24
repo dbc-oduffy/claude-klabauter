@@ -43,6 +43,12 @@ LAYERS CHECKED (each is one `Layer` in `run_doctor()`'s return list)
        an open design fork over what this marker should mean going forward
        ("DO NOT RESOLVE THE FORK BY ASSUMPTION") and the marker's own file is
        gitignored per-machine state, not this doctor's to toggle on a guess.
+    5. Resolve-claude-klabauter shim freshness — does the INSTALLED
+       `_resolve_claude_klabauter.py` (settings-home `bin/`, and the `~/.claude/bin`
+       compat mirror if present) content-match the source copy at
+       `<claude-klabauter-live-root>/coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py`?
+       Detect-only (P105-C5): a content-stale shim is reported, never
+       silently overwritten — see `_check_shim_freshness`'s own docstring.
 
 REPAIR POSTURE — what this command fixes vs. only reports, and why
     Exactly one layer is auto-repairable, and only when `--fix` is passed
@@ -637,6 +643,7 @@ def _fix_bare_hook_commands(fix_report: List[str]) -> None:
                     try:
                         wrapped = fail_open_launcher.wrap_command_exec(command)
                     except (ValueError, AttributeError):
+                        # command shape this hook cannot wrap; leave it unwrapped
                         continue
                     hook["command"] = wrapped["command"]
                     hook["args"] = wrapped["args"]
@@ -883,6 +890,100 @@ def _repair_each(entry, stale, bin_dir: str, fix_report: List[str], current: int
 # ---------------------------------------------------------------------------
 
 
+def _check_shim_freshness() -> Layer:
+    """Layer 6 — is the INSTALLED resolve-claude-klabauter shim content-current with
+    the source copy it was installed from? (P105-C5)
+
+    Compares `<settings-home>/bin/_resolve_claude_klabauter.py` (and the `~/.claude/bin`
+    compat mirror, if present) against `<claude-klabauter-live-root>/coordinator/lib/
+    resolve-claude-klabauter/_resolve_claude_klabauter.py`, using the blob-SHA compare primitive
+    `coordinator_core.plugin_health.drift` already carries
+    (`_run_git(["hash-object", "--stdin-paths"], ...)`) rather than
+    reimplementing a second one — see this row's citation note for why only
+    that primitive, and not `_check_copy_install` itself, is reused here:
+    the latter is shaped around a whole plugin-copy check (a `version.txt`
+    sentinel, a `source_subpath`, a `git ls-tree` enumeration) that this
+    single-file compare has no use for.
+
+    Absence of a check is not a pass (this module's own stated rule): no
+    shim installed on this box, or no resolvable source, is UNKNOWN with a
+    Finding naming which; content differs is BROKEN with a remediation
+    naming the runnable setup script; identical is OK and silent.
+
+    DETECT-ONLY: this layer is never wired into `--fix` (`run_doctor`'s
+    `fix` branch below does not call it). A shim rewrite would overwrite an
+    installed file in the settings-home shim directory with source bytes
+    sight-unseen — a blast radius the installer, not the doctor, owns. The
+    doctor's job is to say the box is wrong, not to silently rewrite it.
+    """
+    name = "Resolve-claude-klabauter shim freshness"
+
+    from coordinator_core.engine_root import coordinator_engine_root
+
+    try:
+        claude_klabauter_root = coordinator_engine_root()
+    except RuntimeError as exc:
+        return Layer(
+            name,
+            "unknown",
+            [Finding("info", f"source claude-klabauter root did not resolve — nothing to compare: {exc}")],
+        )
+
+    source_path = Path(claude_klabauter_root) / "coordinator" / "lib" / "resolve-claude-klabauter" / "_resolve_claude_klabauter.py"
+    if not source_path.is_file():
+        return Layer(
+            name,
+            "unknown",
+            [Finding("info", f"source copy not found at '{source_path}' — nothing to compare")],
+        )
+
+    from coordinator_core._settings_home import settings_home
+
+    candidates = [settings_home() / "bin" / "_resolve_claude_klabauter.py"]
+    compat_mirror = Path(os.path.expanduser("~")) / ".claude" / "bin" / "_resolve_claude_klabauter.py"
+    if compat_mirror not in candidates:
+        candidates.append(compat_mirror)
+
+    installed = [p for p in candidates if p.is_file()]
+    if not installed:
+        return Layer(
+            name,
+            "unknown",
+            [Finding(
+                "info",
+                "no installed _resolve_claude_klabauter.py shim found under settings-home "
+                "bin/ or the ~/.claude/bin compat mirror — nothing to compare",
+            )],
+        )
+
+    from coordinator_core.plugin_health.drift import _run_git
+
+    stdin_payload = "".join(f"{p}\n" for p in [source_path, *installed])
+    result = _run_git(["hash-object", "--stdin-paths"], input_text=stdin_payload)
+    out_lines = (result.stdout or "").splitlines()
+    if result.returncode != 0 or len(out_lines) < 1 + len(installed):
+        return Layer(
+            name,
+            "unknown",
+            [Finding("info", "could not hash source/installed shim copies for comparison (git hash-object failed)")],
+        )
+
+    source_sha = out_lines[0].strip()
+    findings: List[Finding] = []
+    status = "ok"
+    for shim_path, sha_line in zip(installed, out_lines[1:]):
+        if sha_line.strip() != source_sha:
+            status = "broken"
+            findings.append(
+                Finding(
+                    "broken",
+                    f"installed shim '{shim_path}' content-differs from source "
+                    f"'{source_path}' — run python3 {claude_klabauter_root}/scripts/setup.py to refresh it",
+                )
+            )
+    return Layer(name, status, findings)
+
+
 def run_doctor(fix: bool = False) -> tuple[DoctorReport, List[str]]:
     report = DoctorReport()
     report.layers.append(_check_sibling_resolution())
@@ -890,6 +991,7 @@ def run_doctor(fix: bool = False) -> tuple[DoctorReport, List[str]]:
     report.layers.append(_check_foreign_platform_paths())
     report.layers.append(_check_kill_switch_marker())
     report.layers.append(_check_hook_generation_currency())
+    report.layers.append(_check_shim_freshness())
 
     fix_report: List[str] = []
     if fix:

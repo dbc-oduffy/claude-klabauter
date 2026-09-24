@@ -216,6 +216,7 @@ def _remove_handle(repo_root: str, key: str) -> None:
     try:
         p.unlink()
     except FileNotFoundError:
+        # already removed (concurrent release or double-call) is the desired end state
         pass
 
 
@@ -228,6 +229,7 @@ def _list_handles(repo_root: str) -> list:
         try:
             out.append(json.loads(p.read_text(encoding="utf-8")))
         except (OSError, ValueError):
+            # a handle file mid-write or removed by its owner is not a live handle
             continue
     return out
 
@@ -494,6 +496,7 @@ def _teardown(params: dict, repo_root: Optional[Path] = None) -> dict:
             if start_epoch is None or int(proc.create_time()) == int(start_epoch):
                 proc.terminate()
         except Exception:
+            # process already exited or is unreachable; nothing left to terminate
             pass
 
     # Release the lock (remove the handle) unconditionally — even when the

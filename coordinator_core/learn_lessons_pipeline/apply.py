@@ -47,12 +47,10 @@ Bin-directory importability: two of the three `CONSUMES_MANIFEST` CLIs
 `import lib` from inside their own call graph, which only resolves when
 `coordinator/bin` is on `sys.path` AHEAD of any foreign `lib` already bound
 in `sys.modules` (win32 ships its own `lib` namespace package).
-`_ensure_import_path` reuses `workstream_complete`'s existing
-`_ensure_bin_lib_importable` helper (the one that also evicts a foreign
-`sys.modules["lib"]`) rather than writing a third copy of that ladder —
-`ops.invoke_from_argv._ensure_bin_dir_importable` is the OTHER existing
-helper the plan names, but it only puts the bin dir on `sys.path` and does
-not evict a foreign `lib`, so it is not equivalent here.
+`_ensure_import_path` calls `coordinator_core.bin_lib_binding.
+ensure_bin_lib_bound` — the one stdlib-only leaf that puts the bin dir on
+`sys.path` and evicts a foreign `sys.modules["lib"]`, and the only home of
+that ladder in the tree.
 
 Spec backlink: docs/plans/2026-09-11-the-lessons-pipeline-drains-without-a-ha.md § C4
 
@@ -76,6 +74,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable, Optional
 
+from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
 from coordinator_core.ceremony_common.cli_dispatch import (
     invoke_cli_main,
     load_cli_module,
@@ -84,7 +83,6 @@ from coordinator_core.ceremony_common.cli_dispatch import (
 from coordinator_core.contract import apply_base
 from coordinator_core.learn_lessons_pipeline import CONSUMES_MANIFEST, brief
 from coordinator_core.learn_lessons_pipeline.run_stamp import stamp_run_complete
-from coordinator_core.workstream_complete import _ensure_bin_lib_importable
 
 #: This assembler's own name for `apply_base.assert_dispatchable`'s
 #: `ASSEMBLER_DISPATCHABLE` lookup (§ C5) — matches the key
@@ -120,11 +118,11 @@ def _resolve_script_path(name: str) -> Path:
 def _ensure_import_path(cli_name: str) -> None:
     """Ensures `coordinator/bin` is importable and evicts a foreign `lib`
     already bound in `sys.modules`, BEFORE `load_cli_module` runs, for the
-    two `CONSUMES_MANIFEST` members that need it. Reuses the existing
-    `workstream_complete._ensure_bin_lib_importable` helper rather than
-    re-deriving a third copy of this ladder (§ module docstring)."""
+    two `CONSUMES_MANIFEST` members that need it. Calls the shared leaf
+    (§ module docstring) rather than re-deriving a third copy of this
+    ladder."""
     if cli_name in _NEEDS_BIN_IMPORTABLE:
-        _ensure_bin_lib_importable(str(_CLI_SCRIPT_ROOT))
+        ensure_bin_lib_bound(str(_CLI_SCRIPT_ROOT))
 
 
 def _load(cli_name: str) -> ModuleType:

@@ -382,6 +382,34 @@ def test_session_id_zero_match_is_vacuous_not_fatal(tmp_path, capsys, monkeypatc
     assert "gate vacuous" in captured.err
 
 
+def test_session_id_zero_match_falls_back_to_uncommitted_working_tree(
+    tmp_path, capsys, monkeypatch
+):
+    """P143-T1: the gate can run mid-chain BEFORE the ceremony's own commit
+    lands, so a zero-commit session scan (including the floor retry) must
+    not immediately declare `indeterminate` while there is live uncommitted
+    work sitting in the tree. It measures that working tree instead."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _commit_file(repo, "b.py", "y = 2\n", "add b")
+
+    # Uncommitted work — no commit, no trailer, invisible to any commit scan.
+    (repo / "uncommitted.py").write_text("z = 1\n" * 30, encoding="utf-8")
+    _git(repo, "add", "uncommitted.py")
+
+    monkeypatch.chdir(repo)
+
+    rc = main(["--session-id", "nonexistent-session-xyz", "HEAD~2..HEAD"])
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert "VERDICT=indeterminate" not in captured.out
+    assert "basis=code-only+uncommitted-tree" in captured.out
+    assert "commits=0" in captured.out
+    assert "filtered_to=0" in captured.out
+    assert "measured the uncommitted working tree" in captured.err
+
+
 def test_session_id_untrailered_commits_block_a_permissive_verdict(
     tmp_path, capsys, monkeypatch
 ):
@@ -569,7 +597,10 @@ def test_session_scoped_grep_is_not_end_anchored(monkeypatch):
 
     _session_scoped("base..HEAD", "some-session-id")
 
-    assert len(calls) == 3, f"expected initial scan + floor query + floor retry, got {calls}"
+    assert len(calls) == 4, (
+        "expected initial scan + floor query + floor retry + the "
+        f"uncommitted-tree fallback (P143-T1), got {calls}"
+    )
     grep_args = [a for call in calls for a in call if a.startswith("--grep=")]
     assert len(grep_args) == 3
     for grep_arg in grep_args:

@@ -792,6 +792,141 @@ class TestCheckFiveOwnerAttributionIntegration:
         assert "unknown owner" not in out["additionalContext"]
 
 
+class TestCheckFiveScopeAdvisoryTailClause:
+    """C2: Check 5's SCOPE advisory says whether THIS command sweeps the
+    staged path in, without suppressing the advisory (AC8a negative spec
+    unchanged -- pathspec presence never suppresses this warning)."""
+
+    def _setup(self, tmp_path):
+        root = _init_repo(tmp_path)
+        sid, other_sid = "my-sess", "other-sess"
+        assert core.init(sid, cwd=root)
+        assert core.init(other_sid, cwd=root)
+        _push_started_at_to_future(root, sid)
+        other_touched = (
+            Path(root) / ".git" / "coordinator-sessions" / other_sid / "touched.txt"
+        )
+        other_touched.write_text("peer.txt\npeer_del.txt\n", encoding="utf-8")
+        return root, sid
+
+    @staticmethod
+    def _scope_line(ctx: str, path: str) -> str:
+        for block in ctx.split("\n\n"):
+            if block.startswith("SCOPE: %s " % path):
+                return block
+        raise AssertionError("no SCOPE block for %s in: %r" % (path, ctx))
+
+    def test_bare_commit_warns_with_sweep_clause(self, tmp_path):
+        """(1) Stage one peer file. Bare ``git commit -m x`` warns with
+        clause (a)."""
+        root, sid = self._setup(tmp_path)
+        (Path(root) / "peer.txt").write_text("hello\n", encoding="utf-8")
+        _git(root, "add", "peer.txt")
+
+        result = dispatch_checks.check_validate_commit(
+            'git commit -m "add peer"', sid, cwd=root
+        )
+        assert result is not None
+        out = result["hookSpecificOutput"]
+        assert out["permissionDecision"] == "allow"
+        line = self._scope_line(out["additionalContext"], "peer.txt")
+        assert line.endswith("This bare commit sweeps it in.")
+
+    def test_pathspec_naming_the_path_warns_unchanged(self, tmp_path):
+        """(2) Stage the same peer file. ``git commit -m x -- peer.txt``
+        warns with no clause: the warning text for that path equals the
+        HEAD text (prefix plus provenance note)."""
+        root, sid = self._setup(tmp_path)
+        (Path(root) / "peer.txt").write_text("hello\n", encoding="utf-8")
+        _git(root, "add", "peer.txt")
+
+        bare_result = dispatch_checks.check_validate_commit(
+            'git commit -m "add peer"', sid, cwd=root
+        )
+        bare_line = self._scope_line(
+            bare_result["hookSpecificOutput"]["additionalContext"], "peer.txt"
+        )
+        head_text = bare_line[: -len(" This bare commit sweeps it in.")]
+
+        scoped_result = dispatch_checks.check_validate_commit(
+            'git commit -m "add peer" -- peer.txt', sid, cwd=root
+        )
+        assert scoped_result is not None
+        out = scoped_result["hookSpecificOutput"]
+        assert out["permissionDecision"] == "allow"
+        scoped_line = self._scope_line(out["additionalContext"], "peer.txt")
+        assert scoped_line == head_text
+
+    def test_staged_deletion_outside_pathspec_warns_with_outside_clause(
+        self, tmp_path
+    ):
+        """(3) Stage a peer-owned tracked-file deletion. ``git commit -m x
+        -- own.txt`` warns on it with clause (b)."""
+        root, sid = self._setup(tmp_path)
+        (Path(root) / "peer_del.txt").write_text("bye\n", encoding="utf-8")
+        _git(root, "add", "peer_del.txt")
+        _git(root, "commit", "-q", "-m", "add peer_del")
+        _git(root, "rm", "-q", "peer_del.txt")
+
+        (Path(root) / "own.txt").write_text("mine\n", encoding="utf-8")
+        _git(root, "add", "own.txt")
+
+        result = dispatch_checks.check_validate_commit(
+            'git commit -m "own change" -- own.txt', sid, cwd=root
+        )
+        assert result is not None
+        out = result["hookSpecificOutput"]
+        assert out["permissionDecision"] == "allow"
+        line = self._scope_line(out["additionalContext"], "peer_del.txt")
+        assert line.endswith(
+            "This commit's pathspec does not name it; it stays staged."
+        )
+
+    def test_three_clauses_differ_pairwise_and_share_the_prefix(self, tmp_path):
+        """(4) The three ``additionalContext`` strings -- clause (a),
+        clause (b), unchanged -- differ pairwise. Each still contains the
+        unchanged prefix and ``Strict mode would block``."""
+        root, sid = self._setup(tmp_path)
+        (Path(root) / "peer.txt").write_text("hello\n", encoding="utf-8")
+        _git(root, "add", "peer.txt")
+
+        bare = dispatch_checks.check_validate_commit(
+            'git commit -m "add peer"', sid, cwd=root
+        )
+        bare_line = self._scope_line(
+            bare["hookSpecificOutput"]["additionalContext"], "peer.txt"
+        )
+
+        scoped = dispatch_checks.check_validate_commit(
+            'git commit -m "add peer" -- peer.txt', sid, cwd=root
+        )
+        scoped_line = self._scope_line(
+            scoped["hookSpecificOutput"]["additionalContext"], "peer.txt"
+        )
+
+        _git(root, "reset", "-q")
+        (Path(root) / "peer_del.txt").write_text("bye\n", encoding="utf-8")
+        _git(root, "add", "peer_del.txt")
+        _git(root, "commit", "-q", "-m", "add peer_del")
+        _git(root, "rm", "-q", "peer_del.txt")
+        (Path(root) / "own.txt").write_text("mine\n", encoding="utf-8")
+        _git(root, "add", "own.txt")
+
+        outside = dispatch_checks.check_validate_commit(
+            'git commit -m "own change" -- own.txt', sid, cwd=root
+        )
+        outside_line = self._scope_line(
+            outside["hookSpecificOutput"]["additionalContext"], "peer_del.txt"
+        )
+
+        lines = [bare_line, scoped_line, outside_line]
+        assert len(set(lines)) == 3
+        for line in lines:
+            assert "SCOPE: " in line
+            assert "is staged but not in this session's touch list" in line
+            assert "Strict mode would block this commit." in line
+
+
 # ---------------------------------------------------------------------------
 # Check 8 -- frontmatter mutation subject discipline
 # ---------------------------------------------------------------------------

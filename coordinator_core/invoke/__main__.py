@@ -1210,6 +1210,29 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
             except OSError:
                 pass
 
+    # 7b. WARM_DISPATCH_INDETERMINATE (-32004) carrying `error.data.dispatch_key`
+    #     (C5, contract § 9) -- print the exact, runnable poll command to stderr.
+    #     Built from `data.dispatch_key`/`data.reconcile` directly, never by
+    #     parsing `error.message`: any producer of this shape (this client's
+    #     own `_indeterminate_envelope`, or a future door leg, C7) needs only
+    #     stamp the two data fields for this ladder to name its poll, without
+    #     this module knowing which producer it was.
+    if isinstance(response, dict):
+        _error = response.get("error")
+        if isinstance(_error, dict):
+            _data = _error.get("data")
+            if isinstance(_data, dict):
+                _dispatch_key = _data.get("dispatch_key")
+                _reconcile_op = _data.get("reconcile")
+                if isinstance(_dispatch_key, str) and _dispatch_key and isinstance(_reconcile_op, str) and _reconcile_op:
+                    _poll_params = json.dumps({"key": _dispatch_key}, ensure_ascii=False)
+                    print(
+                        "[warm-client] Reconcile via: python3 -m coordinator_core.invoke "
+                        f"{_reconcile_op} '{_poll_params}' --bare",
+                        file=sys.stderr,
+                    )
+                    sys.stderr.flush()
+
     # 8. Print result as indented JSON to stdout.
     # An unguarded json.dumps that raises TypeError/ValueError
     #    (e.g. handler returns a Path, datetime, or other non-serializable object) would crash

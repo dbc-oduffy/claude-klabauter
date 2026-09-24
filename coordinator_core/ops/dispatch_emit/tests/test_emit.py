@@ -862,6 +862,22 @@ def test_the_halt_discriminator_is_a_file_no_report_mentions():
     assert "do not halt on those" in block
 
 
+def test_the_commit_agent_reads_each_report_file_not_the_reply_line():
+    """Executor replies are `<STATUS>: <report path>`; a commit agent reading
+    only the reply cannot see which paths a report names, so every hunk looks
+    like the peer case and the wave halts."""
+    block = _provenance_block()
+    assert "READ that file" in block
+
+
+def test_partial_residue_is_withheld_not_the_peer_case():
+    """A PARTIAL item's residue on a declared path is that item's, not a
+    peer's: it drops out of the commit and never STOPs the wave."""
+    block = _provenance_block()
+    assert "returned PARTIAL, BLOCKED, refused, or died" in block
+    assert "its residue is withheld, never the peer case" in block
+
+
 def test_the_remedy_is_stop_and_report_never_clean_the_path():
     """Reverting a peer's hunk is the destructive failure this must not invite."""
     block = _provenance_block()
@@ -2199,7 +2215,8 @@ def test_compose_script_commit_prompt_licenses_a_partial_wave():
     script = compose_script(waves, name="wf", description="two waves")
 
     assert "A PARTIAL WAVE STILL COMMITS" in script
-    assert "Refuse only if NO item is DONE" in script
+    assert "If NO item is DONE there is nothing to commit: that is the void case below" in script
+    assert "or every item BLOCKED) -> A WHOLLY VOID WAVE IS NOT A REFUSAL" in script
     # The blocked item's id leaving the subject is the half the agent got
     # wrong; asserting only the heading above would leave that green.
     assert "its id drops out of the subject alongside" in script

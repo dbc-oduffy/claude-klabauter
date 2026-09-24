@@ -40,7 +40,10 @@ import subprocess
 import sys
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from coordinator_core._settings_home import settings_home
+from coordinator_core._claude_klabauter_root import (
+    _machine_local_get,
+    clear_machine_local_cache,
+)
 from coordinator_core.win_portability import is_executable
 
 _WINDOWS_PYORG_VERSIONS = ("313", "312", "311", "310")
@@ -95,20 +98,25 @@ def _console_sibling(windowless_path: str) -> str:
 # than converting the call. Caches persist for the life of the importing
 # process (spawn-per-call model means that's one op invocation) and must be
 # cleared explicitly between test cases via clear_resolution_cache().
+#
+# The machine-local shell-out itself (``_machine_local_get``) and its cache
+# now live in ``coordinator_core._claude_klabauter_root`` (R4 shared-helper extraction)
+# -- imported above, not redefined here.
 # ---------------------------------------------------------------------------
 
 _validate_cache: Dict[str, bool] = {}
-_machine_local_cache: Dict[Tuple[str, str], Optional[str]] = {}
 
 
 def clear_resolution_cache() -> None:
-    """Reset both memoization caches. Tests that mutate ``COORDINATOR_PYTHON``,
-    ``MACHINE_LOCAL_IMPL``, or ``CLAUDE_HOME`` between cases MUST call this in
-    setup/teardown -- a stale entry would otherwise return a memoized result
-    for a since-changed steering env, and the module has no other reset
-    hook."""
+    """Reset both memoization caches -- the pin-validation cache here, and
+    the shared ``_machine_local_get`` cache in
+    ``coordinator_core._claude_klabauter_root``. Tests that mutate
+    ``COORDINATOR_PYTHON``, ``MACHINE_LOCAL_IMPL``, or ``CLAUDE_HOME`` between
+    cases MUST call this in setup/teardown -- a stale entry would otherwise
+    return a memoized result for a since-changed steering env, and the module
+    has no other reset hook."""
     _validate_cache.clear()
-    _machine_local_cache.clear()
+    clear_machine_local_cache()
 
 
 class PythonPinInvalid(RuntimeError):
@@ -116,70 +124,6 @@ class PythonPinInvalid(RuntimeError):
     fails ``-c 'import sys'`` validation -- e.g. a dangling venv shim. Mirrors the bash
     resolver's hard-failure contract: a broken pin must never silently fall through to
     the OS-detect tier."""
-
-
-# ---------------------------------------------------------------------------
-# machine-local helpers (mirrors coordinator_core.ops.queue_append's pattern)
-# ---------------------------------------------------------------------------
-
-
-def _claude_home() -> str:
-    override = os.environ.get("CLAUDE_HOME")
-    if override:
-        return override
-    home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or os.path.expanduser("~")
-    return os.path.join(home, ".claude")
-
-
-def _machine_local_impl() -> str:
-    """Return the path to ``_machine_local.py``, honouring ``MACHINE_LOCAL_IMPL`` for
-    tests."""
-    override = os.environ.get("MACHINE_LOCAL_IMPL")
-    if override:
-        return override
-    settings_home_impl = os.path.join(str(settings_home()), "bin", "_machine_local.py")
-    if os.path.exists(settings_home_impl):
-        return settings_home_impl
-    return os.path.join(_claude_home(), "bin", "_machine_local.py")
-
-
-def _machine_local_get(key: str) -> Optional[str]:
-    """Call ``_machine_local.py get <key>`` and return the value, or None on any
-    failure (missing impl, nonzero exit, empty stdout) -- mirrors the bash resolver's
-    "machine-local unavailable/empty -> fall through" contract.
-
-    Memoized per process, keyed by ``(key, resolved impl path)`` -- the impl path
-    already folds in every env var that steers *which* ``_machine_local.py`` gets
-    shelled out to (``MACHINE_LOCAL_IMPL``, ``CLAUDE_HOME`` via
-    ``_machine_local_impl()``/``settings_home()``), so a changed override env
-    naturally produces a different cache key rather than a stale hit. A None
-    (unavailable/empty) result is memoized too: it is a deterministic function of
-    the impl's on-disk state for the remainder of this process, not a transient
-    failure that later calls should retry."""
-    impl = _machine_local_impl()
-    cache_key = (key, impl)
-    if cache_key in _machine_local_cache:
-        return _machine_local_cache[cache_key]
-
-    if not os.path.exists(impl):
-        _machine_local_cache[cache_key] = None
-        return None
-    try:
-        result = subprocess.run(
-            [sys.executable, impl, "get", key],
-            capture_output=True,
-            text=True,
-            creationflags=_CREATE_NO_WINDOW,
-        )
-    except OSError:
-        _machine_local_cache[cache_key] = None
-        return None
-    if result.returncode != 0 or not result.stdout.strip():
-        _machine_local_cache[cache_key] = None
-        return None
-    value = result.stdout.strip()
-    _machine_local_cache[cache_key] = value
-    return value
 
 
 def _validate_interpreter(path: str) -> bool:

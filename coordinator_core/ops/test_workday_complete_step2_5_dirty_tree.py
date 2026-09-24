@@ -30,6 +30,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from coordinator_core.ops.workday_complete_step2_5_dirty_tree import classify_dirty_tree
 from coordinator_core.ops.workday_complete_step2_5_dirty_tree import main as port_main
 from coordinator_core.session import claim_index
 from coordinator_core.session import core as session_core
@@ -329,6 +330,94 @@ def test_not_a_git_repo(tmp_path, capsys):
     rc, _out, err = _run_port(non_repo, [], capsys)
     assert rc == 1
     assert "not inside a git repo" in err
+
+
+# ---------------------------------------------------------------------------
+# classify_dirty_tree() — the typed, mutation-free, silent classify half.
+# ---------------------------------------------------------------------------
+
+
+def _head_sha(repo):
+    res = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True, **no_console_creationflags()
+    )
+    return res.stdout.strip()
+
+
+def _status_text(repo):
+    res = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=repo, capture_output=True, text=True, check=True, **no_console_creationflags()
+    )
+    return res.stdout
+
+
+def _run_classify(repo):
+    cwd_before = os.getcwd()
+    os.chdir(repo)
+    try:
+        return classify_dirty_tree()
+    finally:
+        os.chdir(cwd_before)
+
+
+def test_classify_dirty_tree_ambiguous_and_auto_commit_no_mutation_silent(tmp_path, capsys):
+    repo = _make_repo(tmp_path)
+    (repo / "state" / "review-trail").mkdir(parents=True)
+    (repo / "state" / "review-trail" / "r.json").write_text('{"status":"done"}\n')
+    (repo / "mystery.bin").write_text("ambiguous content\n")
+
+    before_sha = _head_sha(repo)
+    before_status = _status_text(repo)
+    gi_path = repo / ".gitignore"
+    gi_before = gi_path.read_text() if gi_path.exists() else None
+
+    classification = _run_classify(repo)
+    captured = capsys.readouterr()
+
+    assert captured.out == ""
+    assert captured.err == ""
+    assert classification.error is None
+    assert classification.needs_pm is True
+
+    # No mutation: HEAD sha, index/worktree status, and .gitignore unchanged.
+    assert _head_sha(repo) == before_sha
+    assert _status_text(repo) == before_status
+    assert (gi_path.read_text() if gi_path.exists() else None) == gi_before
+
+    # evidence_lines() equals the `[step2.5] ` summary + notice + verdict
+    # lines main(["--dry-run"]) prints for the same (still-untouched) repo,
+    # minus the act half's DRY-RUN preview lines.
+    rc, dr_out, dr_err = _run_port(repo, ["--dry-run"], capsys)
+    assert rc == 2
+    main_lines = [
+        line
+        for line in dr_out.splitlines() + dr_err.splitlines()
+        if line.startswith(f"[{'step2.5'}] ") and "DRY-RUN" not in line
+    ]
+    assert sorted(classification.evidence_lines()) == sorted(main_lines)
+
+
+def test_classify_dirty_tree_clean_repo(tmp_path, capsys):
+    repo = _make_repo(tmp_path)
+    classification = _run_classify(repo)
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+    assert classification.error is None
+    assert classification.needs_pm is False
+
+
+def test_classify_dirty_tree_outside_git_repo_no_raise(tmp_path, capsys):
+    non_repo = tmp_path / "not-a-repo"
+    non_repo.mkdir()
+    classification = _run_classify(non_repo)
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+    assert classification.error is not None
+    assert "not inside a git repo" in classification.error
+    assert classification.needs_pm is False
 
 
 # ---------------------------------------------------------------------------

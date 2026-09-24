@@ -804,17 +804,15 @@ _MUTATION_INDETERMINATE_MESSAGE = (
     "warm dispatch indeterminate: this MUTATING op's request was written to "
     "the warm engine's pipe, which did not answer in time. Whether the engine "
     "read it is unknown from here, so the op may have COMPLETED, or may never "
-    "have started. Reconcile against real state (e.g. `git "
-    "log`) before re-running; re-running blind is how a duplicate commit "
-    "happens, and finding no trace means it is safe to re-run. Deliberately "
-    "NOT retried and NOT re-run cold here: a mutation the engine IS executing, "
-    "re-executed, is the double-execution this refusal prevents "
+    "have started. The absence of a trace is not evidence the op did not run. "
+    "Deliberately NOT retried and NOT re-run cold here: a mutation the engine "
+    "IS executing, re-executed, is the double-execution this refusal prevents "
     "(state/bug-backlog/2026-08-19-scoped-git-commit-still-reports-a-landed-"
     "d4c7d9dc8e14.yaml)."
 )
 
 
-#: The SERVER-SIDE sibling, for `ipc._op_timeout_envelope`. Kept here, next to
+#: The SERVER-SIDE sibling, for `ipc._timeout_error_envelope`. Kept here, next to
 #: the client message and imported from there, so the two stay one edit apart
 #: rather than two copies that drift -- the same single-home reasoning that
 #: constant's own consumer records.
@@ -831,16 +829,71 @@ _OP_TIMEOUT_INDETERMINATE_MESSAGE = (
     "warm dispatch indeterminate: this MUTATING op was dispatched inside the "
     "warm engine and exceeded its own budget before returning. The op may have "
     "COMPLETED -- the engine does not stop executing when its budget expires. "
-    "Reconcile against real state (e.g. `git log`) before re-running; "
-    "re-running blind is how a duplicate commit happens. Deliberately NOT "
-    "retried here: re-executing a dispatched mutation whose outcome is unknown "
-    "is exactly the double-execution this refusal prevents "
+    "Deliberately NOT retried here: re-executing a dispatched mutation whose "
+    "outcome is unknown is exactly the double-execution this refusal prevents "
     "(state/bug-backlog/2026-08-19-scoped-git-commit-still-reports-a-landed-"
     "d4c7d9dc8e14.yaml)."
 )
 
 
-def _indeterminate_envelope(msg: dict, detail: str) -> dict:
+#: The fire-and-forget sibling of `_MUTATION_INDETERMINATE_MESSAGE`. Rendered
+#: instead of it when `evidence_class(method)` is `FIRE_AND_FORGET`
+#: (docs/decisions/DR-442-completion-evidence-is-the-engine-s-record-not-the-side-effect.md):
+#: the op's own effect lands off-box or after return, so the result is
+#: telemetry, never an instruction to reconcile or re-run by hand.
+_FIRE_AND_FORGET_INDETERMINATE_MESSAGE = (
+    "warm dispatch indeterminate: this MUTATING op's request was written to "
+    "the warm engine's pipe, which did not answer in time. This op's own "
+    "effect lands off-box or after the handler returns, so its outcome was "
+    "not observed here and is not this caller's to adjudicate. Deliberately "
+    "NOT retried and NOT re-run cold here: the next cadence tick re-drives "
+    "it, not a blind re-run "
+    "(state/bug-backlog/2026-08-19-scoped-git-commit-still-reports-a-landed-"
+    "d4c7d9dc8e14.yaml)."
+)
+
+
+def _indeterminate_text_for(method: Any) -> str:
+    """The indeterminate message text for `method`, selected by its declared
+    completion-evidence class (docs/decisions/DR-442-completion-evidence-is-
+    the-engine-s-record-not-the-side-effect.md).
+
+    Imported lazily and ONLY from this failure-path function, matching
+    `_op_may_mutate`'s own lazy-on-failure-path-only pattern: this module is
+    on every invocation's cold-start preamble. `UNDECLARED`, and any import
+    or lookup failure, fall back to the fail-closed `_MUTATION_INDETERMINATE_MESSAGE`.
+    """
+    try:
+        from coordinator_core.authz.completion_evidence import EvidenceClass, evidence_class
+
+        if evidence_class(method) is EvidenceClass.FIRE_AND_FORGET:
+            return _FIRE_AND_FORGET_INDETERMINATE_MESSAGE
+    except Exception:  # noqa: BLE001 -- fail closed, see docstring
+        pass
+    return _MUTATION_INDETERMINATE_MESSAGE
+
+
+#: The poll op named in every client-minted -32004 (D5, C5). A bare literal,
+#: not imported from `coordinator_core.ops.warm_request_status` -- importing
+#: that module would pull the ops-registration graph onto this client's
+#: cold-start preamble, which `test_warm_reach_import_ceiling.py` forbids.
+_RECONCILE_POLL_METHOD = "warm.request_status"
+
+
+def _poll_command_for(dispatch_key: str) -> str:
+    """The exact, runnable poll invocation for `dispatch_key` (C5).
+
+    Follows the one precedent already in the tree for a printed CLI
+    reconcile command (`ops/session/guard_settings_integrity.py ::
+    _KS_DETAIL_COMMAND`): `python3 -m coordinator_core.invoke <op> <params>
+    --bare`. `--bare` prints just `result`, matching a poll's own shape (a
+    caller wants the state dict, not a JSON-RPC envelope).
+    """
+    params = json.dumps({"key": dispatch_key}, ensure_ascii=False)
+    return f"python3 -m coordinator_core.invoke {_RECONCILE_POLL_METHOD} '{params}' --bare"
+
+
+def _indeterminate_envelope(msg: dict, detail: str, dispatch_key: Optional[str] = None) -> dict:
     """A JSON-RPC error envelope for a written-but-unanswered mutation.
 
     Returned rather than raised, and returned rather than `None`, because both
@@ -849,14 +902,30 @@ def _indeterminate_envelope(msg: dict, detail: str) -> dict:
     `try_warm_dispatch`'s Backstop 2 into that same `None`. An envelope reaches
     `coordinator_core.invoke.__main__` as THE response, so the cold path is
     skipped and the caller's existing error ladder surfaces this text.
+
+    `dispatch_key`, when given (every live call site mints one -- see
+    `_try_warm_dispatch_inner`), is threaded into `error.data.dispatch_key`
+    and `error.data.reconcile` (contract § 9, D5), and the exact poll
+    invocation is appended to the message text. This does NOT restore the
+    delivery claim the message deliberately withholds -- the poll, not this
+    message, is what now knows whether the op ran.
     """
+    text = _indeterminate_text_for(msg.get("method"))
+    message = f"{text} ({detail})"
+    error: dict = {
+        "code": WARM_DISPATCH_INDETERMINATE,
+        "message": message,
+    }
+    if dispatch_key is not None:
+        error["message"] = f"{message} Reconcile: {_poll_command_for(dispatch_key)}"
+        error["data"] = {
+            "dispatch_key": dispatch_key,
+            "reconcile": _RECONCILE_POLL_METHOD,
+        }
     return {
         "jsonrpc": "2.0",
         "id": msg.get("id"),
-        "error": {
-            "code": WARM_DISPATCH_INDETERMINATE,
-            "message": f"{_MUTATION_INDETERMINATE_MESSAGE} ({detail})",
-        },
+        "error": error,
     }
 
 
@@ -1000,6 +1069,20 @@ def _try_warm_dispatch_inner(
     token = engine_token()
     pipe = _endpoint_name(token)
     request = {**msg, "_engine_token": token}
+    # THE DISPATCH KEY (D1, contract § 1). Minted once per request, here --
+    # never at module scope, matching every other per-call seam below (`_caller`,
+    # publish-lane, settings-home) -- and sent as the `_dispatch_key`
+    # side-channel field `_serve_line` pops before dispatch. `time.monotonic_ns()`
+    # is the clock C1's spike verdict picked on the executing (Linux) host as
+    # ordered across independently-started interpreters; a Windows/Darwin
+    # reading is recorded there as owed, not assumed here. `time` is imported
+    # locally, matching this module's per-call-site import discipline: it sits
+    # on every invocation's cold-start preamble and is measured against
+    # `test_warm_reach_import_ceiling.py`'s budget.
+    import time as _time
+
+    dispatch_key = f"{os.getpid()}-{_time.monotonic_ns()}"
+    request["_dispatch_key"] = dispatch_key
     # Caller-identity seam (module docstring): one top-level `_caller` object, ADDED
     # 2026-08-30 (docs/plans/2026-08-30-every-op-runs-in-the-callers-environment.md
     # § C1b), replacing the bare `_session_id` string this leg used to send. Fields ARE
@@ -1169,17 +1252,17 @@ def _try_warm_dispatch_inner(
                 line = pending.wait(max(0.0, mutation_deadline - liveness_secs))
                 if line is _TIMED_OUT:
                     return _indeterminate_envelope(
-                        msg, f"no response within {mutation_deadline}s"
+                        msg, f"no response within {mutation_deadline}s", dispatch_key
                     )
                 if not line or not line.strip():
                     # Held past the probe, then closed silently: engaged, not
                     # unserviced -- see the zero-byte branch below. -> warm-pool P0 (e).
                     return _indeterminate_envelope(
-                        msg, "closed without a response after delivery"
+                        msg, "closed without a response after delivery", dispatch_key
                     )
         except BrokenPipeError:
             if delivered and _op_may_mutate(msg.get("method")):
-                return _indeterminate_envelope(msg, "pipe broke after delivery")
+                return _indeterminate_envelope(msg, "pipe broke after delivery", dispatch_key)
             if attempt == 0:
                 continue  # the table's one re-open
             return None
@@ -1197,7 +1280,7 @@ def _try_warm_dispatch_inner(
         # branch below for the evidence that separates them.
         def _cold_or_indeterminate(detail: str):
             if _op_may_mutate(msg.get("method")):
-                return _indeterminate_envelope(msg, detail)
+                return _indeterminate_envelope(msg, detail, dispatch_key)
             return None
 
         if not line or not line.strip():

@@ -340,6 +340,40 @@ def test_c2_unclaim_still_refuses_non_terminal_awaiting_gate_without_q1_text(tmp
     assert "requires deployment_state in" in result["error"]
 
 
+def test_c2_unclaim_matches_deployment_state_with_a_trailing_inline_comment(tmp_path):
+    """Item 17 regression: `deployment_state: in_flight  # some note` must
+    still match `in_flight` — a raw `read_fm_field` compare (pre-fix) never
+    matches because the trailing comment is included verbatim in the raw
+    value, so a commented-in_flight record spuriously fell through to the
+    fail-loud "requires deployment_state in {in_flight, ready_to_fire}"
+    branch instead of unclaiming."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    handoff = _seed_handoff(
+        repo,
+        "20260101-inline-comment.md",
+        deliverable_id="dlv-inline-comment-000000",
+        deployment_state="in_flight",
+    )
+    text = handoff.read_text(encoding="utf-8")
+    text = text.replace(
+        "deployment_state: in_flight\n",
+        "deployment_state: in_flight  # some note\n",
+    )
+    handoff.write_text(text, encoding="utf-8")
+
+    result = _run(_unclaim_params(str(handoff)), repo_root=repo / ".git")
+
+    assert result["exit_code"] == 0, result
+    # The rewrite preserves the original trailing comment verbatim (see
+    # `replace_fm_field_raw`) — compare via the unquoted/comment-stripped
+    # reader, the same primitive the fix under test now uses.
+    from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
+
+    split = split_frontmatter(handoff.read_text(encoding="utf-8"))
+    assert read_fm_field_unquoted(split.fm_text, "deployment_state") == "ready_to_fire"
+
+
 def test_c2_close_no_longer_accepts_live_children_recheck_parameter(tmp_path):
     """Census row 4: zero production call sites pass it, and its sole
     documented caller (`handoff_reconcile_close_terminal.py`) is deleted

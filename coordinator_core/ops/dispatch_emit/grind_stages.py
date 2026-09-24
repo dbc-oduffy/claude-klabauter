@@ -78,6 +78,17 @@ _NO_STAGING_CLAUSE = (
     "that."
 )
 
+#: Design item 5 (plan docs/plans/2026-09-22-port-the-remaining-bug-backlog-
+#: grind-les.md, P145-C2). Interpolated into the triage, refute-close and
+#: fix prompts -- peers share this checkout, so a file `git status
+#: --porcelain` shows as modified must be judged at its committed content,
+#: never at whatever a peer has dirtied it to.
+_JUDGE_AGAINST_HEAD_CLAUSE = (
+    "If `git status --porcelain -- <path>` shows a file you are judging as "
+    "modified, judge its `git show HEAD:<path>` content instead, because "
+    "peers share this checkout."
+)
+
 
 def _schema_opt(schema: dict) -> str:
     """Render ``schema`` as the JS object-literal text for an ``agent(...)``
@@ -232,7 +243,7 @@ def compose_triage_call(
         batch_id_part,
         ("lit", ".json. Triage depth for this batch is '"),
         depth_part,
-        ("lit", "'. " + _NO_STAGING_CLAUSE),
+        ("lit", "'. " + _JUDGE_AGAINST_HEAD_CLAUSE + " " + _NO_STAGING_CLAUSE),
     ]
     row_schema = {
         "type": "object",
@@ -293,14 +304,16 @@ def compose_refute_close_call(
     declare the queue-path removal.
 
     ``proposals_js``/``run_id_js`` name JS runtime expressions -- the
-    proposal rows (row_id/path/digest/triage evidence) this batch's
+    proposal rows (row_id/path/digest/triage evidence/origin) this batch's
     refute-close node actually reached, and the run stamp -- interpolated
-    instead of a static/omitted value."""
+    instead of a static/omitted value. Each proposal's ``origin`` records
+    where the close proposal came from (``triage:<verdict>`` for a triage
+    proposal), never derived from the batch id."""
     proposals_part: tuple[str, str] = ("expr", proposals_js) if proposals_js else ("lit", "[]")
     profile_dir_part: tuple[str, str] = ("expr", profile_dir_js) if profile_dir_js else ("lit", profile_dir)
     run_id_part: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", "<run-id>")
     parts: list[tuple[str, str]] = [
-        ("lit", "You are the refute-close stage. Your close proposals (row_id/path/digest/evidence) are: "),
+        ("lit", "You are the refute-close stage. Your close proposals (row_id/path/digest/evidence/origin) are: "),
         proposals_part,
         (
             "lit",
@@ -327,7 +340,9 @@ def compose_refute_close_call(
             "those. In every one of `confirmed`/`refuted`/`stale`, return `row` "
             "as the row_id exactly as given in the proposals above, never the "
             "row's path -- e.g. {\"row\": \"row3\", \"new_path\": \"archive/2026-09/row3.yaml\"}. "
-            + _NO_STAGING_CLAUSE,
+            "Each proposal also carries its own `origin` -- where it came from -- "
+            "for your own reference; it does not change how you judge it. "
+            + _JUDGE_AGAINST_HEAD_CLAUSE + " " + _NO_STAGING_CLAUSE,
         ),
     ]
     schema = {
@@ -377,6 +392,125 @@ def compose_refute_close_call(
     )
 
 
+#: The three answers `resize` may return, verbatim, and no other value
+#: (design item 4, docs/plans/2026-09-22-port-the-remaining-bug-backlog-
+#: grind-les.md, P145-C3).
+RESIZE_ANSWERS: tuple[str, ...] = ("plan-weight", "focused-fix", "not-reproduced")
+
+
+def compose_resize_call(
+    *,
+    label: str,
+    phase_title: str,
+    profile: str = "",
+    rows_js: Optional[str] = None,
+    run_id_js: Optional[str] = None,
+    fix_verdict: Optional[str] = None,
+    close_verdict: Optional[str] = None,
+    agent_type_host: Optional[str] = None,
+    repo_root: str = ".",
+) -> str:
+    """`resize` (general-purpose, sonnet, medium). One read-only re-size per
+    triage batch, called before any baton hand-back for that batch's
+    size-floor-routed rows (design item 4). Read-only: it does not fix,
+    close, or stage anything itself.
+
+    For each row it is handed, decides `plan-weight` (genuinely needs a
+    plan -- the row's own hand-back reason is this answer's
+    `design_question`), `focused-fix` (fits a normal fix after all), or
+    `not-reproduced` (the defect is not reproduced). Appends one ledger
+    line per row via `backlog-grind-assemble grind-row append --profile P --row-id R
+    --digest D --stage triage --verdict resize --outcome <verdict>`, where
+    `<verdict>` is one of the profile's OWN declared triage verdicts --
+    never an invented `resize-`-prefixed string (eng-director F1, option
+    (a): the ledger outcome stays profile-declared). ``fix_verdict``/
+    ``close_verdict`` are the caller's own resolution (from the profile's
+    triage edges) of which declared verdict routes to a fix-kind /
+    refute-close-kind node -- `None` when that resolution is ambiguous
+    (e.g. two fix-kind triage targets), in which case this prompt says so
+    rather than naming a made-up verdict.
+
+    ``rows_js``/``run_id_js`` name JS runtime expressions (this batch's
+    baton-routed rows -- row_id/path/digest -- and the run stamp) to
+    interpolate instead of a static value."""
+    rows_part: tuple[str, str] = ("expr", rows_js) if rows_js else ("lit", "[]")
+    run_id_part: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", "<run-id>")
+    if fix_verdict:
+        fix_note = f"`focused-fix` writes `--outcome {fix_verdict}`"
+    else:
+        fix_note = "no fix-kind edge is resolvable off triage for this profile, so `focused-fix` has no `--outcome` value to write"
+    if close_verdict:
+        close_note = f"`not-reproduced` writes `--outcome {close_verdict}`"
+    else:
+        close_note = "no refute-close-kind edge is resolvable off triage for this profile, so `not-reproduced` has no `--outcome` value to write"
+    if fix_verdict:
+        plan_note = f"`plan-weight` also writes `--outcome {fix_verdict}` (the row's underlying verdict is unchanged -- only the routing decision differs)"
+    else:
+        plan_note = "no fix-kind edge is resolvable off triage for this profile, so `plan-weight` has no `--outcome` value to write"
+    parts: list[tuple[str, str]] = [
+        (
+            "lit",
+            "You are the resize stage. This batch's rows were routed to a "
+            "hand-back on size alone before you were asked. Your rows "
+            "(row_id/path/digest) are: ",
+        ),
+        rows_part,
+        (
+            "lit",
+            ". You are read-only: you do not fix, close, or stage anything "
+            "yourself. For each row, decide exactly one answer from this "
+            f"list, verbatim, and no other value: {list(RESIZE_ANSWERS)}. "
+            "`plan-weight` means the row genuinely needs a plan before it "
+            "can proceed -- state the design question that plan must "
+            "answer in `design_question`. `focused-fix` means it fits a "
+            "normal fix after all. `not-reproduced` means the defect is "
+            "not reproduced. As you decide each row, run "
+            "`backlog-grind-assemble grind-row append --profile "
+            f"{profile} --row-id <its row_id> --digest <its digest> --stage "
+            "triage --verdict resize --outcome <the verdict named below "
+            "for your answer> --evidence-file <a file with your evidence> "
+            "--run-stamp ",
+        ),
+        run_id_part,
+        (
+            "lit",
+            f" --repo-root {repo_root}` immediately. {plan_note}; {fix_note}; "
+            f"{close_note}. " + _JUDGE_AGAINST_HEAD_CLAUSE + " " + _NO_STAGING_CLAUSE,
+        ),
+    ]
+    schema = {
+        "type": "object",
+        "required": ["answers"],
+        "properties": {
+            "answers": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["row", "answer"],
+                    "properties": {
+                        "row": {
+                            "type": "string",
+                            "description": "the row_id exactly as given above, never the row's path",
+                        },
+                        "answer": {"type": "string", "enum": list(RESIZE_ANSWERS)},
+                        "design_question": {"type": "string"},
+                    },
+                },
+            },
+        },
+    }
+    return _agent_call(
+        _join_prompt_parts(parts),
+        label=label,
+        phase_title=phase_title,
+        agent_type=GENERAL_PURPOSE_AGENT_TYPE,
+        agent_type_host=agent_type_host,
+        effort="medium",
+        schema=schema,
+        is_expr=True,
+    )
+
+
 def compose_fix_call(
     *,
     label: str,
@@ -387,6 +521,7 @@ def compose_fix_call(
     locked_files_js: Optional[str] = None,
     feedback_js: Optional[str] = None,
     close_note_js: Optional[str] = None,
+    refute_note_js: Optional[str] = None,
     profile: str = "",
     profile_dir_js: Optional[str] = None,
     row_path_js: Optional[str] = None,
@@ -412,7 +547,11 @@ def compose_fix_call(
     keys rather than a static approximation (§ Design § Stage library,
     "Fix locks cover the TRIAGE-DECLARED files"), and the verifier's
     feedback fed back on a retry (DR-404: fail routes back to FIX with
-    feedback, never a blind re-verify)."""
+    feedback, never a blind re-verify). ``refute_note_js`` names a JS
+    expression that, on a row revived after a refute-close refutation,
+    evaluates to a clause stating the refuter judged the defect live at
+    HEAD and gives the refuter's own reason verbatim (design item 2,
+    docs/plans/2026-09-22-port-the-remaining-bug-backlog-grind-les.md)."""
     row_id_part: tuple[str, str] = ("expr", row_id_js) if row_id_js else ("lit", row_id)
     tail = (
         "] plus `ledger:"
@@ -466,7 +605,9 @@ def compose_fix_call(
         parts.append(("expr", feedback_js))
     if close_note_js:
         parts.append(("expr", close_note_js))
-    parts.append(("lit", " " + _NO_STAGING_CLAUSE))
+    if refute_note_js:
+        parts.append(("expr", refute_note_js))
+    parts.append(("lit", " " + _JUDGE_AGAINST_HEAD_CLAUSE + " " + _NO_STAGING_CLAUSE))
     schema = {
         "type": "object",
         "required": ["outcome", "has_tradeoff"],
@@ -639,7 +780,12 @@ _COMMIT_SCHEMA = {
 #: status` before any retry, never retried blind) -- shared verbatim by
 #: `compose_commit_call` and `compose_commit_ledger_only_call`.
 _COMMIT_TAIL_LIT = (
-    " Then commit. If the outcome is indeterminate, reconcile it against "
+    " Then commit via `coordinator/bin/coordinator-safe-commit.py`, passing "
+    "`--declared-revert <path>` for every removed path above (this row's "
+    "settled ledger jsonl and any scratch TF yaml the settle step removed) -- "
+    "the only committer route. Raw `git commit` is refused by the "
+    "block-subagent-commit guard and is NOT a route."
+    " If the outcome is indeterminate, reconcile it against "
     "`git log` and `git status` before doing anything else -- never retry blind."
     " On commit-failed, put the verbatim refusal or the divergence you found in `reason`."
 )

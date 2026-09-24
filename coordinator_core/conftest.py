@@ -49,6 +49,8 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core import memo_corpus
+
 #: The real `os` callables, bound at import BEFORE any test can monkeypatch
 #: them. `_quarantine_real_home`'s teardown needs them: it runs while a test's
 #: own patches are still installed, and several warm tests replace `os.unlink`
@@ -583,16 +585,16 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
                         try:
                             _REAL_UNLINK(_REAL_JOIN(parent, name))
                         except OSError:
-                            pass
+                            pass  # fixture teardown best-effort; leftover is harmless
                     for name in dirnames:
                         try:
                             _REAL_RMDIR(_REAL_JOIN(parent, name))
                         except OSError:
-                            pass
+                            pass  # fixture teardown best-effort; leftover is harmless
                 try:
                     _REAL_RMDIR(_warm_base)
                 except OSError:
-                    pass
+                    pass  # fixture teardown best-effort; leftover is harmless
 
         request.addfinalizer(_drop_warm_base)
 
@@ -1115,7 +1117,7 @@ def _resolve_live_doe_lessons_outbox():
                     try:
                         _sys.path.remove(str(_lib))
                     except ValueError:
-                        pass
+                        pass  # already removed by another cleanup path; nothing to do
         except Exception:
             root = ""
     return (Path(root) / "state" / "lessons-outbox") if root else None
@@ -1142,7 +1144,7 @@ def _no_live_state_corpus_writes(request):
         try:
             after = set(os.listdir(d)) if d.is_dir() else set()
         except OSError:
-            continue
+            continue  # dir vanished or unreadable after the test; nothing to compare
         gained = after - before[d]
         if gained:
             _pytest.fail(
@@ -1193,6 +1195,98 @@ def _no_new_live_session_hub_entries():
         "repo, or pass the root explicitly. See this file's Live session-hub "
         "litter guard note."
     )
+
+
+# ---------------------------------------------------------------------------
+# Live cross-repo-inbox write guard — P128-C2,
+# docs/plans/2026-09-12-stop-engine-memo-fixtures-reaching-a-liv.md
+# ---------------------------------------------------------------------------
+#
+# Eighteen synthetic fixture memos landed in example-retrieval-repo's REAL
+# `state/cross-repo/inbox/` on 2026-09-04, because the memo fixtures set only
+# `CLAUDE_HOME` while `COORDINATOR_SETTINGS_HOME` — consulted first by
+# `_settings_home.settings_home()` — stayed pointed at the real machine-local
+# registry until `0f0cd2b180` closed that vector two days later. Same
+# eager-at-import-time discipline as `_resolve_live_doe_lessons_outbox`
+# above and for the identical reason: resolving lazily inside a test risks a
+# cold-env test running first and poisoning the ambient environment this
+# reads, which would silently disarm the guard for the whole session. The
+# root set is resolved here, before `_quarantine_real_home` (or any other
+# fixture) applies, against the AMBIENT pre-quarantine environment.
+
+
+def _resolve_live_inbox_roots() -> "tuple[str, ...]":
+    """This repo's own inbox, plus every peer receiver's inbox this box's
+    machine-local registry names — resolved once, at import time.
+
+    An unresolvable leg (no registry configured, a registry entry this box
+    cannot read) drops out of the set silently: this is the root-SET
+    resolver, never a failure signal for "nothing registered here" — a
+    registry-less box must see a guard that still watches its own inbox and
+    nothing more.
+    """
+    own_repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    roots = [os.path.join(memo_corpus.memo_corpus_root(own_repo_root), "inbox")]
+    try:
+        from coordinator_core.ops.fleet import _memo_resolver  # noqa: PLC0415
+
+        registered_repos = _memo_resolver.read_registry_repos()
+    except Exception:
+        registered_repos = {}
+    for repo_path in registered_repos.values():
+        try:
+            corpus_root, _ = memo_corpus.receiver_inbox_root(repo_path)
+        except Exception:
+            continue
+        roots.append(os.path.join(corpus_root, "inbox"))
+    return tuple(roots)
+
+
+_LIVE_INBOX_ROOTS = _resolve_live_inbox_roots()
+
+
+def _live_inbox_roots() -> "tuple[str, ...]":
+    """Monkeypatchable seam over the import-time-resolved root set above.
+
+    `test_no_live_inbox_writes_from_suite.py`'s red-verdict test patches THIS
+    function to stub a live root, rather than touching the real resolution —
+    a two-verdict oracle whose red leg has no such seam is one that gets
+    quietly retuned until it passes.
+    """
+    return _LIVE_INBOX_ROOTS
+
+
+@_pytest.fixture(autouse=True)
+def _no_live_inbox_writes_from_suite():
+    """Fail loudly if a test writes into a live cross-repo inbox — this
+    repo's own, or a registered peer's. Before/after directory-listing diff
+    per root, same template as `_no_new_live_session_hub_entries` above.
+    Negative path cost: two `os.scandir` calls per root, no subprocess, no
+    git call — the registry read already happened once, at import.
+    """
+    roots = _live_inbox_roots()
+    before = {}
+    for root in roots:
+        try:
+            with os.scandir(root) as entries:
+                before[root] = {e.name for e in entries}
+        except OSError:
+            before[root] = set()
+    yield
+    for root in roots:
+        try:
+            with os.scandir(root) as entries:
+                after = {e.name for e in entries}
+        except OSError:
+            continue  # root vanished or unreadable after the test; nothing to compare
+        leaked = sorted(after - before[root])
+        if leaked:
+            _pytest.fail(
+                f"_no_live_inbox_writes_from_suite: {root} gained {leaked!r} — a "
+                "test delivered into a LIVE cross-repo inbox. Point the receiver "
+                "at a tmp_path repo instead.",
+                pytrace=False,
+            )
 
 
 # ---------------------------------------------------------------------------

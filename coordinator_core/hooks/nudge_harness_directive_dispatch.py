@@ -468,7 +468,7 @@ def last_assistant_text(transcript_path: str) -> str:
         try:
             entry = json.loads(line)
         except ValueError:
-            continue
+            continue  # malformed transcript line; skip it
         if not isinstance(entry, dict) or entry.get("type") != "assistant":
             continue
         # A truthy non-dict `message` (older schema,
@@ -597,7 +597,7 @@ def ask_user_question_text(transcript_path: str) -> str:
         try:
             entry = json.loads(line)
         except ValueError:
-            continue
+            continue  # malformed transcript line; skip it
         if not isinstance(entry, dict):
             continue
         # Stop at the turn boundary: only this turn's questions are in scope.

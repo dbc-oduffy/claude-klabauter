@@ -121,7 +121,7 @@ def _first_existing(paths: "list[str]") -> str:
             if Path(p).is_file():
                 return p
         except Exception:
-            continue
+            continue  # per-candidate probe; one unresolvable candidate must not abort the scan
     return ""
 
 

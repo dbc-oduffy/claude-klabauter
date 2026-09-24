@@ -26,7 +26,10 @@ contention/session-registry reads are unchanged — both were already
 payload-cwd/`CLAUDE_PROJECT_DIR`-anchored, never `__file__`-anchored, in the
 source script.
 
-Op contract: `params["payload"]` supplies `cwd` and `session_id`. Returns
+Op contract: `params` reaches this op in either shape a `hooks.*` handler
+receives — wrapped as `params["payload"]` by both engine doors, flat by the
+cold chain; `_envelope.payload_of` reads both, supplying `cwd` and
+`session_id`. Returns
 `context_only("SessionStart", <manifest text>)` — the concatenated PLUGIN/REPO
 snippet bodies, per-entry error banners, and the bounded peer-contention/
 Group-EM lines, matching the source script's raw-stdout emission byte-for-
@@ -49,9 +52,10 @@ import json
 import os
 import threading
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Optional
 
-from coordinator_core.hooks._envelope import context_only
+from coordinator_core.bin_lib_binding import exec_module_bin_bound
+from coordinator_core.hooks._envelope import context_only, payload_of
 from coordinator_core.ipc import register_op
 
 _ROOT_PLUGIN = "PLUGIN"
@@ -96,7 +100,7 @@ def _consumer_repo_root(payload: dict) -> "Optional[Path]":
             try:
                 start = Path(candidate).resolve()
             except OSError:
-                continue
+                continue  # unresolvable candidate path; try the next one
             break
     if start is None:
         try:
@@ -145,7 +149,7 @@ def _compute_contention(repo_root, session_id, timeout: float = 0.3):
                 try:
                     record = json.loads(entry.read_text(encoding="utf-8"))
                 except (OSError, ValueError):
-                    continue
+                    continue  # unreadable/malformed session record; skip it
                 if not isinstance(record, dict):
                     continue
                 if exclude_session_id and record.get("sessionId") == exclude_session_id:
@@ -157,7 +161,7 @@ def _compute_contention(repo_root, session_id, timeout: float = 0.3):
                 try:
                     cwd_path = Path(raw_cwd).resolve()
                 except OSError:
-                    continue
+                    continue  # unresolvable recorded cwd; skip this session record
                 for directory in (cwd_path, *cwd_path.parents):
                     if directory == repo_root:
                         repo_count += 1
@@ -185,7 +189,7 @@ def _group_em_nomination_module(plugin_root: "Optional[Path]"):
         if spec is None or spec.loader is None:
             return None
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        exec_module_bin_bound(spec.loader, module, str(path.parent))
         return module
     except Exception:
         return None
@@ -206,7 +210,7 @@ def _gem_display_name(repo_root, session_id: str, nominated_name) -> str:
             if holder_name:
                 return holder_name
     except Exception:
-        pass
+        pass  # absent/malformed watch file is the cold-start case
     return "name unrecorded"
 
 
@@ -273,10 +277,7 @@ def _compose_oversize_repo_banner(rel_path: str, byte_len: int) -> str:
 
 @register_op("hooks.assert_em_role")
 def _handler(params: dict, repo_root=None) -> dict:
-    payload = params.get("payload")
-    if not isinstance(payload, Mapping):
-        payload = {}
-    payload = dict(payload)
+    payload = payload_of(params)
 
     plugin_root = _plugin_root()
     snippets_dir = (plugin_root / "snippets") if plugin_root else None
@@ -314,12 +315,12 @@ def _handler(params: dict, repo_root=None) -> dict:
         try:
             parts.append(_PEER_READ_POINTER.format(repo_count=repo_count, box_count=box_count))
         except Exception:
-            pass
+            pass  # advisory text only; a formatting failure must not block SessionStart
         try:
             gem_clause = _group_em_clause(consumer_repo_root, plugin_root)
             if gem_clause:
                 parts.append(gem_clause)
         except Exception:
-            pass
+            pass  # advisory text only; a lookup failure must not block SessionStart
 
     return context_only("SessionStart", "".join(parts))

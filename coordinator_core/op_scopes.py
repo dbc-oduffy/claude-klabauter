@@ -37,7 +37,7 @@ from typing import Dict
 #                  required.  Handler receives None as repo_root.
 #
 # NOTE: "central" scope has been RETIRED as of 2026-07-07. Emit ops
-# (artifact.emit, backlog.record, goal.append) were reclassified from
+# (artifact.emit, goal.append) were reclassified from
 # "central" to "common_dir" by the per-repo-emission-cutover plan
 # (docs/plans/2026-07-07-per-repo-emission-cutover.md, chunk C3).
 # "central" meaning "route via coordinator_state_root --central, bypass
@@ -56,11 +56,10 @@ from typing import Dict
 # ---------------------------------------------------------------------------
 _OP_KEY_SCOPE: Dict[str, str] = {
     # Working-tree, keyed on git_common_dir (shared across linked worktrees)
-    # backlog.record / goal.append: per-repo writes — each calling repo supplies
+    # goal.append: per-repo writes — the calling repo supplies
     # _origin_worktree so the handler resolves main_worktree_root(common_dir) and
     # attributes the row to the calling repo.
     # Reclassified from "central" → "common_dir" per 2026-07-07 per-repo-emission-cutover.
-    "backlog.record":                        "common_dir",
     "goal.append":                           "common_dir",
     "orientation.regenerate_cache":          "common_dir",
     # workflow.fire / workflow.fire_status — the fire registry and its logs live
@@ -910,6 +909,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "ceremony.update_docs_scan":               "common_dir",
     "deliverable.cascade_retract":              "common_dir",
     "deliverable.cascade_backstop_sweep":       "common_dir",
+    "deliverable.cascade_divergence_report":    "common_dir",
     # deliverable.fork_detect — keyed on git_common_dir for the same reason as the
     # three cascade ops above: the detector walks the main-worktree-rooted corpus
     # (state/handoffs/, docs/plans/) through seed_deliverable_ledger_rows. Read-only —
@@ -1102,6 +1102,11 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # "show_top" would key anything meaningful.
     # Spec: state/handoffs/2026-08-13-session-owner-reachability-registry.md § 1.
     "session.resolve_address":                "none",
+    # session.whoami_live — read-only composition of core.resolve_session_id
+    # (env-var reads, no repo_root) and liveness.session_live (a
+    # machine-global harness-registry/meta.json read) -> scope "none",
+    # same resolution story as session.resolve_address above.
+    "session.whoami_live":                    "none",
     # session.peer_roster — read-only cwd-filtered live peer roster, over the
     # SAME machine-global harness registry as session.resolve_address just
     # above (identical resolution story, identical reasoning for "none").
@@ -1405,10 +1410,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # git commit history (most recent commit on the branch being merged), which is
     # per-worktree state, same class as coverage.gate.
     "merge.quiet_activity_gate":               "show_top",
-    # schema.drift_gate — "none": resolves the DoE-claude sibling clone (env var /
-    # registry pointer, same ladder as the advisory probe) and claude-klabauter's own fixed
-    # vendored-schemas dir; touches no per-worktree/per-repo caller state.
-    "schema.drift_gate":                       "none",
     # update_docs.probe_fresh_repo_noop — common_dir: DIRECTORY.md / archive/ /
     # tasks/ are main-worktree-rooted paths, shared across linked worktrees of the
     # same repo per this table's own common_dir definition.
@@ -1770,6 +1771,11 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # OP_CLASSIFICATION and scope "none" here, and the two are not in tension.
     "fleet.mode_set":                            "none",
     "fleet.mode_show":                           "none",
+    # warm.request_status — "none": answers from the accept process's
+    # in-memory AckStore (or, on this handler's own cold/pool path, a fixed
+    # unknowable answer); no repo-specific state to key. C4,
+    # docs/plans/2026-09-23-warm-dispatch-reconcile.md.
+    "warm.request_status":                       "none",
 }
 
 # ---------------------------------------------------------------------------

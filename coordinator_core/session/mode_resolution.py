@@ -298,6 +298,18 @@ MODE_KEYS: Dict[str, ModeKey] = {
         value_type=bool,
         default=False,
     ),
+    # COST-INCIDENCE: `compaction_warnings` is `fleet-wins`. The strongest
+    # counter-argument is that only the session knows whether its own state
+    # is on disk. It does not carry, for three reasons:
+    #   - That cost lands on the session's own state, not on the ~50 peers'
+    #     shared tree that made `autonomous` session-wins (see that entry).
+    #   - The `informational` variant never withholds the signal: it still
+    #     tells the session that compaction is involuntary and lossy and to
+    #     commit and checkpoint now. The session-state risk is answered in
+    #     the text the session still receives, not by precedence.
+    #   - Session-wins is not constructible here anyway: no session-scoped
+    #     value exists, and `_validate_registry` refuses session-wins with
+    #     `session_pair=None`.
     "compaction_warnings": ModeKey(
         session_pair=None,
         precedence="fleet-wins",

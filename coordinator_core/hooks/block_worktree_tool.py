@@ -85,6 +85,6 @@ def _handler(params: dict, repo_root=None) -> dict:
         if sentinel_override_active():
             return no_advisory()
     except Exception:
-        pass
+        pass  # sentinel check failure falls through to the deny below, fail-closed
 
     return deny("PreToolUse", _deny_message(params.get("env")))

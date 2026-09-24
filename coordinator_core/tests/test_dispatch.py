@@ -1,16 +1,16 @@
 """
-coordinator_core.tests.test_dispatch — Dispatch-layer routing tests for the three
-reclassified per-repo state writers (backlog.record, goal.append).
+coordinator_core.tests.test_dispatch — Dispatch-layer routing tests for the
+reclassified per-repo state writer (goal.append).
 
 Plan § C3 deliverable: dispatch tests assert emit ops receive a non-None repo_root
 derived from _origin_worktree, and fail-loud (INVALID_PARAMS -32602) when absent.
 
 These tests exercise ipc.dispatch_message (the routing/keying layer), NOT the handler
 internals. Handler-level guard tests (None raises ValueError; resolve_context called with
-main_worktree_root) live in test_c4a_handler_wiring.py and test_recorder.py.
+main_worktree_root) live in test_c4a_handler_wiring.py.
 
 Plan C3 deliverable: dispatch tests asserting
-the 3 reclassified emit ops receive non-None repo_root when _origin_worktree is present and
+the reclassified emit ops receive non-None repo_root when _origin_worktree is present and
 return INVALID_PARAMS when absent. Neither path was covered before this file.
 
 Spec backlink: pln-per-repo-emission-cutover-un-h-03f05e § C3 / AC1
@@ -71,7 +71,7 @@ class _RegistryScope:
 # ---------------------------------------------------------------------------
 
 class TestEmitOpsReceiveRepoRootFromOriginWorktree:
-    """Dispatch layer correctly injects a non-None repo_root into the 3 reclassified emit ops.
+    """Dispatch layer correctly injects a non-None repo_root into the reclassified emit ops.
 
     Exercises the "common_dir" keying path in resolve_op_repo_key: when _origin_worktree is
     present in the message, git_common_dir resolves it, and dispatch_message calls the handler
@@ -102,15 +102,6 @@ class TestEmitOpsReceiveRepoRootFromOriginWorktree:
 
         return captured[0] if captured else None
 
-    def test_backlog_record_receives_non_none_repo_root(self, tmp_path: Path) -> None:
-        """backlog.record handler receives non-None repo_root when _origin_worktree is present."""
-        fake_common_dir = tmp_path / ".git"
-        received = self._dispatch_with_spy("backlog.record", fake_common_dir)
-        assert received is not None, (
-            "backlog.record handler must receive non-None repo_root when _origin_worktree present"
-        )
-        assert received == fake_common_dir
-
     def test_goal_append_receives_non_none_repo_root(self, tmp_path: Path) -> None:
         """goal.append handler receives non-None repo_root when _origin_worktree is present."""
         fake_common_dir = tmp_path / ".git"
@@ -133,8 +124,8 @@ class TestEmitOpsFailLoudWithoutOriginWorktree:
     dispatch_message converts to INVALID_PARAMS. This is the dispatch-layer fail-loud
     gate (AC1 / AC5 line of defense before the handler's own None guard).
 
-    These tests do NOT replace the handler-level tests (test_recorder.py
-    TestBacklogRecordHandler) — they test the dispatch layer independently.
+    These tests do NOT replace the handler-level tests — they test the dispatch layer
+    independently.
     """
 
     @staticmethod
@@ -146,12 +137,6 @@ class TestEmitOpsFailLoudWithoutOriginWorktree:
             "params": {},
             # _origin_worktree deliberately absent
         }
-
-    def test_backlog_record_without_origin_worktree_returns_invalid_params(self) -> None:
-        """backlog.record without _origin_worktree → error code -32602 (INVALID_PARAMS)."""
-        d = _run(dispatch_message(self._msg_without_worktree("backlog.record")))
-        assert "error" in d
-        assert d["error"]["code"] == INVALID_PARAMS
 
     def test_goal_append_without_origin_worktree_returns_invalid_params(self) -> None:
         """goal.append without _origin_worktree → error code -32602 (INVALID_PARAMS)."""

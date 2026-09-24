@@ -101,8 +101,6 @@ Negative-spec (faithfully reproduced — do NOT "fix" mid-port):
 from __future__ import annotations
 
 import os
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -114,10 +112,9 @@ from typing import List, Optional
 # The workaround survived at the one site
 # that motivated the fix.
 from coordinator_core._content_root_primitive import content_root_for as _content_root_for
+from coordinator_core._claude_klabauter_root import _machine_local_get
 from coordinator_core.doe_root_pointer import read_doe_root_pointer as _read_doe_root_pointer
 from coordinator_core.machine_resolver import registry_get
-
-_SUBPROCESS_TIMEOUT_SECS = 15
 
 
 class ResolveCoordinatorCloneError(RuntimeError):
@@ -153,35 +150,6 @@ def _claude_home_dir() -> Optional[str]:
     """``${CLAUDE_HOME:-$HOME}/.claude`` — mirrors `_rcc_claude_home_dir`."""
     home = os.environ.get("CLAUDE_HOME") or os.environ.get("HOME") or os.environ.get("USERPROFILE")
     return os.path.join(home, ".claude") if home else None
-
-
-def _machine_local_get(key: str) -> Optional[str]:
-    """``machine-local get <key>`` -> stripped stdout on success, None on any
-    failure (missing binary, non-zero exit, timeout, empty output) — same
-    discard-and-continue shape as ``coordinator_core.ops.coordinator_doe_root.
-    _machine_local_get`` (not re-derived; this module has its own copy since
-    that one is private to its module, but the contract is identical)."""
-    ml_bin = shutil.which("machine-local")
-    if ml_bin is None:
-        return None
-    try:
-        result = subprocess.run(
-            [ml_bin, "get", key],
-            capture_output=True,
-            text=True,
-            timeout=_SUBPROCESS_TIMEOUT_SECS,
-            check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        # Missing binary / timeout — discard-and-continue per docstring; a
-        # caller without machine-local configured hits this on every call,
-        # so this stays a comment rather than a per-call warning.
-        return None
-    if result.returncode != 0:
-        return None
-    resolved = (result.stdout or "").strip()
-    return resolved or None
 
 
 def _registry_doe_claude() -> Optional[str]:

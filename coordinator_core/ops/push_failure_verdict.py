@@ -205,7 +205,7 @@ def _status_probe(repo_root: Path) -> _StatusProbe:
                     ahead = int(parts[0])
                     behind = -int(parts[1])
                 except ValueError:
-                    continue
+                    continue  # malformed branch.ab line; ahead/behind stays unresolved for this line
                 else:
                     upstream_resolved = True
             continue

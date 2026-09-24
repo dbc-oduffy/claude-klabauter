@@ -84,7 +84,8 @@ Reply fields:
     {"path": "<written path>", "ok": bool,
      "findings": [{"severity","code","message","line"?}, ...],
      "error_count": int, "warn_count": int,
-     "receipt": "<written receipt path>" | None}
+     "receipt": "<written receipt path>" | None,
+     "fire_args": {"repoRoot": "<posix root>"} | absent}
     ``receipt`` names the provenance sidecar written beside the script, or is
     ``None`` when it could not be written — receipt writing is best-effort and
     never fails the emit (§ The receipt is a property of emitting).
@@ -100,6 +101,15 @@ Reply fields:
     degrades to a falsifier phase or a loud no-test-phase narration instead
     of vetoing the emit — see ``emit.py`` module docstring § The terminal
     phase degrades, it never vetoes.
+    ``fire_args`` is present, plan route only, when
+    ``repo_root or _repo_root_for_plan(plan_path)`` resolves to a root —
+    ``{"repoRoot": Path(root).as_posix()}``, a convenience for a caller that
+    hand-fires from this reply. The key is OMITTED (never ``null``) when
+    nothing resolves, and never present on the queue route. This is
+    independent of ``fire.py``'s own root binding at fire time (which
+    resolves and binds its own root regardless of whether this reply carries
+    the key) — backward compatible, and a script emitted before this field
+    existed still fires by ignoring an absent ``args``.
 
 The receipt is a property of emitting, not of one repo's wrapper:
     Every emission route writes a provenance sidecar at
@@ -574,9 +584,12 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
     Returns:
         {"path": str, "ok": bool, "findings": [<finding dict>, ...],
          "error_count": int, "warn_count": int,
-         "receipt": str | None}
+         "receipt": str | None,
+         "fire_args": {"repoRoot": str} | absent}
         ``receipt`` is the provenance sidecar's path, or ``None`` when it could
-        not be written -- that failure never changes the verdict.
+        not be written -- that failure never changes the verdict. ``fire_args``
+        is present (plan route only) when a repo root resolves -- see module
+        docstring § Reply fields.
 
     Raises:
         ValueError — if ``plan_path``/``output_path`` (plan route) or
@@ -738,7 +751,7 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         guarded_path, receipt_plan_path, params, extras=receipt_extras
     )
 
-    return {
+    reply = {
         "path": str(guarded_path),
         "receipt": receipt,
         "ok": error_count == 0,
@@ -754,3 +767,10 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         "error_count": error_count,
         "warn_count": warn_count,
     }
+
+    if not is_queue_route:
+        anchor_root = repo_root or _repo_root_for_plan(plan_path)
+        if anchor_root is not None:
+            reply["fire_args"] = {"repoRoot": Path(anchor_root).as_posix()}
+
+    return reply

@@ -1042,13 +1042,26 @@ def _validate_json_schema_node(
 
 _HANDOFF_KIND_SCHEMA_NAME = 'handoff'
 
+# Retired handoff `kind` values with NO D1 successor — distinct from
+# `_HANDOFF_KIND_PRE_RENAME_ALIASES` above, which pairs a retired spelling with
+# a live target it maps onto. `spike-result` was retired outright (DEC-3a):
+# it never renamed to anything, so `_canonical_kind()` returns it unchanged
+# and it stays absent from the live `handoff` schema's `kind` enum forever —
+# see that enum vs. `handoff-archived.schema.json`'s wider one, which still
+# lists `spike-result` for exactly this reason (the archived corpus permanently
+# retains every historical kind value a record was ever written under). Kept
+# here, not in `baton_class.py`, because it is not an alias pair — it has no
+# target to derive a `baton_class` from.
+_HANDOFF_KIND_RETIRED_SUCCESSORLESS: frozenset[str] = frozenset({'spike-result'})
+
 
 def _tolerate_handoff_kind_aliases(
     errors: list[ErrorDict], schema_name: str | None, schema: dict, frontmatter: dict | None,
 ) -> list[ErrorDict]:
     """Drop a `kind` enum error from `errors` when the raw value is a still-
-    live D1 pre-rename alias, and enrich a genuine reject's hint with the
-    alias table. SCOPED to `schema_name == "handoff"` and the top-level
+    live D1 pre-rename alias OR a retired kind with no successor at all (see
+    `_HANDOFF_KIND_RETIRED_SUCCESSORLESS`), and enrich a genuine reject's hint
+    with the alias table. SCOPED to `schema_name == "handoff"` and the top-level
     `kind` field only (never `gate_source.kind` etc — those have field paths
     other than the bare `"kind"` this checks for).
 
@@ -1070,7 +1083,7 @@ def _tolerate_handoff_kind_aliases(
     def is_kind_enum_error(e: ErrorDict) -> bool:
         return e['field'] == 'kind' and e['error'] == f'invalid enum value "{raw_kind}"'
 
-    if _canonical_kind(raw_str) in enum_values:
+    if _canonical_kind(raw_str) in enum_values or raw_str in _HANDOFF_KIND_RETIRED_SUCCESSORLESS:
         return [e for e in errors if not is_kind_enum_error(e)]
     alias_clause = ', '.join(
         f'{retired} -> {target}' for retired, target in _HANDOFF_KIND_PRE_RENAME_ALIASES.items()
@@ -2125,6 +2138,106 @@ def _cf_mise_prepped_stamp_quartet(fm: dict) -> ErrorDict | None:
     return None
 
 
+#: The four-field execution-restamp record, in written order. Mirrors
+#: `_MISE_PREPPED_FIELDS`'s spelling-once idiom; the engine's own writer
+#: (`review_assemble/exec_auth_stamp.py :: restamp_execution_authorization`)
+#: reads this same tuple's field names via the shared `locked_rmw` primitives,
+#: never a re-typed literal.
+_EXECUTION_RESTAMP_FIELDS = (
+    'execution_restamped_by',
+    'execution_restamped_at',
+    'execution_restamped_from_sha',
+    'execution_restamped_note',
+)
+
+
+def _execution_restamp_field_declared(fm: dict, field: str) -> bool:
+    """True when `field` carries a DECLARED (non-blank scalar) value.
+
+    All four restamp fields are flat scalars — unlike `mise_prepped_findings`,
+    none is list-shaped, so this is a plain non-blank check.
+    """
+    if field not in fm:
+        return False
+    value = fm.get(field)
+    return value is not None and str(value).strip() != ''
+
+
+def _cf_execution_restamp_quartet(fm: dict) -> ErrorDict | None:
+    """P-CROSS-RESTAMP-1 / H-CROSS-RESTAMP-1: the four-field execution-restamp
+    record (`execution_restamped_{by,at,from_sha,note}`) is written together or
+    not at all, on both plans and handoffs.
+
+    Mirrors `_cf_mise_prepped_stamp_quartet`'s any-of-four trigger and
+    going-forward cutoff idiom, adapted for two additional constraints a
+    restamp carries that a mise-prep attest does not:
+
+    1. A restamp records a correction to an EXISTING authorization, so it is
+       malformed without one: `execution_authorized_by` and
+       `execution_authorized_sha` must both be present.
+    2. `execution_restamped_from_sha` must differ from `execution_authorized_sha`
+       — a restamp that rebinds nothing (the two shas equal) is the shape
+       `restamp_execution_authorization`'s revert-to-witnessed-sha path removes
+       the quartet for rather than writes, so seeing it on disk means something
+       upstream wrote a no-op restamp by hand.
+
+    Gated on a going-forward `created` cutoff of 2026-09-23, the date this rule
+    was introduced — mirrors `_cf_mise_prepped_stamp_quartet`'s cutoff idiom.
+    No record on disk carries any of the four fields yet (census row 3 of
+    docs/plans/2026-09-23-exec-authorized-restamp-shape.md), so the cutoff's
+    only live effect is the same accepted residual: exempting a backdated
+    going-forward record.
+
+    Spec backlink: docs/plans/2026-09-23-exec-authorized-restamp-shape.md (C2)
+    """
+    created = fm.get('created')
+    if created and str(created) < '2026-09-23':
+        return None
+    present = [f for f in _EXECUTION_RESTAMP_FIELDS if f in fm]
+    if not present:
+        return None
+    missing = [f for f in _EXECUTION_RESTAMP_FIELDS if not _execution_restamp_field_declared(fm, f)]
+    if missing:
+        return {
+            'field': ', '.join(missing),
+            'error': 'required when any execution_restamped_* field is present',
+            'hint': (
+                'The execution-restamp record is four fields written together '
+                '(execution_restamped_by/_at/_from_sha/_note). Use '
+                'restamp_execution_authorization rather than completing the '
+                'quartet by hand.'
+            ),
+        }
+    auth_missing = [
+        f for f in ('execution_authorized_by', 'execution_authorized_sha')
+        if not fm.get(f) or str(fm.get(f)).strip() == ''
+    ]
+    if auth_missing:
+        return {
+            'field': ', '.join(auth_missing),
+            'error': 'required when the execution_restamped_* quartet is present',
+            'hint': (
+                'A restamp corrects an existing execution authorization — '
+                'execution_authorized_by and execution_authorized_sha must both '
+                'already be set. Use authorize-invocation or '
+                'stamp_execution_authorization first.'
+            ),
+        }
+    if str(fm.get('execution_restamped_from_sha')) == str(fm.get('execution_authorized_sha')):
+        return {
+            'field': 'execution_restamped_from_sha',
+            'error': 'must differ from execution_authorized_sha',
+            'hint': (
+                'execution_restamped_from_sha names the body the authorizer '
+                'actually witnessed; a restamp that rebinds nothing removes the '
+                'quartet rather than writing it. Use '
+                'restamp_execution_authorization rather than editing the '
+                'quartet by hand.'
+            ),
+        }
+    return None
+
+
 #: Kinds on which `handoff_phase` is admitted (H-CROSS-EXEC-2). The roadmap
 #: side MUST resolve through ``kind_values_for_canonical('roadmap-baton')``,
 #: never a bare ``kind == 'roadmap-baton'`` literal: that canonical resolves to
@@ -3138,6 +3251,95 @@ def _cf_plan_tasks_writes_declared(
     }
 
 
+def is_unratified_deferral(row: dict, *, governed: bool = False) -> bool:
+    """True iff `row` is an unratified deferral — the ONE definition, shared
+    by this module's hard-reject rule below and
+    `plan_tasks_render.spine_projection`'s `unratified_deferrals` key, so the
+    validator and the projection cannot disagree (docs/plans/2026-09-11-the-
+    unratified-deferral-gets-a-mechanism.md P119-C1/C4).
+
+    True when `row.get('deferred') is True` AND either `governed` (a
+    GOVERNED plan has no live authoring path for `deferred` at all — the
+    flag itself is the defect there, regardless of `pm_approved`) OR
+    `row.get('pm_approved') is not True` (the LEGACY leg: present-and-true
+    is the only ratified value; absent or false is not).
+
+    Callers import this rather than restating the predicate inline — see
+    `_cf_plan_tasks_unratified_deferral_governed` below and
+    `plan_tasks_render.spine_projection`'s own docstring for why a bare
+    `pm_approved is not True` check there (blind to plan kind) would be the
+    exact drift this plan closes.
+    """
+    if row.get('deferred') is not True:
+        return False
+    if governed:
+        return True
+    return row.get('pm_approved') is not True
+
+
+def _cf_plan_tasks_unratified_deferral_governed(
+    row: dict, *, governed: bool = False
+) -> ErrorDict | None:
+    """Hard-reject cross-field validator: a GOVERNED plan may not carry
+    `deferred: true` on any row, regardless of `pm_approved` — the GOVERNED
+    leg of P119-C1 (docs/plans/2026-09-11-the-unratified-deferral-gets-a-
+    mechanism.md).
+
+    plan-tasks.schema.json's allOf[0] enforces the LEGACY leg (`deferred:
+    true` requires `pm_approved: true`) and is STRIPPED on a governed plan
+    by `_plan_tasks_schema_without_pm_approved_required`, because governed
+    authorization is carried by the plan's `grouping_approvals` blocks, not
+    the per-row boolean. Nothing replaced the stripped branch until this
+    rule: `_cf_plan_tasks_disposition_shape` suppresses its own
+    `pm_approved` leg when `governed`, and `check_plan_tasks_grouping_
+    approval` scans only gated DISPOSITIONS (backlogged/wont_do/spun_off),
+    never the `deferred` flag — so a `deferred: true` row on a governed plan
+    passed every check that existed before this one.
+
+    On a governed plan, deferral is expressed by `disposition: backlogged`
+    under an APPROVED `defer` grouping; DoE's own authoring contract already
+    calls `deferred` legacy with no live authoring path
+    (writing-plans.md § Machine-Parseable Task Spine). So this rule refuses
+    the flag outright, rather than re-deriving a governed-aware version of
+    the legacy truthiness check.
+
+    Deliberately NOT inside `_cf_plan_tasks_disposition_shape`:
+    `plan_assemble/predicates/composition_lints.py :: spine_row_shape` calls
+    that function with `governed=True` unconditionally as a lever to skip
+    the PM-approval arm, so a governed-only refusal placed there would
+    refuse every LEGACY deferral in the composition lint too. Deliberately
+    NOT in `check_plan_tasks_grouping_approval`: the mutate op's add/stamp
+    path never calls it.
+
+    `governed` defaults False for the same reason every other rule in this
+    set does — `validate_frontmatter` sees one row's dict and cannot know
+    the plan kind; `check_plan_tasks_source` and both write guards'
+    `_plan_tasks_spine_errors` forward the real value via
+    `_apply_cross_field_rules`'s kwarg-filter-by-declared-param mechanism.
+
+    Delegates the actual predicate to `is_unratified_deferral` — this
+    function's whole job is turning that boolean into an ErrorDict when
+    `governed` is the reason it fired; the LEGACY-leg (`pm_approved`) case is
+    schema-enforced by allOf[0], not this rule, so this only fires on the
+    GOVERNED branch of the shared predicate.
+    """
+    if not governed:
+        return None
+    if not is_unratified_deferral(row, governed=True):
+        return None
+    return {
+        'field': 'deferred',
+        'error': (
+            f"plan-tasks row {row.get('id') or '(row)'}: 'deferred: true' is not "
+            'a valid authoring path on a GOVERNED plan.'
+        ),
+        'hint': (
+            "Use 'plan-tasks-resolve --backlogged' under an approved 'defer' "
+            "grouping, or 'deferred: false' where the deferral was never real."
+        ),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Ordering lint — closed rows sort to the bottom of the spine (D5, C3).
 #
@@ -3921,6 +4123,7 @@ def check_plan_tasks_source(source: str) -> ErrorDict | None:
 _PLAN_TASKS_CROSS_FIELD_RULES = [
     _cf_plan_tasks_disposition_shape,
     _cf_plan_tasks_writes_declared,
+    _cf_plan_tasks_unratified_deferral_governed,
 ]
 
 
@@ -3960,6 +4163,7 @@ _HANDOFF_CROSS_FIELD_RULES = [
     _cf_owner_axis_scalar,
     _cf_carried_items_shape,
     _cf_gate_evidence_legs_shape,
+    _cf_execution_restamp_quartet,
 ]
 
 # ---------------------------------------------------------------------------
@@ -4527,6 +4731,7 @@ _QUEUE_CROSS_FIELD_RULES = [
 #: same trap `_CUTOVER_CROSS_FIELD_RULES` records immediately above.
 _PLAN_CROSS_FIELD_RULES = [
     _cf_mise_prepped_stamp_quartet,
+    _cf_execution_restamp_quartet,
 ]
 
 _CROSS_FIELD_RULES_BY_SCHEMA: dict[str, list] = {
@@ -6693,7 +6898,7 @@ _PLAN_DIR_INDEX_FILENAMES: frozenset[str] = frozenset({'INDEX.md', 'README.md'})
 #: Record directories whose glob admits every `*.md` beneath them, so a
 #: directory index authored in one is otherwise routed to that directory's
 #: record schema and reported as a record missing every required field.
-_RECORD_DIR_INDEX_PREFIXES: tuple[str, ...] = ('docs/plans/', 'docs/decisions/')
+_RECORD_DIR_INDEX_PREFIXES: tuple[str, ...] = ('docs/plans/', 'docs/decisions/', 'docs/problems/')
 
 
 def _is_plan_dir_index_routing_excluded(normalised_repo_rel_path: str, frontmatter: dict | None) -> bool:

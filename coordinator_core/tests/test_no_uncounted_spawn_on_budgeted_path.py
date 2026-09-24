@@ -396,6 +396,19 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/discover_working_repos.py",
         ("_tier_a5", "_publish_mirror_keys"),
     ),
+    # Hand-verified 2026-09-24 (docs/plans/2026-09-12-memo-send-enrolled-in-the-composition-
+    # gate.md, C2) -- NOT a C2a empty-set row. `memo.send`'s function-granular reachable set
+    # holds three spawn sites: `git_native.py::_git._invoke`, `git/run.py::run_git`, and
+    # `git/commit_signing.py::write_signed_commit_object` (the third found by this row's own
+    # fire-time re-ask, not by the plan's original census). Each carries a `_LEGITIMIZED_SITES`
+    # entry below. `coordinator_core/ops/fleet/tests/test_memo_send_whole_op_spawn_count.py`
+    # supplies both the ASSERTION leg (whole-op spawn count by exact equality against
+    # `budget-manifest.json`) and the EXECUTION leg (per-site attribution by stack) for all
+    # three sites.
+    "memo.send": (
+        "coordinator_core/ops/fleet/memo_send.py",
+        ("_memo_send",),
+    ),
     #
     # -- C2a widening (2026-08-23, EM adjudication over the structural BLOCKED on this chunk) --
     #
@@ -1331,6 +1344,64 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "three whole-op counters, which assert exact equality against `call_count` AND "
         "cross-check the manifest's own `op_total_*` value (3/3/0, nothing stubbed).",
     ),
+    # `memo.send` (2026-09-24, docs/plans/2026-09-12-memo-send-enrolled-in-the-composition-
+    # gate.md, C2). Green-path shape: the receiver-side commit's hookless `update-index`
+    # refresh, executed by `test_green_path_spawn_count_matches_budget_and_is_attributed`.
+    (
+        "memo.send",
+        "coordinator_core/ops/ceremony/git_native.py",
+        "_git._invoke",
+        "<dynamic>",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_SPAWN,
+        counted_by="coordinator_core/ops/fleet/tests/test_memo_send_whole_op_spawn_count.py",
+        executed="Measured 2026-09-24: attributed by stack to git_native.py::_git._invoke under "
+        "`test_green_path_spawn_count_matches_budget_and_is_attributed` (`assert len(spawns) == "
+        "budgeted`, budgeted read from the manifest's memo.send `green_path`); the attribution "
+        "is itself asserted on every run.",
+    ),
+    # `run_git`'s ls-tree fallback reached via `commit_authored_new_file`'s `_head_entry_for`
+    # -> `git_state.head_blobs` route, on a PLANTED refusal precondition (`git_native.
+    # read_tree_spine` and `git_state.read_tree_spine` both monkeypatched to return `None`),
+    # executed by `test_unreadable_head_spine_refusal_spawn_count_matches_budget_and_reaches_run_git`.
+    (
+        "memo.send",
+        "coordinator_core/git/run.py",
+        "run_git",
+        "git",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_SPAWN,
+        counted_by="coordinator_core/ops/fleet/tests/test_memo_send_whole_op_spawn_count.py",
+        executed="Measured 2026-09-24: attributed by stack to git/run.py::run_git under "
+        "`test_unreadable_head_spine_refusal_spawn_count_matches_budget_and_reaches_run_git` "
+        "(`assert len(spawns) == budgeted`, budgeted read from the manifest's memo.send "
+        "`head_spine_unreadable_refused`); the attribution is itself asserted on every run. "
+        "Planted precondition: both read_tree_spine bindings monkeypatched to None so "
+        "_head_entry_for falls to git_state.head_blobs and _commit_via_head_spine refuses loud.",
+    ),
+    # Third reachable site the plan's own census did not carry -- found by C1's fire-time
+    # re-ask (step 0): the receiver repo's own `commit.gpgsign` set true (a NATURAL fixture
+    # precondition, no production monkeypatch), executed by
+    # `test_receiver_signing_enabled_spawn_count_matches_budget_and_reaches_write_signed_commit_object`.
+    (
+        "memo.send",
+        "coordinator_core/git/commit_signing.py",
+        "write_signed_commit_object",
+        "<dynamic>",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_SPAWN,
+        counted_by="coordinator_core/ops/fleet/tests/test_memo_send_whole_op_spawn_count.py",
+        executed="Measured 2026-09-24: attributed by stack to commit_signing.py::"
+        "write_signed_commit_object under "
+        "`test_receiver_signing_enabled_spawn_count_matches_budget_and_reaches_write_signed_"
+        "commit_object` (`assert len(spawns) == budgeted`, budgeted read from the manifest's "
+        "memo.send `receiver_signing_enabled`); the attribution is itself asserted on every run. "
+        "Natural precondition: receiver repo's commit.gpgsign set true (git commit-tree -S "
+        "attempted, counted as the spawn attempt regardless of DR-308's no-secret-key fallthrough).",
+    ),
 }
 
 #: Sites this gate keeps RED that a static reading would wrongly clear. EMPTY as of 2026-08-19,
@@ -1352,7 +1423,12 @@ _UNCOUNTED_MEASURED_UNREACHED: dict[tuple[str, str], str] = {}
 #: the-composition-gate-counts-processes-across-the-op-graph/D2.md`): the OPEN half of the
 #: auto_push / detached-spawn / detached-render-commit cluster. C6 (`ceremony.scoped_git_commit`)
 #: and C11 (`memo.send`) already legitimized all 5-to-8 of this cluster's sites for THOSE two
-#: ops, above in `_LEGITIMIZED_SITES`. Live re-measurement this chunk (`_reachable_functions`
+#: ops, above in `_LEGITIMIZED_SITES`. CORRECTED 2026-09-24 (docs/plans/2026-09-12-memo-send-
+#: enrolled-in-the-composition-gate.md, C2): C11's `memo.send` entries are gone -- `c07062c99`
+#: deleted the op C11 legitimized, under DR-344's kill bar -- and the live `memo.send` is a
+#: fresh C2 enrolment against the rebuilt op, covering `git_native.py::_git._invoke` and
+#: `git/run.py::run_git` in this cluster (plus a third site outside it). Live re-measurement
+#: this chunk (`_reachable_functions`
 #: seeded at every OTHER live op's own entrypoint, filtered to the three cluster files) originally
 #: found 13 further live ops / 59 (op, site) pairs, matching the brief's own EM-measured slice
 #: exactly (13 ops x their own site count: 8+5*8+1+1+4 == 59). `queue.close` (5 pairs) and
@@ -1507,8 +1583,14 @@ def test_cluster_d2_open_disposition_matches_live_measurement():
 #: `git/repo_root.py`, `git_scope.py`, `dag.py`). Two of this cluster's sites are already
 #: legitimized above in `_LEGITIMIZED_SITES` for the two ops that ARE enrolled in
 #: `_BUDGETED_ENTRYPOINTS` and reach them (`ceremony.scoped_git_commit`: `git_native.py`,
-#: `session/scope.py`, `git/run.py`, `git/divergence.py`; `memo.send`: `git_native.py` (both
-#: sites), `session/scope.py`, `git/run.py`) -- those pairs are NOT repeated here.
+#: `session/scope.py`, `git/run.py`, `git/divergence.py`; `memo.send`: `git_native.py`
+#: (`_git._invoke`), `git/run.py` (`run_git`)) -- those pairs are NOT repeated here. CORRECTED
+#: 2026-09-24 (docs/plans/2026-09-12-memo-send-enrolled-in-the-composition-gate.md, C2): the
+#: pre-kill parenthetical above named the dead `memo_send.py`'s reach ("both sites",
+#: `session/scope.py`, `git/run.py`). The rebuilt op's live reach is the two sites named just
+#: above (both already listed) plus a third outside this cluster's own file set,
+#: `git/commit_signing.py::write_signed_commit_object` -- see the new `_LEGITIMIZED_SITES`
+#: entries.
 #:
 #: Live re-measurement this chunk (`spawn_bearing_ops.resolve_op_entrypoints` seeded per live
 #: registry op, `_reachable_functions` from each op's own single resolved handler, filtered to
@@ -1568,6 +1650,9 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
     "deliverable.cascade_backstop_sweep": (
+        ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
+    ),
+    "deliverable.cascade_divergence_report": (
         ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
     ),
     "deliverable.cascade_terminal": (
@@ -1674,14 +1759,11 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/git/run.py", "run_git", "git", 0),
     ),
     "review.freeze_diff": (
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
     "review.snapshot_diff_and_head": (
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
-    ),
-    "schema.drift_gate": (
-        ("coordinator_core/git_scope.py", "_probe_foreign_repo", "git", 0),
-        ("coordinator_core/git_scope.py", "scoped_cat_file_batch", "git", 0),
     ),
     # `session.boot_sweep` rows removed 2026-08-27: the op is gravestoned
     # (K-059) and `ops/session/boot_backstop.py` is deleted. A frozen row
@@ -1701,7 +1783,7 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     ),
 }
 
-#: Entrypoints for the 48 D3-open ops, resolved via each op's own single registered handler
+#: Entrypoints for the 47 D3-open ops, resolved via each op's own single registered handler
 #: (`spawn_bearing_ops.resolve_op_entrypoints`), matching `_CLUSTER_D2_OPEN_ENTRYPOINTS`'s own
 #: shape and kept separate for the same reason: the verifying test below seeds
 #: `_reachable_functions` per op without depending on this file's own registry-divergence tests'
@@ -1711,6 +1793,10 @@ _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "ceremony.chunk_commits": ("coordinator_core/ops/ceremony/chunk_commits.py", "_handler"),
     "commit.exec_bit_change": ("coordinator_core/ops/ceremony/commit_exec_bit.py", "_handler"),
     "deliverable.cascade_backstop_sweep": ("coordinator_core/ops/cascade_backstop_sweep.py", "_handler"),
+    "deliverable.cascade_divergence_report": (
+        "coordinator_core/ops/cascade_divergence_report.py",
+        "_handler",
+    ),
     "deliverable.cascade_terminal": ("coordinator_core/ops/deliverable_cascade.py", "_handler"),
     "distill.apply_disposal": ("coordinator_core/ops/distill_apply_disposal.py", "_handler"),
     "engine.drift": ("coordinator_core/ops/engine_drift.py", "_engine_drift"),
@@ -1738,7 +1824,6 @@ _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "research.restructure_for_repeat_topic": ("coordinator_core/ops/research_dir_restructure.py", "_handler"),
     "review.freeze_diff": ("coordinator_core/ops/review_freeze_diff.py", "_handler"),
     "review.snapshot_diff_and_head": ("coordinator_core/ops/ceremony/snapshot_diff_and_head.py", "_handler"),
-    "schema.drift_gate": ("coordinator_core/ops/schema_drift_gate.py", "_handler"),
     "session.commits": ("coordinator_core/ops/session_commits.py", "_handler"),
     "session.reap_claims_for_repos": ("coordinator_core/ops/session/reap.py", "_handler_reap_claims_for_repos"),
     "session_ledger.aggregate_chain_loe": (
@@ -1768,12 +1853,12 @@ _CLUSTER_D3_TARGET_FILES = frozenset(
 
 def test_cluster_d3_open_disposition_matches_live_measurement():
     """Ratchet for `_CLUSTER_D3_OPEN_DISPOSITION`: re-derives, from the live tree, exactly which
-    cluster sites (the nine D3 files above) each of the 48 D3-open ops' own function-granular
+    cluster sites (the nine D3 files above) each of the 47 D3-open ops' own function-granular
     reachable set contains -- seeded from each op's own live-registry-resolved entrypoint, not a
     hand-picked one -- and asserts it against the frozen disposition, byte for byte, per op.
     A site the live tree adds or drops without this dict being updated in the SAME change fails
     here, matching `test_cluster_d2_open_disposition_matches_live_measurement`'s own precedent.
-    Also asserts the total pair count (59) and the entrypoint-resolves-to-a-real-function
+    Also asserts the total pair count (58) and the entrypoint-resolves-to-a-real-function
     precondition."""
     for op_key, (relpath, func_name) in _CLUSTER_D3_OPEN_ENTRYPOINTS.items():
         assert op_key in _CLUSTER_D3_OPEN_DISPOSITION, f"{op_key} has an entrypoint but no disposition entry"
@@ -1821,7 +1906,9 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
     )
     # 59 -> 60 on 2026-09-03: `git.push_failure_verdict` reaches `git/run.py::run_git`
     # via `git.git_state`'s `head_blobs`/`read_index`, which it imports directly.
-    assert total_pairs == 60, (
+    # 60 -> 58 (P124-C3): `schema.drift_gate` retired outright (op, launchers and every
+    # string-keyed registration removed); its two git_scope.py pairs left with it.
+    assert total_pairs == 58, (
         f"_CLUSTER_D3_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
         "59: 869247ab3a (two-ratchet-gates C3) routed session/scope.py::_git_run onto "
         "git/run.py::run_git, which rewrote the scope.py row of all SIXTEEN ops that carried "
@@ -1872,29 +1959,29 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
 #: carrying ~31 (op, site) pairs") within the brief's own stated tolerance (a scope statement, not
 #: an oracle). `completion.reconcile_commits` (1 pair) was killed and deleted 2026-08-23 (PM
 #: ruling, code gone); its row is removed rather than left pointing at a dead entrypoint, leaving
-#: 15 ops / 34 pairs (enumerated in `_CLUSTER_D4_OPEN_DISPOSITION` below). `release_currency.py`
+#: 14 ops / 33 pairs (enumerated in `_CLUSTER_D4_OPEN_DISPOSITION` below). `release_currency.py`
 #: alone accounts for 13 of the 20 distinct sites and all 13 of `plugin_health.sentinel`'s own
 #: pairs on that file -- nearly one-to-one, matching the brief's own characterization of this file
 #: as per-site work rather than shared machinery.
 #:
 #: DISPOSITION, NAMED HONESTLY PER AC19C (not silence, not a fabricated legitimation, not "a
-#: sibling op reaches it"): NONE of these 15 ops is added to `_BUDGETED_ENTRYPOINTS`, and NONE of
+#: sibling op reaches it"): NONE of these 14 ops is added to `_BUDGETED_ENTRYPOINTS`, and NONE of
 #: their cluster sites is added to `_LEGITIMIZED_SITES`. A `_Legitimation` requires an EXISTING
 #: companion test that asserts the op's OWN spawn count by exact equality (leg 2) AND was measured
-#: to actually execute the site (leg 3). Checked for all 15: no file under
+#: to actually execute the site (leg 3). Checked for all 14: no file under
 #: `coordinator_core/**/tests/*spawn_budget*.py` (the full, enumerated live list of every such file
-#: in the repo) matches any of these 15 ops' own handler modules or op names -- `backlog.record`,
+#: in the repo) matches any of these 14 ops' own handler modules or op names --
 #: `ceremony.init_anchor_injection_state`, `goal.append`,
 #: `goal.close_day`, `goal.close_day_apply`, `install.probe_skill_frontmatter_valid`,
 #: `plugin_health.forwarder_drift`, `plugin_health.sentinel`, `priority.drain`, `priority.set`,
 #: `queue.promote`, `repo_setup.copy_console_subprocess_tripwire`,
 #: `session.guard_hooks_kill_switch_detail`, `session.guard_settings_integrity`, `workflow.fire`
 #: have no exact-equality spawn-count-asserting companion at all -- leg 2 is undischarged for all
-#: 15, and the question of leg 3 does not arise. Unlike D3's cluster, no partial-exception case
-#: turned up here: none of these 15 ops has ANY same-named `*_spawn_budget.py` file on disk, not
+#: 14, and the question of leg 3 does not arise. Unlike D3's cluster, no partial-exception case
+#: turned up here: none of these 14 ops has ANY same-named `*_spawn_budget.py` file on disk, not
 #: even one that asserts a narrower or monkeypatched shape.
 #:
-#: Building the missing companion fixture(s) for any of the 15 means writing to test files this
+#: Building the missing companion fixture(s) for any of the 14 means writing to test files this
 #: chunk's `writes:` scope does NOT include (`coordinator_core/tests/test_no_uncounted_spawn_on_
 #: budgeted_path.py` is the only path in scope). Enrolling these ops into `_BUDGETED_ENTRYPOINTS`
 #: without that legitimation would turn this currently-green gate red for a completeness gap this
@@ -1908,7 +1995,6 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
 #: to a permanent non-reach disposition if further tracing shows a site is not actually live on
 #: that op's path.
 _CLUSTER_D4_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
-    "backlog.record": ("coordinator_core/ops/emit/recorder.py", "_backlog_record"),
     "ceremony.init_anchor_injection_state": ("coordinator_core/ops/init_anchor_injection_state.py", "_handler"),
     "goal.append": ("coordinator_core/ops/goal_append.py", "_goal_append"),
     "goal.close_day": ("coordinator_core/ops/goal_close_day.py", "_goal_close_day"),
@@ -1944,9 +2030,6 @@ _CLUSTER_D4_TARGET_FILES = frozenset(
 #: per-site legitimation. It closes no (op, site) pair recorded here -- the reasoning below
 #: stays live, matching D2/D3's own precedent above.
 _CLUSTER_D4_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] = {
-    "backlog.record": (
-        ("coordinator_core/engine_root.py", "coordinator_engine_root", "machine-local", 0),
-    ),
     "ceremony.init_anchor_injection_state": (
         ("coordinator_core/resolve_coordinator_clone.py", "_machine_local_get", "machine-local", 0),
     ),
@@ -2133,7 +2216,6 @@ def test_cluster_d4_open_disposition_matches_live_measurement():
 #: covering the WHOLE op), or moving it to a permanent non-reach disposition if further tracing
 #: shows a site is not actually live on that op's path.
 _CLUSTER_D5_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
-    "backlog.record": ("coordinator_core/ops/emit/recorder.py", "_backlog_record"),
     "cartography.chunk_table": ("coordinator_core/ops/cartography_chunk_table.py", "_cartography_chunk_table"),
     "cartography.file_index": ("coordinator_core/ops/cartography_file_index.py", "_cartography_file_index"),
     "cartography.tree": ("coordinator_core/ops/cartography_tree.py", "_cartography_tree"),
@@ -2196,9 +2278,6 @@ _CLUSTER_D5_TARGET_FILES = frozenset(
 )
 
 _CLUSTER_D5_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] = {
-    "backlog.record": (
-        ("coordinator_core/ops/emit/resolvers.py", "resolve_coordinator_root", "<dynamic>", 0),
-    ),
     "cartography.chunk_table": (
         ("coordinator_core/cartography/tree.py", "list_tracked_files", "<dynamic>", 0),
     ),
@@ -5486,6 +5565,15 @@ def test_named_argv0_sites_in_tranche_b_are_dispositioned_on_their_own_terms():
 #: implementation that no longer exists, and kill means kill forever. What
 #: is genuinely open is whether the REBUILT op earns an execution-backed
 #: legitimation; that is new work against new code, not a restore.
+#:
+#: RE-ENROLLED 2026-09-24 (docs/plans/2026-09-12-memo-send-enrolled-in-the-composition-
+#: gate.md, C2): the REBUILT op now IS enrolled in `_BUDGETED_ENTRYPOINTS`, with one
+#: execution-backed `_LEGITIMIZED_SITES` entry per reachable site --
+#: `git_native.py::_git._invoke`, `git/run.py::run_git`, and
+#: `git/commit_signing.py::write_signed_commit_object` -- each measured by
+#: `coordinator_core/ops/fleet/tests/test_memo_send_whole_op_spawn_count.py`. The stale
+#: `_STATIC_SPAWN_COUNT_PINS` entry of 8 named above was already live-wrong (the live pin
+#: before this row was 2, not 8); it is retired outright, not corrected in place.
 #: `_NAMED_ARGV0_DISPOSITIONS_C` therefore drops from 33 to 28 (the 5
 #: memo_send.py rows removed); `_UNINVENTORIED_SITE_DISPOSITION` (the
 #: dispatch brief's own uninventoried-site route, formerly used for the
@@ -5963,7 +6051,11 @@ def test_named_argv0_sites_in_tranche_c_are_dispositioned_on_their_own_terms():
 #: commit `f4f0b8a7a`), is now legitimized under `memo.send`'s own
 #: enrolment (`_LEGITIMIZED_SITES`) instead of merely dispositioned red --
 #: the whole point of enrolling the op is to close it out, not carry it
-#: here indefinitely.
+#: here indefinitely. CORRECTED 2026-09-24 (docs/plans/2026-09-12-memo-send-enrolled-in-the-
+#: composition-gate.md, C2): `_resolve_committed_sha` no longer exists -- `c07062c99` deleted
+#: it with the rest of the pre-kill `memo_send.py`. The live `memo.send` (rebuilt at
+#: `7c5785e58`) is legitimized instead under `git_native.py::_git._invoke`,
+#: `git/run.py::run_git` and `git/commit_signing.py::write_signed_commit_object`.
 _UNINVENTORIED_SITE_DISPOSITION: dict[tuple[str, str, str, int], str] = {}
 
 
@@ -6288,7 +6380,10 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "memo.transition": 3,
     "merge_assemble.apply": 1,
     "cruft_sweep.run": 8,
-    "memo.send": 2,
+    # "memo.send": 2, removed 2026-09-24 (docs/plans/2026-09-12-memo-send-enrolled-in-the-
+    # composition-gate.md, C2) -- the op is now enrolled in _BUDGETED_ENTRYPOINTS with an
+    # execution-backed _LEGITIMIZED_SITES entry per reachable site; a COUNT-tier pin beside
+    # an enrolment is dead weight (AC20c).
     "workflow.fire": 6,
     "machine.hibernate": 4,
     "orientation.regenerate_cache": 4,
@@ -6313,7 +6408,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "repo.clone_and_register": 4,
     "repo.create_and_push_remote": 3,
     "tracker.push_suggestion": 3,
-    "backlog.record": 2,
     "cartography.file_index": 2,
     "ceremony.update_docs_scan": 2,
     "changelog.backfill_gaps": 2,
@@ -6345,7 +6439,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "plugin_health.forwarder_drift": 2,
     "release.cut_tag": 2,
     "repo_setup.copy_console_subprocess_tripwire": 2,
-    "schema.drift_gate": 2,
     "session.guard_settings_integrity": 2,
     "app_session.launch": 1,
     "baton.resolve_path_and_repo": 1,
@@ -6364,6 +6457,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "crossrepo.closure_status": 1,
     "cutover.gate": 1,
     "deliverable.cascade_backstop_sweep": 1,
+    "deliverable.cascade_divergence_report": 1,
     "deliverable.cascade_retract": 1,
     "deliverable.rollup": 1,
     "dependency.detect_changed_manifests": 1,
@@ -6448,7 +6542,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "queue.promote": 1,
     "records.history": 1,
     "repo_setup.validate_target_root": 1,
-    "review.freeze_diff": 1,
+    "review.freeze_diff": 2,
     "review.snapshot_diff_and_head": 1,
     "scratchpad.sweep": 1,
     "session.commits": 1,

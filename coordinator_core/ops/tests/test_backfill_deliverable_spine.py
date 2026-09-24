@@ -775,3 +775,186 @@ def test_two_archived_specs_sharing_workstream_with_distinct_slugs_is_ambiguous(
     assert rc == 2, "two archived specs sharing a workstream with distinct slugs must be ambiguous"
     assert extract_deliverable_id(str(spec_a), "archived-spec") == ""
     assert extract_deliverable_id(str(spec_b), "archived-spec") == ""
+
+
+# ---------------------------------------------------------------------------
+# C1/C2 — run_plan_id_leg's --only-kind scoped-skip gate (P003-C2 of
+# docs/plans/2026-08-10-sizing-scoped-spine-write-then-retro.md)
+# ---------------------------------------------------------------------------
+
+
+def test_only_kind_sizing_scopes_out_plan_id_leg_mint_write(tmp_path):
+    """AC1 positive case: `--only-kind sizing` does not name this record's own
+    class ("plan"), so the write is withheld for THIS record — the fixture
+    plan file stays byte-unchanged, and enumeration keeps running:
+    `population_lacking` still counts the unthreaded plan, and in write mode
+    the record prints `[skip-out-of-scope]` (not `[would-mint]`, which is
+    dry-run-only) and is tallied under `Withheld (out-of-scope):`."""
+    root = tmp_path
+    plan = root / "docs" / "plans" / "2026-08-13-fixture-scoped-out.md"
+    _write_frontmatter(plan, slug="fixture-scoped-out")
+    original = plan.read_text(encoding="utf-8")
+
+    out = io.StringIO()
+    rc = backfill_main(
+        ["--write", "--only-kind", "sizing", "--root", str(root)],
+        out=out,
+        err=io.StringIO(),
+    )
+    assert rc == 0
+
+    stdout = out.getvalue()
+    # Byte-unchanged: read bytes, not a frontmatter re-parse (a re-parse
+    # would pass on a rewrite that round-trips).
+    assert plan.read_text(encoding="utf-8") == original
+    assert extract_plan_id(str(plan), "plan") == ""
+    # Enumeration/report still runs — population preserved, write withheld.
+    assert "Lacking plan_id:    1" in stdout
+    assert "[skip-out-of-scope]" in stdout
+    assert "fixture-scoped-out" in stdout
+    plan_id_summary = stdout.split("PLAN_ID LEG SUMMARY:", 1)[1]
+    assert "Withheld (out-of-scope):   1" in plan_id_summary
+    assert "Stamped:            0" in plan_id_summary
+    # The scoped disclosure note names the scope this run is restricted to.
+    assert "write is scoped to sizing; records outside it are counted, not minted." in stdout
+
+
+def test_only_kind_plan_negative_control_still_mints(tmp_path):
+    """Negative control (a): `only_kind=["plan"]` DOES intersect
+    `_PLAN_ID_CLASSES`, so the leg's unscoped mint/write behaviour must be
+    unchanged — a scoped-skip test that never exercises this path would
+    pass on a leg that simply stopped working."""
+    root = tmp_path
+    plan = root / "docs" / "plans" / "2026-08-13-fixture-only-plan.md"
+    _write_frontmatter(plan, slug="fixture-only-plan")
+
+    rc = backfill_main(
+        ["--write", "--only-kind", "plan", "--root", str(root)],
+        out=io.StringIO(),
+        err=io.StringIO(),
+    )
+    assert rc == 0
+    assert extract_plan_id(str(plan), "plan").startswith("pln-")
+
+
+def test_only_kind_none_negative_control_still_mints(tmp_path):
+    """Negative control (b): no `--only-kind` at all must still mint/write,
+    same reasoning as the "plan" control above."""
+    root = tmp_path
+    plan = root / "docs" / "plans" / "2026-08-13-fixture-no-only-kind.md"
+    _write_frontmatter(plan, slug="fixture-no-only-kind")
+
+    rc = backfill_main(["--write", "--root", str(root)], out=io.StringIO(), err=io.StringIO())
+    assert rc == 0
+    assert extract_plan_id(str(plan), "plan").startswith("pln-")
+
+
+# ---------------------------------------------------------------------------
+# P093-C1 — per-record --only-kind scoping (the leg's write, not its
+# enumeration or disclosure)
+# ---------------------------------------------------------------------------
+
+
+def test_only_kind_sizing_withholds_both_plan_and_archived_spec_writes(tmp_path):
+    """REGRESSION (the acceptance test for this chunk): a plan and an
+    archived spec, both lacking plan_id, under `--write --only-kind sizing`.
+    Neither class is named in `--only-kind`, so both writes are withheld —
+    both files stay byte-identical, `Lacking plan_id:    2` is printed, and
+    two `[skip-out-of-scope]` lines name them. Against the pre-change module
+    (leg-wide intersection gating), `--only-kind sizing` already withheld
+    both, so this assertion alone would not show the fix RED; the
+    IN-SCOPE-CLASS test below is what the pre-change module fails."""
+    root = tmp_path
+    plan = root / "docs" / "plans" / "2026-09-11-fixture-regression-plan.md"
+    _write_frontmatter(plan, slug="fixture-regression-plan")
+    spec = root / "archive" / "specs" / "2026-09" / "2026-09-11-fixture-regression-spec.md"
+    _write_frontmatter(spec, slug="fixture-regression-spec")
+    original_plan = plan.read_text(encoding="utf-8")
+    original_spec = spec.read_text(encoding="utf-8")
+
+    out = io.StringIO()
+    rc = backfill_main(
+        ["--write", "--only-kind", "sizing", "--root", str(root)],
+        out=out,
+        err=io.StringIO(),
+    )
+    assert rc == 0
+
+    assert plan.read_text(encoding="utf-8") == original_plan
+    assert spec.read_text(encoding="utf-8") == original_spec
+    assert extract_plan_id(str(plan), "plan") == ""
+    assert extract_plan_id(str(spec), "archived-spec") == ""
+
+    stdout = out.getvalue()
+    plan_id_leg = stdout.split("PLAN_ID LEG (C2, fourth leg)", 1)[1]
+    assert "Lacking plan_id:    2" in plan_id_leg
+    assert plan_id_leg.count("[skip-out-of-scope]") == 2
+    assert "fixture-regression-plan" in plan_id_leg
+    assert "fixture-regression-spec" in plan_id_leg
+    plan_id_summary = plan_id_leg.split("PLAN_ID LEG SUMMARY:", 1)[1]
+    assert "Withheld (out-of-scope):   2" in plan_id_summary
+    assert "Stamped:            0" in plan_id_summary
+
+
+def test_only_kind_plan_mints_plan_but_withholds_archived_spec(tmp_path):
+    """IN-SCOPE CLASS STILL MINTS: `--write --only-kind plan` stamps the
+    plan (its own class IS named) and leaves the archived spec
+    byte-identical (its class, "archived-spec", is not named) — this is the
+    per-record gate the pre-change leg-wide intersection check fails, since
+    "plan" intersects `_PLAN_ID_CLASSES` and the old gate would have minted
+    both."""
+    root = tmp_path
+    plan = root / "docs" / "plans" / "2026-09-11-fixture-inscope-plan.md"
+    _write_frontmatter(plan, slug="fixture-inscope-plan")
+    spec = root / "archive" / "specs" / "2026-09" / "2026-09-11-fixture-inscope-spec.md"
+    _write_frontmatter(spec, slug="fixture-inscope-spec")
+    original_spec = spec.read_text(encoding="utf-8")
+
+    out = io.StringIO()
+    rc = backfill_main(
+        ["--write", "--only-kind", "plan", "--root", str(root)],
+        out=out,
+        err=io.StringIO(),
+    )
+    assert rc == 0
+
+    assert extract_plan_id(str(plan), "plan").startswith("pln-")
+    assert spec.read_text(encoding="utf-8") == original_spec
+    assert extract_plan_id(str(spec), "archived-spec") == ""
+
+    stdout = out.getvalue()
+    assert "[skip-out-of-scope]" in stdout
+    assert "fixture-inscope-spec" in stdout
+    plan_id_summary = stdout.split("PLAN_ID LEG SUMMARY:", 1)[1]
+    assert "Withheld (out-of-scope):   1" in plan_id_summary
+    assert "Stamped:            1" in plan_id_summary
+
+
+def test_only_kind_sizing_dry_run_disclosure_preserved(tmp_path):
+    """DRY-RUN DISCLOSURE PRESERVED: `--dry-run --only-kind sizing` still
+    prints `[would-mint]` for both records (dry-run disclosure is not scoped
+    by --only-kind) and `Lacking plan_id:    2`, plus the one-line
+    replacement note in place of the deleted "unconditional" NOTE."""
+    root = tmp_path
+    plan = root / "docs" / "plans" / "2026-09-11-fixture-dryrun-plan.md"
+    _write_frontmatter(plan, slug="fixture-dryrun-plan")
+    spec = root / "archive" / "specs" / "2026-09" / "2026-09-11-fixture-dryrun-spec.md"
+    _write_frontmatter(spec, slug="fixture-dryrun-spec")
+    original_plan = plan.read_text(encoding="utf-8")
+    original_spec = spec.read_text(encoding="utf-8")
+
+    out = io.StringIO()
+    rc = backfill_main(
+        ["--dry-run", "--only-kind", "sizing", "--root", str(root)],
+        out=out,
+        err=io.StringIO(),
+    )
+    assert rc == 0
+
+    assert plan.read_text(encoding="utf-8") == original_plan
+    assert spec.read_text(encoding="utf-8") == original_spec
+
+    stdout = out.getvalue()
+    assert "Lacking plan_id:    2" in stdout
+    assert stdout.count("[would-mint]") == 2
+    assert "write is scoped to sizing; records outside it are counted, not minted." in stdout

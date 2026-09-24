@@ -339,6 +339,7 @@ def _attach_batch(
         try:
             os.remove(pairs_file)
         except OSError:
+            # temp file already gone (or never created) is the desired end state
             pass
 
     result_lines = [ln for ln in stdout_text.splitlines() if ln.strip()]

@@ -330,7 +330,7 @@ def resolve_machine_local_cli() -> Optional[str]:
                 if os.name == "nt" and candidate.suffix and candidate.is_file():
                     return str(candidate)
             except OSError:
-                continue
+                continue  # candidate path unreadable; try the next one
     return None
 
 

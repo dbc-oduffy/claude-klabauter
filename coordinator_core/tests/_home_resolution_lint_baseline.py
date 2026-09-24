@@ -249,11 +249,12 @@ BARE_OR_BASELINE: list[tuple[str, int, str]] = [
         167,
         'claude_home = os.environ.get("CLAUDE_HOME", "")',
     ),
-    (
-        "coordinator_core/install/sandbox_check.py",
-        837,
-        'home_literal = os.environ.get("HOME", "")',
-    ),
+    # 2026-09-11 (C7, engine_version=2026-09-19.1): the Shape-A row that
+    # stood here, `coordinator_core/install/sandbox_check.py:837`
+    # (`home_literal = os.environ.get("HOME", "")`), no longer matches a
+    # live finding under the new engine's window and was deleted per
+    # `test_bare_or_baseline_has_no_stale_entries`.
+    #
     # 2026-09-11 (C7, engine_version=2026-09-19.1): the Shape-A row that
     # stood here, `probe_onboarding_currency.py:175`, no longer matches a
     # live finding under the new engine's window and was deleted per

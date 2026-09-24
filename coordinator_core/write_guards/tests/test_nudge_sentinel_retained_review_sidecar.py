@@ -233,6 +233,56 @@ class TestCoverageHeuristic:
         _silent(_payload(tmp_path))
 
 
+# ---------------------------------------------------------------------------
+# Roster-keyed in-scope predicate (AC5 of
+# docs/plans/2026-09-23-sidecar-guard-keying.md -- AC1-AC3 mirrored here)
+# ---------------------------------------------------------------------------
+
+
+def _stub_roster(monkeypatch, roster, error=None):
+    """Monkeypatch the `resolve_roster` seam the shared `_LazyRoster`
+    resolves through -- same seam as the sibling guard's suite."""
+    from coordinator_core.bash_guards import _helpers
+
+    monkeypatch.setattr(_helpers, "resolve_roster", lambda: (roster, error))
+
+
+class TestRosterKeyedInScope:
+    _STUB_ROSTER = frozenset({"coordinator:staff-eng", "coordinator:enricher"})
+
+    def test_invented_type_off_roster_fires(self, tmp_path, monkeypatch):
+        _stub_roster(monkeypatch, self._STUB_ROSTER)
+        _write_sidecar(
+            tmp_path,
+            "sess-abc",
+            "codereview-sliceA.md",
+            agent_type="some-invented-type",
+            body=_sentinel_retained_filled_body(),
+        )
+        _advise(_payload(tmp_path))
+
+    def test_missing_agent_type_does_not_fire(self, tmp_path, monkeypatch):
+        _stub_roster(monkeypatch, self._STUB_ROSTER)
+        sidecar_dir = tmp_path / ".coordinator-local" / "subagent-share" / "sess-abc"
+        sidecar_dir.mkdir(parents=True, exist_ok=True)
+        (sidecar_dir / "missing-type.md").write_text(
+            "---\nstatus: open\n---\n\n" + _sentinel_retained_filled_body(),
+            encoding="utf-8",
+        )
+        _silent(_payload(tmp_path))
+
+    def test_enumerated_persona_on_roster_does_not_fire(self, tmp_path, monkeypatch):
+        _stub_roster(monkeypatch, self._STUB_ROSTER)
+        _write_sidecar(
+            tmp_path,
+            "sess-abc",
+            "codereview-sliceA.md",
+            agent_type="coordinator:staff-eng",
+            body=_sentinel_retained_filled_body(),
+        )
+        _silent(_payload(tmp_path))
+
+
 class TestEnvelopeShape:
     def test_envelope_is_additional_context_only(self, tmp_path):
         _write_sidecar(

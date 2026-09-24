@@ -281,7 +281,7 @@ def census(
                     rec["first_ts"] = min(rec["first_ts"], ts)
                     rec["last_ts"] = max(rec["last_ts"], ts)
         except OSError:
-            pass
+            pass  # census log unreadable; report reflects what was read so far
 
     report["sites"] = sites
     if report["series_last_ts"] is not None:

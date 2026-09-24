@@ -87,6 +87,7 @@ import os
 import sys
 from pathlib import Path
 
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.hooks._payload import field
@@ -135,7 +136,7 @@ def _last_assistant_text(transcript_path: str) -> str:
         try:
             entry = json.loads(line)
         except (json.JSONDecodeError, ValueError):
-            continue
+            continue  # per-line transcript parse; one malformed JSONL line must not abort the scan
         if not isinstance(entry, dict) or entry.get("type") != "assistant":
             continue
         msg = entry.get("message")
@@ -237,7 +238,7 @@ def _count_tool_use_blocks(transcript_path: str) -> int | None:
         try:
             record = json.loads(line)
         except (json.JSONDecodeError, ValueError):
-            continue
+            continue  # per-line transcript parse; one malformed JSONL line must not abort the count
         if not isinstance(record, dict):
             continue
         message = record.get("message")
@@ -330,6 +331,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     Inputs (flat scalar, extracted via _payload.field(); "" treated as absent):
         session_id, agent_id, agent_type, agent_transcript_path, hook_event_name.
     """
+    params = payload_of(params)
     import asyncio
 
     session_id = field(params, "session_id")

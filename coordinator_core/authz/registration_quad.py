@@ -489,7 +489,6 @@ _KNOWN_UNCLASSIFIED_OPS_DEBT: frozenset[str] = frozenset(
         "research.restructure_for_repeat_topic",
         "research.verify_scout_inventory_completeness",
         "review.snapshot_diff_and_head",
-        "schema.drift_gate",
         "session.resolve_chain_terminal_disposition",
         "session.rotate_orphan_sweep_log",
         "update_docs.probe_fresh_repo_noop",

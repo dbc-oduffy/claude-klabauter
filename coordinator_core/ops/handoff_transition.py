@@ -285,6 +285,7 @@ from coordinator_core.frontmatter.primitives import (
     FrontmatterSplit,
     _append_blocking_note,
     _fm_key_line_pattern,
+    _locate_nested_block,
     _retire_gate_dependency,
     insert_fm_field,
     read_fm_field,
@@ -1698,7 +1699,7 @@ def _unclaim(
             raise MutateAbort(f"unclaim: no parseable YAML frontmatter in {handoff_path}")
 
         status = read_fm_field(split.fm_text, "status")
-        deployment = read_fm_field(split.fm_text, "deployment_state")
+        deployment = read_fm_field_unquoted(split.fm_text, "deployment_state")
 
         # Completeness check (C7, belt-and-braces under R1 — see
         # _find_implemented_governing_plan's docstring): before normalizing status/
@@ -2956,14 +2957,31 @@ def _replace_fm_array_field(fm: str, key: str, items: list) -> str:
     clear. The whole line is re-emitted from `key`, so no prefix survives to
     reintroduce either bug; the line's own trailing `\\r` is re-emitted so a
     CRLF document cannot end up with mixed line endings.
+
+    Negative-spec (Item 55): the prior version substituted only the `key:`
+    line via `_fm_key_line_pattern(key).sub(...)`. When `key` is on-disk as a
+    legal YAML block sequence (`blocked_by:\\n- a\\n- b`, `_is_nested_block_key`
+    shape), that leaves the `- a`/`- b` continuation lines stranded below the
+    new flow-sequence line — invalid YAML, and a silent duplicate of the
+    array. `_locate_nested_block` is used instead, so the whole key line PLUS
+    any indented/`-`-prefixed continuation block is replaced as one span.
     """
     serialized = _yaml_flow_seq(items)
-
-    def _sub(m: re.Match[str]) -> str:
-        cr = "\r" if m.group(0).endswith("\r") else ""
-        return f"{key}: {serialized}{cr}"
-
-    return _fm_key_line_pattern(key).sub(_sub, fm)
+    located = _locate_nested_block(fm, key)
+    if located is None:
+        return fm
+    key_start, _block_start, block_end = located
+    m = _fm_key_line_pattern(key).search(fm)
+    assert m is not None  # _locate_nested_block found the same key line
+    cr = "\r" if m.group(0).endswith("\r") else ""
+    # `block_end` (via `_locate_nested_block`) already swallows every newline
+    # up through the last continuation line — re-emit exactly one unless the
+    # consumed span itself ended without a trailing newline (the whole
+    # block, including its final `- item` line, was the file's unterminated
+    # last line).
+    had_trailing_newline = block_end > key_start and fm[block_end - 1] == "\n"
+    new_span = f"{key}: {serialized}{cr}" + ("\n" if had_trailing_newline else "")
+    return fm[:key_start] + new_span + fm[block_end:]
 
 
 def _insert_fm_array_field(fm: str, key: str, items: list, after_key: str) -> str:
@@ -2976,15 +2994,30 @@ def _insert_fm_array_field(fm: str, key: str, items: list, after_key: str) -> st
     anchored insert into an append-at-end. Line endings follow
     `primitives.insert_fm_field`: the new line borrows the anchor line's own
     terminator, and the append fallback follows the document's.
+
+    Negative-spec (Item 55): the same block-sequence assumption
+    `_replace_fm_array_field` carried applies here — inserting right after
+    `after_key`'s OWN line (`m.end()`) lands the new line in the MIDDLE of
+    `after_key`'s continuation block when `after_key` is on-disk as a legal
+    block sequence (`blocked_by:\\n- a\\n- b`). `_locate_nested_block` is
+    used to find the anchor's whole span (key line plus any continuation
+    lines) and the insert lands after all of it.
     """
     serialized = _yaml_flow_seq(items)
     new_line = f"{key}: {serialized}"
 
-    m = _fm_key_line_pattern(after_key).search(fm)
-    if m:
-        insert_at = m.end()
+    located = _locate_nested_block(fm, after_key)
+    if located is not None:
+        _key_start, _block_start, block_end = located
+        m = _fm_key_line_pattern(after_key).search(fm)
+        assert m is not None  # _locate_nested_block found the same key line
         cr = "\r" if m.group(0).endswith("\r") else ""
-        return fm[:insert_at] + "\n" + new_line + cr + fm[insert_at:]
+        if block_end == m.end():
+            # No trailing newline at all (anchor line is the file's final
+            # line, unterminated) — synthesize one so the new line lands on
+            # its own line.
+            return fm[:block_end] + "\n" + new_line + cr + fm[block_end:]
+        return fm[:block_end] + new_line + cr + "\n" + fm[block_end:]
 
     trimmed = fm.rstrip()
     eol = "\r\n" if "\r\n" in trimmed else "\n"

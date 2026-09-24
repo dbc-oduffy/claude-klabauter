@@ -264,7 +264,6 @@ def test_tree_missing_coordinator_core_and_not_in_declared_scope_is_not_applicab
     assert result.passed is False
     assert result.exit_code is None
     assert result.is_incomplete is False
-    assert result.is_load_indeterminate is False
 
 
 def test_tree_missing_coordinator_core_but_declared_in_scope_still_refuses(tmp_path):
@@ -377,30 +376,6 @@ def test_isolation_unverified_result_is_incomplete(tmp_path):
     run_mock.assert_not_called()
     assert result.is_incomplete is True
     assert result.timeout_s == 42.0
-    # ... but NOT load-indeterminate: the refusal is a pure function of
-    # this tree's contents, reproducible on an idle box, so it stays
-    # something a declared exemption may legitimately cover.
-    assert result.is_load_indeterminate is False
-
-
-def test_timed_out_result_is_load_indeterminate(tmp_path):
-    """The subtraction's other side: a timeout says nothing about the tree,
-    only that the box was busy, so no declaration may waive it."""
-    tree = tmp_path / "slow_tree_3"
-    tree.mkdir()
-    (tree / "pyproject.toml").write_text(_PYPROJECT, encoding="utf-8")
-    (tree / "coordinator_core").mkdir()
-
-    import subprocess as _subprocess
-
-    def _fake_run(command, **kwargs):
-        raise _subprocess.TimeoutExpired(cmd=command, timeout=kwargs.get("timeout"))
-
-    with mock.patch("percolate.assembled_mirror_gate.subprocess.run", _fake_run):
-        result = run_assembled_mirror_gate(tree, timeout_s=0.01)
-
-    assert result.is_incomplete is True
-    assert result.is_load_indeterminate is True
 
 
 def test_omitting_verdict_obtained_reads_incomplete_never_clean():
@@ -426,15 +401,6 @@ def test_omitting_verdict_obtained_reads_incomplete_never_clean():
         stderr_tail="",
     )
     assert forgetful.is_incomplete is True
-    # ... and non-waivable, so no exemption can absorb it either.
-    assert forgetful.is_load_indeterminate is True
-
-
-def test_content_verdict_is_never_load_indeterminate(tmp_path):
-    tree = _write_tree(tmp_path, "def test_one():\n    assert True\n")
-    result = run_assembled_mirror_gate(tree, timeout_s=30.0)
-    assert result.is_incomplete is False
-    assert result.is_load_indeterminate is False
 
 
 def test_non_default_timeout_s_is_reported_in_both_timed_out_and_incomplete_renderings(tmp_path):

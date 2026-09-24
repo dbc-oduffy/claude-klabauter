@@ -477,7 +477,6 @@ class TestEntrypointGateDataLists:
                 "coordinator/bin/review-assemble.py",
                 "coordinator/bin/review-exec-auth-stamp.py",
                 "coordinator/bin/roadmap-number-stubs.py",
-                "coordinator/bin/schema-drift-gate.py",
                 "coordinator/bin/sizing-assemble.py",
                 "coordinator/bin/staff-session-assemble.py",
                 "coordinator/bin/workstream-complete-assemble.py",

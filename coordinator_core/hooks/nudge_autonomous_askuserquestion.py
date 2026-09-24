@@ -18,9 +18,11 @@ finding 6): ROUTABILITY is satisfied by registering under the `hooks.` prefix al
 for the op's own dispatch-time authorization — added to
 `coordinator_core/authz/classification.py` deliberately, not because routing needs it.
 
-Every input is read from `params["payload"]` — the shape
-`warm/hook_http.py :: payload_from_event` builds from the fired event — and NEVER
-from this process's own `os.environ`: the resident engine serves ~50 concurrent
+`params` reaches this op in either shape a `hooks.*` handler receives —
+wrapped as `params["payload"]` by both engine doors, flat by the cold chain;
+`_envelope.payload_of` reads both. Every input is read from that payload —
+the shape `warm/hook_http.py :: payload_from_event` builds from the fired
+event on the wrapped door — and NEVER from this process's own `os.environ`: the resident engine serves ~50 concurrent
 sessions, and its own environment belongs to none of them (see `hook_http`'s own
 module docstring, obligation 2, and `ops/warm_guard_evaluate.py`'s docstring for the
 established precedent this op follows). In particular the source script's
@@ -49,11 +51,11 @@ Spec backlink: docs/plans/2026-08-31-the-hook-category-stops-paying-an-interpret
 from __future__ import annotations
 
 import os
-import tempfile
 from typing import Any, Mapping, Optional
 
 from coordinator_core.ipc import register_op
-from coordinator_core.hooks._envelope import allow_advisory, no_advisory
+from coordinator_core.hooks._envelope import allow_advisory, no_advisory, payload_of
+from coordinator_core.session.autonomous_sentinel import sentinel_path
 
 _VALID_POSTURES = frozenset({"precision", "default", "substrate-free"})
 _FAIL_OPEN_POSTURE = "precision"
@@ -96,15 +98,21 @@ def _read_key_from_file(path: str, key: str) -> Optional[str]:
     return _extract_key_from_lines(lines, key)
 
 
-def _resolve_posture(cwd: str) -> str:
+def _resolve_posture(cwd: str, env: Mapping) -> str:
     """Fail-open posture resolution: `<cwd>/coordinator.local.md` frontmatter,
-    then `~/.claude/coordinator-identity.yaml`, then "precision".
+    then the identity file under the DoE-claude home order, then "precision".
 
     `cwd` is the caller-supplied fact off the payload — never this process's own
-    working directory. `os.path.expanduser("~")` below resolves the ENGINE HOST's
-    home directory (a fixed machine fact, not per-session state), matching the
-    source script's own second rung; it is not a caller input this op is
-    withholding by reading it from params instead.
+    working directory. `env` is REQUIRED (no default): the identity-file rung
+    mirrors DoE-claude's `_posture.py :: _resolve_posture`
+    (`os.environ.get("CLAUDE_HOME") or Path.home()`) but reads `env["CLAUDE_HOME"]`
+    from the caller-supplied payload mapping, never this process's own
+    `os.environ` — the resident engine serves ~50 concurrent sessions, and its own
+    environment belongs to none of them. A `CLAUDE_HOME` that is missing, empty, or
+    not an absolute path counts as unset and falls through to `Path.home()` (the
+    engine host's own home, a fixed machine fact) — never to a cwd-relative read,
+    since a relative `CLAUDE_HOME` would resolve against DoE-claude's hook process's
+    cwd, which this engine does not share.
     """
     if cwd:
         value = _read_key_from_file(
@@ -113,9 +121,11 @@ def _resolve_posture(cwd: str) -> str:
         if value in _VALID_POSTURES:
             return value
 
-    identity_path = os.path.join(
-        os.path.expanduser("~"), ".claude", "coordinator-identity.yaml"
-    )
+    claude_home = env.get("CLAUDE_HOME") if isinstance(env, Mapping) else None
+    if not (isinstance(claude_home, str) and claude_home and os.path.isabs(claude_home)):
+        claude_home = os.path.expanduser("~")
+
+    identity_path = os.path.join(claude_home, ".claude", "coordinator-identity.yaml")
     value = _read_key_from_file(identity_path, _ADVISORY_PREFIX_KEY)
     if value in _VALID_POSTURES:
         return value
@@ -139,9 +149,11 @@ def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(AskUserQuestion) advisory: nudge the EM off AskUserQuestion for
     break-class/engineering-approach decisions at a firing posture.
 
-    `params["payload"]` is the dict `warm/hook_http.py :: payload_from_event` builds
-    from the fired event. Every input this handler reads — `agent_id`, `env`,
-    `session_id`, `cwd` — comes from that payload, never from `os.environ` or this
+    `payload_of(params)` reads either shape `params` reaches this handler in —
+    wrapped as `params["payload"]` (the dict `warm/hook_http.py ::
+    payload_from_event` builds from the fired event) or flat, from the cold
+    chain. Every input this handler reads — `agent_id`, `env`, `session_id`,
+    `cwd` — comes from that payload, never from `os.environ` or this
     process's own `cwd`.
 
     Suppression conditions (verbatim order from the source script):
@@ -158,9 +170,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     `allow_advisory("PreToolUse", <advisory text>)` (D2 shape a) — the same
     hookSpecificOutput shape the source script prints to stdout.
     """
-    payload = params.get("payload")
-    if not isinstance(payload, Mapping):
-        payload = {}
+    payload = payload_of(params)
 
     if payload.get("agent_id"):
         return no_advisory()
@@ -175,11 +185,13 @@ def _handler(params: dict, repo_root=None) -> dict:
     if not isinstance(session_id, str) or not session_id:
         return no_advisory()
 
-    sentinel_path = os.path.join(
-        tempfile.gettempdir(), f"autonomous-run-{session_id}"
-    )
+    # Single-source resolver (`coordinator_core.session.autonomous_sentinel`),
+    # never a hand-rolled `tempfile.gettempdir()` join here -- that module's
+    # own docstring names exactly this drift class: a writer and a reader
+    # each independently deriving "the platform temp dir" once put the
+    # sentinel at two different paths on Windows.
     try:
-        sentinel_present = os.path.isfile(sentinel_path)
+        sentinel_present = sentinel_path(session_id).is_file()
     except Exception:
         sentinel_present = False
 
@@ -187,7 +199,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     if not isinstance(cwd, str):
         cwd = ""
     try:
-        posture = _resolve_posture(cwd)
+        posture = _resolve_posture(cwd, env)
     except Exception:
         posture = _FAIL_OPEN_POSTURE
 

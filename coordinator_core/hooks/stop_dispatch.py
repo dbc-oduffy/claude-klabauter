@@ -96,9 +96,11 @@ mapping (this aggregate dict back onto stderr+exit2 / stdout+exit0 for a
 DoE-side Stop hook) is explicitly not this chunk's job — see the plan's own
 exit criterion ("a one-line type/url edit in a repo we do not own").
 
-Every input comes from `params["payload"]` — never `os.environ` or this
-process's own `cwd`/session, matching every other payload-cwd-resolving
-`hooks.*` op in this family.
+`params` reaches this op in either shape a `hooks.*` handler receives —
+wrapped as `params["payload"]` by both engine doors, flat by the cold chain;
+`_envelope.payload_of` reads both. Every input comes from that payload —
+never from `os.environ` or this process's own `cwd`/session, matching every
+other payload-cwd-resolving `hooks.*` op in this family.
 
 Spec: docs/plans/2026-08-31-six-hook-scripts-become-engine-ops.md, chunk C3
 Dispatch brief: state/dispatch-briefs/2026-08-31-six-hook-scripts-become-engine-ops/C3.md
@@ -112,7 +114,7 @@ from typing import Mapping, Optional
 
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.repo_root import show_toplevel
-from coordinator_core.hooks._envelope import deny, no_advisory, post_advisory
+from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, post_advisory
 from coordinator_core.hooks.em_report_altitude import op as _em_report_altitude_op
 from coordinator_core.hooks.guard_kira_verdict_routed import (
     _guard_kira_verdict_routed,
@@ -226,10 +228,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     One leg raising is isolated to that leg alone (fail-open for it
     specifically); this handler itself never raises.
     """
-    payload = params.get("payload")
-    if not isinstance(payload, Mapping):
-        payload = {}
-    payload = dict(payload)
+    payload = payload_of(params)
     leg_params = {"payload": payload}
 
     block_reasons: list = []
@@ -246,7 +245,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
         try:
             result = leg_call()
         except Exception:
-            continue
+            continue  # per-leg dispatch; one failing leg must not block the other legs' verdicts
         is_block, text = _extract_advisory(result)
         if is_block:
             # A block must survive the
@@ -281,7 +280,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
         }
         await _receiver_state_sensor_handler(sensor_params, repo_root=common_dir)
     except Exception:
-        pass
+        pass  # producer-only side effect (module docstring item 8); its verdict is never consumed
 
     if block_reasons:
         return deny("Stop", "\n\n".join(block_reasons))

@@ -46,12 +46,15 @@ def _compose(waves, *, shared: bool) -> str:
     )
     if shared:
         return emit.compose_script(waves, **kwargs)
-    original = emit.SharedBlocks
+    # The unshared form is a measurement baseline no emit produces, so the
+    # emit-time script cap does not apply to it.
+    original, original_cap = emit.SharedBlocks, emit._WORKFLOW_SCRIPT_BYTE_CAP
     emit.SharedBlocks = lambda: None  # type: ignore[assignment]
+    emit._WORKFLOW_SCRIPT_BYTE_CAP = float("inf")  # type: ignore[assignment]
     try:
         return emit.compose_script(waves, **kwargs)
     finally:
-        emit.SharedBlocks = original
+        emit.SharedBlocks, emit._WORKFLOW_SCRIPT_BYTE_CAP = original, original_cap
 
 
 def test_every_resolved_prompt_is_byte_identical_with_sharing():

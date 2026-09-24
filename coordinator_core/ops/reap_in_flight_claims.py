@@ -98,6 +98,13 @@ _VERDICT_RECLAIM_SHIPPED = "reclaim_shipped"
 _VERDICT_SKIP_LIVE_CHILDREN = "skip_live_children"
 _VERDICT_SKIP_GOVERNED_PLAN = "skip_governed_plan_implemented"
 _VERDICT_SKIP_CONTINUED = "skip_continued_into"
+#: A dead holder's claim on `ship_check` with no resolvable candidate sha --
+#: no completion entry (P3), an ambiguous holder (P2), or a candidate sha git
+#: cannot resolve -- is NOT evidence the work was never shipped; it is simply
+#: unknown. Absence of shipped-commit evidence is not evidence of absence, so
+#: this row is left claimed (no write in `apply_dispositions`) rather than
+#: releasing a claim that may in fact cover already-shipped work.
+_VERDICT_UNDETERMINED = "undetermined"
 
 
 @dataclass
@@ -142,6 +149,10 @@ class SurveyResult:
     would_release: int
     would_reclaim: int
     dispositions: List[Disposition] = field(default_factory=list)
+    #: Dead-holder claims on shipped-or-not-shipped-we-cannot-tell work --
+    #: `_VERDICT_UNDETERMINED` rows. Not folded into `would_release`: an
+    #: undetermined row is left claimed, never released.
+    would_undetermined: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +367,7 @@ def _batch_commit_timestamps(shas: List[str], repo_root: str) -> Dict[str, int]:
                 try:
                     matched[sha] = int(ct)
                 except ValueError:
-                    continue
+                    continue  # malformed count field on this line; the sha is left unmatched here
     return matched
 
 
@@ -538,6 +549,7 @@ def survey(repo_root: Path, *, handoffs_dir: Optional[Path] = None) -> SurveyRes
 
     would_release = 0
     would_reclaim = 0
+    would_undetermined = 0
     for r in ship_check:
         shas = candidate_shas_by_path.get(str(r.resolved_path))
         best = _best_shipped_sha(shas, sha_ct) if shas else ""
@@ -554,20 +566,26 @@ def survey(repo_root: Path, *, handoffs_dir: Optional[Path] = None) -> SurveyRes
                 )
             )
         else:
-            would_release += 1
+            # No resolvable candidate sha means unknown, not "confirmed
+            # never shipped" -- releasing here would hand the claim back
+            # to the pool on a claim that may cover already-shipped work.
+            # `liveness_basis` is deliberately NOT set: that field is
+            # `_VERDICT_RELEASE`-only (see `Disposition`'s docstring), and
+            # this is not a release.
+            would_undetermined += 1
             basis = _release_liveness_basis(r.holder, repo_root)
             dispositions.append(
                 Disposition(
                     str(r.path),
                     r.holder,
-                    _VERDICT_RELEASE,
+                    _VERDICT_UNDETERMINED,
                     f"holder {r.holder} is dead with no resolvable shipped commit "
-                    f"(deciding arm: {basis})",
-                    liveness_basis=basis,
+                    f"(deciding arm: {basis}) -- ship status undetermined, "
+                    f"claim left in place",
                 )
             )
 
-    return SurveyResult(would_release, would_reclaim, dispositions)
+    return SurveyResult(would_release, would_reclaim, dispositions, would_undetermined)
 
 
 # ---------------------------------------------------------------------------
@@ -617,8 +635,8 @@ def apply_dispositions(
     not resolved, so a caller must not count it toward "N fewer stranded claims".
     `len(applied) + len(retained) + len(failed)` is expected to be LESS than
     `len(dispositions)` whenever skip verdicts (`_VERDICT_SKIP_LIVE_CHILDREN` /
-    `_VERDICT_SKIP_GOVERNED_PLAN`) are present — a skip performs no write and is not
-    accounted in any of the three lists.
+    `_VERDICT_SKIP_GOVERNED_PLAN`) or `_VERDICT_UNDETERMINED` rows are present —
+    none of these perform a write and none is accounted in any of the three lists.
     """
     applied: List[str] = []
     retained: List[str] = []

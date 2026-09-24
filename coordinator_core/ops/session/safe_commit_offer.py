@@ -2628,7 +2628,7 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
                 "or a workflow-internal agent wrote for this session records no "
                 "claim and reads as untouched here — so does anything written "
                 "through the Bash tool rather than Edit/Write. Commit it by "
-                'name: `coordinator-safe-commit "<subject>" -- <paths>`.'
+                "name: `git add -- <paths> && git commit -F <msgfile> -- <paths>`."
                 % report["session_id"]
             )
         else:

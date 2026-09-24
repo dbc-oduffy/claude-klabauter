@@ -160,5 +160,6 @@ def contained_path(candidate: Path, allowed_roots: Iterable[Path]) -> Optional[P
             candidate_compare_path.relative_to(Path(root_for_compare))
             return resolved
         except ValueError:
+            # candidate is not under this root; try the next candidate root
             continue
     return None

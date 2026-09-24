@@ -112,6 +112,8 @@ from typing import Dict, List, Optional, Tuple
 
 import yaml
 
+from coordinator_core.frontmatter.body_blocks import LocateStatus
+from coordinator_core.ops.plan_tasks_render import load_rows
 from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
 
 #: Repo root the `os.path.isdir` rung in `_refuse_if_directory_shaped`
@@ -533,7 +535,82 @@ def _resolve_dep_kinds(chunk_rows: List[Dict[str, str]]) -> Dict[str, str]:
     return resolved
 
 
-def mint_rows(chunk_rows: List[Dict[str, str]]) -> List[dict]:
+def _bare_plan_row_id(chunk_id: str) -> str:
+    """Chunk-table `id` (`P144-C6`, `P156-C1b`) -> the plan spine row id
+    (`C6`, `C1b`) it names: the suffix after the first `-`, when the id
+    carries a plan-prefix at all. An id with no `-` is already a bare plan
+    row id (the prefix is optional -- module contract)."""
+    if "-" in chunk_id:
+        return chunk_id.split("-", 1)[1]
+    return chunk_id
+
+
+def _resolve_spec_plan_path(inventory_path: Path, spec_path: str) -> Path:
+    """A Chunk-table `spec path` cell -> an absolute filesystem path.
+
+    A relative `spec_path` resolves against the REPO ROOT the inventory
+    record lives in -- `<repo>/state/mise-inventory/<file>.md`, so the repo
+    root is the inventory path's own grandparent-of-grandparent
+    (`.../<file>.md` -> `mise-inventory/` -> `state/` -> `<repo>/`), never
+    the process cwd nor this module's own `_REPO_ROOT` (a different repo
+    when the inventory being minted belongs to a sibling checkout)."""
+    path = Path(spec_path)
+    if path.is_absolute():
+        return path
+    repo_root = inventory_path.resolve().parents[2]
+    return repo_root / path
+
+
+def _plan_row_execution_mode(
+    inventory_path: Optional[Path],
+    spec_path: str,
+    chunk_id: str,
+    plan_cache: Dict[Path, Dict[str, dict]],
+) -> Optional[str]:
+    """The plan spine row `chunk_id` (or its id-prefix-stripped form, see
+    `_bare_plan_row_id`) names in `spec_path`'s `` ```yaml plan-tasks ``
+    block -> that row's raw `execution_mode` value, or `None`.
+
+    Reuses `plan_tasks_render.load_rows` -- the exact tolerant fenced-block
+    reader `spine_read.read_spine` itself wraps -- rather than a second YAML
+    parser. `None` covers every non-plan-sourced shape alike, by design: no
+    `inventory_path` (a standalone `mint_rows` call, e.g. this module's own
+    unit tests), a `spec_path` that is not a readable file, a file with no
+    LOCATED plan-tasks block, or a block with no row matching either id
+    form -- an inventory row is not always plan-sourced, and none of these
+    is a refusal.
+
+    `plan_cache` is keyed by resolved plan path so a `spec_path` shared by
+    many Chunk-table rows is read and parsed from disk once per mint, not
+    once per row."""
+    if inventory_path is None:
+        return None
+    plan_path = _resolve_spec_plan_path(inventory_path, spec_path)
+    if plan_path not in plan_cache:
+        try:
+            text = plan_path.read_text(encoding="utf-8")
+        except OSError:
+            plan_cache[plan_path] = {}
+        else:
+            result = load_rows(text)
+            if result.status is not LocateStatus.LOCATED:
+                plan_cache[plan_path] = {}
+            else:
+                plan_cache[plan_path] = {
+                    raw["id"]: raw
+                    for raw in result.rows
+                    if isinstance(raw.get("id"), str) and raw["id"]
+                }
+    rows_by_id = plan_cache[plan_path]
+    row = rows_by_id.get(chunk_id)
+    if row is None:
+        row = rows_by_id.get(_bare_plan_row_id(chunk_id))
+    return row.get("execution_mode") if row is not None else None
+
+
+def mint_rows(
+    chunk_rows: List[Dict[str, str]], inventory_path: Optional[Path] = None
+) -> List[dict]:
     """`## Chunk table` rows (as `parse_chunk_table` returns) -> a list of
     schema-valid plan-tasks row dicts, LIVE rows only. See module docstring's
     column-mapping table for the full field-by-field rule.
@@ -543,6 +620,17 @@ def mint_rows(chunk_rows: List[Dict[str, str]]) -> List[dict]:
     dropped (the dependency is already discharged); a dep naming a
     `routed-out` row is never reachable from a LIVE row here, because that
     row was itself routed out by `_resolve_dep_kinds` first.
+
+    `inventory_path`, when given, is used to resolve each row's `spec path`
+    against its plan and carry a `execution_mode: operator` row from that
+    plan's own spine onto the minted row (see `_plan_row_execution_mode`) --
+    `read_spine`'s own exclusion, one layer up, then drops that row from
+    dispatch and reports it via its `exclusions` out-parameter (module
+    docstring's negative-spec: this module infers no dep the inventory
+    table doesn't name, but a value the SOURCE PLAN already declares for the
+    same row is not an inference). Omitted (the default), this carries
+    nothing -- every existing standalone `mint_rows(rows)` call keeps its
+    prior behaviour unchanged.
     """
     dep_kinds = _resolve_dep_kinds(chunk_rows)
     live: List[Tuple[str, Dict[str, str], List[str]]] = []
@@ -563,6 +651,7 @@ def mint_rows(chunk_rows: List[Dict[str, str]]) -> List[dict]:
         writes_by_id[row_id] = set(writes)
         live.append((row_id, row, writes))
 
+    plan_cache: Dict[Path, Dict[str, dict]] = {}
     minted: List[dict] = []
     for row_id, row, writes in live:
         spec_path = _strip_backtick(row["spec path"])
@@ -588,6 +677,11 @@ def mint_rows(chunk_rows: List[Dict[str, str]]) -> List[dict]:
             "body": _row_body(row_id, spec_path, summary, verification, complexity),
             "writes": writes,
         }
+        execution_mode = _plan_row_execution_mode(
+            inventory_path, spec_path, row_id, plan_cache
+        )
+        if execution_mode == "operator":
+            entry["execution_mode"] = execution_mode
         if depends_on:
             entry["depends_on"] = depends_on
         minted.append(entry)
@@ -662,7 +756,7 @@ def mint_spine(inventory_path: str) -> Tuple[str, Path]:
     deliverable_id = _inherited_deliverable_id(path, text)
 
     chunk_rows = parse_chunk_table(text)
-    rows = mint_rows(chunk_rows)
+    rows = mint_rows(chunk_rows, inventory_path=path)
 
     frontmatter_lines = [f"run_id: {run_id}", "derived_from: mise inventory record"]
     if deliverable_id:

@@ -48,8 +48,9 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Mapping, Optional
+from typing import Optional
 
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.hooks._envelope import no_advisory
@@ -105,9 +106,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     op resolves its own repo root/common dir from `params["payload"]["cwd"]`,
     matching every other payload-cwd-resolving `hooks.*` op in this family.
     """
-    payload = params.get("payload")
-    if not isinstance(payload, Mapping):
-        payload = {}
+    payload = payload_of(params)
 
     agent_type = payload.get("agent_type")
     if not isinstance(agent_type, str) or not agent_type:
@@ -155,14 +154,14 @@ async def _handler(params: dict, repo_root=None) -> dict:
     try:
         await _subagent_zero_tool_use_handler(leg_params, repo_root=common_dir)
     except Exception:
-        pass
+        pass  # producer-only leg; its verdict is never consumed by this dispatcher
 
     try:
         await _subagent_review_mark_handler(
             dict(leg_params, cwd=cwd), repo_root=common_dir
         )
     except Exception:
-        pass
+        pass  # producer-only leg; its verdict is never consumed by this dispatcher
 
     try:
         await _receiver_state_sensor_handler(
@@ -174,6 +173,6 @@ async def _handler(params: dict, repo_root=None) -> dict:
             repo_root=common_dir,
         )
     except Exception:
-        pass
+        pass  # producer-only leg; its verdict is never consumed by this dispatcher
 
     return no_advisory()

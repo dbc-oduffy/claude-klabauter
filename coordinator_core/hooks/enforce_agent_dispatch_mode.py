@@ -68,6 +68,7 @@ import os
 import re
 from typing import Any, Optional
 
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.hooks._envelope import deny, no_advisory, rewrite_input
 from coordinator_core.hooks.support.foreground_dispatch_strip import (
     compute_foreground_reroute,
@@ -122,7 +123,8 @@ def _handler(params: dict, repo_root=None) -> dict:
     elevation, worktree-isolation stripping, named-dispatch stripping, and
     foreground-dispatch rerouting. See module docstring for concern order.
     """
-    data: Any = params if isinstance(params, dict) else {}
+    params = payload_of(params)
+    data: Any = params
 
     tool_input = data.get("tool_input")
     tool_input_dict = tool_input if isinstance(tool_input, dict) else {}
@@ -185,7 +187,7 @@ def _handler(params: dict, repo_root=None) -> dict:
             data.get("cwd"),
         )
     except Exception:
-        pass
+        pass  # best-effort side record; must never block dispatch enforcement
 
     if teammate_name_deny_message is not None:
         return deny("PreToolUse", teammate_name_deny_message)

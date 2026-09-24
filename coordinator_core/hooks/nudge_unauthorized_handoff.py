@@ -24,7 +24,7 @@ import re
 import sys
 
 from coordinator_core.ipc import register_op
-from coordinator_core.hooks._envelope import no_advisory, post_advisory
+from coordinator_core.hooks._envelope import no_advisory, payload_of, post_advisory
 from coordinator_core.hooks._payload import field
 
 # ---------------------------------------------------------------------------
@@ -220,6 +220,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
 
     Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § C6
     """
+    params = payload_of(params)
     text = await advisory_text(
         field(params, "tool_name"),
         field(params, "file_path"),

@@ -158,7 +158,7 @@ def _read_own_shard_raw(repo_root: Path) -> list[dict]:
         try:
             record = json.loads(line)
         except json.JSONDecodeError:
-            continue
+            continue  # malformed JSONL line; skip it, not fatal to the read
         if isinstance(record, dict):
             records.append(record)
     return records

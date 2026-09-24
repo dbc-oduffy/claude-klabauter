@@ -49,6 +49,7 @@ import os
 import sys
 from pathlib import Path
 
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.hooks._payload import field
@@ -99,6 +100,8 @@ async def _handler(params: dict, repo_root=None) -> dict:
         name               — tool_input.name, default null
         dispatched_agent_id — tool_response.agentId (R-1 flattened form), default null
     """
+    params = payload_of(params)
+
     # asyncio deferred to first use here (not module scope) — this is the only function
     # in the module touching the asyncio namespace at runtime. Spec:
     # docs/plans/2026-07-24-canonical-resolution-engine.md task W0-1.

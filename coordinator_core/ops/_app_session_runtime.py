@@ -182,6 +182,7 @@ def _resolve_electron(config: dict, repo_root: str) -> ResolvedRuntime:
     try:
         resolved_binary = binary.resolve(strict=False)
     except OSError:
+        # unresolved binary path is still checked below; resolution is a best-effort improvement
         pass
 
     if not resolved_binary.is_file():

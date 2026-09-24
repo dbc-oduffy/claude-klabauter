@@ -53,7 +53,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core.hooks._envelope import context_only, no_advisory
+from coordinator_core.hooks._envelope import context_only, no_advisory, payload_of
 from coordinator_core.hooks.support.forwarder_resolve import forwarder_argv, resolve_forwarder
 from coordinator_core.hooks.support.skill_invocation import read_invocation
 from coordinator_core.ipc import register_op
@@ -151,7 +151,7 @@ def render_additional_context(run_id: str, inventory_path: str, brief: dict) -> 
     try:
         lines.append("Brief decision object:\n" + json.dumps(brief, indent=2, sort_keys=True))
     except (TypeError, ValueError):
-        pass
+        pass  # unserializable brief; the narration lines above still render
 
     rendered = "\n\n".join(lines)
     return rendered[:_CONTEXT_BUDGET_CHARS]
@@ -222,9 +222,9 @@ def _handler(params: dict, repo_root=None) -> dict:
     `no_advisory()` otherwise (silent pass — matches the DoE source's own
     "nothing otherwise" stdout contract).
     """
+    params = payload_of(params)
     try:
-        payload = params if isinstance(params, dict) else {}
-        additional_context = compute_context(payload)
+        additional_context = compute_context(params)
     except Exception:
         # Defense-in-depth — must never raise; every internal step already
         # fails open on its own.

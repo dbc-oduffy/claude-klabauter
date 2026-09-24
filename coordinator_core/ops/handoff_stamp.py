@@ -992,6 +992,7 @@ def _resolve_continued_into(worktree: Path, value: str) -> bool:
             try:
                 text = f.read_text(encoding="utf-8")
             except OSError:
+                # unreadable handoff file cannot be stamped; skip it
                 continue
             split = split_frontmatter(text)
             if split is None:

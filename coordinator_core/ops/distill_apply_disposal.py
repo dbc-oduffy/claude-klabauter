@@ -1036,6 +1036,7 @@ async def _delete_tracked_and_append_log(
                     try:
                         log_path.unlink()
                     except OSError:
+                        # rollback of a log we never created is a no-op
                         pass
                 # denorm_written here is untracked-parent-only (no git
                 # operation backs those writes, so nothing above reverted
@@ -1237,6 +1238,7 @@ async def _delete_tracked_and_append_log(
         try:
             os.unlink(idx_path)
         except OSError:
+            # index temp file already gone; nothing left to clean up
             pass
 
 
@@ -1458,6 +1460,7 @@ def write_apply_receipt(
             try:
                 os.unlink(tmp_path)
             except OSError:
+                # tmp file already gone (or the replace above already consumed it)
                 pass
     return target
 

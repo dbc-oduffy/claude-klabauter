@@ -73,6 +73,20 @@ Resolution chain (mirrors the bash oracle's header comment verbatim, rung-for-ru
   4. Hard error: returns None, remediation message written to stderr by the caller
      (see `main()` below for the CLI-shaped stderr contract, faithfully reproduced).
 
+  IN-PROCESS ENTRY POINT (added for the plugin-local CLI dispatch rung cut,
+  docs/plans/2026-09-07-directive-resolution-reaches-a-plugin-local-cli.md T1):
+  `coordinator_doe_root_in_process()` runs rungs 1, 2, 2.5 and 2.75 ONLY --
+  it never falls through to rung 3's `resolve_coordinator_clone.resolve_clone_root()`
+  and its `subprocess.run`, so it is zero-spawn on every box, resolvable or not.
+  It returns `(root, rung)` -- the second element is which rung answered (a
+  `DoeRootRung` literal, or `None` on a miss), which `coordinator_doe_root()`
+  has no way to report since it returns `Optional[str]` only. It keeps its OWN
+  memo pair (`_IN_PROCESS_DOE_ROOT`/`_IN_PROCESS_DOE_ROOT_RESOLVED`); that pair
+  and the full ladder's (`_RESOLVED_DOE_ROOT`/`_DOE_ROOT_RESOLVED`) never read or
+  write each other -- a non-spawning miss here can never hide a full-ladder
+  answer, and a rung-3 answer never leaks into this entry point's memo.
+  `_reset_doe_root_cache()` clears both pairs.
+
 Pure resolver — does NOT mutate `os.environ` (REVERSED 2026-07-21; see below).
 Rung 1 still READS `REPO_DOE_CLAUDE` as an operator override; nothing here writes it.
 
@@ -128,12 +142,24 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import List, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 
+from coordinator_core import _settings_home as _cf_settings_home
 from coordinator_core import machine_resolver as _machine_resolver
 from coordinator_core import resolve_coordinator_clone as _resolve_coordinator_clone
 from coordinator_core._content_root_primitive import FLAT_CONTENT_ROOT_MARKER
 from coordinator_core.doe_root_pointer import read_doe_root_pointer_file as _cf_read_doe_root_pointer_file
+
+
+def _cf_claude_config_dir_or_none() -> Optional[str]:
+    """Resolve `_settings_home.claude_config_dir()`, folding a relative
+    `CLAUDE_HOME`/`CLAUDE_CONFIG_DIR` override to None instead of letting
+    `_require_rooted`'s `ValueError` propagate. A resolution rung never
+    raises (see `_cf_flat_layout_probe`/`_cf_marketplace_cache_rung`)."""
+    try:
+        return str(_cf_settings_home.claude_config_dir())
+    except ValueError:
+        return None
 
 # Published-manifest relpath (OSS flat layout). The private DoE-repo layout
 # nests the same relpath under `coordinator/`. Shared by the codename-free
@@ -320,11 +346,20 @@ def _cf_flat_layout_probe() -> Optional[str]:
     `resolve_coordinator_clone`: that module exposes only the full
     `resolve_clone_root()` / `resolve_content_root()` verbs, not a standalone
     probe of an arbitrary candidate directory.
+
+    Home resolution delegates to `_settings_home.claude_config_dir()` (P174-C2)
+    rather than the inline `CLAUDE_HOME`-or-`HOME`-or-`USERPROFILE` + `.claude`
+    join this rung previously hand-rolled — that inline ladder ignored
+    `CLAUDE_CONFIG_DIR` entirely, while the canonical seam gives it the same
+    `CLAUDE_CONFIG_DIR`-first precedence the bin plane already has. A relative
+    override that the seam's `_require_rooted` would reject folds to this rung
+    returning None (see `_cf_claude_config_dir_or_none`) rather than the old
+    ladder's silent cwd-relative join.
     """
-    home = os.environ.get("CLAUDE_HOME") or os.environ.get("HOME") or os.environ.get("USERPROFILE") or ""
-    if not home:
+    claude_dir = _cf_claude_config_dir_or_none()
+    if not claude_dir:
         return None
-    candidate = os.path.join(home, ".claude", "plugins", "coordinator-claude")
+    candidate = os.path.join(claude_dir, "plugins", "coordinator-claude")
     marker = os.path.join(candidate, *FLAT_CONTENT_ROOT_MARKER)
     return candidate if os.path.isfile(marker) else None
 
@@ -351,21 +386,21 @@ def _cf_marketplace_cache_rung() -> Optional[str]:
     DR-047 exists to avoid; see `coordinator_core/data_root.py`'s module
     docstring for the same reasoning applied one layer up).
 
-    Home resolution uses the plain `CLAUDE_HOME`-or-`HOME`-or-`USERPROFILE`
-    ladder this module's own `_cf_flat_layout_probe()` already uses (not
+    Home resolution delegates to `_settings_home.claude_config_dir()` (P174-C2),
+    matching `_cf_flat_layout_probe()`'s own delegation above -- not
     `machine_local_impl_resolve.claude_home()` -- that helper lives in
     `coordinator/bin/lib/`, the same cross-tree import this module's
-    docstring already declines for `_cf_flat_layout_probe()`).
+    docstring already declines for `_cf_flat_layout_probe()`.
 
     Resolves to the repo root directly (OSS-flat shaped: schemas/ sits
     directly under the version dir) -- gated by `_cf_manifest_present` like
     every other candidate in this ladder, so no normalization is needed
     before that gate.
     """
-    home = os.environ.get("CLAUDE_HOME") or os.environ.get("HOME") or os.environ.get("USERPROFILE") or ""
-    if not home:
+    claude_dir = _cf_claude_config_dir_or_none()
+    if not claude_dir:
         return None
-    cache_parent = os.path.join(home, ".claude", "plugins", "cache", "coordinator-claude", "coordinator")
+    cache_parent = os.path.join(claude_dir, "plugins", "cache", "coordinator-claude", "coordinator")
     if not os.path.isdir(cache_parent):
         return None
     best: Optional[str] = None
@@ -460,6 +495,50 @@ def _resolve_via_clone_root_script() -> Optional[str]:
         return None
 
 
+#: The ladder rung that answered `coordinator_doe_root_in_process()`, published
+#: as provenance (see `resolve_plugin_cli_script_root()`'s caller in
+#: `cli_dispatch.py`). Nothing in the full ladder (`coordinator_doe_root()`,
+#: `Optional[str]`-returning) can supply this -- it is the reason the
+#: in-process entry point exists as a separately-named function rather than a
+#: boolean parameter on the shared one.
+DoeRootRung = Literal["env", "repos.doe_claude", "plugin.mirrors.live_path", "codename-free"]
+
+
+def _resolve_doe_root_rungs_1_to_275() -> Tuple[Optional[str], Optional["DoeRootRung"]]:
+    """Rungs 1, 2, 2.5 and 2.75 only, unmemoized -- shared by both
+    `coordinator_doe_root_in_process()` and `coordinator_doe_root()` (the
+    latter falls through to rung 3 on a miss; this helper never does). Never
+    reaches `_resolve_via_clone_root_script()`'s `subprocess.run`."""
+    existing = os.environ.get("REPO_DOE_CLAUDE", "")
+    if existing:
+        return existing, "env"
+
+    # Rung 2: machine-local registry (canonical, DR-071).
+    resolved = _machine_local_get("repos.doe_claude")
+    if resolved:
+        return resolved, "repos.doe_claude"
+
+    # Rung 2.5: fallback to plugin.mirrors.coordinator-claude.live_path.
+    resolved_fallback = _machine_local_get("plugin.mirrors.coordinator-claude.live_path")
+    if resolved_fallback:
+        return resolved_fallback, "plugin.mirrors.live_path"
+
+    # Rung 2.75: codename-free ladder (C1B) -- see module docstring.
+    # B2 (MAJOR, 2026-08-08) -- this ladder was previously
+    # placed AHEAD of rungs 2/2.5, so a stale marketplace install or
+    # pointer file could outrank DR-071's canonical registry anchor
+    # on a private dev box. DR-071 ratifies repos.doe_claude as the
+    # authoritative anchor and explicitly demotes .doe-root beneath
+    # it; nothing in DR-071 blesses placing this ladder ahead of the
+    # registry rungs. Moved below 2/2.5 -- still fully load-bearing
+    # on a genuine OSS box, where rungs 2/2.5 always return None.
+    codename_free_root = _cf_codename_free_root()
+    if codename_free_root is not None:
+        return codename_free_root, "codename-free"
+
+    return None, None
+
+
 # Module-scope memo replacing the retired `os.environ["REPO_DOE_CLAUDE"]` export as
 # the same-process re-resolution guard (see module docstring § DECISION REVERSAL).
 # `_DOE_ROOT_RESOLVED` distinguishes "not yet attempted" from "attempted, resolved to
@@ -467,9 +546,16 @@ def _resolve_via_clone_root_script() -> Optional[str]:
 _RESOLVED_DOE_ROOT: Optional[str] = None
 _DOE_ROOT_RESOLVED: bool = False
 
+# Separate memo pair for `coordinator_doe_root_in_process()` -- holds the full
+# `(root, rung)` tuple. Never read or written by the full-ladder pair above
+# (see module docstring, "IN-PROCESS ENTRY POINT").
+_IN_PROCESS_DOE_ROOT: Tuple[Optional[str], Optional["DoeRootRung"]] = (None, None)
+_IN_PROCESS_DOE_ROOT_RESOLVED: bool = False
+
 
 def _reset_doe_root_cache() -> None:
-    """Test-only helper: clear the coordinator_doe_root() process-scope memo.
+    """Test-only helper: clear both the `coordinator_doe_root()` and
+    `coordinator_doe_root_in_process()` process-scope memos.
 
     Exists because the memo is interpreter-lifetime state: under pytest the first
     test to resolve would otherwise pin the value for every later test. Mirrors
@@ -477,8 +563,44 @@ def _reset_doe_root_cache() -> None:
     autouse reset in ``coordinator_core/conftest.py``.
     """
     global _RESOLVED_DOE_ROOT, _DOE_ROOT_RESOLVED
+    global _IN_PROCESS_DOE_ROOT, _IN_PROCESS_DOE_ROOT_RESOLVED
     _RESOLVED_DOE_ROOT = None
     _DOE_ROOT_RESOLVED = False
+    _IN_PROCESS_DOE_ROOT = (None, None)
+    _IN_PROCESS_DOE_ROOT_RESOLVED = False
+
+
+def coordinator_doe_root_in_process() -> Tuple[Optional[str], Optional["DoeRootRung"]]:
+    """Resolve the DoE-claude sibling-repo root via rungs 1, 2, 2.5 and 2.75
+    ONLY -- never rung 3 (`_resolve_via_clone_root_script()`'s
+    `subprocess.run`). Returns `(root, rung)`, or `(None, None)` on a miss;
+    never raises.
+
+    Zero-argument, matching `coordinator_doe_root()`'s own signature and for
+    the same reason (§ module docstring): a caller's `repo_root` names the
+    repo the CLI operates on, never the tree the CLI ships in.
+
+    Keeps its OWN memo pair (`_IN_PROCESS_DOE_ROOT`/
+    `_IN_PROCESS_DOE_ROOT_RESOLVED`) -- re-reads rung 1 (`REPO_DOE_CLAUDE`)
+    ahead of that memo, exactly as `coordinator_doe_root()` does, so an
+    override set after a prior resolution still wins. The full ladder's
+    memo and this one never interact: a non-spawning miss here is recorded
+    only in this pair, and a later `coordinator_doe_root()` call still
+    descends to rung 3 and can return a different, rung-3-only answer.
+    """
+    global _IN_PROCESS_DOE_ROOT, _IN_PROCESS_DOE_ROOT_RESOLVED
+
+    existing = os.environ.get("REPO_DOE_CLAUDE", "")
+    if existing:
+        return existing, "env"
+
+    if _IN_PROCESS_DOE_ROOT_RESOLVED:
+        return _IN_PROCESS_DOE_ROOT
+
+    root, rung = _resolve_doe_root_rungs_1_to_275()
+    _IN_PROCESS_DOE_ROOT = (root, rung)
+    _IN_PROCESS_DOE_ROOT_RESOLVED = True
+    return root, rung
 
 
 def coordinator_doe_root() -> Optional[str]:
@@ -494,6 +616,11 @@ def coordinator_doe_root() -> Optional[str]:
     operator override, but no rung writes it (see module docstring § DECISION
     REVERSAL). Rung 1 is evaluated BEFORE the memo so an override set after a
     prior resolution still wins, which the old export-based guard could not do.
+
+    Signature, return type, rung order and memo semantics are UNCHANGED by the
+    T1 rung cut (AC2c) -- rungs 1-2.75 now run through the shared
+    `_resolve_doe_root_rungs_1_to_275()` helper, and this function alone falls
+    through to rung 3 on a miss, exactly as it always has.
     """
     global _RESOLVED_DOE_ROOT, _DOE_ROOT_RESOLVED
 
@@ -507,32 +634,11 @@ def coordinator_doe_root() -> Optional[str]:
     if _DOE_ROOT_RESOLVED:
         return _RESOLVED_DOE_ROOT
 
-    resolved_root: Optional[str] = None
-
-    # Rung 2: machine-local registry (canonical, DR-071).
-    resolved = _machine_local_get("repos.doe_claude")
-    if resolved:
-        resolved_root = resolved
-    else:
-        # Rung 2.5: fallback to plugin.mirrors.coordinator-claude.live_path.
-        resolved_fallback = _machine_local_get("plugin.mirrors.coordinator-claude.live_path")
-        if resolved_fallback:
-            resolved_root = resolved_fallback
-        else:
-            # Rung 2.75: codename-free ladder (C1B) -- see module docstring.
-            # B2 (MAJOR, 2026-08-08) -- this ladder was previously
-            # placed AHEAD of rungs 2/2.5, so a stale marketplace install or
-            # pointer file could outrank DR-071's canonical registry anchor
-            # on a private dev box. DR-071 ratifies repos.doe_claude as the
-            # authoritative anchor and explicitly demotes .doe-root beneath
-            # it; nothing in DR-071 blesses placing this ladder ahead of the
-            # registry rungs. Moved below 2/2.5 -- still fully load-bearing
-            # on a genuine OSS box, where rungs 2/2.5 always return None.
-            resolved_root = _cf_codename_free_root()
-            if resolved_root is None:
-                # Rung 3: native resolve_coordinator_clone port.
-                # Rung 4 (hard failure) is `resolved_root` staying None here.
-                resolved_root = _resolve_via_clone_root_script()
+    resolved_root, _rung = _resolve_doe_root_rungs_1_to_275()
+    if resolved_root is None:
+        # Rung 3: native resolve_coordinator_clone port.
+        # Rung 4 (hard failure) is `resolved_root` staying None here.
+        resolved_root = _resolve_via_clone_root_script()
 
     _RESOLVED_DOE_ROOT = resolved_root
     _DOE_ROOT_RESOLVED = True

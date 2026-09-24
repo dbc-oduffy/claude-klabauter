@@ -82,10 +82,16 @@ Negative-spec:
     this guard; that is an accepted scope gap, not a claimed-but-unmet
     coverage promise (see AC9-shaped precedent,
     ``block_unauthorized_claude_md_write``'s own header).
-  - Does NOT gate on ANY sidecar type other than ``coordinator:code-reviewer``
-    findings sidecars (frontmatter ``agent_type`` exact match) — a
-    ``coordinator:review-integrator`` run-report, a ``staff-eng-review``, or
-    an ``assessment`` sidecar in the same directory never trips this guard.
+  - Gates on ``coordinator:code-reviewer`` findings sidecars (frontmatter
+    ``agent_type`` exact match) OR a sidecar whose ``agent_type`` is
+    non-empty and off the dispatch-seam roster (``_in_scope_agent_type``,
+    same rule as ``bash_guards._helpers.is_confined_by_roster_absence``,
+    evaluated locally against a roster resolved at most once per ``check()``
+    call). Does NOT gate on an enumerated persona type
+    (``coordinator:staff-eng`` and the other roster-listed personas) or on a
+    sidecar with an empty/missing ``agent_type`` — both stay out of scope. A
+    ``coordinator:review-integrator`` run-report, in particular, never trips
+    this guard (it is not a findings sidecar at all).
   - Does NOT treat an UNFILLED review-findings scaffold (the template's
     placeholder sentinel still present, or no ``## Findings`` heading at
     all) as "findings exist" — a reviewer dispatch that hasn't returned yet
@@ -121,7 +127,10 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core.bash_guards._helpers import (
+    _resolve_roster_accessor,
+    operator_override_note,
+)
 from coordinator_core.session import machinery_paths
 
 CLASS = "advisory"
@@ -131,19 +140,24 @@ PRIORITY = 115
 #: Rare-use escape hatch — read the module docstring before invoking.
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_REVIEW_INTEGRATION_PENDING"
 
-#: The one code-reviewer-identity agent_type this guard gates on. Any other
-#: agent_type sidecar (run-report, staff-eng-review, assessment, or a
-#: different reviewer persona) is out of scope — see module Negative-spec.
+#: The one code-reviewer-identity agent_type this guard gates on
+#: unconditionally. A sidecar with a DIFFERENT, non-empty agent_type is
+#: ALSO in scope if that type is off the dispatch-seam roster (see
+#: `_in_scope_agent_type` below) — an invented type nobody enumerated gets
+#: no exemption. An enumerated persona (`coordinator:staff-eng` and the
+#: other roster-listed personas) or a sidecar with an empty/missing
+#: agent_type stays out of scope either way — see module Negative-spec.
 #:
 #: NARROWER, deliberately, than `ops.append_integrator_dispositions`'
 #: `_REVIEWER_AGENT_TYPES` frozenset, which covers the reviewer personas too.
 #: The two constants answer different questions and must not be reconciled into
 #: one: that set decides which sidecars can RECEIVE a disposition block, while
-#: this literal decides which sidecars BLOCK an EM hand-edit. Widening this one
-#: to match would make every persona review start blocking EM edits — a
-#: behaviour change nothing has asked for, and the reason Negative-spec bullet 3
-#: above is stated as a deliberate scope choice rather than a gap. If you are
-#: here because the two "look out of sync": they are, on purpose.
+#: this literal (plus the roster-absence leg) decides which sidecars BLOCK an
+#: EM hand-edit. Widening this literal itself to match would make every
+#: persona review start blocking EM edits — a behaviour change nothing has
+#: asked for, and the reason Negative-spec bullet 3 above is stated as a
+#: deliberate scope choice rather than a gap. If you are here because the two
+#: "look out of sync": they are, on purpose.
 _REVIEWER_AGENT_TYPE = "coordinator:code-reviewer"
 
 #: The review-integrator's ONE sanctioned sidecar write
@@ -236,13 +250,62 @@ def _sidecar_covers_target(text: str, normalized_target: str, basename: str) -> 
     return False
 
 
+class _LazyRoster:
+    """Resolves `bash_guards._helpers`'s dispatch-seam roster at most ONCE,
+    on the first `.get()` call, and caches the result (including a
+    roster-load failure, cached as `None`) for the rest of this `check()`
+    call. Shared by both guards' `_find_*` loops so that a `check()` call
+    scanning multiple candidates or multiple sidecar directories still costs
+    at most one `resolve_roster()` disk walk (Design decision, AC6)."""
+
+    __slots__ = ("_resolved", "_value")
+
+    def __init__(self) -> None:
+        self._resolved = False
+        self._value: Optional[Any] = None
+
+    def get(self) -> Optional[Any]:
+        if not self._resolved:
+            roster, _error = _resolve_roster_accessor()()
+            self._value = roster
+            self._resolved = True
+        return self._value
+
+
+def _in_scope_agent_type(agent_type: str, lazy_roster: "_LazyRoster") -> bool:
+    """Shared in-scope predicate for both review-sidecar guards (Design
+    decision section of docs/plans/2026-09-23-sidecar-guard-keying.md).
+
+    In scope iff `agent_type` equals `_REVIEWER_AGENT_TYPE` (unchanged leg),
+    OR `agent_type` is non-empty and fails the SAME fail-closed rule
+    `bash_guards._helpers.is_confined_by_roster_absence` applies (`roster is
+    None or agent_type not in roster`), evaluated locally against a roster
+    resolved lazily, at most once per `check()` call, via `lazy_roster`
+    rather than calling the helper itself (which would resolve its own
+    roster once per candidate). An empty/missing `agent_type` is always out
+    of scope, matching the helper's own empty-type convention.
+
+    Callers MUST evaluate this LAST among a candidate's filters — after
+    every cheaper, roster-free check — so that the roster is only ever
+    touched once a candidate has already passed everything else."""
+    if agent_type == _REVIEWER_AGENT_TYPE:
+        return True
+    if not agent_type:
+        return False
+    roster = lazy_roster.get()
+    return roster is None or agent_type not in roster
+
+
 def _find_pending_sidecar(
-    sidecar_dir: Path, normalized_target: str, basename: str
+    sidecar_dir: Path, normalized_target: str, basename: str, lazy_roster: "_LazyRoster"
 ) -> Optional[Path]:
     """Return the first sidecar in `sidecar_dir` that is a
-    code-reviewer findings sidecar with unaddressed findings covering the
-    target file, or None. Every per-file failure degrades to "skip this
-    candidate", never a raise (module-level fail-open discipline)."""
+    code-reviewer-or-off-roster findings sidecar with unaddressed findings
+    covering the target file, or None. Every per-file failure degrades to
+    "skip this candidate", never a raise (module-level fail-open
+    discipline). The agent_type leg runs LAST, after every cheaper filter,
+    so the roster is touched only for a candidate that already passed
+    everything else (Design decision, hot-path cost)."""
     try:
         candidates: List[Path] = sorted(sidecar_dir.glob("*.md"))
     except OSError:
@@ -254,17 +317,18 @@ def _find_pending_sidecar(
         except OSError:
             continue
 
-        if _extract_frontmatter_agent_type(text) != _REVIEWER_AGENT_TYPE:
-            continue
         if not _heading_present(text, _FINDINGS_HEADING):
             continue
         if _FINDINGS_SENTINEL in text:
             continue  # unfilled scaffold — reviewer hasn't returned yet
         if _heading_present(text, _DISPOSITIONS_HEADING):
             continue  # already integrated
+        if not _sidecar_covers_target(text, normalized_target, basename):
+            continue
+        if not _in_scope_agent_type(_extract_frontmatter_agent_type(text), lazy_roster):
+            continue
 
-        if _sidecar_covers_target(text, normalized_target, basename):
-            return candidate
+        return candidate
 
     return None
 
@@ -324,9 +388,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         # Never let the guard's own module file (or the share directory it
         # walks) trip itself — not a real risk given the agent_type gate,
         # but keeps the walk narrowly scoped to what it claims.
+        lazy_roster = _LazyRoster()
         pending = None
         for sidecar_dir in candidate_dirs:
-            pending = _find_pending_sidecar(sidecar_dir, normalized_target, basename)
+            pending = _find_pending_sidecar(
+                sidecar_dir, normalized_target, basename, lazy_roster
+            )
             if pending is not None:
                 break
         if pending is None:

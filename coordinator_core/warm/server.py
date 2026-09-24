@@ -233,6 +233,7 @@ from coordinator_core.warm.client import (
     WARM_DISPATCH_INDETERMINATE,
     _op_may_mutate,
 )
+from coordinator_core.warm import dispatch_ack
 
 __all__ = [
     "InFlightCounter",
@@ -242,6 +243,7 @@ __all__ = [
     "ACCEPTOR_POOL_SIZE",
     "UNTRUSTED_CALLER_ERROR",
     "SETTINGS_HOME_MISMATCH_ERROR",
+    "DISPATCH_KEY_TOMBSTONED_ERROR",
     "main",
 ]
 
@@ -263,6 +265,42 @@ UNTRUSTED_CALLER_ERROR = -32003
 # statement about THIS SERVER -- the request is well-formed and authorized, and
 # this process simply is not the one that can answer it.
 SETTINGS_HOME_MISMATCH_ERROR = -32008
+
+# DISPATCH KEY TOMBSTONED -- `dispatch_ack.AckStore.admit` refused this key:
+# it is already in the store (admitted, stamped, or tombstoned), or it is at
+# or below the store's `low_water_ns`/before its `boot_ns`. Distinct from
+# `WARM_DISPATCH_INDETERMINATE`: that code means "outcome unknown, do not
+# re-run"; this one means "this exact key has already been asked about (or
+# admitted) once", which is a caller replaying a frame it should not replay.
+# Deliberately absent from `door_core.c :: is_provably_undispatched` (C2 of
+# the spec plan) -- the door mints a fresh key every call, so a
+# door-originated frame never meets this code, and adding it there would
+# license a cold re-run the door has no basis for. Next free slot after
+# -32008.
+DISPATCH_KEY_TOMBSTONED_ERROR = -32009
+
+# The `warm.request_status` method name -- intercepted in `_serve_line`
+# before `admit`/`dispatch`, never submitted to the pool (contract § 9).
+_REQUEST_STATUS_METHOD = "warm.request_status"
+
+# The private, wire-invisible field a pre-handler refusal inside
+# `_pool_dispatch_worker` marks its own returned envelope with (contract §
+# 3) -- the same rides-the-returned-dict shape `_stderr` already uses.
+# `_pool_dispatch`'s done-callback pops it before the response is written to
+# the connection; it never reaches the wire. No refusal path inside
+# `_pool_dispatch_worker` sets it today (the only pre-handler step there is
+# `_repair_settings_home_to_pristine`, which repairs and does not refuse) --
+# this constant and the done-callback branch that consumes it exist so a
+# future refusal there is covered by construction, per C3's own body.
+_NOT_DISPATCHED_MARKER = "_ack_not_dispatched"
+
+# One `AckStore` per resident engine process (contract § 2) -- constructed at
+# module import time, which is this accept process's own boot. Never
+# disk-backed, never shared across processes: `_pool_dispatch_worker` runs
+# in a SEPARATE process and cannot see this object at all (contract § 1,
+# § 2) -- only the accept process that owns this module instance admits,
+# stamps, or answers a poll.
+_ack_store = dispatch_ack.AckStore()
 
 # How often the idle watchdog re-checks `idle.should_demote` -- independent
 # of request arrival (module docstring's "idle demotion" ownership note).
@@ -510,7 +548,33 @@ def _spawn_delta(start: Optional[int], end: Optional[int]) -> Optional[int]:
     return end - start
 
 
-def _run_dispatch(msg: dict, *, caller: Optional[CallerContext] = None, isolated: bool = False) -> dict:
+def _stamp_dispatch_outcome(dispatch_key: str, response: Any) -> None:
+    """Stamp `dispatch_key`'s terminal outcome from a handler's own returned
+    envelope (contract § 3). A -32004 here is `ipc._dispatch_message_impl`'s
+    own internal op-timeout (`_timeout_error_envelope`) -- distinguishable
+    from every other error only by that shared code -- and stamps
+    `abandoned`, which reads as unknowable-final, never as `finished`. Any
+    other error stamps `error` (the code travels with the stamp); a result
+    stamps `result`. Never raises: a malformed `response` is treated as
+    `result` rather than crashing the dispatch leg on the caller's behalf.
+    """
+    error = response.get("error") if isinstance(response, dict) else None
+    if isinstance(error, dict):
+        if error.get("code") == WARM_DISPATCH_INDETERMINATE:
+            _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_ABANDONED)
+        else:
+            _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_ERROR, error_code=error.get("code"))
+    else:
+        _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_RESULT)
+
+
+def _run_dispatch(
+    msg: dict,
+    *,
+    caller: Optional[CallerContext] = None,
+    isolated: bool = False,
+    dispatch_key: Optional[str] = None,
+) -> dict:
     """Invoke the existing engine core for one already-parsed JSON-RPC
     request -- the SOLE process-level dispatch chokepoint
     (`coordinator_core.ipc.dispatch_message`'s own docstring), never a
@@ -607,6 +671,13 @@ def _run_dispatch(msg: dict, *, caller: Optional[CallerContext] = None, isolated
 
         served_home = str(_resolve_settings_home())
         if not settings_home_claim.claims_agree(caller.settings_home, served_home):
+            # This gate runs strictly before `dispatch_message` is ever
+            # called (this function's own "BEFORE dispatch" docstring
+            # note) -- the handler provably never ran, so the outcome
+            # stamped for `dispatch_key` is `not-dispatched`, never `error`
+            # (contract § 3).
+            if dispatch_key is not None:
+                _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_NOT_DISPATCHED)
             return _settings_home_refusal(msg.get("id") if isinstance(msg, dict) else None, caller.settings_home, served_home)
 
     diagnostics: list = []
@@ -711,6 +782,8 @@ def _run_dispatch(msg: dict, *, caller: Optional[CallerContext] = None, isolated
         _stderr_lines.append(_captured_stderr)
     if _stderr_lines and isinstance(response, dict):
         response = {**response, "_stderr": "\n".join(_stderr_lines)}
+    if dispatch_key is not None:
+        _stamp_dispatch_outcome(dispatch_key, response)
     return response
 
 
@@ -907,6 +980,44 @@ def _pool_not_started_envelope(msg: dict) -> dict:
         "id": msg.get("id"),
         "error": {"code": INTERNAL_ERROR, "message": _POOL_NOT_STARTED_MESSAGE},
     }
+
+
+def _stamp_pool_future(dispatch_key: str, future: "concurrent.futures.Future") -> None:
+    """`_pool_dispatch`'s done-callback stamp leg (contract § 3). Fires once
+    the pool future actually resolves -- normal return, a raised
+    `BrokenProcessPool`, or a successful pre-dispatch cancel -- covering the
+    completion this connection thread's own blocking `future.result()` call
+    may have already timed out on and answered indeterminately. Also fires
+    (as a harmless no-op re-stamp; `AckStore.stamp` only stamps an
+    `_ADMITTED` record) when the connection thread's own except-block already
+    stamped the same key directly, e.g. `BrokenProcessPool`'s `worker-lost`
+    or a successful cancel's `not-dispatched`.
+    """
+    if future.cancelled():
+        _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_NOT_DISPATCHED)
+        return
+    try:
+        exc = future.exception()
+    except Exception:  # noqa: BLE001 -- stamping must never raise on the caller's behalf
+        exc = None
+    if isinstance(exc, BrokenProcessPool):
+        _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_WORKER_LOST)
+        return
+    if exc is not None:
+        # Some other worker-side exception `_pool_dispatch_worker` itself
+        # never returns as an envelope (should not happen in practice --
+        # that function's own contract is to always return a dict). Leave
+        # unstamped rather than guess at an outcome vocabulary this store
+        # does not define.
+        return
+    try:
+        result = future.result()
+    except Exception:  # noqa: BLE001 -- see above
+        return
+    if isinstance(result, dict) and result.pop(_NOT_DISPATCHED_MARKER, None):
+        _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_NOT_DISPATCHED)
+        return
+    _stamp_dispatch_outcome(dispatch_key, result)
 
 
 def _pool_broken_indeterminate_envelope(msg: dict) -> dict:
@@ -1633,6 +1744,71 @@ def _serve_line(
     env_payload = msg.pop("_env", None)
     caller = caller_context.merge_env_axis(caller, env_payload)
 
+    # THE DISPATCH-ACK KEY (contract § 1, § 9). Popped the same way
+    # `_engine_token`/`_caller`/`_settings_home`/`_env` are popped above --
+    # transport metadata, never an op param. Absent for an unkeyed frame
+    # (an old door, or an old client caught in a rollout skew window): that
+    # frame is dispatched exactly as before this contract existed, and
+    # recorded nowhere (contract § 1).
+    dispatch_key = msg.pop("_dispatch_key", None)
+    method = msg.get("method") if isinstance(msg, dict) else None
+
+    # POLL INTERCEPT (D5, contract § 9). Answered directly from `AckStore`
+    # in THIS accept process, before `admit` and before `dispatch` --
+    # `warm.request_status` is never submitted to the pool (a pool worker
+    # cannot see this process's memory) and never itself subject to
+    # `admit`'s tombstone/skew refusal, so a poll always resolves to one of
+    # the four states, never a -32004.
+    if method == _REQUEST_STATUS_METHOD:
+        params = msg.get("params")
+        poll_key = params.get("key") if isinstance(params, Mapping) else None
+        if isinstance(poll_key, str) and poll_key:
+            status = _ack_store.status(poll_key)
+        else:
+            status = {"state": dispatch_ack.STATE_UNKNOWABLE, "reason": dispatch_ack.REASON_NO_RESIDENT_ENGINE}
+        response = {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {
+                **status,
+                "engine_boot_ns": _ack_store.boot_ns,
+                "engine_pid": os.getpid(),
+            },
+        }
+        record_invocation(True)
+        _write_and_release(response)
+        return
+
+    # ADMIT (D2, D3). Only non-COMPUTE_ONLY methods are recorded, matching
+    # `_op_may_mutate`'s own fail-closed rule -- a COMPUTE_ONLY dispatch is
+    # free to re-run and gets no record. Runs AFTER every refusal above that
+    # already proves a frame was never dispatched (untrusted caller, skew)
+    # and BEFORE `dispatch(...)` -- the settings-home refusal is NOT one of
+    # these; it fires later, inside `_run_dispatch`/`_pool_dispatch`'s
+    # `BrokenProcessPool` fallback, and is covered by the `not-dispatched`
+    # stamp there instead (contract § 2).
+    if dispatch_key is not None and _op_may_mutate(method):
+        try:
+            admitted = _ack_store.admit(dispatch_key, method)
+        except Exception:  # noqa: BLE001 -- a raising store refuses, never dispatches unacknowledged
+            admitted = False
+        if not admitted:
+            response = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {
+                    "code": DISPATCH_KEY_TOMBSTONED_ERROR,
+                    "message": (
+                        "dispatch key already recorded (admitted, stamped, or "
+                        "tombstoned): this frame must not be re-dispatched. "
+                        f"poll it instead via {_REQUEST_STATUS_METHOD}."
+                    ),
+                },
+            }
+            record_invocation(True)
+            _write_and_release(response)
+            return
+
     try:
         from coordinator_core.ipc import resolve_request_repo
 
@@ -1646,7 +1822,15 @@ def _serve_line(
             pass
 
     try:
-        response = dispatch(msg, caller=caller)
+        # UNKEYED FRAMES CALL `dispatch` EXACTLY AS BEFORE THIS CONTRACT
+        # EXISTED (contract § 1) -- no `dispatch_key=` kwarg at all when
+        # none was sent, so a caller-injected `dispatch=` fake predating
+        # this contract (`test_server_loop.py` et al, none of which accept
+        # a `dispatch_key` kwarg) keeps working unchanged.
+        if dispatch_key is not None:
+            response = dispatch(msg, caller=caller, dispatch_key=dispatch_key)
+        else:
+            response = dispatch(msg, caller=caller)
     except Exception as exc:  # noqa: BLE001 -- never fail the caller, see module docstring
         response = {
             "jsonrpc": "2.0",
@@ -2026,7 +2210,13 @@ class _ServerContext:
                     )
         return self._dispatch_pool
 
-    def _pool_dispatch(self, msg: dict, *, caller: Optional[CallerContext] = None) -> dict:
+    def _pool_dispatch(
+        self,
+        msg: dict,
+        *,
+        caller: Optional[CallerContext] = None,
+        dispatch_key: Optional[str] = None,
+    ) -> dict:
         """The `dispatch=` callable a real accept-loop worker thread
         (`_worker_loop`) hands to `_handle_connection` -- submits the call
         to `DISPATCH_PROCESS_POOL_SIZE` worker PROCESSES and blocks this
@@ -2036,11 +2226,20 @@ class _ServerContext:
         contention inside `dispatch_message` cannot be removed by any
         in-process threading restructure, only by moving the CPU-bound work
         off this process's interpreter lock entirely.
+
+        `dispatch_key`, when given (a key `_serve_line` already admitted),
+        gets a SECOND done-callback (`_stamp_pool_future`) that stamps the
+        outcome once the future actually resolves -- covering completion
+        this connection thread's own blocking wait may have already timed
+        out on. `admit` runs in `_serve_line` before this method is ever
+        called; this method only stamps.
         """
         try:
             future = self._ensure_dispatch_pool().submit(_pool_dispatch_worker, msg, caller)
             self._pool_outstanding.enter()
             future.add_done_callback(lambda _f: self._pool_outstanding.exit())
+            if dispatch_key is not None:
+                future.add_done_callback(lambda _f: _stamp_pool_future(dispatch_key, _f))
             try:
                 return future.result(timeout=_POOL_RESULT_DEADLINE_SECS)
             except concurrent.futures.TimeoutError:
@@ -2049,6 +2248,8 @@ class _ServerContext:
                 # proves the op never ran -- a determinate answer, not the
                 # outcome-unknown shape.
                 if future.cancel():
+                    if dispatch_key is not None:
+                        _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_NOT_DISPATCHED)
                     return _pool_not_started_envelope(msg)
                 # The task STARTED and is still running: genuinely
                 # indeterminate. `ipc._timeout_error_envelope` classifies via
@@ -2094,12 +2295,25 @@ class _ServerContext:
             # refusal instead; `warm.client`'s pass-through surfaces it to the
             # caller unchanged, same as a client-detected indeterminate case.
             if _op_may_mutate(msg.get("method")):
+                if dispatch_key is not None:
+                    _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_WORKER_LOST)
                 return _pool_broken_indeterminate_envelope(msg)
             # `isolated=False`, explicitly: this fallback runs the op IN
             # THIS process, on this connection's own accept-thread -- the
             # exact threaded, unisolated shape the spike measured 8/8
             # contaminated (C3's own body) -- so it must take no `os.environ`
-            # borrow, only the thread-safe ContextVar bind.
+            # borrow, only the thread-safe ContextVar bind. `dispatch_key` is
+            # never non-None here in practice: only a MUTATING method is ever
+            # admitted (§ below), and this branch runs only for a
+            # COMPUTE_ONLY one -- passed through anyway so this fallback's
+            # own behaviour matches `_run_dispatch`'s general contract. Only
+            # passed when present -- `dispatch_key` is never non-None here
+            # in practice (only a MUTATING method is ever admitted, and this
+            # branch runs only for a COMPUTE_ONLY one), and existing callers
+            # of `_run_dispatch` predating this contract never expect the
+            # kwarg at all.
+            if dispatch_key is not None:
+                return _run_dispatch(msg, caller=caller, isolated=False, dispatch_key=dispatch_key)
             return _run_dispatch(msg, caller=caller, isolated=False)
 
     def _ctx_shutdown(self) -> None:

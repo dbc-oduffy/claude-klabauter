@@ -128,11 +128,9 @@ def _decide(params: dict) -> Optional[str]:
 def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Workflow) op: auto-approve a fire whose script carries a
     verifying emission receipt."""
+    params = payload_of(params)
     try:
-        # Normalize the two params
-        # shapes both engine doors and the cold chain send (see
-        # block_worktree_tool).
-        reason = _decide(payload_of(params))
+        reason = _decide(params)
     except Exception:
         return no_advisory()
     if reason is None:

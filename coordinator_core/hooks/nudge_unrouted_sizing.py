@@ -1027,7 +1027,7 @@ def _skill_invoked(transcript_path: str, target_skills: frozenset[str]) -> bool:
         try:
             entry = json.loads(line)
         except ValueError:
-            continue
+            continue  # malformed transcript line; skip it
         if not isinstance(entry, dict) or entry.get("type") != "assistant":
             continue
         msg = entry.get("message")

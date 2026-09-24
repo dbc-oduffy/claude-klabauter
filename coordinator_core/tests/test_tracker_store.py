@@ -103,6 +103,7 @@ from coordinator_core.tracker_store import (  # noqa: E402
     OBSERVED_SET_UNKNOWN,
     TrackerStoreDuplicateIdError,
     TrackerStoreError,
+    TrackerStoreKeyMisuseError,
     append_event,
     append_events,
     compare_events_causal_order,
@@ -4474,4 +4475,182 @@ class TestFoldObservedSetReadsAcrossRotatedPeerShards:
         resolved = resolve_observed_set(marker, repo_root=repo)
         assert resolved["host-peer"] is OBSERVED_SET_UNKNOWN, (
             "a digest mismatch inside the rotated partition must still resolve unknown"
+        )
+
+
+# ---------------------------------------------------------------------------
+# P144-C4 — idempotency_key binding inside append_event's own-shard/own-
+# history duplicate pass (docs/plans/2026-09-22-memo-lesson-ledger-
+# reachability.md § C4; spike verdict docs/research/spike-verdicts/
+# 2026-09-23-idempotency-key-binding-under-dr-241.md)
+# ---------------------------------------------------------------------------
+
+
+class TestP144C4IdempotencyKeyBinding:
+    def test_same_key_only_observed_at_differs_appends_nothing_and_returns_bound_id(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(ts, "machine_slug", lambda *a, **kw: "this-machine")
+        repo = _make_git_repo(tmp_path / "repo")
+
+        first = append_event(
+            _event("evt-a", "2026-01-01T00:00:00Z", payload="x", idempotency_key="k1"),
+            repo_root=repo,
+            key="k1",
+        )
+        second = append_event(
+            _event("evt-b", "2026-01-01T00:00:01Z", payload="x", idempotency_key="k1"),
+            repo_root=repo,
+            key="k1",
+        )
+
+        assert second == first
+        assert second["id"] == "evt-a"
+        lines = _read_raw_lines(shard_path(repo))
+        assert len(lines) == 1, "the retry must append nothing"
+
+    def test_same_key_different_payload_is_refused_naming_bound_id(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(ts, "machine_slug", lambda *a, **kw: "this-machine")
+        repo = _make_git_repo(tmp_path / "repo")
+
+        append_event(
+            _event("evt-a", "2026-01-01T00:00:00Z", payload="x", idempotency_key="k1"),
+            repo_root=repo,
+            key="k1",
+        )
+        with pytest.raises(TrackerStoreKeyMisuseError) as exc_info:
+            append_event(
+                _event("evt-b", "2026-01-01T00:00:01Z", payload="y", idempotency_key="k1"),
+                repo_root=repo,
+                key="k1",
+            )
+        assert exc_info.value.bound_id == "evt-a"
+        lines = _read_raw_lines(shard_path(repo))
+        assert len(lines) == 1, "a refused misuse must append nothing"
+
+    def test_same_key_identical_payload_and_id_still_raises_duplicate_id_error(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(ts, "machine_slug", lambda *a, **kw: "this-machine")
+        repo = _make_git_repo(tmp_path / "repo")
+
+        append_event(
+            _event("evt-a", "2026-01-01T00:00:00Z", payload="x", idempotency_key="k1"),
+            repo_root=repo,
+            key="k1",
+        )
+        with pytest.raises(TrackerStoreDuplicateIdError):
+            append_event(
+                _event("evt-a", "2026-01-01T00:00:00Z", payload="x", idempotency_key="k1"),
+                repo_root=repo,
+                key="k1",
+            )
+
+    def test_key_bound_in_a_rotated_month_is_still_caught(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(ts, "machine_slug", lambda *a, **kw: "this-machine")
+        repo = _make_git_repo(tmp_path / "repo")
+
+        _write_shard(
+            repo,
+            "this-machine",
+            [
+                {
+                    **_event("evt-a", "2026-01-01T00:00:00Z", payload="x"),
+                    "idempotency_key": "k1",
+                    "machine": "this-machine",
+                    "sequence": 1,
+                }
+            ],
+        )
+        rotate_month(repo_root=repo, month="2026-01", machine="this-machine")
+        assert _read_raw_lines(shard_path(repo)) == []
+
+        with pytest.raises(TrackerStoreKeyMisuseError) as exc_info:
+            append_event(
+                _event("evt-b", "2026-02-01T00:00:00Z", payload="y"),
+                repo_root=repo,
+                key="k1",
+            )
+        assert exc_info.value.bound_id == "evt-a"
+
+    def test_no_key_gives_unchanged_behavior(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(ts, "machine_slug", lambda *a, **kw: "this-machine")
+        repo = _make_git_repo(tmp_path / "repo")
+
+        append_event(_event("evt-a", "2026-01-01T00:00:00Z", payload="x"), repo_root=repo)
+        second = append_event(
+            _event("evt-b", "2026-01-01T00:00:01Z", payload="x"), repo_root=repo
+        )
+        assert second["id"] == "evt-b"
+        lines = _read_raw_lines(shard_path(repo))
+        assert len(lines) == 2, "no key means no key-comparison, ordinary append both times"
+
+    def test_another_machines_shard_with_the_same_key_is_not_read(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(ts, "machine_slug", lambda *a, **kw: "this-machine")
+        repo = _make_git_repo(tmp_path / "repo")
+
+        peer_path = _write_shard(
+            repo,
+            "peer-machine",
+            [
+                {
+                    **_event("evt-peer", "2026-01-01T00:00:00Z", payload="x"),
+                    "idempotency_key": "k1",
+                    "machine": "peer-machine",
+                    "sequence": 1,
+                }
+            ],
+        )
+
+        original_read_text = Path.read_text
+        opened: list[Path] = []
+
+        def _spy_read_text(self, *args, **kwargs):
+            opened.append(self)
+            return original_read_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", _spy_read_text)
+
+        # Different payload under the same key — a same-machine collision
+        # would raise TrackerStoreKeyMisuseError; the peer's differently-
+        # keyed event must never be read to reach that verdict.
+        result = append_event(
+            _event("evt-own", "2026-01-01T00:00:01Z", payload="y"),
+            repo_root=repo,
+            key="k1",
+        )
+        assert result["id"] == "evt-own"
+        assert peer_path not in opened, (
+            "append_event's key check must read only this machine's own "
+            "shard and its own rotated history, never a peer's shard "
+            "(DR-241 own-shard-only bound)"
+        )
+
+    def test_process_time_added_by_key_check_stays_small(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(ts, "machine_slug", lambda *a, **kw: "this-machine")
+        repo = _make_git_repo(tmp_path / "repo")
+
+        # Fixture: 500 own-machine events already in the live shard (kept
+        # modest relative to the spike's 5,000-event measurement fixture —
+        # this is a regression guard against a gross gross regression, not
+        # a recreation of the spike's own perf spike).
+        for i in range(500):
+            append_event(
+                _event(f"evt-{i}", f"2026-01-01T00:{i % 60:02d}:00Z", payload=str(i)),
+                repo_root=repo,
+            )
+
+        start = time.process_time()
+        append_event(
+            _event("evt-keyed", "2026-01-01T01:00:00Z", payload="keyed"),
+            repo_root=repo,
+            key="k-final",
+        )
+        elapsed_ms = (time.process_time() - start) * 1000
+        assert elapsed_ms < 200, (
+            f"append_event with a key took {elapsed_ms:.2f}ms process time "
+            "over a 500-event own-shard fixture — regression against the "
+            "spike verdict's ~0.08ms incremental-cost finding"
         )

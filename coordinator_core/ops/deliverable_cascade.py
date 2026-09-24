@@ -1028,6 +1028,7 @@ def _commit_mutated_paths(
         try:
             Path(msg_path).unlink()
         except OSError:
+            # temp commit-message file already gone; nothing left to clean up
             pass
     if not commit_result.ok:
         return f"deliverable.cascade_terminal: commit failed: {commit_result.stderr}", None

@@ -52,7 +52,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core.hooks._envelope import no_advisory
+from coordinator_core.hooks._envelope import no_advisory, payload_of
 from coordinator_core.hooks.support.git_common_dir import resolve_git_common_dir
 from coordinator_core.ipc import register_op
 
@@ -145,8 +145,9 @@ def _handler(params: dict, repo_root=None) -> dict:
     Always returns `no_advisory()` — the product is the on-disk write
     side-effect; this event's output is not surfaced to the model.
     """
+    params = payload_of(params)
     try:
-        run(params if isinstance(params, dict) else None)
+        run(params)
     except Exception:
         # Defense-in-depth — must never raise; run() already contains its
         # own errors, this is a final backstop matching the fail-open

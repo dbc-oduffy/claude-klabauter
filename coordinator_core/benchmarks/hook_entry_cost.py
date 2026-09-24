@@ -247,7 +247,13 @@ def classify_guard_registration() -> List[GuardCallVariance]:
     entry's NAME as the first double-quoted string literal in the window
     (correct for all three shapes -- the name is always the first quoted
     string a registration's own source contains), and checks `cmd`/
-    `payload`/`session_id` presence anywhere in that same bounded window.
+    `payload`/`session_id` presence anywhere in that same bounded window,
+    EXCLUDING comment text (everything from a line's first `#` onward is
+    stripped before that check) -- explanatory prose in the window
+    routinely names these identifiers when describing a called function's
+    own internals (e.g. `check_advisory`'s `payload.get(...)`) without the
+    registration line itself reading them, and counting that prose would
+    misclassify the entry.
     Every registration observed at this module's writing closes within
     `_ENTRY_WINDOW_LINES` lines; a future registration wrapped wider than
     that window could evade this classifier (the same bounded-window
@@ -263,14 +269,20 @@ def classify_guard_registration() -> List[GuardCallVariance]:
     chunks = text.split(_GUARD_ENTRY_SPLIT)[1:]
     out: List[GuardCallVariance] = []
     for chunk in chunks:
-        window = "\n".join(chunk.split("\n")[:_ENTRY_WINDOW_LINES])
+        window_lines = chunk.split("\n")[:_ENTRY_WINDOW_LINES]
+        window = "\n".join(window_lines)
         m = _NAME_RE.search(window)
         if not m:
             continue
         name = m.group(1)
-        reads_cmd = bool(re.search(r"\bcmd\b", window))
-        reads_payload = bool(re.search(r"\bpayload\b", window))
-        reads_session = bool(re.search(r"\bsession_id\b", window))
+        # Comment text stripped before the cmd/payload/session_id check --
+        # see this function's own docstring for why (prose describing a
+        # called function's internals routinely names these identifiers
+        # without the registration line itself reading them).
+        code_window = "\n".join(line.split("#", 1)[0] for line in window_lines)
+        reads_cmd = bool(re.search(r"\bcmd\b", code_window))
+        reads_payload = bool(re.search(r"\bpayload\b", code_window))
+        reads_session = bool(re.search(r"\bsession_id\b", code_window))
         out.append(
             GuardCallVariance(
                 name=name,

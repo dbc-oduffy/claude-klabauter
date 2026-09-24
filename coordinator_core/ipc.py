@@ -1262,7 +1262,7 @@ def mutation_read_deadline_for(method: str, msg: Any = None) -> float:
 #
 # Mandatory JSON-RPC envelope field for all working-tree-scoped ops.
 # Missing or empty on a working-tree-scoped op → structured fail-loud error (C1c).
-# Emit ops (artifact.emit, backlog.record, goal.append) are common_dir-scoped
+# Emit ops (goal.append) are common_dir-scoped
 # (per-repo emission, 2026-07-07) and REQUIRE this field — no longer central.
 # Reading and routing this field into per-request partition resolution lands in C1b/C1c.
 #
@@ -1340,7 +1340,7 @@ def resolve_op_repo_key(method: str, request_repo: Optional[Path]) -> Optional[P
     - "none":       returns None (no per-request key needed).
     - "common_dir": returns git_common_dir(request_repo) — the shared
                     .git directory, correct for linked-worktree setups.
-                    Emit ops (artifact.emit, backlog.record, goal.append) are
+                    Emit ops (goal.append) are
                     common_dir-scoped since the 2026-07-07 per-repo-emission cutover.
     - "show_top":   returns request_repo directly (per-worktree key).
 
@@ -1385,6 +1385,53 @@ def resolve_op_repo_key(method: str, request_repo: Optional[Path]) -> Optional[P
             ) from exc
     # scope == "show_top": use the resolved worktree path directly
     return request_repo
+
+
+def _file_path_param(params: dict) -> Optional[str]:
+    """Extract an absolute file_path from request params for the fallback below.
+
+    Reads the flat top-level "file_path" field (hooks.track_touched_files' shape,
+    and most PostToolUse hook ops); falls back to a nested "tool_input.file_path"
+    shape some hook payloads carry. Returns None if neither is a non-empty string.
+    """
+    raw = params.get("file_path")
+    if isinstance(raw, str) and raw:
+        return raw
+    tool_input = params.get("tool_input")
+    if isinstance(tool_input, dict):
+        raw = tool_input.get("file_path")
+        if isinstance(raw, str) and raw:
+            return raw
+    return None
+
+
+def resolve_op_repo_key_with_file_path_fallback(
+    method: str, request_repo: Optional[Path], params: dict
+) -> Optional[Path]:
+    """Resolve the op repo key, falling back to the request's file_path's own repo.
+
+    A resolvable `_origin_worktree` (request_repo) ALWAYS wins — this never
+    overrides a valid origin. Only when resolve_op_repo_key(method, request_repo)
+    fails (origin absent, or present but not inside any git repo — e.g. a
+    subagent whose cwd reset to a non-repo directory) does this fall back to the
+    request params' `file_path`: if that path's containing directory resolves
+    (pure-Python upward walk via lifecycle.git_common_dir — no subprocess spawn)
+    to a git repo, that repo becomes the routing key instead of refusing the op.
+
+    Raises ValueError (same as resolve_op_repo_key) if neither origin nor
+    file_path resolves to a repo.
+    """
+    try:
+        return resolve_op_repo_key(method, request_repo)
+    except ValueError as exc:
+        file_path = _file_path_param(params)
+        if not file_path:
+            raise
+        parent = Path(file_path).resolve().parent
+        try:
+            return git_common_dir(parent)
+        except (RuntimeError, OSError):
+            raise exc from None
 
 
 # ---------------------------------------------------------------------------
@@ -1996,7 +2043,7 @@ def register_op(name: str, handler: Optional[Callable] = None) -> Callable:
         repo_root:  the per-request resolved repo root (Path or None).  Derived from the
                     _origin_worktree envelope field (C1b-ii seam).  None for "none"-keyed
                     ops (ping, advisory hooks). Non-None (common_dir) for emit ops
-                    (artifact.emit, backlog.record, goal.append) — per-repo emission
+                    (goal.append) — per-repo emission
                     (reclassified from "central" 2026-07-07).
         return:     serialised as the "result" field of the JSON-RPC response.
 
@@ -2404,7 +2451,7 @@ async def _dispatch_message_impl(msg: dict) -> dict:
     # Fail-loud (AC-1c) if the op requires a key but _origin_worktree was absent or
     # unresolvable — never fall back to a silent default repo.
     try:
-        op_repo_key = resolve_op_repo_key(method, request_repo)
+        op_repo_key = resolve_op_repo_key_with_file_path_fallback(method, request_repo, params)
     except ValueError as exc:
         # PM ruling (DoE-claude#85 row 8): "a hook never denies because
         # routing/engine context is missing -- it passes with a loud stderr
@@ -2909,7 +2956,7 @@ async def dispatch_message(
             try:
                 _nested_parent.append(span_ms)
             except Exception:
-                pass
+                pass  # parent accumulator append is best-effort; timing charge is non-critical
         _spawn_end = _spawn_count_or_none()
         _spawns = (
             _spawn_end - spawn_start

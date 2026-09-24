@@ -92,10 +92,11 @@ UNCHANGED — no new flag. This matters beyond this module's own CLI: the
 DoE-side trampoline's invocation of this module's import/`main()`, AND
 this repo's own in-process caller
 (`coordinator_core.workday_complete.brief._compute_dirty_tree_verdict`,
-which calls `_step2_5_dirty_tree_main(["--dry-run"])` with no session
-concept of its own today) both keep calling this module exactly as
-before — (a) would have required updating both call sites' argv shape;
-(b) requires updating neither.
+which now calls `classify_dirty_tree()` directly and reads its typed
+`DirtyTreeClassification` return rather than `main()`'s print/exit-code
+contract) both keep calling this module exactly as before — (a) would
+have required updating both call sites' argv shape; (b) requires
+updating neither.
 
 `resolve_session_id`'s own docstring is the disposition for every one of
 its 4 ambiguity tiers (env-var tiers 1-3, and tier-4's sentinel-file
@@ -173,6 +174,8 @@ Negative-spec (faithful bash-oracle reproduction, not silently "fixed"):
 """
 
 from __future__ import annotations
+
+import dataclasses
 
 MUTATES = [".gitignore", "cross-repo/inbox/**", "cross-repo/archive/**", "state/review-trail/**", "state/memos/**", "state/lessons-outbox/**", "state/improvement-queue/**", "state/debt-backlog/**", "state/bug-backlog/**", "tasks/learn-lessons-**", "tasks/audits/**", "tasks/daily-review-scratch/**", "archive/**", "docs/plans/*-check.md"]
 
@@ -384,6 +387,10 @@ class _Accumulators:
         self.commit_paths: List[str] = []
         self.commit_add_paths: List[str] = []
         self.commit_roots_seen: List[str] = []
+        # Per-path stderr notices, collected during classification (never
+        # printed there) so classify_dirty_tree() stays silent; main()
+        # prints these, in collection order, after the error check.
+        self.notices: List[str] = []
 
 
 def _resolve_claim_context(
@@ -544,11 +551,10 @@ def _classify_main_pass(
         # 4. ORPHAN-TMP.
         bname = path.rsplit("/", 1)[-1]
         if _classify_orphan_tmp(bname):
-            print(f"[{_PROG}] orphan-tmp: {path}", file=sys.stderr)
-            print(
+            acc.notices.append(f"[{_PROG}] orphan-tmp: {path}")
+            acc.notices.append(
                 f"[{_PROG}] WARN: inspect {path} against its target before deleting — "
-                "not auto-disposed (Edit-tool atomic-write crash artifact)",
-                file=sys.stderr,
+                "not auto-disposed (Edit-tool atomic-write crash artifact)"
             )
             counters.orphan += 1
             continue
@@ -584,11 +590,10 @@ def _classify_main_pass(
                 continue
             peer_fact = peer_map.get(path)
             if peer_fact is not None:
-                print(
+                acc.notices.append(
                     f"[{_PROG}] peer-claim: {path} owner={peer_fact['owner']} "
                     f"liveness={peer_fact['liveness']} "
-                    f"claim_source={peer_fact['claim_source']}",
-                    file=sys.stderr,
+                    f"claim_source={peer_fact['claim_source']}"
                 )
                 counters.claim_peer += 1
                 needs_pm = True
@@ -610,13 +615,13 @@ def _classify_main_pass(
 
         # 7. SOURCE-TREE.
         if _classify_source_tree(path):
-            print(f"[{_PROG}] source-tree: {path}", file=sys.stderr)
+            acc.notices.append(f"[{_PROG}] source-tree: {path}")
             counters.source += 1
             needs_pm = True
             continue
 
         # 8. AMBIGUOUS.
-        print(f"[{_PROG}] ambiguous: {path}", file=sys.stderr)
+        acc.notices.append(f"[{_PROG}] ambiguous: {path}")
         counters.ambiguous += 1
         needs_pm = True
 
@@ -643,7 +648,7 @@ def _classify_rename_source_pass(
         src = rest[:first]
 
         if _classify_source_tree(src):
-            print(f"[{_PROG}] source-tree (rename-src): {src}", file=sys.stderr)
+            acc.notices.append(f"[{_PROG}] source-tree (rename-src): {src}")
             counters.source += 1
             needs_pm = True
             continue
@@ -774,15 +779,19 @@ def _act_commit(repo_root: str, dry_run: bool, acc: _Accumulators) -> Optional[i
     return None
 
 
-def _print_summary(counters: _Counters, acc: _Accumulators) -> None:
+def _build_summary_lines(counters: _Counters, acc: _Accumulators) -> List[str]:
+    """The per-group summary line-builder — the one source `_print_summary`
+    and `DirtyTreeClassification.evidence_lines()` both read from."""
+    lines: List[str] = []
+
     if counters.eol > 0:
-        print(f"[{_PROG}] EOL-phantom skipped: {counters.eol}")
+        lines.append(f"[{_PROG}] EOL-phantom skipped: {counters.eol}")
     if counters.sub > 0:
-        print(f"[{_PROG}] submodule skipped: {counters.sub}")
+        lines.append(f"[{_PROG}] submodule skipped: {counters.sub}")
     if counters.leave > 0:
-        print(f"[{_PROG}] leave-alone skipped: {counters.leave}")
+        lines.append(f"[{_PROG}] leave-alone skipped: {counters.leave}")
     if counters.orphan > 0:
-        print(f"[{_PROG}] orphan-tmp listed (no action): {counters.orphan}")
+        lines.append(f"[{_PROG}] orphan-tmp listed (no action): {counters.orphan}")
 
     if counters.gitignore > 0:
         # Dedup preserving first-seen order (mirrors the oracle's
@@ -792,21 +801,106 @@ def _print_summary(counters: _Counters, acc: _Accumulators) -> None:
             if pat not in seen:
                 seen.append(pat)
         gi_pat_list = ", ".join(seen)
-        print(f"[{_PROG}] gitignore + commit: {counters.gitignore} paths, patterns: {gi_pat_list}")
+        lines.append(f"[{_PROG}] gitignore + commit: {counters.gitignore} paths, patterns: {gi_pat_list}")
 
     if counters.commit > 0:
         roots_str2 = ", ".join(acc.commit_roots_seen)
-        print(f"[{_PROG}] auto-commit: {counters.commit} paths under {roots_str2}")
+        lines.append(f"[{_PROG}] auto-commit: {counters.commit} paths under {roots_str2}")
 
     if counters.claim_mine > 0:
-        print(f"[{_PROG}] claim-commit (by claim, not prefix): {counters.claim_mine}")
+        lines.append(f"[{_PROG}] claim-commit (by claim, not prefix): {counters.claim_mine}")
     if counters.claim_peer > 0:
-        print(f"[{_PROG}] peer-claim (needs PM, not committed): {counters.claim_peer}")
+        lines.append(f"[{_PROG}] peer-claim (needs PM, not committed): {counters.claim_peer}")
 
     if counters.source > 0:
-        print(f"[{_PROG}] source-tree (needs PM): {counters.source}")
+        lines.append(f"[{_PROG}] source-tree (needs PM): {counters.source}")
     if counters.ambiguous > 0:
-        print(f"[{_PROG}] ambiguous (needs PM): {counters.ambiguous}")
+        lines.append(f"[{_PROG}] ambiguous (needs PM): {counters.ambiguous}")
+
+    return lines
+
+
+def _print_summary(counters: _Counters, acc: _Accumulators) -> None:
+    for line in _build_summary_lines(counters, acc):
+        print(line)
+
+
+# ---------------------------------------------------------------------------
+# Unit 4 — typed, mutation-free, silent classification (main()'s classify
+# half, exposed so brief.py's probe reads a return value, never main()'s
+# print/exit-code contract).
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class DirtyTreeClassification:
+    """The classify half's result — no stored evidence field (Design
+    constraints § Evidence): `evidence_lines()` derives evidence from
+    `counters`/`acc` via `_build_summary_lines`, the same builder `main()`'s
+    printer uses, so there is exactly one source for those lines."""
+
+    needs_pm: bool
+    error: Optional[str]
+    counters: _Counters
+    acc: _Accumulators
+
+    def evidence_lines(self) -> List[str]:
+        """The `[step2.5] `-prefixed lines `main()` would print for this
+        classification, minus the act half's `DRY-RUN:` preview lines (those
+        describe acts, not findings). On `error`, the error message alone."""
+        if self.error is not None:
+            return [self.error]
+        lines = _build_summary_lines(self.counters, self.acc)
+        lines.extend(self.acc.notices)
+        lines.append(f"[{_PROG}] NEEDS-PM" if self.needs_pm else f"[{_PROG}] OK")
+        return lines
+
+
+def classify_dirty_tree() -> DirtyTreeClassification:
+    """Classifies every dirty path in the cwd's git repo. Mutation-free
+    (no git write, no `.gitignore` edit) and silent (no stdout/stderr) —
+    everything `main()`'s classify half does today up to and including
+    `_classify_rename_source_pass`, minus the act blocks and the prints.
+
+    Both of `main()`'s classify-time failure cases (not a repo; `git
+    status` OSError/TimeoutExpired/non-zero) become `error=<the same
+    message text main() prints today>` rather than a raise."""
+    repo_root = show_toplevel()
+    if not repo_root:
+        return DirtyTreeClassification(
+            needs_pm=False,
+            error=f"[{_PROG}] ERROR: not inside a git repo",
+            counters=_Counters(),
+            acc=_Accumulators(),
+        )
+
+    counters = _Counters()
+    acc = _Accumulators()
+
+    try:
+        status_res = _run_git(["status", "--porcelain", "--untracked-files=all"], cwd=repo_root)
+    except (OSError, subprocess.TimeoutExpired):
+        return DirtyTreeClassification(
+            needs_pm=False,
+            error=f"[{_PROG}] ERROR: git status failed",
+            counters=counters,
+            acc=acc,
+        )
+    if status_res.returncode != 0:
+        return DirtyTreeClassification(
+            needs_pm=False,
+            error=f"[{_PROG}] ERROR: git status failed",
+            counters=counters,
+            acc=acc,
+        )
+    status_lines = status_res.stdout.splitlines()
+
+    claim_ctx = _resolve_claim_context(repo_root)
+
+    needs_pm = _classify_main_pass(status_lines, repo_root, counters, acc, claim_ctx)
+    needs_pm = _classify_rename_source_pass(status_lines, counters, acc) or needs_pm
+
+    return DirtyTreeClassification(needs_pm=needs_pm, error=None, counters=counters, acc=acc)
 
 
 # ---------------------------------------------------------------------------
@@ -824,32 +918,27 @@ def main(argv: List[str]) -> int:
             print(f"ERROR: unknown argument: {arg}", file=sys.stderr)
             return 1
 
-    # --- Unit 1: locate repo root ---
+    # --- classify ---
+    classification = classify_dirty_tree()
+    if classification.error is not None:
+        print(classification.error, file=sys.stderr)
+        return 1
+
+    # --- Unit 1: locate repo root for the act half (show_toplevel() never
+    # spawns — see its own docstring — so a second call costs nothing) ---
     repo_root = show_toplevel()
     if not repo_root:
         print(f"[{_PROG}] ERROR: not inside a git repo", file=sys.stderr)
         return 1
 
-    # --- Unit 1: counters/accumulators ---
-    counters = _Counters()
-    acc = _Accumulators()
+    counters = classification.counters
+    acc = classification.acc
 
-    # --- Unit 2: gather git status once, classify twice (main + rename-source) ---
-    try:
-        status_res = _run_git(["status", "--porcelain", "--untracked-files=all"], cwd=repo_root)
-    except (OSError, subprocess.TimeoutExpired):
-        print(f"[{_PROG}] ERROR: git status failed", file=sys.stderr)
-        return 1
-    if status_res.returncode != 0:
-        print(f"[{_PROG}] ERROR: git status failed", file=sys.stderr)
-        return 1
-    status_lines = status_res.stdout.splitlines()
-
-    # --- Unit 2: C6 — resolve this run's claim context ONCE, not per path.
-    claim_ctx = _resolve_claim_context(repo_root)
-
-    needs_pm = _classify_main_pass(status_lines, repo_root, counters, acc, claim_ctx)
-    needs_pm = _classify_rename_source_pass(status_lines, counters, acc) or needs_pm
+    # Print the classification notices, in collection order, before the act
+    # blocks — matches HEAD: no stderr output occurred between the two
+    # classification passes and the act blocks other than these notices.
+    for notice in acc.notices:
+        print(notice, file=sys.stderr)
 
     # --- Unit 3: act blocks ---
     rc = _act_gitignore(repo_root, dry_run, counters, acc)
@@ -862,7 +951,7 @@ def main(argv: List[str]) -> int:
     # --- Unit 3: summary + verdict ---
     _print_summary(counters, acc)
 
-    if needs_pm:
+    if classification.needs_pm:
         print(f"[{_PROG}] NEEDS-PM")
         return 2
 

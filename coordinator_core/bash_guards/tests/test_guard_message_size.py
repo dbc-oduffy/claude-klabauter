@@ -305,21 +305,33 @@ def _ceil_to_5(value: float) -> int:
     return int(-(-value // 5) * 5)
 
 
-#: Live-measured baseline, this tree, this host, at chunk-authoring time
-#: (2026-08-03) -- see module docstring's "Known limitation" note on
-#: cross-host/checkout jitter, which `_ceil_to_5` absorbs by rounding each
-#: raw mean UP to the nearest 5 bytes rather than recording the exact float.
+#: R11 (docs/plans/2026-09-22-spawn-budget-and-census.md, C10) -- the jitter
+#: allowance leg-3's baselines carry, sized from two census-row-3 runs at
+#: fire HEAD (32aacc6a73), one under the platform-default TMPDIR and one
+#: under an 80+-char TMPDIR (a Windows-length checkout path), the two spans
+#: this module's path-dependent prose is sensitive to. Per-band |delta|
+#: (default-TMPDIR mean minus long-TMPDIR mean): advisory-rewrite=0.0,
+#: confinement-deny=0.0, directory:hooks=2.1618, directory:write_guards=1.4681,
+#: platform-conditioned-deny=0.0. Max = 2.1618, `_ceil_to_5(2.1618)` = 5.
+JITTER_ALLOWANCE_BYTES = max(5, _ceil_to_5(2.1618))
+
+#: Live-measured baseline, this tree, this host, re-measured at C10
+#: (docs/plans/2026-09-22-spawn-budget-and-census.md, fire HEAD 32aacc6a73,
+#: default-TMPDIR run) as `_ceil_to_5(live_mean) + JITTER_ALLOWANCE_BYTES` --
+#: see module docstring's "Known limitation" note on cross-host/checkout
+#: jitter, which `JITTER_ALLOWANCE_BYTES` now absorbs explicitly (measured,
+#: not guessed) on top of `_ceil_to_5`'s per-band rounding.
 #: A future chunk that genuinely trims a band's prose must lower the
 #: matching entry here by hand (mirroring `test_operator_override_note_
 #: retains_affordances._MAX_BYTES`'s own manually-ratcheted-down precedent)
 #: -- this dict does not self-update, by design (a ratchet that rewrites
 #: its own ceiling on every green run is not a ratchet).
 RATCHET_BASELINE_MEAN_PROSE_BYTES_PER_BAND: Dict[str, int] = {
-    "confinement-deny": 850,
-    "advisory-rewrite": 620,
-    "platform-conditioned-deny": 910,
-    "directory:write_guards": 960,
-    "directory:hooks": 845,
+    "confinement-deny": 250 + JITTER_ALLOWANCE_BYTES,
+    "advisory-rewrite": 165 + JITTER_ALLOWANCE_BYTES,
+    "platform-conditioned-deny": 750 + JITTER_ALLOWANCE_BYTES,
+    "directory:write_guards": 145 + JITTER_ALLOWANCE_BYTES,
+    "directory:hooks": 230 + JITTER_ALLOWANCE_BYTES,
 }
 
 
@@ -394,6 +406,34 @@ def test_leg3_ratchet_mean_prose_bytes_per_band(measured_corpus):
     assert not violations, "leg-3 ratchet increase(s) -- adjudicate each named cell, do not sweep:\n%s" % (
         "\n".join(violations)
     )
+
+
+def test_leg3_baseline_is_not_slack(measured_corpus):
+    """R11's dilution finding, closed as a two-sided ratchet rather than a
+    one-off re-baseline: a band whose recorded baseline has drifted more than
+    `2 * JITTER_ALLOWANCE_BYTES` above its live `_ceil_to_5` mean is slack,
+    not a ratchet -- the gap no longer tracks any real cross-host jitter and
+    should be lowered by hand (this dict does not self-update, by design;
+    see `RATCHET_BASELINE_MEAN_PROSE_BYTES_PER_BAND`'s own docstring)."""
+    cells, _elapsed = measured_corpus
+    speakers = _select_speakers(cells)
+    by_band: Dict[str, List[_Cell]] = defaultdict(list)
+    for cell in speakers:
+        by_band[cell.band].append(cell)
+
+    violations = []
+    for band, band_cells in sorted(by_band.items()):
+        baseline = RATCHET_BASELINE_MEAN_PROSE_BYTES_PER_BAND.get(band)
+        if baseline is None:
+            continue
+        live_ceil = _ceil_to_5(statistics.mean(c.measurement.prose_bytes for c in band_cells))
+        slack = baseline - live_ceil
+        if slack > 2 * JITTER_ALLOWANCE_BYTES:
+            violations.append(
+                "%s: baseline %d is %d over live ceil5-mean %d (allowance %d) -- lower it to %d"
+                % (band, baseline, slack, live_ceil, JITTER_ALLOWANCE_BYTES, live_ceil + JITTER_ALLOWANCE_BYTES)
+            )
+    assert not violations, "leg-3 baseline is slack, not ratchet -- lower by hand:\n%s" % "\n".join(violations)
 
 
 # ---------------------------------------------------------------------------

@@ -287,6 +287,19 @@ def test_mode_only_delta_no_false_exclusion_warning(tmp_path, monkeypatch):
     mode_line = _git(["ls-tree", "HEAD", "--", "script.sh"], repo).stdout
     assert mode_line.split()[0] == "100755"
     _assert_fast_arm(argvs)
+    # `git update-index --chmod=+x` above only ever touched the INDEX entry
+    # -- the disk file's own permission bits were never chmod'd, by design
+    # (this is what makes it a MODE-ONLY delta: content agrees, only the
+    # tracked mode changed). `commit_scoped()` never writes to the worktree
+    # either, so script.sh's real on-disk mode is still non-executable after
+    # landing the commit -- a genuine, intentional pending divergence
+    # against the new HEAD, same class as a `worktree_excluded` path (see
+    # this module's own docstring), just expressed in the mode bit rather
+    # than content. Reconcile it the same way -- `git checkout -- script.sh`
+    # restores the worktree's mode AND content from the index, which
+    # already carries the committed 100755 -- before the oracle proves
+    # "committed cleanly", never "nothing pending".
+    _discard_worktree_edit(repo, "script.sh")
     _assert_ac2_oracle(repo)
 
 
@@ -370,17 +383,28 @@ def test_worktree_excluded_report_byte_identical_fast_vs_ladder(tmp_path, monkey
     # is not one any more: C6b gave `_commit_via_head_spine` its
     # `create_missing_dirs=True` route (`_synthesize_absent_spine_dirs`),
     # deliberately, because that shape was the one precondition-miss this
-    # branch hit at nonzero rate. The AC15 claim under test -- the exclusion
-    # report is byte-identical across both arms -- is unaffected by which
-    # trigger provokes the ladder, so this now uses the trigger that is still
-    # real: `_resolve_cas_ref_target` genuinely refuses after `git pack-refs
-    # --all` (no loose ref file for HEAD's branch until the next ref update
-    # touches it), the same repo state `test_agree_branch_commits_correctly_
-    # immediately_after_pack_refs` pins and the reason this module's own
-    # ladder was kept rather than deleted. Keeping the retired trigger asserted
-    # the ladder for a shape that correctly no longer reaches it -- a stale
-    # precondition failing against code that is right.
-    _git(["pack-refs", "--all"], ladder_repo)
+    # branch hit at nonzero rate.
+    #
+    # `git pack-refs --all` is ALSO retired as a trigger: `_resolve_cas_ref_
+    # target` no longer refuses a packed-only ref (its own docstring --
+    # `_ref_exists_loose_or_packed` resolves loose OR packed, deliberately,
+    # since a genuinely fresh-after-`git gc` branch used to be unable to
+    # commit at all). This test previously asserted the ladder against that
+    # retired precondition and went red the moment the fix landed -- a stale
+    # trigger failing against code that is right, not a regression in the
+    # committer.
+    #
+    # The AC15 claim under test -- the exclusion report is byte-identical
+    # across both arms -- is unaffected by which precondition-miss provokes
+    # the ladder, so this drives the one still-real, controllable trigger:
+    # `_commit_via_head_spine`'s own documented "CAS ref cannot be resolved
+    # to one confident loose-file target" precondition, forced directly on
+    # `_resolve_cas_ref_target` the same way AC6/AC11(b) above force their
+    # own race windows via `_install_peer_action` -- a monkeypatched seam at
+    # the exact decision point, never a mock of git itself. The ladder that
+    # then runs is 100% real git plumbing (`read-tree`/`update-index`/
+    # `write-tree`/`commit-tree`/`update-ref`, all real spawns).
+    monkeypatch.setattr(git_native, "_resolve_cas_ref_target", lambda root: None)
     msg_file_ladder = _write_msg(tmp_path, "ladder arm\n")
     ladder_argvs = _spy_git_argvs(monkeypatch)
     ladder_result = git_native.commit_scoped(["newdir/nested.txt"], msg_file_ladder, ladder_repo)

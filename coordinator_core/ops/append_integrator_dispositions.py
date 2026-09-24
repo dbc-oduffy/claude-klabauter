@@ -501,6 +501,7 @@ def _iter_json_findings_payloads(text: str):
         try:
             parsed = json.loads(body)
         except (json.JSONDecodeError, ValueError):
+            # not every fenced block is JSON findings; skip non-matching blocks
             continue
         if isinstance(parsed, dict) and isinstance(parsed.get("findings"), list):
             yield parsed, parsed["findings"]
@@ -714,6 +715,7 @@ def _already_routed_by(sidecar_path, reviewer_stem):
         try:
             text = entry.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
+            # an unreadable sibling file is not a routed run-report; skip it
             continue
         if _extract_frontmatter_agent_type(text) != _INTEGRATOR_AGENT_TYPE:
             continue
@@ -770,6 +772,7 @@ def _discover_run_report(sidecar_path, reviewer_stem):
         try:
             text = entry.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
+            # an unreadable candidate file cannot be inspected; skip it
             continue
         if _extract_frontmatter_agent_type(text) != _INTEGRATOR_AGENT_TYPE:
             continue

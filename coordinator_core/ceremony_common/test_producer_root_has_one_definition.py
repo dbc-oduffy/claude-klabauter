@@ -94,3 +94,40 @@ def test_the_definition_site_still_holds_the_definition():
 
     assert _INLINE_JOIN.search(_DEFINITION_SITE.read_text(encoding="utf-8"))
     assert resolve_cli_script_root() == _PKG_ROOT.parent / "coordinator" / "bin"
+
+
+# ---------------------------------------------------------------------------
+# The second root's guard-the-guard (P036-T1, AC5). `_INLINE_JOIN` itself is
+# untouched above -- this is a SEPARATE assertion, by name (import + textual
+# presence), about the second root's own definitions. No equality assertion:
+# `resolve_plugin_cli_script_root()` is `None` on a box with no DoE clone,
+# and no equality is available to it there.
+# ---------------------------------------------------------------------------
+
+_PLUGIN_ROOT_NAMES = ("resolve_plugin_cli_script_root", "UNRESOLVED_PLUGIN_CLI_ROOT")
+
+
+def _count_textual_occurrences(name: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for f in _dispatch_path_modules() + [_DEFINITION_SITE]:
+        text = f.read_text(encoding="utf-8")
+        n = text.count(name)
+        if n:
+            counts[str(f.relative_to(_PKG_ROOT))] = n
+    return counts
+
+
+def test_resolve_plugin_cli_script_root_is_defined_exactly_once():
+    from coordinator_core.ceremony_common import cli_dispatch
+
+    assert hasattr(cli_dispatch, "resolve_plugin_cli_script_root")
+
+    for name in _PLUGIN_ROOT_NAMES:
+        counts = _count_textual_occurrences(name)
+        offenders = {k: v for k, v in counts.items() if k != str(_DEFINITION_SITE.relative_to(_PKG_ROOT))}
+        assert not offenders, (
+            f"{name!r} appears outside {_DEFINITION_SITE.relative_to(_PKG_ROOT)}: {offenders}"
+        )
+        assert counts.get(str(_DEFINITION_SITE.relative_to(_PKG_ROOT)), 0) >= 1, (
+            f"{name!r} not found in its one legal definition site"
+        )

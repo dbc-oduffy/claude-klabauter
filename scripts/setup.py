@@ -36,7 +36,8 @@ Responsibilities:
       makes a disarmed `_dialect.py` (ImportError -> SILENT) loud at install time,
       naming the interpreter(s) probed. Non-fatal; does not arm the guard (see C2 of
       docs/plans/2026-08-17-machine-first-install-surface.md).
-  5. Post-install health probe (bin/claude-klabauter-doctor-probe.py --step-zero) as best-effort.
+  5. Post-install health probe (bin/claude-klabauter-doctor-probe.py --step-zero --required-only)
+     as best-effort; runs only the 4 required probes, not all 26.
   (There is no `coordinator_whoami` provisioning step. The package is RETIRED —
      this chain used to pip-install it editable under the operator's
      `coordinator.python` general pin, and that step is deliberately absent, not
@@ -126,13 +127,16 @@ Negative-spec:
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum, auto
@@ -254,6 +258,8 @@ from coordinator_core.install.timeouts import (  # noqa: E402
 from coordinator_core.engine_root import (  # noqa: E402
     _maybe_emit_engine_root_retired as _emit_claude_klabauter_root_retired,
 )
+from coordinator_core.cli_entry import run_op_main  # noqa: E402
+from coordinator_core.install._shared import env_overlay  # noqa: E402
 
 HELP_TEXT = """\
 Claude-klabauter installer — sets up the coordinator control-plane engine.
@@ -2413,6 +2419,93 @@ def resolve_claude_klabauter_root(repo_root: Path, args: Args) -> tuple[Path, st
     return repo_root, "git-root auto-discovery"
 
 
+#: The three `resolve_claude_klabauter_root` source strings that count as
+#: operator-asserted (`census` row 7) — the only rungs allowed to write the
+#: `.claude-klabauter-live-root` pointer. Rung 4 ("git-root auto-discovery") never writes.
+_OPERATOR_ASSERTED_ROOT_SOURCES = frozenset(
+    {"--claude-klabauter-live-root flag", "COORDINATOR_ENGINE_ROOT env var", "CLAUDE_KLABAUTER_ROOT env var (RETIRED)"}
+)
+
+
+def write_registry_independent_root_pointer(claude_klabauter_root: Path, claude_klabauter_root_source: str) -> None:
+    """Write `<settings-home>/machine-local/.claude-klabauter-live-root` directly from this
+    run's own resolved root — the SAME sentinel `_resolve_claude_klabauter ::
+    _resolve_claude_klabauter_root` (rung 2) and `coordinator_core/engine_root.py`
+    (rung 1.5) already read — placing this write OUTSIDE the registry cycle
+    (plan body § The cold entry, `docs/plans/2026-09-11-the-install-chain-
+    survives-a-genuinely-c.md` C2).
+
+    Called from `main` immediately after `resolve_claude_klabauter_root` and BEFORE
+    `register_claude_klabauter_root`: placed any later, `register_claude_klabauter_root`'s exit
+    90 on a box with no `machine-local` means it never runs on the box it
+    exists for.
+
+    Negative spec, load-bearing: never spawns a subprocess, never reads the
+    machine-local registry, never depends on `machine-local` being present.
+    Those three are what put this write outside the cycle a registry-backed
+    write would be stuck in — a test that passes with a registry present
+    proves nothing about this function.
+
+    Only writes when `claude_klabauter_root_source` is one of the three
+    operator-asserted rungs (`_OPERATOR_ASSERTED_ROOT_SOURCES`) —
+    `resolve_claude_klabauter_root`'s fourth rung, git-root auto-discovery, writes
+    NOTHING: it creates no pointer and leaves an existing one byte-identical.
+    A rung-4 guess stamping the pointer would let any warm run from any
+    clone silently overwrite an operator's pin, since the sentinel is read
+    ahead of the registry.
+
+    The write degrades ADVISORY on failure (e.g. unwritable settings home) —
+    warns, never fails the install. Always reported: one line naming the
+    pointer path, the resolved root, and the source string, or (rung 4) one
+    line naming why nothing was written and which flag would write it.
+    """
+    from coordinator_core._settings_home import settings_home
+
+    pointer_path = settings_home() / "machine-local" / ".claude-klabauter-live-root"
+
+    if claude_klabauter_root_source not in _OPERATOR_ASSERTED_ROOT_SOURCES:
+        print(
+            f"[SKIP] .claude-klabauter-live-root pointer not written — root came from "
+            f"{claude_klabauter_root_source!r} (auto-discovered, not operator-asserted). "
+            f"Pass --claude-klabauter-live-root to write it."
+        )
+        return
+
+    content = str(claude_klabauter_root)
+    try:
+        existing = pointer_path.read_text(encoding="utf-8").rstrip("\r\n")
+    except OSError:
+        existing = None
+
+    if existing == content:
+        print(f"PASS [pointer] .claude-klabauter-live-root already {pointer_path} = {content} ({claude_klabauter_root_source})")
+        return
+
+    try:
+        pointer_path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(pointer_path.parent), prefix=".claude-klabauter-live-root.", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
+                tmp_file.write(content + "\n")
+            os.replace(tmp_name, pointer_path)
+        except OSError:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
+    except OSError as exc:
+        print(
+            f"[ADVISORY] could not write .claude-klabauter-live-root pointer at {pointer_path}: {exc}",
+            file=sys.stderr,
+        )
+        return
+
+    print(f"PASS [pointer] wrote {pointer_path} = {content} ({claude_klabauter_root_source})")
+
+
 def _git_current_branch(tree: Path) -> str | None:
     """The tree's checked-out local branch name, or `None` on any failure
     (git absent, not a work tree, detached HEAD) — advisory-only caller
@@ -3329,11 +3422,15 @@ def run_health_probe(claude_klabauter_root_resolved: Path, engine_py: str, agent
     # wrapper (retired in C7) — this honors the fallback venv's dependency
     # provisioning resolved above.
     proc = subprocess.run(
-        [engine_py, str(probe), "--step-zero"],
+        [engine_py, str(probe), "--step-zero", "--required-only"],
         capture_output=True, text=True,
         **_NO_CONSOLE,
     )
     probe_output = proc.stdout + proc.stderr
+    print(
+        f"  (advisory probes skipped here — run 'python {probe} --triage' "
+        "for the full set)"
+    )
 
     if agent_mode:
         # Machine consumers depend on the raw NDJSON envelope — emit unchanged.
@@ -3915,20 +4012,98 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
 
 
 #: Dependency-ordered claude-doe launcher chain: (label, CLI relpath under
-#: coordinator/bin/, extra argv). Order matters -- the root pointer must
-#: exist before anything that resolves through it at RUNTIME (the wrapper's
-#: `--print-plugin-dir` reads it, transitively, via the doe-root ladder), and
-#: the wrapper/launcher (the artifacts the shim's rc block invokes BY PATH)
-#: must be installed before the shim (which wires the rc/profile sentinel
-#: that dot-sources/invokes them). See docs/reference/coordinator-plugin-
-#: load-chain.md § 4 for the full artifact -> generator -> source-of-truth
-#: table this constant mirrors.
-_CLAUDE_DOE_CHAIN_STEPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
-    ("doe-root pointer", "gen-doe-root-pointer.py", ("--graceful-skip-unresolved",)),
-    ("claude-doe wrapper", "install-claude-doe-wrapper.py", ()),
-    ("claude-doe launcher", "gen-claude-doe-launcher.py", ()),
-    ("claude-doe shim (rc/profile sentinel)", "gen-claude-doe-shim.py", ()),
+#: coordinator/bin/ -- kept only for the on-disk-presence guard and the
+#: "Re-run manually" hint, never loaded or executed (call shape (b),
+#: docs/research/spike-verdicts/2026-09-23-in-process-launcher-chain-
+#: claims.md) --, extra argv, the op module `run_op_main` calls in-process).
+#: Order matters -- the root pointer must exist before anything that
+#: resolves through it at RUNTIME (the wrapper's `--print-plugin-dir` reads
+#: it, transitively, via the doe-root ladder), and the wrapper/launcher (the
+#: artifacts the shim's rc block invokes BY PATH) must be installed before
+#: the shim (which wires the rc/profile sentinel that dot-sources/invokes
+#: them). See docs/reference/coordinator-plugin-load-chain.md § 4 for the
+#: full artifact -> generator -> source-of-truth table this constant mirrors.
+_CLAUDE_DOE_CHAIN_STEPS: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
+    ("doe-root pointer", "gen-doe-root-pointer.py", ("--graceful-skip-unresolved",),
+     "coordinator_core.ops.gen_doe_root_pointer"),
+    ("claude-doe wrapper", "install-claude-doe-wrapper.py", (),
+     "coordinator_core.ops.install_claude_doe_wrapper"),
+    ("claude-doe launcher", "gen-claude-doe-launcher.py", (),
+     "coordinator_core.ops.gen_claude_doe_launcher"),
+    ("claude-doe shim (rc/profile sentinel)", "gen-claude-doe-shim.py", (),
+     "coordinator_core.ops.gen_claude_doe_shim"),
 )
+
+
+def _doe_chain_default_wrapper_src(repo_root: Path) -> str:
+    """Port of install-claude-doe-wrapper.py's `_default_wrapper_src` one-
+    liner (docs/research/spike-verdicts/2026-09-23-in-process-launcher-chain-
+    claims.md, call shape (b)): the wrapper it installs is always co-located
+    at `coordinator/bin/claude-doe.py`, no engine-root resolution needed."""
+    return str(repo_root / "coordinator" / "bin" / "claude-doe.py")
+
+
+def _doe_chain_data_root_helpers():
+    """Scoped `coordinator/bin/lib` sys.path add to import `coordinator_data_root`,
+    mirroring `_mp_doe_root_pointer_rung`'s add-then-remove pattern above (this
+    module's own bootstrap-before-deps-provisioned discipline): the path is
+    removed again once the import lands, never left shadowing anything setup.py
+    itself imports."""
+    lib_dir = Path(__file__).resolve().parent.parent / "coordinator" / "bin" / "lib"
+    added = str(lib_dir) not in sys.path
+    if added:
+        sys.path.insert(0, str(lib_dir))
+    try:
+        from coordinator_data_root import data_file, data_root
+        return data_root, data_file
+    finally:
+        if added:
+            try:
+                sys.path.remove(str(lib_dir))
+            except ValueError:
+                pass
+
+
+def _doe_chain_default_template_dir() -> str:
+    """Port of gen-claude-doe-launcher.py's `_default_template_dir` one-liner."""
+    data_root, _data_file = _doe_chain_data_root_helpers()
+    return os.path.join(str(data_root("templates")), "bin")
+
+
+def _doe_chain_shell_family_from_argv(extra_argv: "tuple[str, ...]") -> str:
+    """Port of gen-claude-doe-shim.py's `_shell_family_from_argv` one-liner."""
+    for i, arg in enumerate(extra_argv):
+        if arg == "--shell" and i + 1 < len(extra_argv):
+            return extra_argv[i + 1]
+    from coordinator_core.ops.gen_claude_doe_shim import _default_shell_family
+
+    return _default_shell_family()
+
+
+def _doe_chain_default_template_path(shell_family: str) -> str:
+    """Port of gen-claude-doe-shim.py's `_default_template_path` one-liner."""
+    _data_root, data_file = _doe_chain_data_root_helpers()
+    stem = "claude-doe-shim.ps1.tmpl" if shell_family == "powershell" else "claude-doe-shim.sh.tmpl"
+    return str(data_file("templates", "shell", stem))
+
+
+def _doe_chain_build_argv(cli_name: str, extra_argv: "tuple[str, ...]", repo_root: Path) -> "list[str]":
+    """Resolve the full argv for one launcher-chain step in-process, porting
+    each trampoline's own default-argv one-liner to the call site (spike
+    verdict call shape (b)) instead of loading the trampoline file."""
+    argv = list(extra_argv)
+    if cli_name == "install-claude-doe-wrapper.py" and "--wrapper-src" not in argv:
+        argv = argv + ["--wrapper-src", _doe_chain_default_wrapper_src(repo_root)]
+    elif cli_name == "gen-claude-doe-launcher.py" and (
+        "--template-dir" not in argv and "-h" not in argv and "--help" not in argv
+    ):
+        argv = argv + ["--template-dir", _doe_chain_default_template_dir()]
+    elif cli_name == "gen-claude-doe-shim.py" and (
+        "--template" not in argv and "-h" not in argv and "--help" not in argv
+    ):
+        shell_family = _doe_chain_shell_family_from_argv(tuple(argv))
+        argv = argv + ["--template", _doe_chain_default_template_path(shell_family)]
+    return argv
 
 
 def install_claude_doe_launcher_chain(repo_root: Path, engine_py: str, claude_klabauter_root_resolved: Path, args: Args) -> None:
@@ -3970,93 +4145,103 @@ def install_claude_doe_launcher_chain(repo_root: Path, engine_py: str, claude_kl
     print()
     print("--- Install: claude-doe launcher chain (coordinator/bin/*claude-doe*) ---")
 
-    env = dict(os.environ)
-    # BOTH names, same value — see install_bin_forwarders for why the retired
-    # name alone is the worse failure shape for a DoE child.
-    env["CLAUDE_KLABAUTER_ROOT"] = str(claude_klabauter_root_resolved)
-    env["COORDINATOR_ENGINE_ROOT"] = str(claude_klabauter_root_resolved)
-
+    # In-process, not four subprocess.run children (spike verdict, call shape
+    # (b): docs/research/spike-verdicts/2026-09-23-in-process-launcher-chain-
+    # claims.md). BOTH env names, same value — see install_bin_forwarders for
+    # why the retired name alone is the worse failure shape for a DoE child.
+    # Scoped for the loop's duration only (env_overlay restores the prior
+    # environment exactly on exit), not a process-wide os.environ write.
     any_failed = False
-    for label, cli_name, extra_argv in _CLAUDE_DOE_CHAIN_STEPS:
-        cli = repo_root / "coordinator" / "bin" / cli_name
-        if not cli.is_file():
-            any_failed = True
-            print(
-                f"[ADVISORY] {cli} not found — skipping {label} install. "
-                "Coordinator will NOT load in any interactive session on this box until this is fixed.",
-                file=sys.stderr,
-            )
-            continue
+    with env_overlay({
+        "CLAUDE_KLABAUTER_ROOT": str(claude_klabauter_root_resolved),
+        "COORDINATOR_ENGINE_ROOT": str(claude_klabauter_root_resolved),
+    }):
+        for label, cli_name, extra_argv, op_module in _CLAUDE_DOE_CHAIN_STEPS:
+            cli = repo_root / "coordinator" / "bin" / cli_name
+            if not cli.is_file():
+                any_failed = True
+                print(
+                    f"[ADVISORY] {cli} not found — skipping {label} install. "
+                    "Coordinator will NOT load in any interactive session on this box until this is fixed.",
+                    file=sys.stderr,
+                )
+                continue
 
-        argv = [engine_py, str(cli), *extra_argv]
-        try:
-            proc = subprocess.run(
-                argv,
-                cwd=str(claude_klabauter_root_resolved),
-                env=env,
-                capture_output=True, text=True,
-                **_NO_CONSOLE,
-            )
-        except OSError as exc:
-            any_failed = True
-            print(
-                f"[ADVISORY] {label} install could not even be spawned ({exc}) — "
-                "coordinator will NOT load in any interactive session on this box until this is fixed.",
-                file=sys.stderr,
-            )
-            print(f"  Re-run manually: {' '.join(argv)}", file=sys.stderr)
-            continue
+            rerun_hint = " ".join([engine_py, str(cli), *extra_argv])
+            argv = _doe_chain_build_argv(cli_name, extra_argv, repo_root)
 
-        output = (proc.stdout + proc.stderr).strip()
-        # `gen-doe-root-pointer.py
-        # --graceful-skip-unresolved` exits 0 on a genuine skip (repos.doe_claude
-        # not yet resolved), so returncode alone can't distinguish "wrote it"
-        # from "gave up". Detect the `<label>: skipped` contract row and treat
-        # it as its own ADVISORY outcome — never PASS — with the explanation
-        # printed unconditionally (skip lines must survive agent_mode, unlike
-        # the general output-echo above, or a scripted install sees only a
-        # bare ADVISORY line with no reason).
-        skipped = any(
-            line.strip().endswith(": skipped") or ": skipped (" in line
-            for line in output.splitlines()
-            if line.strip().startswith("doe_root_pointer:")
-        )
-        if not args.agent_mode and output and not skipped:
-            print(output)
-        if skipped:
-            # NOT APPLICABLE, not incomplete. This whole chain wires the
-            # dev-clone install mode: every step of it exists to point a
-            # `claude()` shell function at a DoE-claude working clone via
-            # `.doe-root`. `docs/safety.md` rows 4 and 5 already say so --
-            # "only present in the maximalist/dev install mode", "not the
-            # marketplace path" -- and `skills/setup/SKILL.md` states that OSS
-            # coordinator-claude and claude-klabauter installs never take the
-            # `--doe-root` seam at all.
-            #
-            # An unresolved `repos.doe_claude` IS that discriminant: there is
-            # no DoE clone to point at, so the remaining three generators have
-            # nothing to render and the marketplace plugin loads without them.
-            # Reporting it as an incomplete chain told a correctly-installed
-            # OSS box that coordinator would not load -- shouting a dev-mode
-            # requirement at an install that does not have one, which a Linux
-            # cloud dogfood read as a hard break and worked around by hand.
-            print(f"SKIP [claude-doe-chain] {label} — dev-clone mode not configured on this box")
-            print(
-                "SKIP [claude-doe-chain] remaining launcher-chain steps — the claude() shim "
-                "wires the dev-clone install mode only; the marketplace plugin install needs "
-                "none of it. To opt in: machine-local set repos.doe_claude <path>  then re-run.",
+            out_buf = io.StringIO()
+            err_buf = io.StringIO()
+            raised = None
+            try:
+                with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+                    code = run_op_main(op_module, argv, cwd=str(claude_klabauter_root_resolved))
+            except SystemExit as exc:
+                code = exc.code if isinstance(exc.code, int) else 1
+            except Exception as exc:  # noqa: BLE001 — an op raising must ADVISORY, not abort setup
+                raised = exc
+                code = 1
+
+            if raised is not None:
+                any_failed = True
+                print(
+                    f"[ADVISORY] {label} install raised an unexpected error ({raised}) — "
+                    "coordinator will NOT load in any interactive session on this box until this is fixed.",
+                    file=sys.stderr,
+                )
+                print(f"  Re-run manually: {rerun_hint}", file=sys.stderr)
+                continue
+
+            output = (out_buf.getvalue() + err_buf.getvalue()).strip()
+            # `gen-doe-root-pointer.py
+            # --graceful-skip-unresolved` exits 0 on a genuine skip (repos.doe_claude
+            # not yet resolved), so returncode alone can't distinguish "wrote it"
+            # from "gave up". Detect the `<label>: skipped` contract row and treat
+            # it as its own ADVISORY outcome — never PASS — with the explanation
+            # printed unconditionally (skip lines must survive agent_mode, unlike
+            # the general output-echo above, or a scripted install sees only a
+            # bare ADVISORY line with no reason).
+            skipped = any(
+                line.strip().endswith(": skipped") or ": skipped (" in line
+                for line in output.splitlines()
+                if line.strip().startswith("doe_root_pointer:")
             )
-            return
-        if proc.returncode != 0:
-            any_failed = True
-            print(
-                f"[ADVISORY] {label} install reported a non-zero exit (code {proc.returncode}) — "
-                "coordinator will NOT load in any interactive session on this box until this is fixed.",
-                file=sys.stderr,
-            )
-            print(f"  Re-run manually: {' '.join(argv)}", file=sys.stderr)
-            continue
-        print(f"PASS [claude-doe-chain] {label}")
+            if not args.agent_mode and output and not skipped:
+                print(output)
+            if skipped:
+                # NOT APPLICABLE, not incomplete. This whole chain wires the
+                # dev-clone install mode: every step of it exists to point a
+                # `claude()` shell function at a DoE-claude working clone via
+                # `.doe-root`. `docs/safety.md` rows 4 and 5 already say so --
+                # "only present in the maximalist/dev install mode", "not the
+                # marketplace path" -- and `skills/setup/SKILL.md` states that OSS
+                # coordinator-claude and claude-klabauter installs never take the
+                # `--doe-root` seam at all.
+                #
+                # An unresolved `repos.doe_claude` IS that discriminant: there is
+                # no DoE clone to point at, so the remaining three generators have
+                # nothing to render and the marketplace plugin loads without them.
+                # Reporting it as an incomplete chain told a correctly-installed
+                # OSS box that coordinator would not load -- shouting a dev-mode
+                # requirement at an install that does not have one, which a Linux
+                # cloud dogfood read as a hard break and worked around by hand.
+                print(f"SKIP [claude-doe-chain] {label} — dev-clone mode not configured on this box")
+                print(
+                    "SKIP [claude-doe-chain] remaining launcher-chain steps — the claude() shim "
+                    "wires the dev-clone install mode only; the marketplace plugin install needs "
+                    "none of it. To opt in: machine-local set repos.doe_claude <path>  then re-run.",
+                )
+                return
+            if code != 0:
+                any_failed = True
+                print(
+                    f"[ADVISORY] {label} install reported a non-zero exit (code {code}) — "
+                    "coordinator will NOT load in any interactive session on this box until this is fixed.",
+                    file=sys.stderr,
+                )
+                print(f"  Re-run manually: {rerun_hint}", file=sys.stderr)
+                continue
+            print(f"PASS [claude-doe-chain] {label}")
 
     if any_failed:
         print(
@@ -4287,6 +4472,73 @@ def install_percolate_identity(repo_root: Path, claude_klabauter_root_resolved: 
         print(f"PASS [percolate-identity] created template at {path} — edit before running publish.")
     else:
         print(f"PASS [percolate-identity] already exists at {path} — left untouched.")
+
+
+def install_global_doctrine_files(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args) -> None:
+    """Best-effort install-chain step: copy the coordinator-claude sibling's
+    `templates/global-doctrine/CLAUDE.md` and `templates/global-doctrine/
+    rules/*.md` into `~/.claude/CLAUDE.md` and `~/.claude/rules/`, copying IN
+    only what is absent — never overwriting an existing file, never pruning
+    one this source tree no longer carries.
+
+    Same failure shape as `install_precompiled_bytecode`'s docstring: this
+    leg has always run inside the `coordinator_core.install.maximalist`
+    chain (`/coordinator:install`, Step 3.5b.3) but a cloud dispatch
+    container's actual install path is THIS standalone script (T74: the
+    trampoline that used to invoke maximalist.py directly from
+    `cloud_setup.py` is gone), so without this call site a cloud-provisioned
+    box's `~/.claude` never gets the global doctrine/rules deposited at all.
+    ADVISORY, non-fatal — mirrors `install_percolate_identity`'s shape; the
+    logic itself lives in `coordinator_core.install.maximalist` and is
+    imported, not duplicated, matching `install_precompiled_bytecode`'s
+    precedent for reusing a maximalist-chain leg from here.
+    """
+    print()
+    print("--- Install: ~/.claude/CLAUDE.md + rules/*.md (global doctrine, copy-if-absent) ---")
+
+    if str(claude_klabauter_root_resolved) not in sys.path:
+        sys.path.insert(0, str(claude_klabauter_root_resolved))
+    try:
+        from coordinator_core.install.maximalist import install_global_doctrine
+        from coordinator_core.install._shared import RequireHomeError, require_home
+    except ImportError as exc:
+        print(f"[ADVISORY] cannot import the global-doctrine leg — skipping: {exc}", file=sys.stderr)
+        return
+
+    coord_path, coord_resolution = _resolve_coordinator_claude_root(repo_root, args)
+    if coord_resolution.is_unresolved or not _looks_like_coordinator_claude_source(coord_path):
+        print(
+            f"[ADVISORY] no coordinator-claude source resolved at {coord_path} "
+            f"({coord_resolution.display}) — skipping global-doctrine copy.",
+            file=sys.stderr,
+        )
+        return
+    # Same two shapes `_looks_like_coordinator_claude_source` already
+    # distinguished: a DoE dev-clone houses the plugin (and its `templates/`)
+    # under a `coordinator/` subdir; the OSS mirror shape has it at its own
+    # root.
+    coord_root = coord_path / "coordinator" if (coord_path / "coordinator").is_dir() else coord_path
+
+    try:
+        claude_home_dir = require_home("install-global-doctrine")
+    except RequireHomeError as exc:
+        print(f"[ADVISORY] cannot resolve home directory — skipping global-doctrine copy: {exc}", file=sys.stderr)
+        return
+
+    try:
+        claude_md_created, rules_created = install_global_doctrine(str(coord_root), claude_home_dir, check_only=False)
+    except OSError as exc:
+        print(f"[ADVISORY] could not write global doctrine/rules: {exc}", file=sys.stderr)
+        return
+
+    if claude_md_created:
+        print("PASS [global-doctrine] created ~/.claude/CLAUDE.md")
+    else:
+        print("PASS [global-doctrine] ~/.claude/CLAUDE.md already exists — left untouched.")
+    if rules_created:
+        print(f"PASS [global-doctrine] created rules/{{{', '.join(rules_created)}}}")
+    else:
+        print("PASS [global-doctrine] no new rules/*.md to add.")
 
 
 def install_machine_identity(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args) -> None:
@@ -4635,6 +4887,7 @@ def main(argv: list[str]) -> int:
     script_path = Path(__file__).resolve()
     repo_root = script_path.parent.parent
     claude_klabauter_root_resolved, claude_klabauter_root_source = resolve_claude_klabauter_root(repo_root, args)
+    write_registry_independent_root_pointer(claude_klabauter_root_resolved, claude_klabauter_root_source)
 
     if not args.register_only:
         print("=== claude-klabauter setup (standalone) ===")
@@ -4719,6 +4972,7 @@ def main(argv: list[str]) -> int:
         register_live_plugin_root(repo_root, claude_klabauter_root_resolved, args)
         install_lfs_pre_push_gate(repo_root, args)
         install_percolate_identity(repo_root, claude_klabauter_root_resolved)
+        install_global_doctrine_files(repo_root, claude_klabauter_root_resolved, args)
         install_precompiled_bytecode(claude_klabauter_root_resolved, args)
         install_machine_identity(repo_root, claude_klabauter_root_resolved, args)
         install_host_sampler_task(repo_root, claude_klabauter_root_resolved)

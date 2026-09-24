@@ -169,11 +169,16 @@ from coordinator_core.contract.decision_object.judgment import (
     build_judgment_point as _shared_build_judgment_point,
     build_untrusted_gate_judgment_point as _shared_build_untrusted_gate_judgment_point,
 )
+from coordinator_core.frontmatter.body_blocks import (
+    LocateStatus as _LocateStatus,
+    locate_fenced_block as _locate_fenced_block,
+)
 from coordinator_core.frontmatter.primitives import (
     canonical_body_sha,
     read_fm_field_unquoted,
     split_frontmatter,
 )
+from coordinator_core.frontmatter.schema_validate import parse_yaml as _parse_yaml
 from coordinator_core.git import git_index as _git_index
 from coordinator_core.git import git_state as _git_state
 from coordinator_core.git import repo_root as _repo_root_mod
@@ -901,7 +906,7 @@ def _claim_holder_live(claims_dir: Path, cwd: str, holder_sid: Optional[str]) ->
         if _liveness.claim_holder_live(str(claims_dir), cwd):
             return True
     except (OSError, ValueError):
-        pass
+        pass  # liveness probe indeterminate; fall through to the sid-based check below
     if not holder_sid:
         return False
     try:
@@ -1926,13 +1931,14 @@ def _is_bookkeeping_diff_line(line: str) -> bool:
     return False
 
 
-def _classify_stamp_delta(repo_root: Path, stamp_commit: str, path: str) -> str:
+def _classify_stamp_delta_line_shape(repo_root: Path, stamp_commit: str, path: str) -> str:
     """Ported from HEAD (`pickup_assemble._classify_stamp_delta`), extended
     for the plan-tasks spine disposition fields: every changed content line
     in `stamp_commit..HEAD -- path` must be a ratification-line, a
     `**Status:**` line, a per-chunk `disposition`/`disposition_ref`/
     `disposition_detail` line, or blank to count as `bookkeeping`; anything
-    else defaults to `substantive`."""
+    else defaults to `substantive`. This is the unanchored-artifact path:
+    one `git diff` spawn, unchanged from before R6."""
     from coordinator_core.git.run import run_git
 
     result = run_git(["-C", str(repo_root), "diff", f"{stamp_commit}..HEAD", "--", path])
@@ -1948,6 +1954,130 @@ def _classify_stamp_delta(repo_root: Path, stamp_commit: str, path: str) -> str:
         if not _is_bookkeeping_diff_line(line):
             return "substantive"
     return "bookkeeping" if saw_change else "substantive"
+
+
+def _parsed_frontmatter_dict(text: str) -> Optional[dict[str, Any]]:
+    """Parse `text`'s frontmatter block (if any) via the shared restricted-
+    YAML parser (`schema_validate.parse_yaml`, pure Python, zero spawns).
+    Returns `None` when there is no frontmatter block or it fails to parse
+    to a dict."""
+    split = split_frontmatter(text)
+    if split is None:
+        return None
+    try:
+        parsed = _parse_yaml(split.fm_text)
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _spine_rows(text: str) -> Optional[list[dict[str, Any]]]:
+    """Parse the ` ```yaml plan-tasks` fenced block (if any) under `## Tasks`
+    into its list of row dicts, via the shared fence locator
+    (`frontmatter.body_blocks.locate_fenced_block`) plus the shared
+    restricted-YAML parser. Returns `None` when the block is absent,
+    malformed, or fails to parse to a list."""
+    split = split_frontmatter(text)
+    body_text = split.body_with_leading_newline if split is not None else text
+    located = _locate_fenced_block(body_text)
+    if located.status != _LocateStatus.LOCATED or located.body is None:
+        return None
+    try:
+        parsed = _parse_yaml(located.body)
+    except Exception:
+        return None
+    if not isinstance(parsed, list) or not all(isinstance(row, dict) for row in parsed):
+        return None
+    return parsed
+
+
+def _has_structural_anchor(head_text: str) -> bool:
+    """True iff `head_text` carries at least one of the three structural
+    anchors R6 compares as sets rather than diff lines: a parseable
+    frontmatter `scope` list, a parseable `prime_exit_criterion` block, or a
+    parseable ` ```yaml plan-tasks` spine. An artifact with none of these
+    keeps the original line-shape `git diff` path unchanged."""
+    fm = _parsed_frontmatter_dict(head_text)
+    if fm is not None:
+        scope = fm.get("scope")
+        if isinstance(scope, list) and scope:
+            return True
+        pec = fm.get("prime_exit_criterion")
+        if isinstance(pec, dict) and pec:
+            return True
+    return _spine_rows(head_text) is not None
+
+
+def _structural_comparison_sets(text: str) -> dict[str, Any]:
+    """The structural comparison basis R6 compares as SETS, never diff
+    lines: frontmatter `scope` entries, the spine row-id set, the union of
+    every row's `writes` entries (as `(row_id, write_path)` pairs, so a
+    write moved between rows is still visible), and the parsed
+    `prime_exit_criterion` block (compared by value, not as a set)."""
+    fm = _parsed_frontmatter_dict(text) or {}
+    scope = fm.get("scope")
+    scope_set = frozenset(scope) if isinstance(scope, list) else frozenset()
+    pec = fm.get("prime_exit_criterion")
+    pec_value = pec if isinstance(pec, dict) else None
+
+    rows = _spine_rows(text) or []
+    row_ids: set[str] = set()
+    write_pairs: set[tuple[str, str]] = set()
+    for row in rows:
+        row_id = row.get("id")
+        if not isinstance(row_id, str):
+            continue
+        row_ids.add(row_id)
+        writes = row.get("writes")
+        if isinstance(writes, list):
+            for w in writes:
+                if isinstance(w, str):
+                    write_pairs.add((row_id, w))
+
+    return {
+        "scope": scope_set,
+        "row_ids": frozenset(row_ids),
+        "writes": frozenset(write_pairs),
+        "prime_exit_criterion": pec_value,
+    }
+
+
+def _classify_stamp_delta_structural(
+    repo_root: Path, stamp_commit: str, path: str, head_text: str
+) -> str:
+    """The anchored-artifact path: ONE `git show <stamp_commit>:<path>`
+    spawn (never a second `git diff`), then a structural comparison of the
+    parsed frontmatter/spine sets at both revisions
+    (`_structural_comparison_sets`). Any difference in `scope`, the spine
+    row-id set, any row's `writes` set, or the parsed `prime_exit_criterion`
+    means `substantive`; an unreadable/unparseable stamp revision also means
+    `substantive` (same failure posture as the line-shape path). Otherwise
+    `bookkeeping`, whatever the body prose changed."""
+    stamp_text = _read_file_at_revision(repo_root, stamp_commit, path)
+    if stamp_text is None:
+        return "substantive"
+    head_sets = _structural_comparison_sets(head_text)
+    stamp_sets = _structural_comparison_sets(stamp_text)
+    return "bookkeeping" if head_sets == stamp_sets else "substantive"
+
+
+def _classify_stamp_delta(
+    repo_root: Path, stamp_commit: str, path: str, head_text: str
+) -> str:
+    """`gates.execution_stamp_match`'s stale-delta classifier — one spawn,
+    whichever path fires. `head_text` is the caller's already-read HEAD
+    content (`compute_execution_stamp_match`'s `target_text`); this
+    function never re-reads HEAD with `git show HEAD:path`.
+
+    (1) No structural anchor (no parseable frontmatter `scope`, no
+        `prime_exit_criterion`, no ` ```yaml plan-tasks` block) ->
+        unchanged line-shape path, one `git diff` spawn
+        (`_classify_stamp_delta_line_shape`).
+    (2) Otherwise, one `git show <stamp_commit>:<path>` spawn, structural
+        set/value comparison (`_classify_stamp_delta_structural`)."""
+    if not _has_structural_anchor(head_text):
+        return _classify_stamp_delta_line_shape(repo_root, stamp_commit, path)
+    return _classify_stamp_delta_structural(repo_root, stamp_commit, path, head_text)
 
 
 def compute_execution_stamp_match(
@@ -2068,7 +2198,7 @@ def compute_execution_stamp_match(
             target_rel_path,
         )
 
-    delta_class = _classify_stamp_delta(repo_root, stamp_commit, target_rel_path)
+    delta_class = _classify_stamp_delta(repo_root, stamp_commit, target_rel_path, target_text)
     if delta_class == "bookkeeping":
         verdict = "stale-bookkeeping"
         next_move = (
@@ -3324,7 +3454,7 @@ def compute_reply_closure(frontmatter: dict[str, Any], memo_path: str, repo_root
             try:
                 text = candidate_path.read_text(encoding="utf-8", errors="replace")
             except OSError:
-                continue
+                continue  # memo file unreadable; skip it, not fatal to the sweep
             split = split_frontmatter(text)
             if split is None:
                 continue
@@ -4705,21 +4835,14 @@ def main(argv: list[str]) -> int:
     try:
         results = brief_multi(artifact_path, decisions, no_claim=no_claim)
     except _TransportFailure as exc:
-        failure = _emit({
-            "error": str(exc), "transport_failure": True,
-            "narration": f"Could not compute a brief: {exc}.",
-            "next_move": "Confirm the command is run from inside a git worktree, then retry.",
-        }, EXIT_TRANSPORT_FAIL)
-        print(json.dumps(failure.decision_object))
-        return failure.exit_code
+        # Transport failure: compute never ran, so nothing goes on stdout —
+        # the exit code is the only evidence (completion-evidence contract,
+        # DR-442). Matches `backlog_grind_assemble.main`'s shape.
+        print(f"pickup-assemble: transport failure: {exc}", file=sys.stderr)
+        return EXIT_TRANSPORT_FAIL
     except Exception as exc:  # noqa: BLE001 - structural backstop
-        failure = _emit({
-            "error": str(exc), "transport_failure": True,
-            "narration": f"brief() raised an unexpected exception: {exc}.",
-            "next_move": "Re-run; if this repeats, report the traceback.",
-        }, EXIT_TRANSPORT_FAIL)
-        print(json.dumps(failure.decision_object))
-        return failure.exit_code
+        print(f"pickup-assemble: unexpected failure: {exc}", file=sys.stderr)
+        return EXIT_TRANSPORT_FAIL
 
     if len(results) == 1:
         payload: Any = results[0].decision_object

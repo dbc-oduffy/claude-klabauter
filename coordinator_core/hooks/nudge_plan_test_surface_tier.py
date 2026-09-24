@@ -99,7 +99,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from coordinator_core._hook_envelope import allow_advisory, no_advisory
+from coordinator_core._hook_envelope import allow_advisory, no_advisory, payload_of
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.hooks.support.sentinel_write_guard import extract_target_path
 from coordinator_core.ipc import register_op
@@ -250,6 +250,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Write|Edit|MultiEdit) op: advise (never deny) when a plan
     body's write leaves a Tier-F/U test-surface row, or an Anti-scope
     section naming an execution vehicle."""
+    params = payload_of(params)
     try:
         return _handle(params)
     except Exception:

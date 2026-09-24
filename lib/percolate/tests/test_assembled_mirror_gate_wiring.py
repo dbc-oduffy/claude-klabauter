@@ -252,18 +252,19 @@ class TestEndOfRunAssembledMirrorGateLeg:
         assert "known debt, tracked separately" not in captured.out
         assert "no claim about the tree" in captured.err
 
-    def test_exempted_row_with_isolation_unverified_result_is_covered(
+    def test_exempted_row_with_isolation_unverified_result_still_fails(
         self, tmp_path, monkeypatch, capsys
     ):
-        """The OTHER incomplete shape is NOT the same rule, and gating it
-        alongside the timeout above shut a real publish lane for five days
-        (cross-repo/inbox/2026-08-31-doe-claude-em-mirror-gate-completeness-
-        reclosed-the-oss-lane.md). `isolation_unverified` is a pure function
-        of the destination tree's contents, not of the box: a mirror that
-        structurally never carries `coordinator_core/` refuses this way on
-        every round, on an idle box, forever -- exactly the standing, named
-        tradeoff the ledger exists to let an operator declare. So a declared
-        exemption DOES cover it: WARN, and `ok` stays True."""
+        """The OSS-lane exemption entry that once made this shape coverable
+        is retired (`assembled_mirror_gate_exemptions` stays `[]` going
+        forward -- the structural `not_applicable` verdict now serves the
+        non-engine-mirror case this entry existed for). With that use case
+        gone, an isolation_unverified result reaching this branch is only
+        ever a genuine bug -- a row whose declared scope claims
+        `coordinator_core` while its tree lacks it -- and must stay
+        non-exemptible exactly like a timeout: it carries no claim about
+        the tree for any exemption to waive. `ok` stays False even with a
+        declared exemption on the row."""
         repo_root = tmp_path / "repo"
         # Deliberately no coordinator_core/ dir -- isolation_unverified.
         repo_root.mkdir(parents=True, exist_ok=True)
@@ -283,16 +284,18 @@ class TestEndOfRunAssembledMirrorGateLeg:
             target_filtered=False,
             out=sink,
         )
-        assert ok is True
-        assert "non-engine mirror, declared" in sink.getvalue()
-        assert "no claim about the tree" not in capsys.readouterr().err
+        assert ok is False
+        assert "non-engine mirror, declared" not in sink.getvalue()
+        assert "no claim about the tree" in capsys.readouterr().err
 
     def test_unexempted_isolation_unverified_result_still_fails(
         self, tmp_path, monkeypatch, capsys
     ):
         """The declaration is what reopens the lane, never the refusal shape
         itself: an undeclared root refusing ISOLATION UNVERIFIED stays
-        fatal."""
+        fatal. `is_incomplete` gates the exemption-lookup skip directly now
+        (no `is_load_indeterminate` sub-predicate), so this reads as an
+        incomplete result carrying no claim, not as a missed exemption."""
         repo_root = tmp_path / "repo"
         repo_root.mkdir(parents=True, exist_ok=True)
         (repo_root / "pytest.ini").write_text(
@@ -307,7 +310,7 @@ class TestEndOfRunAssembledMirrorGateLeg:
         )
         assert ok is False
         captured = capsys.readouterr()
-        assert "assembled-mirror gate FAILED" in captured.err
+        assert "no claim about the tree" in captured.err
 
     def test_declared_scope_excludes_engine_and_tree_lacks_it_is_not_applicable(
         self, tmp_path, monkeypatch, capsys
@@ -364,7 +367,7 @@ class TestEndOfRunAssembledMirrorGateLeg:
         )
         assert ok is False
         captured = capsys.readouterr()
-        assert "assembled-mirror gate FAILED" in captured.err
+        assert "no claim about the tree" in captured.err
 
     def test_narrow_door_regression_declared_scope_ignores_this_runs_row_subset(
         self, tmp_path, monkeypatch, capsys
@@ -398,7 +401,7 @@ class TestEndOfRunAssembledMirrorGateLeg:
         assert ok is False
         assert "NOT APPLICABLE" not in sink.getvalue()
         captured = capsys.readouterr()
-        assert "assembled-mirror gate FAILED" in captured.err
+        assert "no claim about the tree" in captured.err
 
     def test_declared_scope_lookup_failure_is_incomplete_never_not_applicable(
         self, tmp_path, monkeypatch, capsys
@@ -433,7 +436,7 @@ class TestEndOfRunAssembledMirrorGateLeg:
         assert "NOT APPLICABLE" not in sink.getvalue()
         captured = capsys.readouterr()
         assert "could not resolve the declared target row set" in captured.err
-        assert "assembled-mirror gate FAILED" in captured.err
+        assert "no claim about the tree" in captured.err
 
     def test_missing_repo_root_is_a_hard_failure(self, tmp_path, capsys):
         repo_root = tmp_path / "does-not-exist"

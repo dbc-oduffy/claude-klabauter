@@ -487,6 +487,14 @@ _TSHIRT_TO_REVIEW_TIER: dict[str, str] = {
 
 _REVIEW_PHASE_TITLE = "Review"
 
+# The Workflow runner's own hard cap on a fired `.mjs` script's UTF-8
+# encoded byte length (state/bug-backlog/2026-09-23-dispatch-emit-writes-a-
+# workflow-script-t-10ad124c7958.yaml) -- exceeding it composes a script
+# that reads clean here and is refused only later, at fire time, by a tool
+# this module does not control. Checked once, against the fully composed
+# script text, right before `compose_script` returns.
+_WORKFLOW_SCRIPT_BYTE_CAP = 524288
+
 # (b) Commit-phase placement keyed to wave size: the PM's own n>10
 # executors-per-wave marker (see module docstring § Commit-phase placement
 # keyed to wave size). A wave at or under this many rows fires exactly one
@@ -686,13 +694,19 @@ def _row_verification_runs(row) -> bool:
 
 
 class NoWavesError(ValueError):
-    """Raised when the spine derives zero waves (empty spine or empty rows).
+    """Raised when ``compose_script`` refuses to emit a whole script.
 
-    Refusing here, BEFORE any phase/script composition, is what stands in
-    for ``workflow_scaffold._normalize_phases``'s caller-driven default-phase
-    fallback — that fallback is correct for a caller-driven scaffolder and
+    Two distinct refusals share this class, both a whole-script refusal
+    rather than a per-row one: the spine derives zero waves (empty spine or
+    empty rows), refused BEFORE any phase/script composition begins -- what
+    stands in for ``workflow_scaffold._normalize_phases``'s caller-driven
+    default-phase fallback, correct for a caller-driven scaffolder and
     directly hostile to AC4/AC10 here, which require fail-loud refusal
-    rather than a fabricated phase.
+    rather than a fabricated phase; and the composed script exceeding the
+    Workflow runner's own byte cap (``_WORKFLOW_SCRIPT_BYTE_CAP``), refused
+    AFTER composition, at emit time, rather than firing later at the runner
+    (state/bug-backlog/2026-09-23-dispatch-emit-writes-a-workflow-script-t-
+    10ad124c7958.yaml).
     """
 
 
@@ -1284,13 +1298,16 @@ _BRIEF_PRECEDENCE_CLAUSE = (
 #: a heredoc, a script) leaves no session claim, because ``track_touched_files`` records only
 #: Write/Edit/MultiEdit/NotebookEdit calls. The dispatched commit agent then
 #: reads the path as an orphan and refuses it, halting the whole wave
-#: (klabauter#24). Reading through Bash is unaffected and stays fine.
+#: (klabauter#24). Reading through Bash is unaffected and stays fine. A CLI a
+#: row legitimately runs (a memo send, a probe, a record writer) writes its
+#: output the same unclaimed way, so the clause names the re-save that claims it.
 _WRITE_TOOL_ONLY_CLAUSE = (
     "Make every file change with the Write, Edit, MultiEdit or NotebookEdit "
     "tools, never through Bash (no `sed -i`, heredoc redirection, or script "
     "that edits a file) -- a Bash write leaves no session claim and the "
     "commit phase will refuse it as an orphan. Reading files through Bash is "
-    "fine."
+    "fine. A file a CLI you run writes into your footprint is unclaimed the "
+    "same way: Read it, then Write it back unchanged with the Write tool."
 )
 
 #: The per-row head ``_row_prompt`` opens with and ``_wave_agent_calls`` hoists
@@ -1708,6 +1725,27 @@ def _stop_rule_clause() -> str:
     )
 
 
+#: Matches a mise-inventory row body's leading `Spec: <path> (<id>)` line --
+#: the only place a row's SOURCE PLAN lives. `WaveRow` carries no dedicated
+#: field for it (bug 2026-09-23-a-stop-rule-halt-stops-the-whole-lane); the
+#: line format itself is `inventory_mint._row_body`'s, which every minted
+#: mise-inventory spine row carries. An ordinary single-plan spine row's body
+#: never starts with this line, so a non-match means "no per-row plan" (the
+#: single-plan case), never "unknown".
+_ROW_SPEC_PLAN_RE = re.compile(r"^Spec:\s*(\S+)\s*\(")
+
+
+def _row_source_plan(row: WaveRow) -> Optional[str]:
+    """The plan path a mise-inventory row was minted FROM, read off its own
+    body's leading `Spec: <path> (<id>)` line -- `None` for an ordinary
+    single-plan row, which carries no such line (see `_ROW_SPEC_PLAN_RE`)."""
+    if not row.body:
+        return None
+    first_line = row.body.splitlines()[0].strip()
+    match = _ROW_SPEC_PLAN_RE.match(first_line)
+    return match.group(1) if match else None
+
+
 def _stop_rule_halt_gate(stopped_var: str, phase_title: str) -> str:
     """The JS that stops the run when `_status_check_block` recorded a row in
     this batch declaring ``_STOP_RULE_TOKEN``.
@@ -1741,6 +1779,33 @@ def _stop_rule_halt_gate(stopped_var: str, phase_title: str) -> str:
         f"  if ({stopped_var}.length) return {{ halted: "
         f"{_js_string_literal(reason)} + \" Chunk(s): \" + "
         f"{stopped_var}.join(\", \") }};"
+    )
+
+
+def _plan_scoped_stop_gate(stopped_var: str) -> str:
+    """The multi-plan counterpart to `_stop_rule_halt_gate`: a fired stop
+    rule halts only ITS OWN plan, never the whole run.
+
+    Composed only when `compose_script` finds rows from more than one plan
+    (mise-inventory rows carry `Spec: <path> (<id>)` in their body --
+    `_row_source_plan`); a single-plan compose keeps `_stop_rule_halt_gate`
+    byte-for-byte (bug 2026-09-23-a-stop-rule-halt-stops-the-whole-lane).
+
+    Records each stopped row's plan (via the runtime `_rowPlan` map
+    `compose_script` declares once) into `_haltedPlans`, and the first
+    stopping chunk's id into `_haltedPlanReasons` -- `_skipIfHalted` reads
+    both to keep every LATER row of a halted plan from ever dispatching,
+    while every other plan's rows run untouched. Never returns `{ halted }`
+    -- the run keeps going.
+    """
+    return (
+        f"  for (const id of {stopped_var}) {{\n"
+        "    const p = _rowPlan[id];\n"
+        "    if (p) {\n"
+        "      _haltedPlans.add(p);\n"
+        "      if (!_haltedPlanReasons.has(p)) _haltedPlanReasons.set(p, id);\n"
+        "    }\n"
+        "  }"
     )
 
 
@@ -1962,6 +2027,7 @@ def _wave_agent_calls(
     plan_context: Optional[PlanContext] = None,
     shared: Optional[SharedBlocks] = None,
     agent_type_host: Optional[str] = None,
+    skip_check: bool = False,
 ) -> str:
     """Compose the ``phase()`` + agent-dispatch call(s) for one executor wave.
 
@@ -1980,6 +2046,15 @@ def _wave_agent_calls(
 
     ``plan_context`` (AC12) is forwarded, unopened and unparsed, straight to
     ``_row_prompt`` for every row in the wave — see that function's docstring.
+
+    ``skip_check`` (default ``False``, back-compat for every existing
+    caller/test) wraps each row's ``agent(...)`` call in the runtime
+    ``_skipIfHalted(id, () => agent(...))`` helper ``compose_script``
+    declares only for a multi-plan compose (bug 2026-09-23-a-stop-rule-halt-
+    stops-the-whole-lane). A row whose plan is already in ``_haltedPlans``
+    at runtime is never dispatched -- ``_skipIfHalted`` returns a synthetic
+    ``BLOCKED: ...`` reply in its place, which the status check classifies
+    as incomplete (never as an unanswered brief) and the commit agent drops.
     """
     phase_call = f"  phase({_js_string_literal(phase_title)});"
     binder = f"const {results_var} = " if results_var else ""
@@ -1995,25 +2070,10 @@ def _wave_agent_calls(
             return _js_string_literal(prompt)
         return f"{shared.expr(head)} + {_js_string_literal(prompt[len(head):])}"
 
-    if len(wave) == 1:
-        row = wave[0]
-        row_agent_type = _row_agent_type(row)
-        call = (
-            f"  {binder}await agent("
-            f"{_prompt_literal(row)}, "
-            "{ "
-            f"label: {_js_string_literal(build_work_label(row.id))}, "
-            f"phase: {_js_string_literal(phase_title)}, "
-            f"agentType: {_js_string_literal(_degrade_agent_type(row_agent_type, agent_type_host))}, "
-            f"{_model_opt(row_agent_type, row.agent_model)} "
-            "});"
-        )
-        return f"{phase_call}\n{call}"
-
-    def _item_call(row: WaveRow) -> str:
+    def _agent_call_expr(row: WaveRow) -> str:
         row_agent_type = _row_agent_type(row)
         return (
-            "    () => agent("
+            "agent("
             f"{_prompt_literal(row)}, "
             "{ "
             f"label: {_js_string_literal(build_work_label(row.id))}, "
@@ -2022,6 +2082,24 @@ def _wave_agent_calls(
             f"{_model_opt(row_agent_type, row.agent_model)} "
             "})"
         )
+
+    if len(wave) == 1:
+        row = wave[0]
+        call_expr = _agent_call_expr(row)
+        if skip_check:
+            call_expr = (
+                f"_skipIfHalted({_js_string_literal(row.id)}, () => {call_expr})"
+            )
+        call = f"  {binder}await {call_expr};"
+        return f"{phase_call}\n{call}"
+
+    def _item_call(row: WaveRow) -> str:
+        call_expr = _agent_call_expr(row)
+        if skip_check:
+            call_expr = (
+                f"_skipIfHalted({_js_string_literal(row.id)}, () => {call_expr})"
+            )
+        return f"    () => {call_expr}"
 
     item_calls = ",\n".join(_item_call(row) for row in wave)
     call = (
@@ -2214,28 +2292,30 @@ _PROVENANCE_WIKI_POINTER = (
 
 _PROVENANCE_HEADING = (
     "Pathspec provenance: the pathspec above is this wave's declared "
-    "`writes:` scope. The executor report(s) below are each executor's own "
-    "touched-files set for this wave. Refuse any path in the pathspec the "
-    f"reports do not corroborate. Incident evidence for every rule here: "
+    "`writes:` scope. Each executor reply below is `<STATUS>: <report "
+    "path>`; READ that file: it is that executor's touched-files set. "
+    "Commit no path the reports do not corroborate; an unchanged one "
+    f"drops, never refuses. Evidence for each rule: "
     f"{_PROVENANCE_WIKI_POINTER}."
     "\n\nVERIFY BEFORE YOU COMMIT, in order:"
     "\n1. `git diff --stat -- <your pathspec>`."
     "\n2. `git status --porcelain -- <your pathspec>`. `git diff --stat` is "
-    "one leg, not the sole verification signal: it diffs TRACKED content "
-    "only, so an untracked file an executor just created never appears in it."
+    "not the sole verification signal: it diffs TRACKED content only, so a "
+    "new untracked file never appears in it."
     "\n3. Account for every path those two commands show against the reports "
     "above. A tracked hunk or untracked addition named by a report is that "
-    "executor's own work and yours to commit -- do not halt on those, and do "
-    "not ask an executor to re-itemise. A file showing changes that NO report "
-    "mentions at all is the peer case: named by no report, STOP -- name the "
+    "executor's own work and yours to commit -- do not halt on those. "
+    "A pathspec path "
+    "showing changes that NO report "
+    "mentions at all is the peer case: named by no report, STOP -- confirm "
+    "it's inside your pathspec, then name the "
     "file and its unaccounted hunks, and emit no success token. Never revert, "
     "stash, or check out a hunk to \"clean\" the path; the hunks are someone "
     "else's."
     "\n4. PASTE THE `git diff --stat` OUTPUT VERBATIM into your report, above "
     "your token line, under the heading `DIFF OBSERVED:` -- the raw lines "
     "with their real counts, never a summary or a table you built from them, "
-    "plus any untracked lines `git status --porcelain` showed. Presentation "
-    "quality measured ANTI-CORRELATED with whether checking happened, so do "
+    "plus any untracked lines `git status --porcelain` showed; do "
     "not build a nicer artifact -- paste the plainer one. A verdict with no "
     "`DIFF OBSERVED:` block is a verdict that did not look."
     "\n\nRead the diff, not just the reports: a report is what an agent says "
@@ -2280,15 +2360,16 @@ _PROVENANCE_HEADING = (
     "pathspec, not a refusal -- a chunk whose diagnosis licensed no edit to "
     "one of its declared write targets is an ordinary outcome."
     "\n- NOT every item returned DONE -> A PARTIAL WAVE STILL COMMITS. An item "
-    "that returned BLOCKED, refused, or died contributes no paths and no "
-    "chunk id: drop its paths from the pathspec and its id from "
+    "that returned PARTIAL, BLOCKED, refused, or died contributes no paths and "
+    "no chunk id; its residue is withheld, never the peer case: drop its "
+    "paths from the pathspec and its id from "
     "the subject, commit what the DONE executors delivered, and name the "
-    "dropped ids and paths above your token line. Refuse only if NO item is "
-    "DONE. Refusing the whole wave because one item of N is blocked is the "
+    "dropped ids and paths above your token line. If NO item is DONE there "
+    "is nothing to commit: that is the void case below. Refusing the whole wave because one item of N is blocked is the "
     "failure mode, not the safe choice. The blocked item returns to `pending` "
     "and rides a later wave."
     "\n- NO declared path changed AND the reports corroborate that (a chunk "
-    "voided by an earlier chunk's answer) -> A WHOLLY VOID WAVE IS NOT A "
+    "voided by an earlier chunk, or every item BLOCKED) -> A WHOLLY VOID WAVE IS NOT A "
     "REFUSAL. Do NOT commit, do NOT "
     "fabricate an empty or placeholder commit, and do NOT cite some other "
     "wave's sha as though it were yours. Verify the void yourself -- `git "
@@ -2510,11 +2591,16 @@ def _commit_agent_call(
         " (it lands via commit-tree plumbing), so nothing attaches the"
         " trailer unless you call the resolver yourself: BEFORE calling"
         " `commit_paths`, run"
-        " `message = apply_missing_trailers(message, repo, paths)`."
-        " That call resolves the id, it does not invent one -- do not pass"
-        " a flag for it and do not hand-write one into the message body"
-        " yourself. If the trailer resolves to an id you did not expect,"
-        " report it; that is never grounds to amend, reset, or re-commit."
+        f" `message = apply_missing_trailers(message, repo, paths,"
+        f' deliverable_id_override="{deliverable_id}")`.'
+        f" This wave's own Deliverable-Id is `{deliverable_id}`; the override"
+        " forwards it verbatim -- it does not invent one, and it takes"
+        " precedence over any other artifact in the pathspec. Do not"
+        " hand-write a Deliverable-Id line into the message body yourself;"
+        " if your own message already carries a different Deliverable-Id"
+        " line, delete it before calling `commit_paths`. If the trailer"
+        " resolves to an id you did not expect, report it; that is never"
+        " grounds to amend, reset, or re-commit."
         if deliverable_id
         else ""
     )
@@ -2877,6 +2963,7 @@ def _preflight_agent_call(
     repo_root: Optional[str] = None,
     prefixes: list[str] | None = None,
     agent_type_host: Optional[str] = None,
+    gitignore_filter_degraded: bool = False,
 ) -> str:
     """Compose the preflight phase's ``phase()`` + ``agent()`` call (AC14).
 
@@ -2894,6 +2981,16 @@ def _preflight_agent_call(
     ``_preflight_halt_gate`` (see there for why an unbound ``await agent(...)``
     is not decorative-only -- it discards the one verdict the phase exists to
     produce). Mirrors ``_commit_agent_call``/``_commit_halt_gate``'s shape.
+
+    ``gitignore_filter_degraded`` mirrors the emit-time ``_gitignored_paths``
+    run that already dropped every ignored CONCRETE path from ``pathspec``
+    before this call: when that filter ran undegraded, asking the model to
+    re-judge ignore rules for those paths is a redundant leg, dropped from
+    the refusal list (P161-C4). A degraded filter run means the mechanical
+    check may have missed paths, so the model-judged leg stays. Either way
+    the ``writes_under:`` prefix clause is untouched -- prefixes are never
+    filtered by ``_gitignored_paths``, so the model is still the only check
+    for them.
     """
     phase_call = f"  phase({_js_string_literal(phase_title)});"
     prefix_clause = (
@@ -2906,17 +3003,29 @@ def _preflight_agent_call(
         if prefixes
         else ""
     )
+    refusal_reasons = (
+        "a claim conflict, an ignore rule, or a guard"
+        if gitignore_filter_degraded
+        else "a claim conflict or a guard"
+    )
+    mechanical_ignore_clause = (
+        " Ignore rules for the paths listed above were already checked "
+        "mechanically at emit; do not re-check them."
+        if not gitignore_filter_degraded
+        else ""
+    )
     prompt = (
         f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n"
         + (f"{_REPO_ANCHOR_LINE.format(root=repo_root)}\n\n" if repo_root else "")
         + "Preflight only -- do not stage or commit anything. Every path below is "
         "EXPECTED to be unchanged or nonexistent right now: the chunks that write "
         "them have not run yet, so 'no diff' is the correct state and is NOT a "
-        "refusal. Report BLOCKED only if a path would be refused by a claim "
-        "conflict, an ignore rule, or a guard, or if it is a DIRECTORY (see "
+        "refusal. Report BLOCKED only if a path would be refused by "
+        f"{refusal_reasons}, or if it is a DIRECTORY (see "
         "below). Verify that "
         f"every path in [{', '.join(pathspec)}] is currently claimable and "
         "committable by you."
+        + mechanical_ignore_clause
         + prefix_clause
         + "\n\nDIRECTORY-SHAPED WRITE -- you are the on-disk backstop for this, "
         "and nothing upstream catches it. Run a stat/`test -d` over every path "
@@ -3419,6 +3528,16 @@ def compose_script(
             "boundary in the module docstring)"
         )
 
+    # bug 2026-09-23-a-stop-rule-halt-stops-the-whole-lane: a mise-inventory
+    # compose carries rows from more than one plan (each row's OWN plan read
+    # off its body's `Spec: <path> (<id>)` line -- `_row_source_plan`,
+    # WaveRow has no dedicated field). Ordinary single-plan rows carry no
+    # such line, so `_row_plans` is all-`None` and `_multi_plan` is False --
+    # that compose stays byte-for-byte on the pre-existing whole-run halt.
+    _row_plans = {row.id: _row_source_plan(row) for wave in waves for row in wave}
+    _distinct_plans = {p for p in _row_plans.values() if p is not None}
+    _multi_plan = len(_distinct_plans) > 1
+
     # AC14: derive every wave's commit pathspec up front (same call, same
     # per-wave order/refusal behaviour as before) so the preflight phase can
     # be composed from their union BEFORE the first wave/commit phase block
@@ -3474,6 +3593,30 @@ def compose_script(
     body_blocks.append("  const _incompleteChunks = [];")
     body_blocks.append("  const _unansweredBriefs = [];")
 
+    if _multi_plan:
+        # Declared ONCE, script-wide: `_rowPlan` is the runtime lookup every
+        # `_skipIfHalted` call reads (`_wave_agent_calls(skip_check=True)`),
+        # `_haltedPlans`/`_haltedPlanReasons` are what `_plan_scoped_stop_gate`
+        # writes into after each batch's own status check.
+        row_plan_entries = ", ".join(
+            f"{_js_string_literal(rid)}: {_js_string_literal(plan)}"
+            for rid, plan in _row_plans.items()
+            if plan is not None
+        )
+        body_blocks.append(f"  const _rowPlan = {{ {row_plan_entries} }};")
+        body_blocks.append("  const _haltedPlans = new Set();")
+        body_blocks.append("  const _haltedPlanReasons = new Map();")
+        body_blocks.append(
+            "  function _skipIfHalted(id, fn) {\n"
+            "    const p = _rowPlan[id];\n"
+            "    if (p && _haltedPlans.has(p)) {\n"
+            "      return 'BLOCKED: plan halted by stop rule in ' "
+            "+ _haltedPlanReasons.get(p);\n"
+            "    }\n"
+            "    return fn();\n"
+            "  }"
+        )
+
     phase_titles.append(_PREFLIGHT_PHASE_TITLE)
     # The anchor rides on `plan_context` rather than `compose_script`'s own
     # `repo_root`: an outside composer (DoE-claude's emit-dispatch-workflow.py)
@@ -3487,6 +3630,7 @@ def compose_script(
             repo_root=repo_anchor,
             prefixes=preflight_prefixes,
             agent_type_host=agent_type_host,
+            gitignore_filter_degraded=gitignore_filter_degraded,
         )
     )
 
@@ -3519,6 +3663,7 @@ def compose_script(
                     plan_context,
                     shared,
                     agent_type_host=agent_type_host,
+                    skip_check=_multi_plan,
                 )
             )
             stopped_var = f"_stopped{results_var[0].upper()}{results_var[1:]}"
@@ -3526,8 +3671,14 @@ def compose_script(
                 _status_check_block(results_var, [row.id for row in batch], stopped_var)
             )
             # Emitted LAST on every path out of this batch -- see
-            # `_stop_rule_halt_gate`.
-            stop_gate = _stop_rule_halt_gate(stopped_var, wave_title)
+            # `_stop_rule_halt_gate` (single-plan, whole-run halt) /
+            # `_plan_scoped_stop_gate` (multi-plan, per-plan skip, run
+            # continues).
+            stop_gate = (
+                _plan_scoped_stop_gate(stopped_var)
+                if _multi_plan
+                else _stop_rule_halt_gate(stopped_var, wave_title)
+            )
 
             if commit_pathspec_or_none(batch) is None:
                 # Every row in this batch declares `writes: []` -- no commit
@@ -3623,7 +3774,21 @@ def compose_script(
 
     # Top-level, never `async function run(ctx) { ... }` -- see module
     # docstring § Top-level body, never a defined-but-uninvoked wrapper.
-    return f"{_NODE_CHECK_DOES_NOT_APPLY_COMMENT}\n{meta_block}\n{body}\n"
+    script = f"{_NODE_CHECK_DOES_NOT_APPLY_COMMENT}\n{meta_block}\n{body}\n"
+
+    # Refuse HERE, at emit time, rather than composing a script the
+    # Workflow runner will only refuse later at fire time (see
+    # `_WORKFLOW_SCRIPT_BYTE_CAP`).
+    script_size = len(script.encode("utf-8"))
+    if script_size > _WORKFLOW_SCRIPT_BYTE_CAP:
+        row_count = sum(len(wave) for wave in waves)
+        raise NoWavesError(
+            f"composed script is {script_size} bytes, over the Workflow "
+            f"runner's {_WORKFLOW_SCRIPT_BYTE_CAP}-byte cap ({row_count} "
+            "row(s)) -- split the inventory into parts of fewer rows"
+        )
+
+    return script
 
 
 #: A non-DONE status in the position the executor return contract puts it:

@@ -5,25 +5,27 @@ coordinator_core.reconcile.tests.test_commit_reality — surviving-helper fixtur
 three-signal commit-reality shipped-ness matcher (`evaluate_commit_reality`) across a full
 scenario matrix. That matcher is deleted (see `commit_reality.py`'s own module docstring); the
 verdict fixtures and their real-git-repo scaffolding are deleted with it. What remains pins the
-two helpers `archive_stamp.py` and `ops/completion_ops.py` still import directly:
-`_is_mechanical_subject` (plus its `_DEFAULT_MECHANICAL_DENYLIST` default) and `_git`.
+one helper `archive_stamp.py` still imports directly: `_is_mechanical_subject` (plus its
+`_DEFAULT_MECHANICAL_DENYLIST` default).
+
+**SHRUNK FURTHER 2026-09-23 (R3, `docs/plans/2026-09-22-spawn-budget-and-census.md`).** `_git` is
+deleted from `commit_reality.py`; `ops/completion_ops.py` now spawns git through
+`coordinator_core.git.run.run_git` directly, pinned by `coordinator_core/tests/
+test_shared_git_runner.py`, not here. The `_git` fixtures below are removed with it.
 
 Spec backlink: pln-claude-klabauter-auto-reconcile-pass-off-425848 § C2 (DEC-1) — historical.
 """
 
 from __future__ import annotations
 
-import subprocess
-
 import pytest
 
 from coordinator_core.reconcile.commit_reality import (
     _DEFAULT_MECHANICAL_DENYLIST,
-    _git,
     _is_mechanical_subject,
 )
 
-pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+pytestmark = [pytest.mark.cadence]
 
 _MECHANICAL_DENYLIST = [
     "pickup:",
@@ -81,24 +83,3 @@ class TestEmptyDenylistDisablesFiltering:
         subject = "pickup: claim handoff 2026-01-01"
         assert _is_mechanical_subject(subject, list(_DEFAULT_MECHANICAL_DENYLIST))
         assert not _is_mechanical_subject(subject, [])
-
-
-class TestGitHelper:
-    """`_git` is the read-only git subprocess choke point `ops/completion_ops.py`
-    imports as `_reality_git` — pinned directly rather than only via a caller."""
-
-    def test_git_runs_read_only_subcommand_in_worktree(self, tmp_path) -> None:
-        subprocess.run(
-            ["git", "init", "-q"],
-            cwd=str(tmp_path),
-            capture_output=True,
-            text=True,
-            check=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        result = _git(tmp_path, ["status", "--short"])
-        assert result.returncode == 0
-
-    def test_git_reports_nonzero_on_invalid_subcommand(self, tmp_path) -> None:
-        result = _git(tmp_path, ["not-a-real-git-subcommand"])
-        assert result.returncode != 0

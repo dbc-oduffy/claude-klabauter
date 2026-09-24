@@ -131,7 +131,37 @@ def test_spine_projection_closed_count_includes_coded():
 
 
 def test_spine_projection_empty_rows():
-    assert spine_projection([]) == {"open": [], "closed_count": 0}
+    assert spine_projection([]) == {
+        "open": [],
+        "closed_count": 0,
+        "unratified_deferrals": [],
+    }
+
+
+def test_spine_projection_flags_legacy_deferred_without_pm_approved():
+    rows = [
+        {"id": "D1", "title": "One", "disposition": "open", "deferred": True, "pm_approved": False},
+        {"id": "D2", "title": "Two", "disposition": "open", "deferred": True, "pm_approved": True},
+    ]
+    projection = spine_projection(rows)
+    assert projection["unratified_deferrals"] == ["D1"]
+
+
+def test_spine_projection_governed_flags_both():
+    rows = [
+        {"id": "D1", "title": "One", "disposition": "open", "deferred": True, "pm_approved": False},
+        {"id": "D2", "title": "Two", "disposition": "open", "deferred": True, "pm_approved": True},
+    ]
+    projection = spine_projection(rows, governed=True)
+    assert projection["unratified_deferrals"] == ["D1", "D2"]
+
+
+def test_spine_projection_backlogged_without_deferred_never_flagged():
+    rows = [
+        {"id": "D1", "title": "One", "disposition": "backlogged"},
+    ]
+    assert spine_projection(rows)["unratified_deferrals"] == []
+    assert spine_projection(rows, governed=True)["unratified_deferrals"] == []
 
 
 # ---------------------------------------------------------------------------

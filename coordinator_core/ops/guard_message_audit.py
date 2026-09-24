@@ -296,6 +296,7 @@ def collect(repo_root: Path) -> List[EmitSite]:
         try:
             source = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
+            # unreadable source module cannot be audited; skip it
             continue
         present_fields = [f for f in TEXT_FIELDS if f in source]
         if not present_fields:

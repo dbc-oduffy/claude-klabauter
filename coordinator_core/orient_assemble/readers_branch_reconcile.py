@@ -70,6 +70,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
 from coordinator_core.orient_assemble.reader_result import ReaderResult
 
 #: The source CLI's absolute path — resolved relative to this file, never a
@@ -90,6 +91,7 @@ def _load_source_module():
     """Load the hyphenated-filename source CLI as an importable module (same
     pattern as `readers_handoff_triage._load_source_module`) — a normal
     `import` statement cannot address a `-`-containing filename."""
+    ensure_bin_lib_bound(str(_SOURCE_PATH.parent))
     spec = importlib.util.spec_from_file_location(
         "workday_start_day_branch_resolve", _SOURCE_PATH
     )

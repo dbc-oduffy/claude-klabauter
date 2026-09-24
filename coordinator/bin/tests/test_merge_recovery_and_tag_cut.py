@@ -112,6 +112,57 @@ def test_cut_tag_is_idempotent_on_retry(tmp_path: Path) -> None:
     assert second_sha == first_sha
 
 
+def test_cut_tag_must_contain_passes_when_ancestor(tmp_path: Path) -> None:
+    """must_contain set to a descendant of merge_sha: ancestor check passes,
+    tag still cut normally."""
+    work = _init_repo_with_origin(tmp_path)
+    merge_sha = _git(["rev-parse", "HEAD"], cwd=work).stdout.strip()
+
+    (work / "g.txt").write_text("more\n", encoding="utf-8")
+    _git(["add", "g.txt"], cwd=work)
+    _git(["commit", "-m", "second"], cwd=work)
+    descendant_sha = _git(["rev-parse", "HEAD"], cwd=work).stdout.strip()
+
+    cut, cut_sha = cut_tag(work, "v1.0.0", merge_ref=merge_sha, must_contain=descendant_sha)
+
+    assert cut is True
+    assert cut_sha == merge_sha
+    peeled = _git(["rev-parse", "v1.0.0^{}"], cwd=work).stdout.strip()
+    assert peeled == merge_sha
+
+
+def test_cut_tag_must_contain_fails_loud_when_not_ancestor(tmp_path: Path) -> None:
+    """must_contain pointing at an unrelated commit: refuses to cut, no tag
+    is created."""
+    work = _init_repo_with_origin(tmp_path)
+    merge_sha = _git(["rev-parse", "HEAD"], cwd=work).stdout.strip()
+
+    _git(["checkout", "--orphan", "unrelated"], cwd=work)
+    (work / "h.txt").write_text("branch\n", encoding="utf-8")
+    _git(["add", "h.txt"], cwd=work)
+    _git(["commit", "-m", "unrelated root commit"], cwd=work)
+    unrelated_sha = _git(["rev-parse", "HEAD"], cwd=work).stdout.strip()
+    _git(["checkout", "main"], cwd=work)
+
+    with pytest.raises(SystemExit) as exc_info:
+        cut_tag(work, "v1.0.0", merge_ref=merge_sha, must_contain=unrelated_sha)
+    assert exc_info.value.code == 1
+
+    tag_exists = _run_git_allow_fail(["tag", "-l", "v1.0.0"], cwd=work)
+    assert tag_exists.strip() == ""
+
+
+def _run_git_allow_fail(args: list[str], cwd: Path) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        **_mod._win_portability_flags(),
+    )
+    return result.stdout
+
+
 # ---------------------------------------------------------------------------
 # resolve_tag_prefix
 # ---------------------------------------------------------------------------

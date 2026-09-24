@@ -64,7 +64,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from coordinator_core._hook_envelope import deny
+from coordinator_core._hook_envelope import deny, payload_of
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.hooks.support.sentinel_write_guard import extract_target_path
@@ -112,6 +112,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     dict, …) per this package's payload-dict-in / hook-response-out
     contract.
     """
+    params = payload_of(params)
     if params.get("tool_name", "") not in _GUARDED_TOOLS:
         return no_advisory()
 

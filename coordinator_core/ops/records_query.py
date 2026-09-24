@@ -714,7 +714,9 @@ def liveness(fm: dict, record_type: str) -> str:
     #     there (a straight yes/no), unlike the three-way LIVE/BLOCKED/DONE
     #     answer this branch gives it.
     if record_type == 'plan':
-        if status == 'deferred':
+        # 'blocked' is non-terminal and held from outside this plan; it buckets
+        # BLOCKED alongside 'deferred'.
+        if status in ('deferred', 'blocked'):
             return 'BLOCKED'
         if status in ('implemented', 'abandoned', 'superseded', 'closed_partial'):
             return 'DONE'
@@ -866,17 +868,25 @@ def _normalize_roadmap_status(fm: dict, record_type: str) -> None:
     """Normalize ``roadmap``-type frontmatter ``status`` to the contract enum, in place.
 
     Port of query-records.js's ``normalizeRoadmapStatus`` (bin/query-records.js:1073-1080).
-    No-op for every other type. Unmapped values fall back to ``'active'`` (open
-    posture, same as the JS). ORDERING: must run AFTER ``_apply_consumed_marker``
-    and BEFORE the ``liveness`` assignment — same position query-records.js
-    enforces (queryRecords:1436-1441, immediately preceding ``frontmatter.liveness``).
+    No-op for every other type. An unmapped value falls back to ``'planning'``
+    (closed posture — unrecognized input parks in the pre-work bucket rather than
+    the open ``'active'`` one) and emits a WARN naming the offending record.
+    ORDERING: must run AFTER ``_apply_consumed_marker`` and BEFORE the
+    ``liveness`` assignment — same position query-records.js enforces
+    (queryRecords:1436-1441, immediately preceding ``frontmatter.liveness``).
     """
     if record_type != 'roadmap':
         return
     raw = fm.get('status')
     if raw is None:
         return
-    fm['status'] = _ROADMAP_STATUS_MAP.get(str(raw), 'active')
+    key = str(raw)
+    if key not in _ROADMAP_STATUS_MAP:
+        _LOG.warning(
+            'records.query: unmapped roadmap status %r for %s, defaulting to planning',
+            raw, fm.get('id') or fm.get('slug') or '<unknown>',
+        )
+    fm['status'] = _ROADMAP_STATUS_MAP.get(key, 'planning')
 
 
 # --where grammar — byte-exact port of query-records.js's parseClause/matchesClause/

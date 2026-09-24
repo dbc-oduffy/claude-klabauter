@@ -182,6 +182,7 @@ def _sweep_expired_reservations(reservations_dir: Path) -> None:
             if entry.stat().st_mtime < cutoff:
                 entry.unlink()
         except OSError:
+            # reservation file already gone (or mtime probe failed); nothing to reclaim
             pass
 
 

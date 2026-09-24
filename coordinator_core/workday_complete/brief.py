@@ -98,8 +98,6 @@ Negative-spec:
 from __future__ import annotations
 
 import argparse
-import contextlib
-import io
 import json
 import re
 import sys
@@ -123,7 +121,7 @@ from coordinator_core.ops.emit.resolvers import resolve_context
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.goal_close_day import collect_open_day_goals
 from coordinator_core.ops.workday_complete_step2_5_dirty_tree import (
-    main as _step2_5_dirty_tree_main,
+    classify_dirty_tree,
 )
 from coordinator_core.resolution.facade import resolve_operator_config
 from coordinator_core.workday_complete.cockpit_contract_freshness import (
@@ -185,7 +183,7 @@ def _resolve_repo_common_dir_for_ceremony(start: Optional[Path] = None) -> Optio
     worktree root via `main_worktree_root(common_dir)` before calling
     `resolve_context` — same convention every other `resolve_context()` call
     site in the tree follows (`ops/emit_cadence.py`, `ops/artifact_emit.py`,
-    `ops/goal_append.py`, `ops/goal_close_day.py`, `ops/emit/recorder.py`).
+    `ops/goal_append.py`, `ops/goal_close_day.py`).
     Returns `None` on any resolution failure — never raises; the caller
     degrades to an empty open-day-goals partition (see
     `_compute_open_day_goals`)."""
@@ -280,34 +278,33 @@ def _main_worktree_root_for_directive() -> str:
 # whether ambiguous/source-tree paths remain and therefore whether the ask
 # is even live.
 def _compute_dirty_tree_verdict() -> dict[str, Any]:
-    """Read-only `--dry-run` probe of Step 2.5's own auto-disposition script
-    (`coordinator_core.ops.workday_complete_step2_5_dirty_tree`) — determines
-    whether SOURCE-TREE/AMBIGUOUS paths remain (exit 2) WITHOUT performing
-    any git mutation; `--dry-run` makes no commits, no `.gitignore` edits, no
-    `git rm --cached` (that module's own docstring). Never raises and never
+    """Read-only probe of Step 2.5's typed, mutation-free classification
+    (`coordinator_core.ops.workday_complete_step2_5_dirty_tree.
+    classify_dirty_tree`) — determines whether SOURCE-TREE/AMBIGUOUS paths
+    remain (`needs_pm`) WITHOUT performing any git mutation and WITHOUT
+    reading `main()`'s print/exit-code contract. Never raises and never
     fails the ceremony (mirrors `_compute_open_day_goals`'s degradation
-    posture) — but degrades toward `ambiguous=True` on any probe failure,
-    i.e. toward asking the EM, never toward silently skipping a genuine ask."""
-    stdout_buf, stderr_buf = io.StringIO(), io.StringIO()
+    posture) — but degrades toward `ambiguous=True` on any probe failure
+    (a raise, or the classification's own `error` set), i.e. toward asking
+    the EM, never toward silently skipping a genuine ask (fail-toward-
+    asking posture, a deliberate HEAD behaviour change: HEAD's exit-1 hard
+    error read as not-ambiguous)."""
     try:
-        with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(
-            stderr_buf
-        ):
-            exit_code = _step2_5_dirty_tree_main(["--dry-run"])
-    except SystemExit as exc:
-        exit_code = exc.code if isinstance(exc.code, int) else 1
+        classification = classify_dirty_tree()
     except Exception as exc:  # noqa: BLE001 - never fail the ceremony
         return {
             "ambiguous": True,
             "evidence": (
-                "workday-complete-step2_5-dirty-tree --dry-run probe raised "
+                "workday-complete-step2_5-dirty-tree classify_dirty_tree() probe raised "
                 f"{exc!r}, degrading to ambiguous=True (fail toward asking)"
             ),
         }
-    evidence = (stdout_buf.getvalue() + stderr_buf.getvalue()).strip()
+    if classification.error is not None:
+        return {"ambiguous": True, "evidence": classification.error}
+    evidence = "\n".join(classification.evidence_lines()).strip()
     return {
-        "ambiguous": exit_code == 2,
-        "evidence": evidence or "workday-complete-step2_5-dirty-tree --dry-run: no output",
+        "ambiguous": classification.needs_pm,
+        "evidence": evidence or "workday-complete-step2_5-dirty-tree: no output",
     }
 
 
@@ -784,7 +781,7 @@ def _build_judgment_points(
                 ],
                 evidence=dirty_tree_verdict.get(
                     "evidence",
-                    "workday-complete-step2_5-dirty-tree exit 2 (ambiguous paths remain)",
+                    "workday-complete-step2_5-dirty-tree: ambiguous paths remain",
                 ),
                 reason="insufficient-evidence",
                 revalidate_at_dispatch=True,

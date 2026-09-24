@@ -187,6 +187,7 @@ def _sidecar_timestamp(path: Path, frontmatter: dict) -> datetime | None:
                 parsed = parsed.replace(tzinfo=timezone.utc)
             return parsed
         except ValueError:
+            # spawned_at is not ISO-parseable; fall back to file mtime below
             pass
     try:
         return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
@@ -265,6 +266,7 @@ def _collect_recent_answers(
         try:
             text = fpath.read_text(encoding="utf-8", errors="replace")
         except OSError:
+            # an unreadable run-report cannot be checked for audience mismatch; skip it
             continue
         frontmatter = _parse_frontmatter(text)
         timestamp = _sidecar_timestamp(fpath, frontmatter)

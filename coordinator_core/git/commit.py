@@ -87,9 +87,11 @@ from coordinator_core.git.git_index import parse_index_identity
 from coordinator_core.git.git_objects import (
     _ref_exists_loose_or_packed,
     cas_ref,
+    read_object,
     write_object,
 )
-from coordinator_core.git.git_state import head_sha, head_tree_sha, read_tree_spine
+from coordinator_core.git.git_state import head_blobs, head_sha, head_tree_sha, read_tree_spine
+from coordinator_core.git import published_tree_classification
 from coordinator_core.git import rollback_check
 from coordinator_core.git.tree_spine import (
     _ABSENT,
@@ -763,6 +765,49 @@ def _cas_target(repo: Union[str, Path]) -> Optional[Tuple[Path, str]]:
 _REQUIRED = object()
 
 
+def _attach_session_id_trailer(message: str, repo: Union[str, Path]) -> str:
+    """Append a `Session-Id: <sid>` trailer to `message` when it carries none
+    already and a sid resolves -- fixes dispatched wave-commit agents that
+    call `commit_paths` in-process and land commits with no `Session-Id`
+    trailer (`state/bug-backlog/2026-09-24-wave-commit-agent-called-commit-
+    paths-in-fc03df470bcc.yaml`). Resolves via the SAME rung `ops/ceremony/
+    commit_v2.py` uses (`session_core.resolve_session_id`) -- env/ContextVar
+    only, no subprocess spawn, so this stays inside `commit_paths`' zero-
+    spawn contract.
+
+    Never refuses: an unresolvable sid, or a message that already carries
+    the trailer, both leave `message` unchanged. Idempotency is a plain
+    case-sensitive `^Session-Id:` line match -- the same convention `ops/
+    ceremony/branch_resolution.py` already uses -- rather than `commit_
+    trailers.py`'s trailer-block-aware parser, which needs a message staged
+    to disk; a false negative here only ever means one extra (harmless,
+    add-only) trailer, never a dropped one.
+    """
+    if any(line.startswith("Session-Id:") for line in message.splitlines()):
+        return message
+    from coordinator_core.session import core as session_core
+
+    sid = session_core.resolve_session_id(str(repo))
+    if not sid:
+        return message
+
+    from coordinator_core.git.commit_trailers import (
+        can_format_trailers_in_process,
+        format_trailers_in_process,
+    )
+
+    raw = message.encode("utf-8", errors="surrogateescape")
+    if not can_format_trailers_in_process(raw):
+        # The rare out-of-envelope shape (a `#` comment line) needs a `git
+        # interpret-trailers` spawn to format correctly -- `commit_paths`
+        # never spawns, so this leaves `message` unchanged rather than trade
+        # the zero-spawn invariant for one trailer.
+        return message
+    return format_trailers_in_process(raw, [f"Session-Id: {sid}"]).decode(
+        "utf-8", errors="surrogateescape"
+    )
+
+
 def commit_paths(
     repo: Union[str, Path] = _REQUIRED,  # type: ignore[assignment]
     paths: Sequence[str] = _REQUIRED,  # type: ignore[assignment]
@@ -812,20 +857,21 @@ def commit_paths(
     commits paths it authored itself in the same pass, so there is nothing
     a widened default could preserve, only stale blobs it could newly hide.
 
-    WHY `repo_root` IS ACCEPTED AS AN ALIAS FOR `repo`. This function is the
-    sanctioned leg-1 route for the dispatched committer, whose call block
-    lives in a doc claude-klabauter does not own (`agents/git-commit-agent.md`,
-    `snippets/scoped-commit-route.md` -- both name the parameter
-    `repo_root`). A `TypeError` here does not read to that agent as "wrong
-    keyword": it reads as *leg 1 is unavailable*, and it drops to the plain
-    `git commit -- <paths>` fallback, which the subagent commit guard then
-    denies -- so an entire dispatched workflow halts at its commit phase with
-    both legs apparently dead. Every emitted plan wave is gated behind that
-    phase. `repo_root` is also the name `ops/dispatch_emit/emit.py` uses for
-    the same value throughout, so the collision is systemic rather than one
-    doc's typo. Accepting it costs a branch and removes the halt; the correct
-    path is made reachable rather than the wrong one walled off. Supplying
-    both is a caller confusion, not a shorthand, and still raises.
+    WHY `repo_root` IS ACCEPTED AS AN ALIAS FOR `repo`. This alias exists
+    only to keep a stray in-process call from misreading a `TypeError` as
+    "leg 1 is unavailable" -- it is NOT sanction to call this function
+    in-process. The sanctioned routes are `ops/ceremony/commit_v2.py` and a
+    scoped `git commit -- <paths>` with a trailer, per DoE's own
+    `agents/git-commit-agent.md`. A doc claude-klabauter does not own
+    (`agents/git-commit-agent.md`, `snippets/scoped-commit-route.md` -- both
+    name the parameter `repo_root`) names `repo_root` for the same value
+    `ops/dispatch_emit/emit.py` uses throughout, so a stray in-process caller
+    passing that name hits a plain `TypeError` -- a caller-hostile failure
+    for a route that should not be reachable in the first place, and the
+    alias exists only to keep that `TypeError` from misreading as "leg 1 is
+    unavailable" rather than "in-process is the wrong door". Supplying both
+    `repo` and `repo_root` is a caller confusion, not a shorthand, and still
+    raises.
 
     `paths` is likewise optional so a deletion-only commit -- documented as
     legal ("at least one of `paths` / `deleted_paths`") -- reaches the empty-
@@ -848,6 +894,8 @@ def commit_paths(
         paths = ()
     if message is _REQUIRED:
         raise TypeError("commit_paths() missing required argument: 'message'")
+
+    message = _attach_session_id_trailer(message, repo)
 
     root = Path(repo)
     gitdir = resolve_git_dir(repo)
@@ -895,6 +943,46 @@ def commit_paths(
             raise CommitRefused(
                 f"{p} is declared deleted but still present in the worktree "
                 "-- drop it from `deleted_paths`, or remove the file first"
+            )
+
+    # PUBLISHED-TREE ALLOWLIST CHECK -- a new top-level name under a
+    # generator-owned source dir (`coordinator_core/`, `coordinator/bin/`)
+    # that the landing field 7 of its publish row does not admit, and the
+    # landing `deny` list does not withhold. This route fires no native
+    # hook -- same reasoning as the PHANTOM DELETION block above -- so the
+    # refusal lives here or the defect ships silent until the next publish
+    # round catches it. `touched_published_names` is a pure string
+    # pre-filter: a commit whose pathspec touches neither dir pays nothing.
+    # The identity-file stat below is the klabauter/DoE/other-repo gate: a
+    # tree without the declarations yaml at its root is never refused.
+    touched = published_tree_classification.touched_published_names(path_list)
+    if touched and (root / published_tree_classification.DECLARATIONS_PATH).is_file():
+
+        def _read_landing(rel: str) -> Optional[str]:
+            # Landing bytes: worktree for a path in this commit's own
+            # pathspec, else HEAD's blob -- so a regeneration run but left
+            # out of the pathspec is still caught.
+            if rel in path_list:
+                return (root / rel).read_text(encoding="utf-8")
+            blobs = head_blobs(repo, [rel])
+            entry = blobs.get(rel)
+            if entry is None:
+                return None
+            obj = read_object(resolve_git_common_dir(repo), entry[1])
+            if obj is None:
+                return None
+            return obj[1].decode("utf-8")
+
+        refused = published_tree_classification.unclassified(touched, _read_landing)
+        if refused:
+            detail = ", ".join(f"{row}: {name}" for row, name in refused)
+            raise CommitRefused(
+                "commit lands a published-tree top-level name the landing "
+                f"allowlist does not classify -- {detail} -- run "
+                "coordinator/bin/publish-allowlist-generate.py and add "
+                "setup/publish-targets.portable to this commit's paths, or "
+                "add the name to the row's deny in "
+                "setup/publish-allowlist-declarations.yaml"
             )
 
     # DEFAULT-PATH SHAPE CHECK (C2): the sweeping/orphan/out-of-repo legs of

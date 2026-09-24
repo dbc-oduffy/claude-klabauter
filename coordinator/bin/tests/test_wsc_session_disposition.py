@@ -63,6 +63,11 @@ def _load_cli_module():
 
 
 wsc = _load_cli_module()
+# Bind the engine names before any test patches one: a `mock.patch.object`
+# taken while a name is still None restores None on exit, after the call
+# inside it has set the idempotence flag -- leaving the module "bound" with
+# an unbound name for every later test.
+wsc._bootstrap_engine_imports()
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
@@ -274,7 +279,10 @@ class TestPrimaryScan(unittest.TestCase):
                     "state/handoffs/2026-07-02_second.md",
                 ],
             )
-            self.assertEqual(wsc.primary_consumed_handoff(repo, "sid-multi"), paths[0])
+            # Chain HEAD, not chain root: primary_consumed_handoff picks the
+            # newest match, i.e. the LAST element of the oldest-first sorted
+            # `paths` list.
+            self.assertEqual(wsc.primary_consumed_handoff(repo, "sid-multi"), paths[-1])
 
     def test_paths_plural_empty_when_missing_dir(self):
         import tempfile

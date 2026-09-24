@@ -117,6 +117,14 @@ ASSEMBLER_DISPATCHABLE: "types.MappingProxyType[str, frozenset[str]]" = types.Ma
         "freeze-review-diff",
         "fan-out-integrator",
         "classify-dispatch-shape",
+        # Plugin-local barewords (P036-T4,
+        # docs/plans/2026-09-07-directive-resolution-reaches-a-plugin-local-
+        # cli.md) — each also a literal member of
+        # `workstream_complete.apply._PLUGIN_LOCAL_CLIS` and of
+        # `workstream_complete.CONSUMES_MANIFEST` (T1b), never derived from
+        # either.
+        "baton-chain-closure",
+        "plan-reversibility-eligibility",
     }),
     "workweek_complete": frozenset({
         "list-week-changelog",

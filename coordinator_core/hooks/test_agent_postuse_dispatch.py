@@ -23,6 +23,7 @@ Spec backlink: coordinator_core/hooks/agent_postuse_dispatch.py (module under te
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -62,13 +63,12 @@ def legs(monkeypatch):
     return _install
 
 
-@pytest.mark.asyncio
-async def test_both_legs_fire_once_with_the_handler_params(legs):
+def test_both_legs_fire_once_with_the_handler_params(legs):
     """AC15 shape: a dropped leg is invisible in the return value, so count the calls."""
     calls = legs(("first", no_advisory()), ("second", no_advisory()))
 
     params = {"session_id": "test-session-fanin", "dispatched_agent_id": "abcdef123456"}
-    result = await apd._handler(params, repo_root="/repo")
+    result = asyncio.run(apd._handler(params, repo_root="/repo"))
 
     assert [label for label, _p, _r in calls] == ["first", "second"]
     assert all(p is params for _l, p, _r in calls)
@@ -76,12 +76,11 @@ async def test_both_legs_fire_once_with_the_handler_params(legs):
     assert result == no_advisory()
 
 
-@pytest.mark.asyncio
-async def test_a_raising_leg_does_not_suppress_its_sibling(legs, capsys):
+def test_a_raising_leg_does_not_suppress_its_sibling(legs, capsys):
     """The property the process boundary gave for free and `gather` does not."""
     calls = legs(("raiser", RuntimeError("audit log unwritable")), ("sibling", no_advisory()))
 
-    result = await apd._handler({}, repo_root=None)
+    result = asyncio.run(apd._handler({}, repo_root=None))
 
     assert [label for label, _p, _r in calls] == ["raiser", "sibling"]
     assert result == no_advisory()
@@ -90,8 +89,7 @@ async def test_a_raising_leg_does_not_suppress_its_sibling(legs, capsys):
     assert "RuntimeError" in stderr
 
 
-@pytest.mark.asyncio
-async def test_advisory_text_from_one_leg_survives_the_merge(legs):
+def test_advisory_text_from_one_leg_survives_the_merge(legs):
     """Both legs return `no_advisory()` today; the merge must not hardcode that.
 
     A leg that grows prose later has to be heard without this module being edited --
@@ -99,30 +97,28 @@ async def test_advisory_text_from_one_leg_survives_the_merge(legs):
     """
     legs(("quiet", no_advisory()), ("loud", post_advisory("something worth saying")))
 
-    result = await apd._handler({}, repo_root=None)
+    result = asyncio.run(apd._handler({}, repo_root=None))
 
     assert result["hookSpecificOutput"]["additionalContext"].endswith(
         "something worth saying"
     )
 
 
-@pytest.mark.asyncio
-async def test_two_advisory_texts_merge_in_leg_order(legs):
+def test_two_advisory_texts_merge_in_leg_order(legs):
     legs(("first", post_advisory("alpha")), ("second", post_advisory("beta")))
 
-    result = await apd._handler({}, repo_root=None)
+    result = asyncio.run(apd._handler({}, repo_root=None))
 
     context = result["hookSpecificOutput"]["additionalContext"]
     assert context.index("alpha") < context.index("beta")
     assert "\n\n" in context
 
 
-@pytest.mark.asyncio
-async def test_a_leg_returning_an_unexpected_shape_is_treated_as_silent(legs):
+def test_a_leg_returning_an_unexpected_shape_is_treated_as_silent(legs):
     """A leg's own shape bug must not take down the fan-in or its sibling."""
     calls = legs(("odd", "not a dict"), ("sibling", no_advisory()))
 
-    result = await apd._handler({}, repo_root=None)
+    result = asyncio.run(apd._handler({}, repo_root=None))
 
     assert [label for label, _p, _r in calls] == ["odd", "sibling"]
     assert result == no_advisory()

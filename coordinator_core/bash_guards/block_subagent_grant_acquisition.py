@@ -64,6 +64,24 @@ here as "the only illegitimate route" or any other completeness claim --
 this plan was corrected once already for exactly that overstatement (see
 the plan's Problem section footnote), and this docstring does not repeat it.
 
+DOOR COVERAGE (2026-09-23, P169-C2). Unlike `block_subagent_commit.py`, this
+module gates NO `coordinator-invoke` door spelling. That is not an
+oversight-shaped gap: a census re-run of the full eager-import graph rooted
+at `coordinator_core.ops._EAGER_OP_MODULES` and `coordinator_core.hooks.
+_EAGER_HOOK_MODULES` -- the authoritative registration lists, walked
+transitively via `ast`-only static import resolution, never an executed
+import -- finds zero registered op or hook module that imports or calls
+`write_claude_md_write_grant` (`coordinator_core.session.claude_md_grant`'s
+own module docstring names `_CLAUDE_MD_GRANT_MODULE` as a STRING constant in
+`guard_doctrine_surface_bash_write.py`, a reference for its own carve-out
+matcher, never a reach). No registered op today executes caller-named code
+that could reach the grant writer through `coordinator-invoke`, so there is
+no door to gate yet. `test_block_subagent_grant_acquisition.py` pins this
+census; if it ever goes red -- a future op imports or calls the grant writer
+-- this module must gain `coordinator-invoke` coverage (reusing `block_
+subagent_commit.py`'s `_invoke_op_token_indices` matcher) in the SAME change
+that opens the route, not after.
+
 What backstops the residual: `block_subagent_grant_record_write`
 (`coordinator_core/write_guards/block_subagent_grant_record_write.py`, plan
 chunk C9, authored concurrently) denies the Write/Edit/MultiEdit/

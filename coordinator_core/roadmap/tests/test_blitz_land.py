@@ -97,6 +97,67 @@ def test_an_already_linked_plan_is_not_repaired(tmp_path):
     assert _status(root, plan) == "approved"
 
 
+def test_a_ready_plan_carrying_supersedes_stamps_the_named_plan_superseded(tmp_path):
+    root = _repo(tmp_path)
+    old_plan = _plan(root, "old-plan", "approved")
+    new_plan = _plan(root, "new-plan", "draft", supersedes=old_plan)
+    _baton(root, "b-1", deliverable_id="dlv-b-1")
+
+    out = bl.land_wave(root, {"waveIndex": 0, "ready": [{"batonId": "b-1", "planPath": new_plan}]})
+
+    assert out["approved"][0]["stamped"] is True
+    assert _status(root, new_plan) == "approved"
+    assert _status(root, old_plan) == "superseded"
+    assert out["approved"][0]["superseded"] == [
+        {"path": old_plan, "superseded": True, "note": None}
+    ]
+
+
+def test_supersedes_naming_a_missing_plan_is_reported_not_raised(tmp_path):
+    root = _repo(tmp_path)
+    new_plan = _plan(root, "new-plan", "draft", supersedes="docs/plans/nope.md")
+    _baton(root, "b-1", deliverable_id="dlv-b-1")
+
+    out = bl.land_wave(root, {"waveIndex": 0, "ready": [{"batonId": "b-1", "planPath": new_plan}]})
+
+    assert out["approved"][0]["stamped"] is True
+    row = out["approved"][0]["superseded"][0]
+    assert row["path"] == "docs/plans/nope.md"
+    assert row["superseded"] is False
+    assert "does not exist" in row["note"]
+
+
+def test_supersedes_naming_itself_is_not_self_superseded(tmp_path):
+    root = _repo(tmp_path)
+    baton = _baton(root, "b-1", deliverable_id="dlv-b-1")
+    plan = root / "docs" / "plans" / "self-plan.md"
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    rel = "docs/plans/self-plan.md"
+    plan.write_text(
+        f"---\ntitle: self-plan\nstatus: draft\nsupersedes: {rel}\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+
+    out = bl.land_wave(root, {"waveIndex": 0, "ready": [{"batonId": "b-1", "planPath": rel}]})
+
+    assert out["approved"][0]["stamped"] is True
+    assert out["approved"][0]["superseded"] == []
+    assert _status(root, rel) == "approved"
+
+
+def test_a_re_land_does_not_re_stamp_an_already_superseded_plan(tmp_path):
+    root = _repo(tmp_path)
+    old_plan = _plan(root, "old-plan", "superseded")
+    new_plan = _plan(root, "new-plan", "approved", supersedes=old_plan)
+    _baton(root, "b-1", deliverable_id="dlv-b-1", governing_plan=new_plan)
+
+    out = bl.land_wave(root, {"waveIndex": 0, "ready": [{"batonId": "b-1", "planPath": new_plan}]})
+
+    row = out["approved"][0]["superseded"][0]
+    assert row["superseded"] is False
+    assert "already status: superseded" in row["note"]
+
+
 def test_a_baton_already_owning_a_different_plan_is_refused(tmp_path):
     """A landing ADOPTS an unlinked plan; it never re-owns a linked one. Silently
     repointing would let a wave steal a baton from a plan somebody else authored."""

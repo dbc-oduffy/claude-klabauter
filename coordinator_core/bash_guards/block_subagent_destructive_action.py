@@ -3057,13 +3057,12 @@ def _build_reason(
             "this guard. Fix forward, or surface a genuine need to the EM."
         )
     return (
-        "BLOCKED: destructive git/rm/chmod-chown -R at the shell surface for\n"
-        "subagents -- not a capability boundary, an interpreter can still\n"
-        "reach git.\n\n"
+        "BLOCKED: destructive git/rm/chmod-chown -R at the shell surface --\n"
+        "not a capability boundary; an interpreter still reaches git.\n\n"
         f"  Denied:   {deny_kind}\n"
         f"  Command:  {cmd_safe}\n\n"
-        "Fix forward, or surface it to the EM. No subagent-reachable override\n"
-        "exists."
+        "Fix forward, or surface it to the EM. No subagent-reachable\n"
+        "override exists."
     )
 
 

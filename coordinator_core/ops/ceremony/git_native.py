@@ -54,6 +54,7 @@ import functools
 import ntpath
 import logging
 import os
+import posixpath
 import shutil
 import subprocess
 import tempfile
@@ -577,6 +578,74 @@ def _has_windows_drive(normalized: str) -> bool:
     exists to close. `ntpath` itself is a pure-Python module present on
     every platform, so this reads the same drive-letter shape everywhere."""
     return ntpath.splitdrive(normalized)[0] != ""
+
+
+def canonical_repo_relative_path_refusal(path: str) -> Optional[str]:
+    """`None` iff `path` is already a canonical repo-relative tree-entry
+    path; otherwise a register-shaped refusal message naming the offending
+    path and, when a safe canonical form exists, that form -- REFUSAL, never
+    silent normalisation. A tree entry assembled from a non-canonical path
+    (e.g. `coordinator/../coordinator_core/x.py`) passes every check this
+    module ran before this function existed and then fails at `git
+    update-index`/`read-tree` with an "invalid path" error the caller never
+    sees until a push -- commit 528eee8314 shipped one. Single shared
+    validator, called once from `_commit_via_head_spine`, the helper every
+    commit route in this module (and so `ceremony.commit_v2`) lands through.
+
+    Checked: absolute path, Windows drive letter (`ntpath.splitdrive`, see
+    `_has_windows_drive`), and -- per `/`-split component, after backslash
+    normalisation -- an empty component (a doubled or trailing `/`), a `.`
+    component, a `..` component, or a `.git` component (case-insensitive:
+    `.GIT`, `.Git` are the same refusal on a case-insensitive filesystem).
+    """
+    normalized = path.replace("\\", "/")
+    reasons = []
+    if not normalized:
+        reasons.append("empty path")
+    if normalized.startswith("/"):
+        reasons.append("absolute path")
+    if _has_windows_drive(normalized):
+        reasons.append("Windows drive letter")
+    if normalized:
+        parts = normalized.split("/")
+        if any(p == "" for p in parts):
+            reasons.append("empty path component (a doubled or trailing '/')")
+        if any(p == "." for p in parts):
+            reasons.append("'.' path component")
+        if any(p == ".." for p in parts):
+            reasons.append("'..' path component")
+        if any(p.casefold() == ".git" for p in parts):
+            reasons.append("'.git' path component")
+    if not reasons:
+        return None
+
+    candidate = posixpath.normpath(normalized) if normalized else normalized
+    canonical_ok = (
+        normalized
+        and candidate not in ("", ".", "..")
+        and not candidate.startswith("../")
+        and not candidate.startswith("/")
+        and not _has_windows_drive(candidate)
+        and not any(p.casefold() == ".git" for p in candidate.split("/"))
+    )
+    hint = f"; canonical form: {candidate!r}" if canonical_ok else ""
+    return (
+        f"refusing non-canonical path {path!r} ({', '.join(reasons)}){hint} -- "
+        "pass a canonical repo-relative path"
+    )
+
+
+def first_non_canonical_path_refusal(paths) -> Optional[str]:
+    """First `canonical_repo_relative_path_refusal` hit across `paths`, or
+    `None` if every path is canonical -- the plural form every multi-path
+    commit entry point (`commit_scoped`, `ceremony.commit_v2`) calls once
+    over its combined path lists rather than looping the singular check
+    itself."""
+    for candidate_path in paths:
+        refusal = canonical_repo_relative_path_refusal(candidate_path)
+        if refusal is not None:
+            return refusal
+    return None
 
 
 def _empty_private_index_refusal(
@@ -4825,6 +4894,24 @@ def _commit_via_head_spine(
             returncode=1,
             stdout="",
             stderr=f"{caller}: refused -- this commit lands a path Windows cannot check out:\n{legality_refusal}",
+        )
+    # Canonical-path gate, before any tree/spine write below -- every commit
+    # route (`commit_scoped`'s two branches, `commit_authored_content`,
+    # `commit_authored_new_file`) assembles its `{path: (mode, sha) |
+    # _ABSENT}` dict and calls this one helper to land it, so checking here
+    # once covers all of them. A `..`/`.`/empty/`.git` component reaching
+    # `git update-index`/`read-tree` below is refused by GIT ITSELF too, but
+    # only at that point -- too late to stop the loose objects this function
+    # already wrote from being orphaned garbage, and (528eee8314) too late to
+    # stop a caller further up the ladder from treating rc=0 as success. See
+    # `canonical_repo_relative_path_refusal`'s own docstring for what is
+    # checked.
+    canonical_refusal = first_non_canonical_path_refusal(assembled.keys())
+    if canonical_refusal is not None:
+        return GitResult(
+            returncode=1,
+            stdout="",
+            stderr=f"{caller}: {canonical_refusal}",
         )
 
     root_tree_sha = _git_state_head_tree_sha(root)

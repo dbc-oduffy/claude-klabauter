@@ -82,6 +82,41 @@ def _query_roadmap_records(ctx: EmitContext) -> list[dict]:
         return []
 
 
+def _no_overview_malformed(ctx: EmitContext, seen_paths: set[str]) -> list[dict]:
+    """No-OVERVIEW bucket (Item 58): a roadmap directory missing ``OVERVIEW.md`` is
+    invisible to ``_query_roadmap_records`` — its ``state/roadmap/**/OVERVIEW.md`` glob
+    only matches directories that HAVE the file, so such a directory previously vanished
+    silently instead of surfacing anywhere. Enumerate ``state/roadmap/*`` directly and
+    quarantine each directory lacking ``OVERVIEW.md`` to ``malformed_records.roadmaps``,
+    matching the shape ``collect`` already uses for an invalid record.
+
+    ``seen_paths`` guards against double-counting a directory whose OVERVIEW.md the
+    query seam already returned (valid or malformed by content) — this bucket is only
+    for the directories the query seam never saw at all.
+    """
+    worktree_root = ctx.central_state_root.parent
+    roadmap_root = worktree_root / "state" / "roadmap"
+    if not roadmap_root.is_dir():
+        return []
+
+    malformed: list[dict] = []
+    for entry in sorted(roadmap_root.iterdir()):
+        if not entry.is_dir():
+            continue
+        overview = entry / "OVERVIEW.md"
+        if overview.exists():
+            continue
+        path = f"state/roadmap/{entry.name}/OVERVIEW.md"
+        if path in seen_paths:
+            continue
+        malformed.append({
+            "path": path,
+            "reason": "no OVERVIEW.md in roadmap directory",
+            "frontmatter_keys": [],
+        })
+    return malformed
+
+
 def _is_valid(fm: dict) -> bool:
     """Required fields present + status within the RoadmapStatus enum (bash:1752-1757)."""
     return (
@@ -98,12 +133,15 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
 
     records: list[dict] = []
     malformed: list[dict] = []
+    seen_paths: set[str] = set()
 
     for rec in raw:
         if not isinstance(rec, dict):
             continue
         fm = normalize_frontmatter(rec)
         path = rec.get("path")
+        if isinstance(path, str):
+            seen_paths.add(path)
 
         if not _is_valid(fm):
             malformed.append({
@@ -172,5 +210,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
             "scan_errors": scan_errors,
             "provenance": ctx.provenance("local_fs", path=path, derivation="parsed"),
         })
+
+    malformed.extend(_no_overview_malformed(ctx, seen_paths))
 
     return records, malformed

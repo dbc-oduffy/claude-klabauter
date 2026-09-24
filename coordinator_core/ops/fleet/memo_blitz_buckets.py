@@ -829,6 +829,13 @@ def _build_candidates(
 
     records: list[dict] = []
     unreadable: list[str] = []
+    # Non-open memos were previously dropped by a bare `continue` here with
+    # no trace on the envelope — a status typo, a not-yet-recognized status
+    # value, or a memo whose `status:` is simply absent all vanished from the
+    # sweep identically to a genuinely-actioned memo, and a blitz grinding the
+    # OPEN pile never learned any of them existed. Every skip is now COUNTED
+    # (mirrors `unreadable`'s own discipline) rather than silently swallowed.
+    non_open: list[dict[str, Any]] = []
     for path in paths:
         read = _read_memo(path)
         if read is None:
@@ -836,7 +843,12 @@ def _build_candidates(
             continue
         frontmatter = read["frontmatter"]
         status = frontmatter.get("status")
-        if not isinstance(status, str) or status.strip() not in _OPEN_STATUSES:
+        status_text = status.strip() if isinstance(status, str) else None
+        if status_text not in _OPEN_STATUSES:
+            non_open.append({
+                "id": path.name,
+                "status": status_text,
+            })
             continue
         created = _created_date(frontmatter, path)
         space, space_declared = _space_key(frontmatter, path)
@@ -919,10 +931,14 @@ def _build_candidates(
         "bucket_counts": bucket_counts,
         "spaces_declared": spaces_declared,
         "unreadable": unreadable,
+        "non_open": non_open,
         "note": (
             "unreadable[] lists inbox files skipped for absent/unparseable "
-            "frontmatter — counted, not silently swallowed."
-            if unreadable else None
+            "frontmatter — counted, not silently swallowed. non_open[] lists "
+            "readable inbox files whose status: is not open/in_progress "
+            "(absent, terminal, or unrecognized) — also counted, never "
+            "silently dropped from the sweep."
+            if (unreadable or non_open) else None
         ),
     })
 

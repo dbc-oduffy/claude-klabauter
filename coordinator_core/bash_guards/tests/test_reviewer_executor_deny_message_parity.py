@@ -1,29 +1,27 @@
 """Message-truth regression pins for
-``block_reviewer_bash_outside_allowlist``'s per-``effective_type`` deny
-message (Divergence 12, ``_DENY_MESSAGE_STANZA_OVERRIDES``).
+``block_reviewer_bash_outside_allowlist``'s deny message.
 
-This file adds the two proofs the guard module's own docstring negative-spec
-promises but which no existing test file pins directly:
+This file's ``_DENY_MESSAGE_STANZA_OVERRIDES`` per-``effective_type``
+mechanism (Divergence 12) was deleted 2026-09-23 (this plan's C1) once
+``coordinator:executor``, its sole entry, was confirmed permanently
+unconfined (Divergence 9) -- ``_deny_reason`` now always renders the single
+default header/stanzas. What remains load-bearing here:
 
   1. ``coordinator:code-reviewer``'s deny message is byte-identical to a
-     literal known-good string -- the AC3 invariant that message-truth work
-     for ``coordinator:executor`` must never touch. Every existing test
+     literal known-good string (AC3). Every existing test
      (``test_block_reviewer_bash_outside_allowlist*.py``) asserts SHAPE
      (deny vs allow, or substring presence) -- none pins the FULL string, so
      a future edit to a shared "Did you mean.../Denied: any other
-     command..." stanza (which this guard's own docstring says stays
-     type-agnostic) could silently drift the reviewer's message with no red
-     test.
-  2. A verdict-invariance table over a small command corpus, fired against
-     BOTH confined types -- proves that resolving deny-message TEXT
-     per-``effective_type`` (this module's ``_DENY_MESSAGE_STANZA_OVERRIDES``
-     dict) never itself changes the underlying allow/deny VERDICT for either
-     type. Message-truth work operating on prose alone must never widen or
-     narrow the allowlist as a side effect.
+     command..." stanza could silently drift the reviewer's message with no
+     red test.
+  2. A verdict-invariance table over a small command corpus, run against
+     ``coordinator:code-reviewer`` (still confined) and
+     ``coordinator:executor`` (unconfined outright, every row allows) --
+     proves this guard's own confinement gate, not any per-type message
+     resolution, is what decides the verdict.
 
 Spec backlink: coordinator_core/bash_guards/block_reviewer_bash_outside_allowlist.py
-  module docstring, Divergence 12 and its "Negative spec, binding on any
-  future third confined type."
+  module docstring, Divergence 9 and Divergence 12.
 """
 
 from __future__ import annotations

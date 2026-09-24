@@ -79,6 +79,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import asyncio
 
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.ipc import register_op
 
 # Generator-provenance declaration (generator_provenance.py). Per this
@@ -468,6 +469,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     """
     # asyncio deferred to first use here (not module scope). Spec:
     # docs/plans/2026-07-24-canonical-resolution-engine.md task W0-1.
+    params = payload_of(params)
     import asyncio
 
     session_id = field(params, "session_id")

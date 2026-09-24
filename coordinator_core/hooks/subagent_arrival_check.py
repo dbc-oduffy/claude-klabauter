@@ -120,6 +120,7 @@ import json
 import os
 import re
 
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._payload import field
 
@@ -419,6 +420,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     shape directly (structured JSON-RPC result, not an advisory envelope) — never
     raises; every failure path resolves to state "unknown" with a specific reason.
     """
+    params = payload_of(params)
     import asyncio
 
     transcript_path = field(params, "transcript_path")

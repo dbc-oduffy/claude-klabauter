@@ -2245,3 +2245,88 @@ def test_run_advisory_warn_does_not_misname_a_genuine_nonzero_return(monkeypatch
     assert "exit 1" in err
     assert "the interpreter never launched" not in err
     assert "timed out" not in err
+
+
+# ---------------------------------------------------------------------------
+# install_global_doctrine -- copies global-doctrine/CLAUDE.md and rules/*.md
+# IN, never overwriting an existing destination and never pruning one this
+# source tree doesn't carry (P143-T32).
+# ---------------------------------------------------------------------------
+
+
+def _make_doctrine_source(coord_root: Path, claude_md_text: str, rule_names: Dict[str, str]) -> None:
+    doctrine_dir = coord_root / "templates" / "global-doctrine"
+    doctrine_dir.mkdir(parents=True, exist_ok=True)
+    (doctrine_dir / "CLAUDE.md").write_text(claude_md_text, encoding="utf-8")
+    rules_dir = doctrine_dir / "rules"
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    for name, text in rule_names.items():
+        (rules_dir / name).write_text(text, encoding="utf-8")
+
+
+def test_install_global_doctrine_creates_absent_claude_md_and_rules(tmp_path):
+    coord_root = tmp_path / "coord"
+    home = tmp_path / "home"
+    _make_doctrine_source(coord_root, "# Global doctrine\n", {"context7.md": "# context7\n"})
+
+    claude_md_created, rules_created = maximalist.install_global_doctrine(
+        str(coord_root), str(home), check_only=False,
+    )
+
+    assert claude_md_created is True
+    assert rules_created == ["context7.md"]
+    assert (home / ".claude" / "CLAUDE.md").read_text(encoding="utf-8") == "# Global doctrine\n"
+    assert (home / ".claude" / "rules" / "context7.md").read_text(encoding="utf-8") == "# context7\n"
+
+
+def test_install_global_doctrine_never_overwrites_existing_files(tmp_path):
+    coord_root = tmp_path / "coord"
+    home = tmp_path / "home"
+    _make_doctrine_source(coord_root, "# fresh source content\n", {"context7.md": "# fresh rule\n"})
+
+    dest_claude_dir = home / ".claude"
+    dest_rules_dir = dest_claude_dir / "rules"
+    dest_rules_dir.mkdir(parents=True, exist_ok=True)
+    (dest_claude_dir / "CLAUDE.md").write_text("# operator's hand-edited copy\n", encoding="utf-8")
+    (dest_rules_dir / "context7.md").write_text("# operator's hand-edited rule\n", encoding="utf-8")
+
+    claude_md_created, rules_created = maximalist.install_global_doctrine(
+        str(coord_root), str(home), check_only=False,
+    )
+
+    assert claude_md_created is False
+    assert rules_created == []
+    assert (dest_claude_dir / "CLAUDE.md").read_text(encoding="utf-8") == "# operator's hand-edited copy\n"
+    assert (dest_rules_dir / "context7.md").read_text(encoding="utf-8") == "# operator's hand-edited rule\n"
+
+
+def test_install_global_doctrine_never_prunes_a_rule_absent_from_source(tmp_path):
+    coord_root = tmp_path / "coord"
+    home = tmp_path / "home"
+    _make_doctrine_source(coord_root, "# doctrine\n", {})
+
+    dest_rules_dir = home / ".claude" / "rules"
+    dest_rules_dir.mkdir(parents=True, exist_ok=True)
+    (dest_rules_dir / "retired-rule.md").write_text("# still here\n", encoding="utf-8")
+
+    maximalist.install_global_doctrine(str(coord_root), str(home), check_only=False)
+
+    assert (dest_rules_dir / "retired-rule.md").exists(), (
+        "a rule this source tree no longer carries must never be pruned from "
+        "the destination"
+    )
+
+
+def test_install_global_doctrine_check_only_writes_nothing(tmp_path):
+    coord_root = tmp_path / "coord"
+    home = tmp_path / "home"
+    _make_doctrine_source(coord_root, "# doctrine\n", {"context7.md": "# context7\n"})
+
+    claude_md_created, rules_created = maximalist.install_global_doctrine(
+        str(coord_root), str(home), check_only=True,
+    )
+
+    assert claude_md_created is True
+    assert rules_created == ["context7.md"]
+    assert not (home / ".claude" / "CLAUDE.md").exists()
+    assert not (home / ".claude" / "rules" / "context7.md").exists()

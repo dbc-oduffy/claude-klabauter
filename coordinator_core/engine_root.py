@@ -825,7 +825,7 @@ def _maybe_emit_engine_root_retired(site: str, root_value: str = "") -> None:
 
         record_fallback_read(site, root_value=root_value)
     except Exception:
-        pass
+        pass  # census recording is best-effort; the stderr advisory above already fired
 
 
 def _maybe_emit_engine_root_conflict(new_val: str, old_val: str) -> None:

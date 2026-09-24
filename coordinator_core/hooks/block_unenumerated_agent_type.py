@@ -146,7 +146,7 @@ from typing import Any, Dict, FrozenSet, Optional, Tuple
 
 import yaml
 
-from coordinator_core._hook_envelope import deny, no_advisory
+from coordinator_core._hook_envelope import deny, no_advisory, payload_of
 from coordinator_core.doe_root_pointer import read_doe_root_pointer
 from coordinator_core.ipc import register_op
 
@@ -184,6 +184,14 @@ _OVERRIDE_MARKER_RE = re.compile(
 #: plugin agents/*.md) -- there is no agent definition to discover, only a
 #: harness-level fork-yourself instruction -- so it is unreachable by
 #: roster discovery by construction and must be hardcoded here.
+#: `workflow-subagent` is the identity the harness stamps on an agent a
+#: Workflow script spawns without naming an `agentType` -- measured live, not
+#: read from a schema: a headless EM fired a hand-authored Workflow and both of
+#: its agents reached `PreToolUse(Bash)` as `agent_type: "workflow-subagent"`.
+#: Like `fork` it has no agent-definition file on any filesystem leg. Off the
+#: roster, the reviewer Bash guard's roster-absence leg confined every such
+#: agent to read-only Tier A, so a workflow's executors could edit code but
+#: never run the tests or typecheck that verify it.
 _HARNESS_BUILTIN_TYPES: FrozenSet[str] = frozenset({
     "claude",
     "claude-code-guide",
@@ -192,6 +200,7 @@ _HARNESS_BUILTIN_TYPES: FrozenSet[str] = frozenset({
     "Plan",
     "statusline-setup",
     "fork",
+    "workflow-subagent",
 })
 
 #: (c), plugin leg -- the ONLY top-level `~/.claude/plugins/<entry>`
@@ -353,7 +362,7 @@ def _scan_agents_frontmatter(doe_root: str) -> Dict[str, Tuple[dict, Path]]:
         try:
             text = md_path.read_text(encoding="utf-8")
         except OSError:
-            continue
+            continue  # unreadable agent-md file; skip it
         fm = _extract_frontmatter(text)
         if not fm:
             continue
@@ -404,12 +413,12 @@ def _repo_style_plugin_pairs(plugins_root: Path) -> "list[Tuple[str, Path]]":
         try:
             agent_files = list(top.glob("**/agents/*.md"))
         except OSError:
-            continue
+            continue  # unreadable marketplace dir; skip it
         for md_path in agent_files:
             try:
                 rel_parts = md_path.relative_to(top).parts
             except ValueError:
-                continue
+                continue  # path not under top; skip it
             if len(rel_parts) < 2 or rel_parts[-2] != "agents":
                 continue
             namespace = top.name if len(rel_parts) == 2 else rel_parts[-3]
@@ -452,7 +461,7 @@ def _cache_style_plugin_pairs(plugins_root: Path) -> "list[Tuple[str, Path]]":
         try:
             parts = md_path.relative_to(cache_root).parts
         except ValueError:
-            continue
+            continue  # path not under cache_root; skip it
         # (marketplace, plugin, version, "agents", stem.md)
         if len(parts) != 5 or parts[3] != "agents":
             continue
@@ -483,7 +492,7 @@ def _marketplace_style_plugin_pairs(plugins_root: Path) -> "list[Tuple[str, Path
         try:
             parts = md_path.relative_to(marketplaces_root).parts
         except ValueError:
-            continue
+            continue  # path not under marketplaces_root; skip it
         # (marketplace, "plugins", plugin, "agents", stem.md)
         if len(parts) != 5 or parts[1] != "plugins" or parts[3] != "agents":
             continue
@@ -555,7 +564,7 @@ def _manifest_style_plugin_pairs(plugins_root: Path) -> "list[Tuple[str, Path]]"
                 try:
                     agent_files = list(candidate_agents_dir.glob("*.md"))
                 except OSError:
-                    continue
+                    continue  # unreadable agents dir; skip it
                 for md_path in agent_files:
                     pairs.append((f"{namespace}:{md_path.stem}", md_path))
     return pairs
@@ -603,7 +612,7 @@ def _scan_plugin_agents_frontmatter(home: Optional[str]) -> Dict[str, Tuple[dict
         try:
             text = md_path.read_text(encoding="utf-8")
         except OSError:
-            continue
+            continue  # unreadable agent-md file; skip it
         fm = _extract_frontmatter(text)
         if not fm:
             continue
@@ -952,8 +961,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     subagent` composition already resolves to a returned envelope or
     `None`, not an exception).
     """
-    if not isinstance(params, dict):
-        return no_advisory()
+    params = payload_of(params)
     result = check(params)
     if result is None:
         return no_advisory()

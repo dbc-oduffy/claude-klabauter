@@ -107,8 +107,10 @@ import hashlib
 import os
 import re
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Optional
 
+from coordinator_core._hook_envelope import payload_of
+from coordinator_core.daily_branch import is_work_branch
 from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.hooks._envelope import no_advisory, post_advisory
@@ -197,7 +199,7 @@ def _current_branch_cheap(git_root: str) -> str:
         if m:
             return m.group(1)
     except Exception:
-        pass
+        pass  # branch-name probe is best-effort; absence just means no branch reported
     return ""
 
 
@@ -383,7 +385,7 @@ def _check_push_failures(git_root: str, session_id: str) -> Optional[str]:
             with open(cursor_path, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(str(log_size))
         except Exception:
-            pass
+            pass  # cursor write is best-effort bookkeeping; a miss just re-reads from baseline next time
         return None
 
     if log_size <= baseline:
@@ -395,16 +397,16 @@ def _check_push_failures(git_root: str, session_id: str) -> Optional[str]:
             fh.seek(baseline)
             new_lines = [ln for ln in fh.read().splitlines() if ln.strip()]
     except Exception:
-        pass
+        pass  # unreadable log tail; treat as no new lines this pass
 
     try:
         with open(cursor_path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(str(log_size))
     except Exception:
-        pass
+        pass  # cursor write is best-effort bookkeeping; a miss just re-reads from baseline next time
 
     branch = _current_branch_cheap(git_root)
-    if not branch.startswith("work/"):
+    if not is_work_branch(branch):
         return None
 
     try:
@@ -415,7 +417,7 @@ def _check_push_failures(git_root: str, session_id: str) -> Optional[str]:
             if cache_mtime >= log_mtime:
                 return None
     except Exception:
-        pass
+        pass  # cache-freshness probe is optional; fall through and report the verdict
 
     failed_lines = [ln for ln in new_lines if _PUSH_FAILED_LINE_RE.search(ln)]
     if not failed_lines:
@@ -495,7 +497,7 @@ def _check_hooks_json_staleness(git_root: str, session_id: str, common_dir: str)
             with open(cursor_path, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(current_hash)
         except Exception:
-            pass
+            pass  # cursor write is best-effort bookkeeping; a miss just re-hashes next time
         return None
 
     if current_hash == baseline:
@@ -505,7 +507,7 @@ def _check_hooks_json_staleness(git_root: str, session_id: str, common_dir: str)
         with open(cursor_path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(current_hash)
     except Exception:
-        pass
+        pass  # cursor write is best-effort bookkeeping; a miss just re-hashes next time
 
     return (
         "PLUGIN-HOOKS-JSON-RESTART-GATED — coordinator/hooks/hooks.json changed on disk "
@@ -538,11 +540,8 @@ def _handler(params: dict, repo_root=None) -> dict:
     subagent-side firing session, an unresolvable git root, or a malformed
     payload); otherwise `post_advisory(<text>)`.
     """
+    payload = payload_of(params)
     try:
-        payload = params.get("payload")
-        if not isinstance(payload, Mapping):
-            payload = {}
-
         session_id = payload.get("session_id") or ""
         if not isinstance(session_id, str):
             session_id = ""

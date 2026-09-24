@@ -43,10 +43,18 @@ documented fallback rung), so this reuse degrades correctly on this door
 too rather than requiring a parallel resolver.
 
 Graceful degradation: any failure inside `evaluate_payload_json` fails OPEN
-(returns `no_advisory()`) rather than raising — a Bash/PowerShell call must
-never be bricked by a guard-chain defect, mirroring the DoE dispatcher's own
-fail-open philosophy for engine-resolution failure (which cannot occur here)
-and `preuse_write_dispatch`'s identical contract for its own chain.
+(never raises, never denies) — a Bash/PowerShell call must never be bricked
+by a guard-chain defect, mirroring the DoE dispatcher's own fail-open
+philosophy for engine-resolution failure (which cannot occur here) and
+`preuse_write_dispatch`'s identical contract for its own chain. Open does NOT
+mean silent: a chain failure (e.g. `ipc.py`'s "Missing required routing key
+... requires _origin_worktree" when a Bash call's cwd resolves outside every
+registered worktree — state/bug-backlog/2026-09-23-pretooluse-bash-guard-
+fails-to-evaluate-0abe3f44d9d8.yaml) is surfaced via `allow_advisory` rather
+than swallowed into `no_advisory()`. The two are NOT interchangeable: a guard
+that could not run and a guard that ran and had nothing to say are different
+facts, and collapsing them let the guard silently stop firing on every
+outside-a-worktree Bash call with no trace anywhere.
 
 Negative-spec:
     Does NOT resolve a sibling engine checkout, place anything on
@@ -67,9 +75,30 @@ Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C8
 from __future__ import annotations
 
 import json
+import sys
 
-from coordinator_core.hooks._envelope import no_advisory, payload_of
+from coordinator_core.hooks._envelope import allow_advisory, no_advisory, payload_of
 from coordinator_core.ipc import register_op
+
+
+def _unevaluated(detail: str) -> dict:
+    """A guard that did not run, made visibly distinct from one that ran and passed.
+
+    `no_advisory()` and this envelope differ only in `additionalContext` — both
+    ALLOW the call — but that field is the whole point: `no_advisory()` says
+    nothing, which is what "ran clean" ALSO looks like, so a silenced guard read
+    as a passing one. This names the failure instead, to both the model
+    (`additionalContext`) and the operator (stderr), mirroring
+    `coordinator_core.warm.hook_http.unreachable_response`'s wording for the
+    transport-down case — this is that same fact ("did not run"), one layer
+    in, for an in-process chain failure rather than an unreachable engine.
+    """
+    message = (
+        f"A coordinator guard for PreToolUse could not be evaluated "
+        f"(hooks.preuse_bash_dispatch: {detail}). It did not pass -- it did not run."
+    )
+    print(f"[coordinator] {message}", file=sys.stderr)
+    return allow_advisory("PreToolUse", message)
 
 
 @register_op("hooks.preuse_bash_dispatch")
@@ -101,8 +130,8 @@ def _handler(params: dict, repo_root=None) -> dict:
             _engine_resolution_class,
             _policy_file_for,
         )
-    except Exception:
-        return no_advisory()
+    except Exception as exc:
+        return _unevaluated(f"{type(exc).__name__}: {exc}")
 
     try:
         raw = json.dumps(params)
@@ -111,8 +140,13 @@ def _handler(params: dict, repo_root=None) -> dict:
             policy_file=_policy_file_for(params),
             resolution_class=_engine_resolution_class(),
         )
-    except Exception:
-        return no_advisory()  # any engine failure -> fail-open ALLOW
+    except Exception as exc:
+        # Fail-open ALLOW, but visibly -- see `_unevaluated`. This is the site
+        # ipc.py's "Missing required routing key ... requires _origin_worktree"
+        # (a Bash call whose cwd resolves outside every registered worktree)
+        # actually surfaces from; it used to be swallowed into `no_advisory()`
+        # here, indistinguishable from a guard that ran clean.
+        return _unevaluated(f"{type(exc).__name__}: {exc}")
 
     if out is None:
         return no_advisory()

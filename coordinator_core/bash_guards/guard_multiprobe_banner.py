@@ -316,9 +316,9 @@ _SCRATCH_SCRIPT_NAME = "multiprobe.py"
 #: reason (AC9: the alternative must be PowerShell-valid; a `python3 -c`
 #: invocation is a subprocess call, not shell syntax, so it runs the same
 #: from a PowerShell prompt).
-_POWERSHELL_BANNER_GENERIC_SUMMARY = (
-    "a single in-process python3 call batching every probe, zero per-probe forks"
-)
+#: TRIMMED (C8b): was "a single in-process python3 call batching every
+#: probe, zero per-probe forks" (78 bytes) -- same fact, fewer words.
+_POWERSHELL_BANNER_GENERIC_SUMMARY = "one in-process python3 call, zero per-probe forks"
 def _powershell_banner_generic_example() -> str:
     """Built at call time via `_mb_python3_invocation()` -- see the sibling
     grep-via-bash path (`guard_grep_via_bash.py`), which resolves the real
@@ -471,9 +471,19 @@ def _outlet_from_seam_result(
         rewrite = updated["command"]
         if is_subagent:
             return _subagent_script_outlet(rewrite, script_hint, bypass_note)
-        return ("this rewrite. %s" % bypass_note, rewrite)
+        # TRIMMED (C8b, pln-trim-the-remaining-over-cap-guard-b969d9 §
+        # C8b): was "this rewrite. %s" -- the two-word lede carries no
+        # information a bare "rewrite" doesn't; the module's own docstring
+        # ("SUBAGENT-AWARE OUTLET" section) names the shared
+        # `_platform_verdict`/seam-script bytes as the real overage this
+        # guard cannot trim from within its own footprint (out-of-footprint:
+        # `_platform_verdict.py`, `dispatch_checks.py`).
+        return ("rewrite. %s" % bypass_note, rewrite)
     context = hso.get("additionalContext") or ""
-    return ("the alternative below. %s" % bypass_note, context)
+    # TRIMMED (C8b): was "the alternative below. %s" -- "below" is
+    # redundant with the example that immediately follows it in the
+    # rendered template.
+    return ("alternative. %s" % bypass_note, context)
 
 
 def check(

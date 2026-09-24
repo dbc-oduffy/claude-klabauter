@@ -267,10 +267,17 @@ def test_compaction_advisory_fires_exactly_once_per_sentinel_and_rearms(tmp_path
 def test_first_agent_dispatch_fires_once_on_first_agent_call():
     session_id = "test-session-first-agent-dispatch-fires"
 
+    from coordinator_core.session.machinery_paths import SHARE_RELDIR
+
     first = pad._check_first_agent_dispatch_sync(session_id, "Agent")
     assert first != ""
     assert session_id in first
-    assert "state/subagent-share/" in first
+    # Current (non-retired) share root only -- state/subagent-share/ is the
+    # RETIRED root (coordinator_core/session/machinery_paths.py,
+    # coordinator_core/tests/test_no_hand_built_legacy_share_root.py); an
+    # advisory pointing an EM at it would send them to a bucket new sessions
+    # never write to.
+    assert f"{SHARE_RELDIR}/" in first
 
     # Second Agent-tool call, same session -- must not re-fire.
     second = pad._check_first_agent_dispatch_sync(session_id, "Agent")

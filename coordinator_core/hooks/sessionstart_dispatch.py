@@ -56,8 +56,9 @@ Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C10
 from __future__ import annotations
 
 import inspect
-from typing import Mapping, Optional
+from typing import Optional
 
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.hooks._envelope import context_only, no_advisory
 from coordinator_core.hooks.guard_hook_generation_self_probe import (
     _handler as _guard_hook_generation_self_probe_handler,
@@ -98,9 +99,7 @@ def _extract_context(result) -> "Optional[str]":
 
 @register_op("hooks.sessionstart_dispatch")
 async def _handler(params: dict, repo_root=None) -> dict:
-    payload = params.get("payload")
-    if not isinstance(payload, Mapping):
-        payload = {}
+    payload = payload_of(params)
     payload = dict(payload)
     leg_params = {"payload": payload}
 
@@ -122,7 +121,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
             if inspect.isawaitable(result):
                 result = await result
         except Exception:
-            continue
+            continue  # per-leg dispatch; one failing leg must not block the other legs' banners
         text = _extract_context(result)
         if text:
             texts.append(text)

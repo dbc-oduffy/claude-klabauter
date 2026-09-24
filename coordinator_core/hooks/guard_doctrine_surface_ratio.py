@@ -116,7 +116,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from coordinator_core._hook_envelope import deny
+from coordinator_core._hook_envelope import deny, payload_of
 from coordinator_core.doctrine_surface_tiers import admission_cap_for, tier_boundaries_for
 from coordinator_core.hooks._envelope import allow_advisory, no_advisory
 from coordinator_core.hooks.doctrine_changelog_prose import surface_of
@@ -280,6 +280,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Write|Edit|MultiEdit) op: price a byte-adding write to a
     doctrine surface against its D2 tier, advisory-only on the ratio path,
     deny-only on new-file admission overrun."""
+    params = payload_of(params)
     result = evaluate(params)
     if result is None:
         return no_advisory()

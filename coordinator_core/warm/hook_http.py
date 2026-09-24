@@ -240,9 +240,10 @@ FORWARDED_ENV_PREFIXES = CALLER_PREFIXES
 #: one. Add a name here only when an op is measured reading it from `payload["env"]`.
 #:
 #: `hooks.plan_persistence_check` reads the first four; `hooks.nudge_autonomous_askuserquestion`
-#: reads the fifth. Both ops' module docstrings named this list's absence as the reason their
-#: env reads could not survive a `command`->`http` flip -- this closes that, and those
-#: docstrings' "does not yet carry this" notes are stale as of this commit.
+#: and `hooks.watchdog_undischarged_next_move` also read `CLAUDE_HOME`, and the former also
+#: reads `COORDINATOR_AUTONOMOUS_ASK_OK`. Both ops' module docstrings named this list's absence
+#: as the reason their env reads could not survive a `command`->`http` flip -- this closes
+#: that, and those docstrings' "does not yet carry this" notes are stale as of this commit.
 FORWARDED_ENV_NAMES = frozenset(
     {
         "CLAUDE_HOME",

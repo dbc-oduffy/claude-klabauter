@@ -1269,45 +1269,12 @@ def test_ac9_warn_fires_exactly_once_across_sequential_calls(
 
 
 # ---------------------------------------------------------------------------
-# _machine_local_impl — settings-home repoint (AC3, C3)
-#
-# Spec backlink: pln-repoint-coordinator-core-claud-56d805 § C3
+# _machine_local_impl settings-home repoint is now owned by the shared helper
+# (coordinator_core._claude_klabauter_root); see
+# coordinator_core/tests/test_claude_klabauter_root_shared_helper.py (R4, C2/C3,
+# docs/plans/2026-09-22-spawn-budget-and-census.md). deliverable_rollup no
+# longer defines a local _machine_local_impl to test here.
 # ---------------------------------------------------------------------------
-
-
-class TestMachineLocalImplSettingsHomeRepoint:
-    """_machine_local_impl() prefers <settings-home>/bin/_machine_local.py, falling
-    back to the legacy ~/.claude/bin path only when the settings-home impl is absent.
-    """
-
-    def test_prefers_settings_home_impl_when_present(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("MACHINE_LOCAL_IMPL", raising=False)
-        settings_home_root = tmp_path / "settings_home"
-        (settings_home_root / "bin").mkdir(parents=True)
-        expected_impl = settings_home_root / "bin" / "_machine_local.py"
-        expected_impl.write_text("# stub\n")
-        monkeypatch.setattr(
-            _rollup_mod, "settings_home", lambda: settings_home_root
-        )
-
-        result = _rollup_mod._machine_local_impl()
-
-        assert result == str(expected_impl)
-
-    def test_falls_back_to_claude_home_when_settings_home_impl_absent(
-        self, tmp_path, monkeypatch
-    ):
-        monkeypatch.delenv("MACHINE_LOCAL_IMPL", raising=False)
-        settings_home_root = tmp_path / "settings_home_missing"
-        monkeypatch.setattr(
-            _rollup_mod, "settings_home", lambda: settings_home_root
-        )
-        claude_home_root = tmp_path / "dummy_claude_home"
-        monkeypatch.setenv("CLAUDE_HOME", str(claude_home_root))
-
-        result = _rollup_mod._machine_local_impl()
-
-        assert result == str(claude_home_root / "bin" / "_machine_local.py")
 
 
 # ---------------------------------------------------------------------------

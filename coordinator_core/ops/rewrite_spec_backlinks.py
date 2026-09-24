@@ -309,7 +309,7 @@ def rewrite_file(
                 try:
                     os.unlink(tmp_path)
                 except OSError:
-                    pass
+                    pass  # best-effort tempfile cleanup after a failed replace; the raised error above already propagates
         # DR-276: declared AFTER the in-place edit lands, never before.
         declare_write(full_path)
 

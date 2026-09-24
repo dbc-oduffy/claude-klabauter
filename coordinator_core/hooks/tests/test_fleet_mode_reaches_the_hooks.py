@@ -59,9 +59,20 @@ def _isolate_sentinel_and_fleet(tmp_path, monkeypatch):
 
 
 def _touch_autonomous_sentinel(tmp_path, session_id):
+    """Mint an autonomous-run sentinel with real content, not a bare touch.
+
+    `resolve_mode`'s session-wins leg (`_autonomous_session_value`) only
+    checks `.exists()`, so an empty file passed every presence-only test
+    here -- but `_check_context_pressure_sync`'s red-band
+    `autonomous_recognized` check reads the file's CONTENT and compares it
+    against the literal string ``"autonomous"`` (the real writer's other
+    value is ``"mise-en-place"``); an empty sentinel never matches either,
+    so a presence-only fixture silently fails that content check without
+    raising. Writing the real content here covers both call shapes.
+    """
     from coordinator_core.session import autonomous_sentinel
 
-    autonomous_sentinel.sentinel_path(session_id).touch()
+    autonomous_sentinel.sentinel_path(session_id).write_text("autonomous", encoding="utf-8")
 
 
 def _write_fleet(record):
@@ -154,12 +165,35 @@ class TestNudgeEmCodeDispatchHandlerAutonomous:
 # ---------------------------------------------------------------------------
 
 
+#: A real sidecar record always carries `context_window_size` alongside
+#: `used_percentage` (see context_usage_sidecar's module docstring) --
+#: `_check_context_pressure_sync` derives its token-runway bands
+#: (`_ORANGE_RUNWAY_TOKENS`/`_RED_RUNWAY_TOKENS`, both back from
+#: `window - _AUTO_COMPACT_RESERVE_TOKENS`) from that figure via
+#: `_model_window_tokens`, and with it absent every reading in this file
+#: resolved to `used_tokens is None` -- silent at every percentage, which is
+#: why all 13 tests below read empty text regardless of the percentage
+#: written. Chosen so `orange_bound_tokens` lands at an exact 30% of the
+#: window (190_000 * 0.70 == 133_000 == reserve + orange runway): the 40/41
+#: fixtures below (orange band) clear it with room, and the resulting
+#: red_bound_tokens (87_000, ~45.79%) sits comfortably below the 47/48/50
+#: fixtures (red band) and above the 40/41 pair -- not the literal legacy
+#: 40%/43% cut (this module no longer computes fixed percentages, see
+#: `_ORANGE_RUNWAY_TOKENS`'s own comment), just a window where this file's
+#: existing percentage fixtures fall on the intended side of both bounds.
+_WINDOW_TOKENS = 190_000
+
+
 def _write_usage(session_id: str, used_percentage: float, now: float):
     from coordinator_core.session.context_usage_sidecar import write_usage
 
     write_usage(
         session_id,
-        {"used_percentage": used_percentage, "remaining_percentage": 100 - used_percentage},
+        {
+            "used_percentage": used_percentage,
+            "remaining_percentage": 100 - used_percentage,
+            "context_window_size": _WINDOW_TOKENS,
+        },
         now=now,
     )
 
@@ -191,7 +225,10 @@ class TestContextPressureCompactionWarningsFleetWins:
         )
         assert text
         assert "INFORMATIONAL" in text
-        assert "Commit and checkpoint now" in text
+        # Matches the informational-variant text verbatim (postuse_advisory_
+        # dispatch._check_context_pressure_sync's red-band branch) -- lower-
+        # case and mid-sentence, not a standalone imperative.
+        assert "commit and checkpoint now" in text
 
     def test_cloud_box_gets_the_informational_variant_with_no_config_at_all(
         self, _isolate_sentinel_and_fleet, monkeypatch
@@ -376,3 +413,72 @@ class TestBatonAffordanceIsNamedInBothBands:
             "cp-nomode", "/does/not/matter/transcript.jsonl"
         )
         assert "INFORMATIONAL" in text
+
+
+#: Marker distinguishing "no fleet file at all" from a fleet file whose
+#: `compaction_warnings` value is the JSON null / Python `None` -- both are
+#: legitimate cases in the cross product below and must not collapse into
+#: one branch.
+_NO_FLEET_FILE = object()
+
+#: The full cross product this row pins: every fleet value class the key can
+#: hold, valid or malformed, non-string included -- `compaction_warnings` is
+#: a variant selector, never an off switch, so none of these may ever
+#: produce empty advisory text at either band. `id=` labels keep pytest's
+#: node ids readable instead of dumping raw objects/dicts into the name.
+_FLEET_VALUE_CASES = [
+    pytest.param(_NO_FLEET_FILE, id="no_fleet_file"),
+    pytest.param("standard", id="standard"),
+    pytest.param("informational", id="informational"),
+    pytest.param("silent", id="out_of_enum_string"),
+    pytest.param(True, id="bool_true"),
+    pytest.param(1, id="int_one"),
+    pytest.param(None, id="null"),
+    pytest.param(["informational"], id="list"),
+    pytest.param({"value": "informational"}, id="dict"),
+]
+
+#: Non-string classes (including the out-of-enum string) that must degrade
+#: to the STANDARD variant at the red band -- never silently coerced to
+#: `informational`. `_NO_FLEET_FILE`/"standard" already assert STANDARD via
+#: the baseline tests above and are excluded here to avoid duplicating that
+#: assertion under a different fixture id.
+_DEGRADES_TO_STANDARD_IDS = {
+    "out_of_enum_string",
+    "bool_true",
+    "int_one",
+    "null",
+    "list",
+    "dict",
+}
+
+
+class TestCompactionWarningsFullCrossProduct:
+    """C1: `compaction_warnings` is pinned to non-empty advisory text at
+    both bands for every fleet value class -- valid, out-of-enum, and every
+    non-string shape `_validate_value` can be handed. Malformed input
+    degrades to the declared default and is never coerced to
+    `informational`."""
+
+    def _resolve(self, fleet_value, session_id, percentage):
+        if fleet_value is not _NO_FLEET_FILE:
+            _write_fleet({"compaction_warnings": fleet_value})
+        _write_usage(session_id, percentage, 1_000_000.0)
+        return postuse_advisory_dispatch._check_context_pressure_sync(
+            session_id, "/does/not/matter/transcript.jsonl"
+        )
+
+    @pytest.mark.parametrize("fleet_value", _FLEET_VALUE_CASES)
+    def test_orange_band_never_empty(self, _isolate_sentinel_and_fleet, fleet_value, request):
+        session_id = f"xp-orange-{request.node.callspec.id}"
+        text = self._resolve(fleet_value, session_id, 41.0)
+        assert text
+
+    @pytest.mark.parametrize("fleet_value", _FLEET_VALUE_CASES)
+    def test_red_band_never_empty(self, _isolate_sentinel_and_fleet, fleet_value, request):
+        session_id = f"xp-red-{request.node.callspec.id}"
+        text = self._resolve(fleet_value, session_id, 48.0)
+        assert text
+        if request.node.callspec.id in _DEGRADES_TO_STANDARD_IDS:
+            assert "HANDOFF NOW" in text
+            assert "INFORMATIONAL" not in text

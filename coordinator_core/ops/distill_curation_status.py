@@ -97,6 +97,7 @@ def _run_id_to_utc(run_id: str) -> Optional[_dt.datetime]:
         try:
             return _dt.datetime.strptime(run_id, fmt).replace(tzinfo=_dt.timezone.utc)
         except ValueError:
+            # run_id does not match this format; try the next one
             continue
     return None
 

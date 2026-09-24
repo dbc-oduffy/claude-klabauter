@@ -269,7 +269,10 @@ def test_sidecar_review_file_not_treated_as_moved_plan(tmp_path, capsys):
     assert rc == 0
 
 
-@pytest.mark.skipif(os.name == "nt", reason="chmod-based unreadable-file fixture is POSIX-only")
+@pytest.mark.skipif(
+    os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="POSIX permission bits only, and meaningless as root (DAC_OVERRIDE bypasses them)",
+)
 def test_unreadable_candidate_file_fails_loud_even_with_zero_hits(tmp_path, capsys):
     """BEHAVIOUR CHANGE regression (2026-07-22): the AC9 gate must never
     report "no dangling backlinks" when a candidate file could not be
@@ -513,9 +516,10 @@ def test_archive_round_trip_id_citation_survives_and_gate_stays_clean(tmp_path):
     assert run_gate(root) == 0
 
 
-def test_archive_plans_act_phase_wires_the_citation_gate():
-    """C5 point 4: fleet.archive_completed_plans' act phase must call the
-    same run_gate this module exposes — not a re-derived check."""
-    from coordinator_core.ops.fleet import archive_plans
-
-    assert archive_plans._run_backlink_gate is run_gate
+# GRAVESTONE (TF-20260923-bb-066): test_archive_plans_act_phase_wires_the_citation_gate
+# deleted. The inline post-move backlink gate it pinned measured ~5.2s on
+# archive_plans' normal path, over the DR-344 500ms kill bar
+# (docs/decisions/DR-344-the-brightline-process-budget-for-claude-klabauter.md). The
+# requirement (a post-move dangling-plan-backlink audit for archive_plans)
+# survives as an open bug row, to be met by a first-principles plan — not by
+# restoring this inline call.

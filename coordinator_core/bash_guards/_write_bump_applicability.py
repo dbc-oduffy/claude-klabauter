@@ -159,6 +159,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import ntpath
 import os
 import tempfile
 from pathlib import Path
@@ -339,6 +340,51 @@ def _posix_tmp_literal() -> Optional[str]:
     return "/tmp"
 
 
+def _is_bare_drive_relative_tmp(raw: str) -> bool:
+    """True iff `raw` is a Windows DRIVE-RELATIVE path (rooted -- starts
+    with a separator -- but carries no drive letter and is not a UNC path)
+    whose final segment is a bare `tmp`/`temp` name, case-insensitively.
+
+    THE GENERAL SHAPE `_posix_tmp_literal`'s NEGATIVE SPEC documents for the
+    hardcoded `/tmp` literal specifically: such a string resolves against
+    whatever drive the process happens to be cwd'd on
+    (`os.path.realpath`/`ntpath` on Windows), blessing that drive's own
+    top-level tmp/temp directory as an always-allowed temp root regardless
+    of which drive holds the actual repo -- a per-drive write-confinement
+    hole. This predicate generalizes the check to EVERY temp-root source
+    `_all_temp_roots` consults (`tempfile.gettempdir()`, `TMPDIR`/`TEMP`/
+    `TMP`), not only the one hardcoded POSIX literal -- per code review:
+    (1) real Windows `tempfile.gettempdir()`'s own fallback returns a
+    backslash-relative `\\tmp`/`\\temp`, never the literal `/tmp` a narrower,
+    string-equality guard would need to match; (2) `TMPDIR`/`TEMP`/`TMP` can
+    carry the identical drive-relative shape from a POSIX-flavoured
+    environment layered onto a Windows host (e.g. Git Bash exporting
+    `TMPDIR=/tmp`) and were previously not filtered at all.
+
+    Uses `ntpath` (Windows path semantics) UNCONDITIONALLY, regardless of
+    the actual host running this process -- the same reason the sibling
+    test module imports it directly rather than deriving from `os.path`:
+    the shape being tested is "would this string be drive-relative if
+    interpreted as a Windows path", which `ntpath` answers on any host.
+
+    Deliberately requires the tail be ROOTED (start with `/` or `\\`) to
+    count as drive-relative, per the plan's own wording -- a plain relative
+    name (`tmp`, no leading separator at all) is a different path shape and
+    is not a realistic `gettempdir()`/env-var value; only the rooted,
+    no-drive-letter shape is what `_resolve_path`'s `os.path.realpath` call
+    silently anchors onto the current drive.
+    """
+    if not raw:
+        return False
+    drive, tail = ntpath.splitdrive(raw)
+    if drive or not tail:
+        return False
+    if tail[0] not in ("\\", "/"):
+        return False
+    normalized = tail.replace("\\", "/").strip("/")
+    return normalized.lower() in ("tmp", "temp")
+
+
 def _all_temp_roots(env: Optional[dict] = None) -> list:
     """Every recognized temp root -- resolved, case-folded, deduplicated --
     a bare scratch path might resolve under. See `target_is_bare_temp_scratch`
@@ -354,13 +400,24 @@ def _all_temp_roots(env: Optional[dict] = None) -> list:
     `TMPDIR`/`TEMP`/`TMP` are also consulted directly (not merely via
     `gettempdir()`) since a caller may have set one without it being the
     value `tempfile` itself would report.
+
+    On a Windows host (`_host_is_windows()`), any RAW candidate from ANY of
+    these sources is dropped before resolution when `_is_bare_drive_relative_
+    tmp` recognizes it -- not only the hardcoded POSIX literal (see that
+    predicate's own docstring for why the check must be source-agnostic).
+    The filter runs on the pre-resolution raw string, never the resolved
+    one: `os.path.realpath` is exactly the step that silently anchors a
+    drive-relative string onto the current drive, so the shape must be
+    caught before that happens, not inferred from its result afterward.
     """
     env = os.environ if env is None else env
     raw_candidates = []
     try:
-        raw_candidates.append(tempfile.gettempdir())
+        gettempdir_val = tempfile.gettempdir()
     except OSError:
-        pass
+        gettempdir_val = None
+    if gettempdir_val:
+        raw_candidates.append(gettempdir_val)
     posix_tmp = _posix_tmp_literal()
     if posix_tmp:
         raw_candidates.append(posix_tmp)
@@ -368,9 +425,12 @@ def _all_temp_roots(env: Optional[dict] = None) -> list:
         val = env.get(var)
         if val:
             raw_candidates.append(val)
+    on_windows = _host_is_windows()
     resolved = []
     seen = set()
     for raw in raw_candidates:
+        if on_windows and _is_bare_drive_relative_tmp(raw):
+            continue
         rp = _resolve_path(raw)
         if rp is None or rp in seen:
             continue

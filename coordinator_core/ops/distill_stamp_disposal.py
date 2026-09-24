@@ -261,6 +261,7 @@ def write_stamped_manifest(manifest_path: Path, manifest: dict[str, Any]) -> Non
             try:
                 os.unlink(tmp_path)
             except OSError:
+                # tmp file already gone (or the replace above already consumed it)
                 pass
 
 

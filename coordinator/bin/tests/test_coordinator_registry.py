@@ -354,13 +354,14 @@ def _build_payload_shaped_fixture(root: str) -> tuple[str, str]:
     published-shape dependency present, even though the pointer file itself
     is deliberately absent (no ambient .doe-root on an OSS box).
 
-    claude_home_dir: <root>/claude-home/ — holds ONLY the marketplace-cache
-    manifest, at the exact layout resolve_coordinator_clone._newest_cache_dir()
-    /_mp_marketplace_cache_rung() probe: plugins/cache/coordinator-claude/
-    coordinator/<version>/schemas/coordinator-registry.manifest.json. The
-    engine-payload tree ships NO manifest anywhere under it (per the
-    findings' "two mirrors" ground truth) — reachability depends entirely on
-    this rung.
+    claude_home_dir: <root>/claude-home/ — the `CLAUDE_HOME` env value, a
+    `$HOME` substitute (Convention A). Its `.claude/` subdir holds ONLY the
+    marketplace-cache manifest, at the exact layout
+    resolve_coordinator_clone._newest_cache_dir() /_mp_marketplace_cache_rung()
+    probe: `.claude/plugins/cache/coordinator-claude/coordinator/<version>/
+    schemas/coordinator-registry.manifest.json`. The engine-payload tree
+    ships NO manifest anywhere under it (per the findings' "two mirrors"
+    ground truth) — reachability depends entirely on this rung.
     """
     payload_lib_dir = os.path.join(root, "engine-payload", "coordinator", "bin", "lib")
     os.makedirs(payload_lib_dir)
@@ -376,7 +377,7 @@ def _build_payload_shaped_fixture(root: str) -> tuple[str, str]:
 
     claude_home_dir = os.path.join(root, "claude-home")
     cache_manifest_dir = os.path.join(
-        claude_home_dir, "plugins", "cache", "coordinator-claude", "coordinator", "1.2.3", "schemas"
+        claude_home_dir, ".claude", "plugins", "cache", "coordinator-claude", "coordinator", "1.2.3", "schemas"
     )
     os.makedirs(cache_manifest_dir)
     with open(

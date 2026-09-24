@@ -245,68 +245,6 @@ def assert_version_consistency() -> str:
     return schema_version
 
 
-def contract_declares_backlog_history() -> bool:
-    """Return True when the vendored contract declares a concrete ``backlog_history`` block.
-
-    Purpose: contract-presence gate for backlog-history D9-hold decoupling (plan § Design
-    decision → Option C). The block first appears in the vendored schema at whatever version
-    the coordinator lands it (contract v2.7.0; DoE+PM convention call + the Director of Engineering review); this
-    probe self-activates at that re-vendor without hardcoding any version number.
-
-    Reads ``$defs['snapshot-envelope']['properties']['backlog_history']`` from the vendored
-    bundle and returns True ONLY for a **concrete object shape** — a dict containing either
-    a ``$ref`` key (pointer to a backlog-history ``$def``) or a non-empty ``"properties"``
-    dict (inline object shape). Explicitly rejects the placeholder idiom
-    ``{"anyOf":[{},{"type":"null"}]}`` already used in the 2.5.0 schema for
-    ``narrative_views``, and rejects absent (None) or empty ``{}`` — both map to False
-    (D9 safe default).
-
-    Graceful ``.get()``-chaining: a missing ``$defs``, ``snapshot-envelope``, or
-    ``properties`` key returns False (older bundle → D9 safe default), never raises.
-
-    Spec backlink:
-        docs/plans/2026-07-05-backlog-history-emit-gate-decouple.md § Design decision → Option C
-    """
-    if not VENDOR_SCHEMA_BUNDLE.exists():
-        return False
-    try:
-        bundle = json.loads(VENDOR_SCHEMA_BUNDLE.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, ValueError):
-        return False
-    # Guard against non-dict bundle root (list/string/number produces
-    # AttributeError on .get(); the docstring guarantees graceful .get()-chaining → False, never raises).
-    if not isinstance(bundle, dict):
-        return False
-
-    bh_schema = (
-        bundle
-        .get("$defs", {})
-        .get("snapshot-envelope", {})
-        .get("properties", {})
-        .get("backlog_history")
-    )
-
-    # Absent → False.
-    if bh_schema is None:
-        return False
-    # Must be a dict — non-dict is not a concrete shape.
-    if not isinstance(bh_schema, dict):
-        return False
-    # Empty dict → placeholder or stub → False.
-    if not bh_schema:
-        return False
-    # Reject the {"anyOf":[{},{"type":"null"}]} placeholder idiom.
-    if "anyOf" in bh_schema and "$ref" not in bh_schema and "properties" not in bh_schema:
-        return False
-    # Concrete shape: either a $ref (pointer) or a non-empty properties dict.
-    if "$ref" in bh_schema:
-        return True
-    props = bh_schema.get("properties")
-    if isinstance(props, dict) and props:
-        return True
-    return False
-
-
 # Enums and the ref-null conditional, pinned from the vendored schema (Review: code-reviewer
 # — slice1-F2/F3 — read directly from
 # _vendor/cockpit-contract/schema/emission-scope.schema.json's per-repo `provenance` shape,

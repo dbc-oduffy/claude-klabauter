@@ -43,26 +43,18 @@ implementation, not a trampoline over the bash — see that module's docstring).
 P-15/P-17. Claude-klabauter does not delete or otherwise touch DoE's or
 Example-retrieval-repo-ue-addon's vendored bash copy — only claude-klabauter's own bridge is retired.
 
-P-5/P-6/P-6s (coordinator_whoami probes) deliberately KEEP their subprocess-to-a-
-resolved-interpreter shape (coordinator_core.pyresolve.resolve_python_bin(), same
-pin precedence as the bash oracle's resolve-python.sh) — this is not a spawn-tax bug
-but the actual point of the probe: verifying package importability under the
-operator's resolved Python, which may differ from this engine's own interpreter.
-"Fixing" this into an in-process import would only ever test this engine's own venv,
-defeating the probe's purpose. P-2's tomllib-availability check is preserved as a
-subprocess against the same resolved interpreter for the identical reason (the
-probe's whole point is testing the RESOLVED interpreter's tomllib availability, not
-this engine's own). P-7's mcpServers/enabledPlugins JSON validation, formerly an
-inline `python -c` heredoc, collapses to a direct in-process function — pure data
-validation with no interpreter-dependent behavior. P-6 formerly spawned one
-`py_bin -m coordinator_whoami.<module>` PER discovered plugin envelope module — the
-per-plugin loop, not the process boundary, was the amplification
-(`coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`). It now spawns
-`py_bin` exactly once, running every discovered module inside that single process
-via a small driver (`_P6_BATCH_DRIVER_SOURCE`) that replays each module through
-`runpy.run_module` with its own stdout captured, keeping the resolved-interpreter
-boundary P-5/P-6s still need while collapsing the per-module fan-out; see
-`probe_p6`'s docstring for the one fidelity given up.
+P-5/P-6/P-6s (coordinator_whoami import + envelope probes) and the
+`coordinator_whoami.machine` registry-read are RETIRED — `coordinator_whoami` itself
+is RETIRED (scripts/setup.py declares it "no provisioning step creates it"), so a
+probe asserting its importability was a permanent false RED with a remedy
+(`bin/ensure-coordinator-venv.sh`) that no longer exists in either tree. See
+`state/cross-repo/archive/2026-09-11-doe-claude-em-doctor-p5-probes-retired-whoami.md`.
+P-2's tomllib-availability check is preserved as a subprocess against the resolved
+interpreter for a different reason: the probe's whole point is testing the RESOLVED
+interpreter's tomllib availability, not this engine's own. P-7's mcpServers/
+enabledPlugins JSON validation, formerly an inline `python -c` heredoc, collapses to
+a direct in-process function — pure data validation with no interpreter-dependent
+behavior.
 
 Spawn budget (hitlist G8, 2026-08-21). Every subprocess this suite makes derives its
 bound from `_PROBE_SPAWN_BUDGET_SECS` — no probe carries a hand-typed timeout, and
@@ -117,6 +109,7 @@ from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
 from coordinator_core._settings_home import normalize_native_path, settings_home
+from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
 from coordinator_core.data_root import content_root_for
 from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
 from coordinator_core.install import check_install_singularity
@@ -461,65 +454,8 @@ def _select_active_probes(
 
 
 # ---------------------------------------------------------------------------
-# Python interpreter resolution + identity
+# Python interpreter resolution
 # ---------------------------------------------------------------------------
-
-
-def _py_ident(py_bin: str, py_args: List[str]) -> str:
-    """Deliberate isolation boundary, not a candidate for an in-process
-    import — ``py_bin`` names a RESOLVED candidate python, not
-    ``sys.executable``; identifying it requires asking that candidate
-    interpreter for its own version, which is by construction not
-    importable in-process. See
-    ``state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md``
-    for the recorded verdict."""
-    py_path = shutil.which(py_bin) or py_bin
-    try:
-        from coordinator_core.win_portability import no_console_creationflags
-
-        proc = subprocess.run(
-            [py_bin, *py_args, "--version"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=_PROBE_SPAWN_BUDGET_SECS,
-            **no_console_creationflags(),
-        )
-        lines = (proc.stdout or "").splitlines()
-        version_line = lines[0] if lines else ""
-    except (OSError, subprocess.TimeoutExpired):
-        version_line = ""
-    return f"{version_line} at {py_path}"
-
-
-def _whoami_importable(py_bin: str, py_args: List[str]) -> Optional[bool]:
-    """Deliberate isolation boundary, not a candidate for an in-process
-    import — ``py_bin`` is a resolved candidate interpreter, distinct from
-    the one running this module, and import-state isolation is also
-    required: a failed ``import coordinator_whoami`` under a candidate must
-    not land in this process's own ``sys.modules``. See
-    ``state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md``
-    for the recorded verdict.
-
-    Three-valued, not two: True/False are OBSERVED import outcomes, and None
-    means the check could not be run at all (the candidate interpreter never
-    exec'd, or exceeded the spawn budget). Collapsing None into False — which
-    this returned before the budget clamp made the timeout branch genuinely
-    reachable — makes P-5 assert RED "coordinator_whoami not importable"
-    about an import it never performed, the fabricated verdict
-    ``docs/wiki/doctor-probe-design.md`` § `inconclusive` forbids."""
-    try:
-        from coordinator_core.win_portability import no_console_creationflags
-
-        proc = subprocess.run(
-            [py_bin, *py_args, "-c", "import coordinator_whoami"],
-            capture_output=True,
-            timeout=_PROBE_SPAWN_BUDGET_SECS,
-            **no_console_creationflags(),
-        )
-        return proc.returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return None
 
 
 class _Lazy:
@@ -740,293 +676,14 @@ def probe_p4(ml_cmd: Optional[str], sh_bin: Path) -> List[ProbeNote]:
     ]
 
 
-def probe_p5(whoami_ok: Optional[bool], py_ident: str, sh: Path) -> List[ProbeNote]:
-    if whoami_ok:
-        return []
-    if whoami_ok is None:
-        return _inconclusive(
-            "P-5", f"could not run the import check under {py_ident} — the candidate "
-            "interpreter did not exec or exceeded the probe spawn budget"
-        )
-    return [
-        ProbeNote(
-            "P-5",
-            "red",
-            f"coordinator_whoami not importable under {py_ident} — venv is now at "
-            f"{sh}/.coordinator-venv/ (run bin/ensure-coordinator-venv.sh to rebuild); "
-            "editable installs are per-interpreter — install under THIS interpreter, or "
-            "set COORDINATOR_PYTHON to the one that has it",
-        )
-    ]
-
-
-#: Envelope modules under `coordinator_whoami` that are NOT per-plugin
-#: implementations: the generic surfaces probed by their own probes (P-6s runs
-#: `session`; the machine envelope runs `machine`). Safe to name literally --
-#: neither carries a repo codename, which is precisely why both survived the
-#: publish transform that broke the one below.
-_WHOAMI_GENERIC_ENVELOPE_MODULES = frozenset({"session", "machine"})
-
-
-def _whoami_plugin_modules(sh: Path) -> List[str]:
-    """The per-plugin `coordinator_whoami` subpackages installed on this
-    machine, DISCOVERED FROM DISK rather than named in source.
-
-    WHY THIS IS NOT A LITERAL. P-6 used to spawn `-m
-    coordinator_whoami.<repo-name>` with the repo name written out here.
-    `coordinator_whoami` is installed under settings-home, OUTSIDE the engine
-    tree, so publish's depersonalization rewrote our reference to it and
-    renamed nothing at the other end -- the mirror every box resolves spawned
-    an import that cannot succeed and reported it as "module crash or missing
-    CLI". The engine's internal renames stay self-consistent because files move
-    with their references; this one reached across a package boundary. A
-    depersonalized name must never reach an identifier that has to resolve, so
-    the name is now read from the installed package at runtime and appears in
-    no source byte the transform can touch.
-
-    It also matches what the package documents: per-plugin implementations live
-    in subpackages and a second plugin is expected to "author a sibling
-    subpackage". A hardcoded name could never have probed that sibling; this
-    enumerates it.
-
-    Gates on `__main__.py`, which is exactly what `-m` requires -- a directory
-    without one is not runnable and would fail for a reason that says nothing
-    about envelope health. Zero-spawn (one `iterdir`), and an unreadable or
-    absent package degrades to `[]`, which the caller reports as inconclusive
-    rather than a fabricated pass.
-    """
-    pkg = sh / "coordinator-whoami" / "coordinator_whoami"
-    try:
-        names = sorted(entry.name for entry in pkg.iterdir() if entry.is_dir())
-    except OSError:
-        return []
-    return [
-        name
-        for name in names
-        if not name.startswith("_")
-        and name not in _WHOAMI_GENERIC_ENVELOPE_MODULES
-        and (pkg / name / "__main__.py").is_file()
-    ]
-
-
-#: The isolation boundary P-6 protects (state/audits/2026-08-06-self-spawn-
-#: isolation-boundary-classification.md) is between THIS process and
-#: ``py_bin`` — a resolved candidate interpreter, distinct from the one
-#: running this module. It is NOT a boundary between the per-plugin
-#: ``coordinator_whoami`` modules probed under that candidate: those already
-#: ran in the SAME bash-oracle shell generation this ported, one after
-#: another, with no isolation between them. So one ``py_bin`` spawn running
-#: every discovered module in sequence preserves the boundary that matters
-#: and only gives up one that was never promised.
-#:
-#: sys.argv[1] carries the discovered module list as a JSON array — passed
-#: as an argv element, not interpolated into the source text, so a module
-#: name can never inject Python source into its own probe driver.
-#:
-#: Negative-spec — two things this batching changes, and nothing else:
-#:
-#: - The modules share ONE interpreter, so a package one imports as a side
-#:   effect is already in ``sys.modules`` for every module probed after it.
-#:   N separate interpreters never had that coupling.
-#: - One ``_PROBE_SPAWN_BUDGET_SECS`` now covers the whole set rather than
-#:   each module. The batch does strictly less work than the N spawns it
-#:   replaces, so this is the tighter bound on a smaller job, and it expires
-#:   into INCONCLUSIVE, never red.
-#:
-#: Every other observable is unchanged. Each candidate's own stdout is
-#: isolated by a per-module StringIO swap, and SystemExit is swallowed the
-#: way a child's exit code was already discarded — P-6 read stdout and never
-#: a returncode — so a crashing module still reports "produced no output".
-_P6_RESULT_MARKER = "__P6_BATCH_RESULT__"
-
-_P6_BATCH_DRIVER_SOURCE = (
-    "import io, json, runpy, sys\n"
-    "\n"
-    "_modules = json.loads(sys.argv[1])\n"
-    "_results = {}\n"
-    "for _m in _modules:\n"
-    "    _buf = io.StringIO()\n"
-    "    _old_stdout = sys.stdout\n"
-    "    sys.stdout = _buf\n"
-    "    _error = None\n"
-    "    try:\n"
-    '        runpy.run_module("coordinator_whoami." + _m, run_name="__main__")\n'
-    "    except SystemExit:\n"
-    "        pass\n"
-    "    except Exception as _exc:\n"
-    '        _error = "{}: {}".format(type(_exc).__name__, _exc)\n'
-    "    finally:\n"
-    "        sys.stdout = _old_stdout\n"
-    '    _results[_m] = {"stdout": _buf.getvalue(), "error": _error}\n'
-    "sys.stdout.write(" + repr(_P6_RESULT_MARKER) + ' + json.dumps(_results) + "\\n")\n'
-)
-
-
-def _parse_p6_batch_output(out: str) -> Optional[dict]:
-    """The driver's own stdout is not this probe's only inhabitant — a
-    module it ran may itself have written to the real stdout before this
-    driver swapped it out, or after restoring it on the way out. Scan from
-    the end for the marked result line rather than assuming it is the last
-    line unconditionally, and return None (never raise) on anything that
-    does not parse — the caller's job, not this parser's, to decide what an
-    unparseable batch means for the probe's verdict."""
-    for line in reversed(out.splitlines()):
-        if line.startswith(_P6_RESULT_MARKER):
-            try:
-                return json.loads(line[len(_P6_RESULT_MARKER):])
-            except json.JSONDecodeError:
-                return None
-    return None
-
-
-def probe_p6(
-    whoami_ok: Optional[bool], py_bin: str, py_args: List[str], py_ident: str, sh: Path
-) -> List[ProbeNote]:
-    """Deliberate isolation boundary, not a candidate for an in-process
-    import — runs every per-plugin ``coordinator_whoami`` envelope module
-    under ONE spawn of ``py_bin``, a resolved candidate interpreter distinct
-    from the one running this module, so the probe reflects that
-    interpreter's own environment, not this process's. See
-    ``state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md``
-    for the recorded verdict on the process boundary, and
-    ``_P6_BATCH_DRIVER_SOURCE`` above for what batching the MODULE loop
-    inside that one spawn gives up (nothing this probe's verdict depends on).
-
-    Which modules those are is discovered, not declared — see
-    ``_whoami_plugin_modules`` for why a literal name here was break-class on
-    the published engine."""
-    if whoami_ok is None:
-        return _inconclusive("P-6", f"P-5's import check could not run under {py_ident}")
-    if not whoami_ok:
-        return [
-            ProbeNote(
-                "P-6",
-                "red",
-                f"coordinator_whoami not importable under {py_ident} — cannot probe "
-                "per-plugin envelopes (fix P-5 first)",
-            )
-        ]
-    modules = _whoami_plugin_modules(sh)
-    if not modules:
-        return _inconclusive(
-            "P-6",
-            f"no per-plugin coordinator_whoami envelope module found under {sh}"
-            "/coordinator-whoami — nothing to probe",
-        )
-
-    try:
-        from coordinator_core.win_portability import no_console_creationflags
-
-        proc = subprocess.run(
-            [py_bin, *py_args, "-c", _P6_BATCH_DRIVER_SOURCE, json.dumps(modules)],
-            capture_output=True,
-            text=True,
-            timeout=_PROBE_SPAWN_BUDGET_SECS,
-            **no_console_creationflags(),
-        )
-        out = proc.stdout or ""
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return _inconclusive(
-            "P-6", f"could not run {py_bin} batch envelope driver — {_exec_detail(exc)}"
-        )
-
-    results = _parse_p6_batch_output(out)
-    if results is None:
-        return _inconclusive(
-            "P-6", f"batch envelope driver under {py_ident} produced no parseable result"
-        )
-
-    notes: List[ProbeNote] = []
-    for module in modules:
-        target = f"coordinator_whoami.{module}"
-        entry = results.get(module)
-        module_out = entry.get("stdout", "") if isinstance(entry, dict) else ""
-        if not module_out.strip():
-            notes.append(
-                ProbeNote(
-                    "P-6",
-                    "red",
-                    f"{target} produced no output — module crash or missing CLI",
-                )
-            )
-            continue
-        try:
-            d = json.loads(module_out)
-            if not isinstance(d, dict) or d.get("contract_version") != 1:
-                raise ValueError
-        except (json.JSONDecodeError, ValueError):
-            notes.append(
-                ProbeNote(
-                    "P-6",
-                    "red",
-                    f"{target} envelope invalid — check registry keys + contract docs",
-                )
-            )
-    return notes
-
-
-def probe_p6s(
-    whoami_ok: Optional[bool], py_bin: str, py_args: List[str], py_ident: str
-) -> List[ProbeNote]:
-    """Deliberate isolation boundary, not a candidate for an in-process
-    import — runs ``coordinator_whoami.session`` under ``py_bin``, a
-    resolved candidate interpreter distinct from the one running this
-    module, so the probe reflects that interpreter's own environment, not
-    this process's. See
-    ``state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md``
-    for the recorded verdict."""
-    if whoami_ok is None:
-        return _inconclusive("P-6s", f"P-5's import check could not run under {py_ident}")
-    if not whoami_ok:
-        return [
-            ProbeNote(
-                "P-6s",
-                "red",
-                f"coordinator_whoami not importable under {py_ident} — cannot probe session "
-                "envelope (fix P-5 first)",
-            )
-        ]
-    try:
-        from coordinator_core.win_portability import no_console_creationflags
-
-        proc = subprocess.run(
-            [py_bin, *py_args, "-m", "coordinator_whoami.session"],
-            capture_output=True,
-            text=True,
-            timeout=_PROBE_SPAWN_BUDGET_SECS,
-            **no_console_creationflags(),
-        )
-        out = proc.stdout or ""
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return _inconclusive(
-            "P-6s", f"could not run {py_bin} -m coordinator_whoami.session — {_exec_detail(exc)}"
-        )
-    if not out.strip():
-        return [
-            ProbeNote(
-                "P-6s",
-                "red",
-                "coordinator_whoami.session produced no output — module crash or missing CLI",
-            )
-        ]
-    try:
-        d = json.loads(out)
-        if (
-            not isinstance(d, dict)
-            or d.get("contract_version") != 1
-            or d.get("plugin_name") != "coordinator-session"
-        ):
-            raise ValueError
-    except (json.JSONDecodeError, ValueError):
-        return [
-            ProbeNote(
-                "P-6s",
-                "red",
-                "coordinator_whoami.session envelope invalid — expected contract_version=1, "
-                "plugin_name=coordinator-session",
-            )
-        ]
-    return []
+# GRAVESTONE — P-5 (coordinator_whoami import check), P-6 (per-plugin envelope
+# probe, plus _whoami_plugin_modules/_P6_BATCH_DRIVER_SOURCE/
+# _parse_p6_batch_output), and P-6s (session envelope probe) retired here.
+# `coordinator_whoami` is itself RETIRED (scripts/setup.py: "no provisioning
+# step creates it"), so these probes were a permanent false RED whose printed
+# remedy (bin/ensure-coordinator-venv.sh) had already been deleted. Zero
+# non-doctor callers at removal. See
+# state/cross-repo/archive/2026-09-11-doe-claude-em-doctor-p5-probes-retired-whoami.md.
 
 
 def probe_p7(claude_home: Path) -> List[ProbeNote]:
@@ -1752,6 +1409,7 @@ def probe_p22(claude_klabauter_root: Path) -> List[ProbeNote]:
         )
 
     bin_dir = str(script.parent)
+    ensure_bin_lib_bound(bin_dir)
     added = bin_dir not in sys.path
     if added:
         sys.path.insert(0, bin_dir)
@@ -1996,38 +1654,11 @@ def probe_p23(claude_klabauter_root: Path, wrapper_home: Path, sh_bin: Path) -> 
     ]
 
 
-def _fetch_machine_json(whoami_ok: Optional[bool], py_bin: str, py_args: List[str]) -> dict:
-    """Deliberate isolation boundary, not a candidate for an in-process
-    import — runs ``coordinator_whoami.machine`` under ``py_bin``, a
-    resolved candidate interpreter distinct from the one running this
-    module, so the registry read reflects that interpreter's own
-    environment. See
-    ``state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md``
-    for the recorded verdict."""
-    if not whoami_ok:
-        return {}
-    try:
-        from coordinator_core.win_portability import no_console_creationflags
-
-        proc = subprocess.run(
-            [py_bin, *py_args, "-m", "coordinator_whoami.machine"],
-            capture_output=True,
-            text=True,
-            timeout=_PROBE_SPAWN_BUDGET_SECS,
-            **no_console_creationflags(),
-        )
-        out = (proc.stdout or "").strip()
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        print(f"[{_PROG}] could not run coordinator_whoami.machine — {exc} (machine field will be empty)", file=sys.stderr)
-        out = ""
-    if not out:
-        return {}
-    try:
-        parsed = json.loads(out)
-    except (json.JSONDecodeError, ValueError, TypeError) as exc:
-        print(f"[{_PROG}] coordinator_whoami.machine emitted unparsable JSON — {exc} (machine field will be empty)", file=sys.stderr)
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+# GRAVESTONE — _fetch_machine_json (ran `coordinator_whoami.machine` under a
+# resolved candidate interpreter to populate the sentinel's "machine" field)
+# retired alongside P-5/P-6/P-6s: `coordinator_whoami` is RETIRED, so the
+# spawn always failed. The "machine" key stays in the payload schema
+# (LOAD-BEARING, see module docstring) — callers now always get {}.
 
 
 def _write_sentinel(
@@ -2193,7 +1824,6 @@ def _run(mode: str, arg: str) -> Tuple[List[str], List[str], int]:
             "[coordinator-doctor] ERROR: no Python interpreter found — cannot run selector or probes"
         )
         return stdout_lines, stderr_lines, 2
-    py_ident = _py_ident(py_bin, py_args)
 
     original_claude_home = os.environ.get("CLAUDE_HOME")
     claude_home = _resolve_claude_home(original_claude_home)
@@ -2224,7 +1854,6 @@ def _run(mode: str, arg: str) -> Tuple[List[str], List[str], int]:
     ml_cmd = _resolve_cli(sh_bin, bin_dir, "machine-local")
     ch_cmd = _resolve_cli(sh_bin, bin_dir, "claude-home")
 
-    whoami_lazy = _Lazy(lambda: _whoami_importable(py_bin, py_args))
     # Resolved once per run and shared, so a second probe asking the registry
     # the same question costs nothing (G8's verdict). Lazy because P-3 is not
     # in the triage set: a bare triage run must not pay even two file reads it
@@ -2257,9 +1886,6 @@ def _run(mode: str, arg: str) -> Tuple[List[str], List[str], int]:
     _run_probe("P-2", lambda: probe_p2(ml_dir / "registry.toml", ml_dir, py_bin, py_args))
     _run_probe("P-3", lambda: probe_p3(registry_keys_lazy.get()))
     _run_probe("P-4", lambda: probe_p4(ml_cmd, sh_bin))
-    _run_probe("P-5", lambda: probe_p5(whoami_lazy.get(), py_ident, sh))
-    _run_probe("P-6", lambda: probe_p6(whoami_lazy.get(), py_bin, py_args, py_ident, sh))
-    _run_probe("P-6s", lambda: probe_p6s(whoami_lazy.get(), py_bin, py_args, py_ident))
     _run_probe("P-7", lambda: probe_p7(claude_home))
     _run_probe("P-8", lambda: probe_p8(plugins_root))
     _run_probe("P-9", lambda: probe_p9(sh_bin))
@@ -2310,9 +1936,11 @@ def _run(mode: str, arg: str) -> Tuple[List[str], List[str], int]:
     hint = "All coordinator-doctor probes passed." if verdict == "GREEN" else " | ".join(hint_lines)
 
     if mode == "full":
-        machine_json = _fetch_machine_json(whoami_lazy.get(), py_bin, py_args)
+        # coordinator_whoami is RETIRED — the "machine" field is always empty
+        # now (was populated by the retired _fetch_machine_json spawn); the
+        # key itself stays in the schema (LOAD-BEARING, see module docstring).
         ok = _write_sentinel(
-            sentinel_path, red_probes, amber_probes, advisory_notes, verdict, hint, machine_json
+            sentinel_path, red_probes, amber_probes, advisory_notes, verdict, hint, {}
         )
         if not ok:
             stderr_lines.append(

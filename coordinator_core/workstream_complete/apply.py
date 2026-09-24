@@ -30,6 +30,14 @@ reads back previously named only the args, which is why every one of the
 three cross-repo reporters this plan cites suspected the argument instead
 of the real cause.
 
+Plugin-local route (docs/plans/2026-09-07-directive-resolution-reaches-a-
+plugin-local-cli.md, T2): a `_PLUGIN_LOCAL_CLIS` member resolves its script
+under the SECOND, DoE-anchored root (`cli_dispatch.
+resolve_plugin_cli_script_root`), never this module's own engine root —
+see `docs/reference/plugin-local-cli-dispatch.md` for the full route and
+`cli_dispatch.py`'s own module docstring for the two-root model this
+module composes rather than re-derives.
+
 Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
 Spec backlink: docs/plans/2026-07-26-workstream-complete-computed-frontage.md, chunk C4
 Spec backlink (no-commit row guard): DoE-claude docs/plans/2026-07-29-pm-approved-
@@ -252,6 +260,8 @@ from coordinator_core.ceremony_common.json_payload_flag import (
 )
 from coordinator_core.ceremony_common.cli_dispatch import (
     resolve_cli_script_root,
+    resolve_plugin_cli_script_root,
+    UNRESOLVED_PLUGIN_CLI_ROOT,
     invoke_cli_main as _shared_invoke_cli_main,
     load_cli_module as _shared_load_cli_module,
 )
@@ -315,6 +325,24 @@ assert set(_LEGACY_CONVERT2_CLI_NAMES) <= set(CONSUMES_MANIFEST), (
 #: mutated at runtime, never resolved via glob/search.
 _CLI_SCRIPT_ROOT = resolve_cli_script_root()
 
+#: The `CONSUMES_MANIFEST` members whose script ships from the SECOND,
+#: DoE-anchored root (`_PLUGIN_CLI_SCRIPT_ROOT` below), never the engine
+#: root — hand-typed literal, per T1b's manifest comment
+#: (`coordinator_core/workstream_complete/__init__.py`, "Plugin-local
+#: barewords"). No glob, no listing: membership picks the prefix, and
+#: only membership.
+_PLUGIN_LOCAL_CLIS: frozenset[str] = frozenset(
+    {"baton-chain-closure", "plan-reversibility-eligibility"}
+)
+
+#: The SECOND, DoE-anchored `coordinator/bin` root (docs/plans/2026-09-07-
+#: directive-resolution-reaches-a-plugin-local-cli.md, T1/T2) —
+#: `resolve_plugin_cli_script_root()` returns `None` on a box with no
+#: DoE-claude clone, never raises; `UNRESOLVED_PLUGIN_CLI_ROOT` is the
+#: sentinel `Path` that keeps this module's dispatch table's value type
+#: `Path`, never `Optional[Path]`, on such a box.
+_PLUGIN_CLI_SCRIPT_ROOT = resolve_plugin_cli_script_root() or UNRESOLVED_PLUGIN_CLI_ROOT
+
 
 def _resolve_script_path(name: str) -> Path:
     """Every `CONSUMES_MANIFEST` member is a bareword (no `.py` suffix) —
@@ -330,11 +358,20 @@ def _resolve_script_path(name: str) -> Path:
     candidate existing on disk (see module docstring's "Known
     dispatch-table gap" paragraph) is tolerated here — resolution still
     returns a path, and any failure to load it surfaces per-directive at
-    dispatch time, never at import time."""
-    py_path = _CLI_SCRIPT_ROOT / f"{name}.py"
+    dispatch time, never at import time.
+
+    Prefix selection (docs/plans/2026-09-07-directive-resolution-reaches-
+    a-plugin-local-cli.md, T2): a `_PLUGIN_LOCAL_CLIS` member resolves
+    under `_PLUGIN_CLI_SCRIPT_ROOT` (the second, DoE-anchored root —
+    `UNRESOLVED_PLUGIN_CLI_ROOT` when that root did not resolve); every
+    other name resolves under `_CLI_SCRIPT_ROOT` (the engine root),
+    exactly as before. Membership alone picks the prefix — no glob, no
+    listing, no runtime mutation."""
+    script_root = _PLUGIN_CLI_SCRIPT_ROOT if name in _PLUGIN_LOCAL_CLIS else _CLI_SCRIPT_ROOT
+    py_path = script_root / f"{name}.py"
     if py_path.exists():
         return py_path
-    return _CLI_SCRIPT_ROOT / name
+    return script_root / name
 
 
 _CLI_DISPATCH: dict[str, Path] = {name: _resolve_script_path(name) for name in CONSUMES_MANIFEST}
@@ -382,8 +419,26 @@ def _load_cli_module(cli_name: str) -> ModuleType:
     unchanged for its callers (`_dispatch_directive`, via
     `_execute_directives`, still catches it as an ordinary per-directive
     dispatch failure — same as the `FileNotFoundError` case this
-    docstring's first paragraph already documents)."""
+    docstring's first paragraph already documents).
+
+    Per-directive plugin-local refusal (docs/plans/2026-09-07-directive-
+    resolution-reaches-a-plugin-local-cli.md, T2): immediately after
+    `script_path = _resolve_cli(cli_name)` and BEFORE the cache check
+    below, a `_PLUGIN_LOCAL_CLIS` member whose resolved
+    `script_path.parent == UNRESOLVED_PLUGIN_CLI_ROOT` raises
+    `UnrecognizedDirective` naming the unresolved root and the ladder
+    rungs tried — this box has no DoE-claude clone (or a stale/moved one),
+    so this one directive refuses without halting the whole run. Holds
+    the same ahead-of-cache position the admission check above already
+    holds, so a directive that already resolved successfully once cannot
+    mask a since-vanished root on a later dispatch."""
     script_path = _resolve_cli(cli_name)
+    if cli_name in _PLUGIN_LOCAL_CLIS and script_path.parent == UNRESOLVED_PLUGIN_CLI_ROOT:
+        raise UnrecognizedDirective(
+            f"workstream_complete.apply: plugin-local cli {cli_name!r} has no "
+            f"resolvable DoE-anchored root (rungs 1, 2, 2.5, 2.75 tried via "
+            f"resolve_plugin_cli_script_root) — resolved sentinel {script_path.parent}"
+        )
     if cli_name in _LOADED_MODULES:
         return _LOADED_MODULES[cli_name]
     module_name = f"_workstream_complete_cli_{cli_name.replace('-', '_').replace('.', '_')}"

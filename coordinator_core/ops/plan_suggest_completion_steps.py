@@ -363,7 +363,7 @@ def _plans_with_review_trail_coverage(
             with open(trail_path, "r", encoding="utf-8") as fh:
                 record = json.load(fh)
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            continue
+            continue  # per-record loop; one unreadable/malformed review-trail record is skipped, not fatal to the scan
         if not isinstance(record, dict):
             continue
         if record.get("scope_kind") != "plan":
@@ -418,7 +418,7 @@ def suggest_completion_steps(repo_root: Path) -> List[Dict[str, object]]:
         try:
             text = file_path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
-            continue
+            continue  # per-plan loop; one unreadable plan file is skipped, not fatal to the scan
 
         status = extract_frontmatter_scalar(text, "status")
         if status not in _EXECUTION_IMMINENT_STATUSES:

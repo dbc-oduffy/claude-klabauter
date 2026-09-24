@@ -364,7 +364,7 @@ def find_frontmatterless_duplicate(plans_dir: Path, title: str, exclude: Optiona
         try:
             text = fpath.read_text(encoding="utf-8", errors="replace")
         except OSError:
-            continue
+            continue  # per-plan loop; one unreadable plan file is skipped, not fatal to the duplicate-title scan
         if split_frontmatter(text) is not None:
             continue
         candidate_title = extract_h1_title(text)

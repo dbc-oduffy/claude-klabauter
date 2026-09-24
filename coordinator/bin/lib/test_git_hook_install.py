@@ -509,6 +509,119 @@ def test_ensure_hooks_fleet_one_bad_repo_does_not_abort_the_rest(tmp_path, monke
     assert "repos.aaa_bad" in captured.err
 
 
+def test_ensure_hooks_fleet_default_never_fails_even_when_owned_hook_missing(
+    tmp_path, monkeypatch
+):
+    """`strict` defaults False: a repo this run OWNS (worktree-classified)
+    that ends the attempt without an installed hook must still return 0 --
+    byte-identical to every existing caller (/workday-start Step -0.45's
+    "must never block a session start" contract), and the sole way this
+    changes is opting in with `strict=True` (see the next test)."""
+    owned_root = tmp_path / "owned"
+    owned_root.mkdir()
+    (owned_root / ".git").mkdir()
+    (owned_root / "CLAUDE.md").write_text("x", encoding="utf-8")
+
+    monkeypatch.setattr(
+        ghi, "_registry_repo_roots", lambda bin_dir: [("repos.owned", str(owned_root))]
+    )
+    monkeypatch.setattr(ghi, "_classify_target", lambda root: "worktree")
+
+    def _fake_ensure_no_write(bin_dir, root=None, outcome=None, check_only=False):
+        # Claims success but never actually writes the hook file -- the
+        # exact "plausible-looking state" this module's own docstring warns
+        # a bare rc cannot distinguish from a real install.
+        if outcome is not None:
+            outcome.append("installed-absent")
+        return 0
+
+    monkeypatch.setattr(ghi, "ensure_prepare_commit_msg_hook", _fake_ensure_no_write)
+
+    rc = ghi.ensure_hooks_fleet(str(tmp_path))
+
+    assert rc == 0
+    assert not (owned_root / ".git" / "hooks" / "prepare-commit-msg").exists()
+
+
+def test_ensure_hooks_fleet_strict_fails_when_owned_hook_missing(tmp_path, monkeypatch, capsys):
+    """`strict=True`: the same scenario as above must now return 1, and name
+    the repo/hook in the stderr report -- this is ask #1's fix: the tool must
+    never (when a real signal is requested) claim success while a hook it
+    owns is absent."""
+    owned_root = tmp_path / "owned"
+    owned_root.mkdir()
+    (owned_root / ".git").mkdir()
+    (owned_root / "CLAUDE.md").write_text("x", encoding="utf-8")
+
+    monkeypatch.setattr(
+        ghi, "_registry_repo_roots", lambda bin_dir: [("repos.owned", str(owned_root))]
+    )
+    monkeypatch.setattr(ghi, "_classify_target", lambda root: "worktree")
+
+    def _fake_ensure_no_write(bin_dir, root=None, outcome=None, check_only=False):
+        if outcome is not None:
+            outcome.append("installed-absent")
+        return 0
+
+    monkeypatch.setattr(ghi, "ensure_prepare_commit_msg_hook", _fake_ensure_no_write)
+
+    rc = ghi.ensure_hooks_fleet(str(tmp_path), strict=True)
+
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "repos.owned" in captured.err
+    assert "not present/executable after install" in captured.err
+
+
+def test_ensure_hooks_fleet_strict_stays_clean_when_hook_actually_lands(
+    tmp_path, monkeypatch
+):
+    """Control for the two tests above: `strict=True` must NOT false-positive
+    on a repo whose hook genuinely landed on disk."""
+    owned_root = tmp_path / "owned"
+    owned_root.mkdir()
+    (owned_root / ".git" / "hooks").mkdir(parents=True)
+    (owned_root / "CLAUDE.md").write_text("x", encoding="utf-8")
+    hook_path = owned_root / ".git" / "hooks" / "prepare-commit-msg"
+    hook_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    hook_path.chmod(0o755)
+
+    monkeypatch.setattr(
+        ghi, "_registry_repo_roots", lambda bin_dir: [("repos.owned", str(owned_root))]
+    )
+    monkeypatch.setattr(ghi, "_classify_target", lambda root: "worktree")
+
+    def _fake_ensure_real_write(bin_dir, root=None, outcome=None, check_only=False):
+        if outcome is not None:
+            outcome.append("already-current")
+        return 0
+
+    monkeypatch.setattr(ghi, "ensure_prepare_commit_msg_hook", _fake_ensure_real_write)
+
+    rc = ghi.ensure_hooks_fleet(str(tmp_path), strict=True)
+
+    assert rc == 0
+
+
+def test_ensure_hooks_fleet_strict_ignores_mirror_absence(tmp_path, monkeypatch):
+    """A `mirror`-classified repo (e.g. klabauter on a workstation, deliberately
+    excluded from hook install -- see `_is_coordinator_worktree`'s docstring)
+    must never count against `strict`: its hookless state is BY DESIGN, not a
+    defect this function owns."""
+    mirror_root = tmp_path / "mirror"
+    mirror_root.mkdir()
+    (mirror_root / ".git").mkdir()
+    # No CLAUDE.md / cross-repo marker -- classifies as "mirror".
+
+    monkeypatch.setattr(
+        ghi, "_registry_repo_roots", lambda bin_dir: [("repos.mirror", str(mirror_root))]
+    )
+
+    rc = ghi.ensure_hooks_fleet(str(tmp_path), strict=True)
+
+    assert rc == 0
+
+
 # ---------------------------------------------------------------------------
 # The no-session gate is GENERATED from the ladder, never hand-copied.
 # ---------------------------------------------------------------------------

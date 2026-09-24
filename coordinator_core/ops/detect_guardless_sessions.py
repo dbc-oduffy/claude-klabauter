@@ -254,6 +254,7 @@ def _run_process_probe() -> List[ProcessObservation]:
         except psutil.AccessDenied as exc:
             raise _CommandLineUnavailable(proc.pid) from exc
         except psutil.NoSuchProcess:
+            # process exited between listing and inspection; nothing to check
             continue
         # `cmdline` is a list[str]; joined with a single space to feed the
         # existing string-based --plugin-dir matcher (_is_guarded /

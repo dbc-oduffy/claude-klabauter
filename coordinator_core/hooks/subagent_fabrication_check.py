@@ -105,6 +105,7 @@ import json
 import os
 import subprocess
 
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.hooks._payload import field
 from coordinator_core.hooks.subagent_arrival_check import (
     _is_path_safe_agent_id,
@@ -150,7 +151,7 @@ def _count_calls_by_name(transcript_path: str) -> dict[str, int] | None:
         try:
             record = json.loads(line)
         except (json.JSONDecodeError, ValueError):
-            continue
+            continue  # per-line transcript parse; one malformed JSONL line must not abort the scan
         if not isinstance(record, dict):
             continue
         message = record.get("message")
@@ -286,6 +287,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     "reason"} shape directly — never raises; every unresolved input or failed
     probe resolves to verdict "no_signal", never "fabrication_suspected".
     """
+    params = payload_of(params)
     import asyncio
 
     transcript_path = field(params, "transcript_path")

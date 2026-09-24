@@ -46,6 +46,24 @@ not know to flip, direction 2 will legitimately flag the affected manifest
 entry until either the sweep's `_RICH_DECISIONS` payload is widened to
 supply whatever key gates it, or it is added to the exception set by name.
 
+A fifth axis (docs/plans/2026-09-07-directive-resolution-reaches-a-plugin-
+local-cli.md, AC15): `_all_emittable_directive_clis` monkeypatches
+`wsc._plugin_cli_reachable` to `True` unconditionally — the same
+`monkeypatch.setattr` shape this sweep already uses for
+`_lesson_capture_reachable`/`compute_session_shape_gate` — so the two
+plugin-local barewords (`baton-chain-closure`, `plan-reversibility-
+eligibility`) are always in the emitted set, on every box, regardless of
+whether this box's own DoE ladder resolves. Without this axis,
+`test_every_manifest_entry_is_named_by_at_least_one_directive` would fail
+FOREVER on a box with no DoE clone (the fleet floor and the measured cloud
+container) the moment those two names joined `CONSUMES_MANIFEST` — a
+`cadence`-gate red weeks later, not a wave-window one. The prior revision
+of this plan's own risk record read the `coordinator-lesson-add`/
+`coordinator-queue-append` prose above as an existing machine-state
+exemption being "extended" by this pair; that premise is false of this
+tree (`_DISPATCHED_WORKER_ONLY_MANIFEST_MEMBERS` is its one exemption
+channel, and it stays empty) — this axis, not that exemption, is the fix.
+
 Run scoped only:
     python3 -m pytest coordinator_core/workstream_complete/test_workstream_complete_contract.py -q
 Spec backlink: docs/plans/2026-07-26-workstream-complete-computed-frontage.md § AC2, D-5, chunk C1
@@ -188,6 +206,14 @@ def _rich_decisions(*, governing_plan_slug: bool, review_present: bool, tmp_path
             }
         ],
         "plan_path": f"docs/plans/{_GOVERNING_PLAN_SLUG}.md",
+        # AC15's plugin-root sweep axis needs `build_plan_reversibility_
+        # eligibility_directive` to actually fire (gated on a resolved
+        # governing plan path, § Approach table) -- `directives_completion.
+        # _KEY_GOVERNING_PLAN_PATH`, a key this sweep did not previously
+        # supply (a genuine new conditional axis, per module docstring's
+        # Coverage caveat, not something `_plugin_cli_reachable` alone
+        # could paper over).
+        "governing_plan_path": f"docs/plans/{_GOVERNING_PLAN_SLUG}.md",
         "orientation_cache_exists": True,
         "pinboard_note": "contract-test pinboard note",
         "review_partition": {
@@ -218,6 +244,13 @@ def _all_emittable_directive_clis(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     fixtures shared across every leg of the sweep below, not per-leg state.
     """
     _seed_disk_fixtures(tmp_path)
+    # AC15 (docs/plans/2026-09-07-directive-resolution-reaches-a-plugin-
+    # local-cli.md): the plugin-root reachability axis, forced True on every
+    # box so the two plugin-local barewords are always emitted -- see module
+    # docstring's Coverage caveat. Set once, outside the loop below: unlike
+    # `compute_session_shape_gate`/`_lesson_capture_reachable`, this axis is
+    # not itself varied across sweep legs, only forced on.
+    monkeypatch.setattr(wsc, "_plugin_cli_reachable", lambda: True)
     clis: set[str] = set()
     dispositions = (
         _gate("chain-terminal", consumed_handoff="state/handoffs/contract-test.md", consumed_handoff_paths=()),
@@ -282,6 +315,30 @@ def test_every_manifest_entry_is_named_by_at_least_one_directive(monkeypatch, tm
             "docstring's Coverage caveat -- widen _rich_decisions or the "
             "gate sweep, or add a named dispatched-worker-only exception)"
         )
+
+
+def test_every_manifest_entry_is_named_with_the_plugin_ladder_unresolvable(
+    monkeypatch, tmp_path
+) -> None:
+    """AC15: the dead-census assertion stays green even when this box's own
+    DoE ladder genuinely does not resolve — `_all_emittable_directive_clis`
+    forces `_plugin_cli_reachable` to `True` regardless, so the real ladder's
+    answer never gates this test's outcome."""
+    monkeypatch.setattr(
+        "coordinator_core.ceremony_common.cli_dispatch.resolve_plugin_cli_script_root",
+        lambda: None,
+    )
+    emitted = _all_emittable_directive_clis(monkeypatch, tmp_path)
+    for name in ("baton-chain-closure", "plan-reversibility-eligibility"):
+        assert name in wsc.CONSUMES_MANIFEST
+        assert name in emitted
+
+
+def test_dispatched_worker_only_exemption_set_stays_empty() -> None:
+    """AC15's negative half: the plugin-root reachability axis is the fix —
+    the exemption set is not the mechanism here and must not be widened to
+    cover it (§ Risks)."""
+    assert _DISPATCHED_WORKER_ONLY_MANIFEST_MEMBERS == frozenset()
 
 
 @pytest.mark.real_home

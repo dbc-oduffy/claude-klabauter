@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import allow_advisory, no_advisory
 from coordinator_core.hooks._payload import field
@@ -106,6 +107,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     # `import asyncio` dragged asyncio.base_events (~5ms) into every eager op/hook
     # import even for callers that never dispatch this PreToolUse hook. Spec:
     # docs/plans/2026-07-24-canonical-resolution-engine.md task W0-1.
+    params = payload_of(params)
     import asyncio
 
     # Subagent suppression — agent_id resolves (bare-hex unnamed agent, or named

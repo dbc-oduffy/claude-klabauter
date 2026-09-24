@@ -144,6 +144,7 @@ from typing import List, Optional
 
 import yaml
 
+from coordinator_core._hook_envelope import payload_of
 from coordinator_core.commit_ledger import store as ledger_store
 from coordinator_core.commit_ledger.resolve_owner import resolve_owner_handoff_id
 from coordinator_core.frontmatter.primitives import split_frontmatter
@@ -329,7 +330,7 @@ def _own_pending_diff_ranges(session_id: str, worktree: Path) -> List[str]:
         try:
             data = _json.loads(candidate.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            continue
+            continue  # per-candidate review-trail probe; one bad file must not abort the scan
         if not isinstance(data, dict):
             continue
         if data.get("session_id") != short_sid:
@@ -522,6 +523,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     its only observable effects are the ledger append and the sidecar stamp
     (or their absence).
     """
+    params = payload_of(params)
     session_id = field(params, "session_id")
     agent_id = field(params, "agent_id")
     agent_type = field(params, "agent_type")
