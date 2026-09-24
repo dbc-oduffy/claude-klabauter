@@ -2893,33 +2893,55 @@ def register_retrieval_mcp_entry(report: Report) -> None:
 
     Merged, never replaced: Claude Code may have written this file already.
     """
-    config_path = _claude_json_path()
-    helper = _write_connect_helper(None, RETRIEVAL_MCP_DEFAULT_URL)
+    _write_connect_helper(None, RETRIEVAL_MCP_DEFAULT_URL)
     entry = {
         "type": "http",
         "url": RETRIEVAL_MCP_DEFAULT_URL,
-        "headersHelper": shlex.join([sys.executable, str(helper)]),
+        "headersHelper": _connect_helper_command(),
     }
+    config_path, read_error = _merge_retrieval_entry(entry, replace=True)
+    report.mcp_entry_written = {"config_path": str(config_path), "entry": entry}
+    if read_error:
+        report.mcp_entry_written["read_error"] = read_error
+    print(f"[cloud_setup] MCP entry registered: {RETRIEVAL_REPO_SLUG} -> {entry['url']}")
+
+
+def _connect_helper_command() -> str:
+    return shlex.join([sys.executable, str(_connect_helper_path())])
+
+
+def _merge_retrieval_entry(fields: dict, *, replace: bool) -> tuple[Path, str | None]:
+    """Write ``fields`` into ``mcpServers.<slug>`` of ``.claude.json``: as the whole entry
+    (``replace``), or merged over whatever entry is there. Every other key in the file is kept.
+
+    Returns the config path and the read error of an unreadable file, which is replaced.
+    """
+    config_path = _claude_json_path()
     data: dict = {}
+    read_error = None
     try:
         if config_path.exists():
             data = json.loads(config_path.read_text())
             if not isinstance(data, dict):
                 data = {}
     except Exception as e:  # noqa: BLE001 - an unreadable config is replaced, not fatal
-        report.mcp_entry_written = {"read_error": f"{type(e).__name__}: {e}"}
+        read_error = f"{type(e).__name__}: {e}"
         data = {}
     servers = data.get("mcpServers")
     if not isinstance(servers, dict):
         servers = {}
-    servers[RETRIEVAL_REPO_SLUG] = entry
+    current = servers.get(RETRIEVAL_REPO_SLUG)
+    if replace:
+        current = {}
+    elif not isinstance(current, dict):
+        current = {"type": "http", "url": RETRIEVAL_MCP_DEFAULT_URL}
+    servers[RETRIEVAL_REPO_SLUG] = {**current, **fields}
     data["mcpServers"] = servers
     config_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = config_path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8", newline="\n")
     tmp.replace(config_path)
-    report.mcp_entry_written = {"config_path": str(config_path), "entry": entry}
-    print(f"[cloud_setup] MCP entry registered: {RETRIEVAL_REPO_SLUG} -> {entry['url']}")
+    return config_path, read_error
 
 
 def arm_retrieval_connect_helper(report: Report) -> None:
@@ -2931,6 +2953,10 @@ def arm_retrieval_connect_helper(report: Report) -> None:
     example-retrieval-repo's SessionStart hook cannot double-start the daemon. The
     helper's port is re-derived from the checkout's truth source, like
     `verify_mcp_registration`.
+
+    Also re-asserts ``headersHelper`` on the entry: example-retrieval-repo's installer
+    can rewrite the entry to a bare ``{type, url}`` during the install that
+    just ran, and a helper file no entry names starts nothing.
     """
     if retrieval_half_skipped(report):
         print("[cloud_setup] connect helper: probe-only — retrieval half not installed.")
@@ -2952,6 +2978,7 @@ def arm_retrieval_connect_helper(report: Report) -> None:
         install["project_root"],
     ]
     helper = _write_connect_helper(start_argv, url or RETRIEVAL_MCP_DEFAULT_URL)
+    _merge_retrieval_entry({"headersHelper": _connect_helper_command()}, replace=False)
     report.connect_helper = {"path": str(helper), "start_argv": start_argv, "url": url}
     print(f"[cloud_setup] connect helper armed: {helper}")
 
@@ -2983,6 +3010,7 @@ def verify_mcp_registration(report: Report) -> None:
         "expected_url": expected_url,
         "port_source": port_source,
         "url_matches_daemon_port": False,
+        "headers_helper_present": False,
     }
     try:
         data = json.loads(config_path.read_text())
@@ -2996,11 +3024,15 @@ def verify_mcp_registration(report: Report) -> None:
         result["type"] = entry.get("type")
         result["url"] = entry.get("url")
         result["url_matches_daemon_port"] = bool(expected_url) and entry.get("url") == expected_url
+        # Without it a cold session's one connect races a daemon nothing started.
+        result["headers_helper_present"] = entry.get("headersHelper") == _connect_helper_command()
     report.mcp_registration = result
-    verdict = "OK" if result["url_matches_daemon_port"] else "NOT REGISTERED as expected"
+    ok = result["url_matches_daemon_port"] and result["headers_helper_present"]
+    verdict = "OK" if ok else "NOT REGISTERED as expected"
     _safe_print(
         f"[cloud_setup] MCP registration: {verdict} "
-        f"(entry={result['url']!r}, expected={expected_url!r}, port source: {port_source})"
+        f"(entry={result['url']!r}, expected={expected_url!r}, port source: {port_source}, "
+        f"headersHelper present: {result['headers_helper_present']})"
     )
 
 
