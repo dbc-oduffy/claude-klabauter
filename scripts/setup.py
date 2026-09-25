@@ -364,6 +364,7 @@ class Args:
         self.allow_venv_fallback = False
         self.container_optin = False
         self.with_test_deps = False
+        self.with_claude_doe_launcher = False
         self.register_only = False
         self.check = False
         self.preflight = False
@@ -397,6 +398,11 @@ def parse_args(argv: list[str]) -> Args:
             args.container_optin = True
         elif tok == "--with-test-deps":
             args.with_test_deps = True
+        elif tok == "--with-claude-doe-launcher":
+            # The DoE-developer opt-in that lets this installer shadow the
+            # operator's `claude` command. Deliberately absent from HELP_TEXT:
+            # an OSS reader has no DoE clone and must never meet the concept.
+            args.with_claude_doe_launcher = True
         elif tok == "--register-only":
             args.register_only = True
         elif tok == "--check":
@@ -4106,6 +4112,72 @@ def _doe_chain_build_argv(cli_name: str, extra_argv: "tuple[str, ...]", repo_roo
     return argv
 
 
+def _doe_dev_clone_root() -> Path | None:
+    """The DoE dev clone `repos.doe_claude` names, or None when it names nothing
+    that carries the `.coordinator-dev-repo` sentinel. The sentinel is the
+    fleet-wide dev-vs-OSS discriminant: a published coordinator-claude clone
+    never carries it, and a path that does not exist cannot."""
+    raw = os.environ.get("REPO_DOE_CLAUDE", "")
+    if not raw:
+        try:
+            from coordinator_core.machine_resolver import registry_get
+
+            raw = registry_get("repos.doe_claude") or ""
+        except Exception:  # noqa: BLE001 — unreadable registry reads as "no dev clone"
+            raw = ""
+    if not raw.strip():
+        return None
+    root = Path(raw.strip())
+    return root if (root / ".coordinator-dev-repo").is_file() else None
+
+
+def _rendered_claude_doe_shims() -> list[Path]:
+    """Every rendered `claude()` shim on this box. The rc block only sources a
+    shim that exists, so these files are the whole of the hijack."""
+    from coordinator_core.ops.gen_claude_doe_shim import _resolve_claude_home_base, _shim_filename
+
+    shell_dir = Path(_resolve_claude_home_base()) / ".claude" / "shell"
+    return [
+        shell_dir / _shim_filename(family)
+        for family in ("bash", "powershell")
+        if (shell_dir / _shim_filename(family)).is_file()
+    ]
+
+
+def _claude_doe_launcher_opted_in(args: Args) -> bool:
+    """Whether this run may wire the `claude()` shim, removing any shim a
+    non-opted box was given.
+
+    The shim shadows the operator's bare `claude`, so it is wired only on a
+    box that CHOSE it: `--with-claude-doe-launcher`, or a shim already present
+    from an earlier choice — and in both cases only beside a real DoE dev
+    clone. A shim on a box with no dev clone was never chosen (a consumer
+    install used to receive one) and is deleted, which returns `claude` to the
+    real binary on the next shell start. The rc block stays: it sources the
+    shim only if the file exists, so it is inert without it."""
+    shims = _rendered_claude_doe_shims()
+    if _doe_dev_clone_root() is None:
+        for shim in shims:
+            try:
+                shim.unlink()
+                print(f"REMOVED [claude-doe-chain] {shim} — `claude` is the real binary again from the next shell")
+            except OSError as exc:
+                print(f"[ADVISORY] could not remove {shim} ({exc}); `claude --vanilla` bypasses it.", file=sys.stderr)
+        if args.with_claude_doe_launcher:
+            print(
+                "[ADVISORY] --with-claude-doe-launcher needs repos.doe_claude to name a DoE dev clone "
+                "(one carrying .coordinator-dev-repo); launcher not wired.",
+                file=sys.stderr,
+            )
+        else:
+            print("SKIP [claude-doe-chain] not applicable — the plugin install needs none of it")
+        return False
+    if not (args.with_claude_doe_launcher or shims):
+        print("SKIP [claude-doe-chain] not opted in (--with-claude-doe-launcher wires the dev-clone `claude()` shim)")
+        return False
+    return True
+
+
 def install_claude_doe_launcher_chain(repo_root: Path, engine_py: str, claude_klabauter_root_resolved: Path, args: Args) -> None:
     """Best-effort install-chain step: runs the four `coordinator/bin/*claude-doe*`
     generators that render/wire the interactive `claude-doe` launch chain
@@ -4144,6 +4216,9 @@ def install_claude_doe_launcher_chain(repo_root: Path, engine_py: str, claude_kl
     """
     print()
     print("--- Install: claude-doe launcher chain (coordinator/bin/*claude-doe*) ---")
+
+    if not _claude_doe_launcher_opted_in(args):
+        return
 
     # In-process, not four subprocess.run children (spike verdict, call shape
     # (b): docs/research/spike-verdicts/2026-09-23-in-process-launcher-chain-

@@ -512,6 +512,16 @@ int door_argv_declares_params_stdin(int argc, const char *const *argv) {
     return 0;
 }
 
+int door_argv_declares_advisory(int argc, const char *const *argv) {
+    if (argv == NULL) return 0;
+    for (int i = 1; i < argc; i++) {
+        const char *arg = argv[i];
+        if (arg == NULL) continue;
+        if (strcmp(arg, DOOR_ADVISORY_FLAG) == 0) return 1;
+    }
+    return 0;
+}
+
 /* =========================================================================
  * The stdin-reading basename table -- see door_core.h for the full policy
  * and cross-reference to C1's derivation. THE LIST LIVES HERE, NOT IN A

@@ -262,6 +262,17 @@ door_stdin_status_t door_drain_stdin_bounded(
  * only move the same error. */
 int door_argv_declares_params_stdin(int argc, const char *const *argv);
 
+/* The flag `hook-run` accepts ahead of the op name: `hook-run --advisory
+ * hooks.<name>`. A bare token, unlike `--params-file` -- no separated or
+ * joined value form to match. */
+#define DOOR_ADVISORY_FLAG "--advisory"
+
+/* True iff `argv[1 .. argc-1]` declares the row advisory. `argv[0]`
+ * excluded for the same reason `door_argv_declares_params_stdin` excludes
+ * it: this door never forwards it, and an image whose own path happened to
+ * spell the flag is not a caller declaration. */
+int door_argv_declares_advisory(int argc, const char *const *argv);
+
 /* =========================================================================
  * The stdin-reading basename gate -- deliberately mirrors
  * `door_argv_declares_params_stdin` above, for the same stated reason: "so

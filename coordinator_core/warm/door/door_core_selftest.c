@@ -289,6 +289,30 @@ int main(void) {
                   door_argv_declares_params_stdin(3, NULL), 0);
     }
 
+    /* ---- 6b. The advisory hook-mode flag (door_core.h). A door that
+     * misses this shape wraps a legitimately silent advisory row's cold
+     * fall-through back into `emit_hook_pass_loudly`'s loud envelope; a
+     * door that over-matches it silences a guard row that should have
+     * stayed loud. */
+    {
+        const char *before_op[] = {"door.exe", "--advisory", "hooks.some_hook"};
+        check_int("advisory/flag_before_op",
+                  door_argv_declares_advisory(3, before_op), 1);
+
+        const char *guard[] = {"door.exe", "hooks.some_hook"};
+        check_int("advisory/no_flag_is_not_advisory",
+                  door_argv_declares_advisory(2, guard), 0);
+
+        /* argv[0] is never forwarded, so an image path that happens to
+         * spell the flag is not a caller declaration. */
+        const char *argv0_only[] = {"--advisory"};
+        check_int("advisory/argv0_excluded",
+                  door_argv_declares_advisory(1, argv0_only), 0);
+
+        check_int("advisory/null_argv",
+                  door_argv_declares_advisory(2, NULL), 0);
+    }
+
     /* ---- 7. The stdin-reading basename gate (door_core.h). Mirrors
      * check 6's shape: a door that misses a listed name delivers a
      * stdin-reading entrypoint warm, where `sys.stdin` is None; a door

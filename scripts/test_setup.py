@@ -2826,8 +2826,118 @@ def test_claude_doe_chain_manifest_declares_the_step():
     assert "claude_doe_launcher_chain" in ids
 
 
+@pytest.fixture
+def launcher_opted_in(setup_mod, monkeypatch):
+    """Tests of the chain body, past the opt-in gate the tests below pin."""
+    monkeypatch.setattr(setup_mod, "_claude_doe_launcher_opted_in", lambda args: True)
+
+
+@pytest.fixture
+def launcher_box(setup_mod, tmp_path, monkeypatch):
+    """An isolated home with no registry answer: `repos.doe_claude` resolves
+    only through REPO_DOE_CLAUDE, which each test sets or leaves unset."""
+    import coordinator_core.machine_resolver as mr
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("CLAUDE_HOME", str(home))
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
+    monkeypatch.setattr(mr, "registry_get", lambda key: None)
+    calls = []
+    monkeypatch.setattr(
+        setup_mod, "run_op_main", lambda op_module, argv, cwd=None: (calls.append(op_module) or 0)
+    )
+    shim = home / ".claude" / "shell" / "claude-doe-shim.sh"
+    return {"home": home, "shim": shim, "calls": calls}
+
+
+def _dev_clone(tmp_path, monkeypatch):
+    clone = tmp_path / "DoE-claude"
+    clone.mkdir()
+    (clone / ".coordinator-dev-repo").write_text("")
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(clone))
+    return clone
+
+
+def _run_chain(setup_mod, tmp_path, args):
+    repo_root = tmp_path / "repo"
+    bin_dir = repo_root / "coordinator" / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    for _, name, _, _ in setup_mod._CLAUDE_DOE_CHAIN_STEPS:
+        (bin_dir / name).write_text("# stub\n")
+    setup_mod.install_claude_doe_launcher_chain(repo_root, sys.executable, tmp_path, args)
+
+
+def test_launcher_chain_removes_a_shim_a_consumer_box_never_chose(
+    setup_mod, launcher_box, tmp_path, capsys
+):
+    """The shim shadows the bare `claude`. On a box with no DoE dev clone it
+    was never chosen, and a stale one bricks `claude` outright."""
+    launcher_box["shim"].parent.mkdir(parents=True)
+    launcher_box["shim"].write_text("claude() { :; }\n")
+
+    _run_chain(setup_mod, tmp_path, setup_mod.Args())
+
+    assert not launcher_box["shim"].exists()
+    assert launcher_box["calls"] == []
+
+
+def test_launcher_chain_rejects_a_doe_root_without_the_dev_sentinel(
+    setup_mod, launcher_box, tmp_path, monkeypatch, capsys
+):
+    published = tmp_path / "coordinator-claude"
+    published.mkdir()
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(published))
+    args = setup_mod.Args()
+    args.with_claude_doe_launcher = True
+
+    _run_chain(setup_mod, tmp_path, args)
+
+    assert launcher_box["calls"] == []
+    assert "launcher not wired" in capsys.readouterr().err
+
+
+def test_launcher_chain_on_a_dev_box_waits_for_the_opt_in(
+    setup_mod, launcher_box, tmp_path, monkeypatch, capsys
+):
+    _dev_clone(tmp_path, monkeypatch)
+
+    _run_chain(setup_mod, tmp_path, setup_mod.Args())
+
+    assert launcher_box["calls"] == []
+    assert "not opted in" in capsys.readouterr().out
+
+
+def test_launcher_chain_runs_on_the_opt_in_flag(setup_mod, launcher_box, tmp_path, monkeypatch):
+    _dev_clone(tmp_path, monkeypatch)
+    args = setup_mod.Args()
+    args.with_claude_doe_launcher = True
+
+    _run_chain(setup_mod, tmp_path, args)
+
+    assert len(launcher_box["calls"]) == len(setup_mod._CLAUDE_DOE_CHAIN_STEPS)
+
+
+def test_launcher_chain_keeps_an_earlier_choice_on_a_dev_box(
+    setup_mod, launcher_box, tmp_path, monkeypatch
+):
+    _dev_clone(tmp_path, monkeypatch)
+    launcher_box["shim"].parent.mkdir(parents=True)
+    launcher_box["shim"].write_text("claude() { :; }\n")
+
+    _run_chain(setup_mod, tmp_path, setup_mod.Args())
+
+    assert launcher_box["shim"].exists()
+    assert len(launcher_box["calls"]) == len(setup_mod._CLAUDE_DOE_CHAIN_STEPS)
+
+
+def test_with_claude_doe_launcher_is_parsed_and_kept_out_of_help(setup_mod):
+    assert setup_mod.parse_args(["--with-claude-doe-launcher", "--i-am-agent"]).with_claude_doe_launcher
+    assert "claude-doe" not in setup_mod.HELP_TEXT
+
+
 def test_install_claude_doe_launcher_chain_missing_generators_is_loud_advisory(
-    setup_mod, tmp_path, monkeypatch, capsys
+    setup_mod, launcher_opted_in, tmp_path, monkeypatch, capsys
 ):
     repo_root = tmp_path / "repo"
     (repo_root / "coordinator" / "bin").mkdir(parents=True)  # empty -- all four missing
@@ -2848,7 +2958,7 @@ def test_install_claude_doe_launcher_chain_missing_generators_is_loud_advisory(
 
 
 def test_install_claude_doe_launcher_chain_continues_past_a_mid_chain_failure(
-    setup_mod, tmp_path, monkeypatch, capsys
+    setup_mod, launcher_opted_in, tmp_path, monkeypatch, capsys
 ):
     repo_root = tmp_path / "repo"
     bin_dir = repo_root / "coordinator" / "bin"
@@ -2882,7 +2992,7 @@ def test_install_claude_doe_launcher_chain_continues_past_a_mid_chain_failure(
 
 
 def test_install_claude_doe_launcher_chain_unresolved_doe_root_is_not_applicable(
-    setup_mod, tmp_path, monkeypatch, capsys
+    setup_mod, launcher_opted_in, tmp_path, monkeypatch, capsys
 ):
     """An unresolved `repos.doe_claude` means the dev-clone install mode is not
     configured -- the marketplace plugin install needs none of this chain
@@ -2932,7 +3042,7 @@ def test_install_claude_doe_launcher_chain_unresolved_doe_root_is_not_applicable
 
 
 def test_install_claude_doe_launcher_chain_all_pass_prints_no_incomplete_summary(
-    setup_mod, tmp_path, monkeypatch, capsys
+    setup_mod, launcher_opted_in, tmp_path, monkeypatch, capsys
 ):
     repo_root = tmp_path / "repo"
     bin_dir = repo_root / "coordinator" / "bin"
@@ -2956,7 +3066,7 @@ def test_install_claude_doe_launcher_chain_all_pass_prints_no_incomplete_summary
 
 
 def test_install_claude_doe_launcher_chain_never_spawns_subprocess(
-    setup_mod, tmp_path, monkeypatch, capsys
+    setup_mod, launcher_opted_in, tmp_path, monkeypatch, capsys
 ):
     """P175-C6: the chain runs its four generators in-process via
     `run_op_main` (spike verdict call shape (b)) -- no `subprocess.run` on

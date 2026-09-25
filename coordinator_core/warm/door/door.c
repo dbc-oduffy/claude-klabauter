@@ -725,6 +725,27 @@ static int door_argv_declares_params_stdin_w(int argc, wchar_t **wargv) {
     return declared;
 }
 
+/* Wide-argv adapter over `door_argv_declares_advisory`; fails closed to 0
+ * on a conversion failure. */
+static int door_argv_declares_advisory_w(int argc, wchar_t **wargv) {
+    if (argc <= 1 || wargv == NULL) return 0;
+    const char **argv_u8 = (const char **)calloc((size_t)argc, sizeof(char *));
+    if (!argv_u8) return 0;
+    int declared = 0;
+    int converted = 1;
+    for (int i = 1; i < argc; i++) {
+        int len = 0;
+        argv_u8[i] = wide_to_utf8(wargv[i], &len);
+        if (!argv_u8[i]) { converted = 0; break; }
+    }
+    if (converted) {
+        declared = door_argv_declares_advisory(argc, argv_u8);
+    }
+    for (int i = 1; i < argc; i++) free((void *)argv_u8[i]);
+    free(argv_u8);
+    return declared;
+}
+
 /* Wide-basename adapter over `door_basename_declares_stdin_read`
  * (door_core.c) -- mirrors `door_argv_declares_params_stdin_w` immediately
  * above, including that predicate's own reason for reusing the shared
@@ -999,9 +1020,14 @@ static int write_all(HANDLE h, const char *data, size_t len);
  * stdout still denies, because a hook that did not answer must never read as
  * one that allowed. */
 static int hook_fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w) {
+    /* An advisory row stays silent on every failure below, as hook-run.py
+     * does; a guard row keeps the loud envelope. */
+    int advisory = door_argv_declares_advisory_w(argc, wargv);
+
     wchar_t script_path_w[MAX_PATH * 2];
     wchar_t *cmdline_w = build_fallback_cmdline(argc, wargv, engine_root_w, script_path_w);
     if (!cmdline_w) {
+        if (advisory) return 0;
         return emit_hook_pass_loudly("coordinator-door: engine unreachable and no cold entrypoint resolved");
     }
 
@@ -1014,6 +1040,7 @@ static int hook_fall_through(int argc, wchar_t **wargv, const wchar_t *engine_ro
         if (in_r) CloseHandle(in_r);
         if (in_w) CloseHandle(in_w);
         free(cmdline_w);
+        if (advisory) return 0;
         return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard could not be started");
     }
     /* The parent's ends must not leak into the child, or the child never sees
@@ -1039,6 +1066,7 @@ static int hook_fall_through(int argc, wchar_t **wargv, const wchar_t *engine_ro
     if (!spawned) {
         CloseHandle(in_w);
         CloseHandle(out_r);
+        if (advisory) return 0;
         return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard could not be started");
     }
 
@@ -1071,6 +1099,7 @@ static int hook_fall_through(int argc, wchar_t **wargv, const wchar_t *engine_ro
     }
     if (!answered || i == verdict.len) {
         if (verdict_ok) free(verdict.data);
+        if (advisory) return 0;
         return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard returned no verdict");
     }
     write_all(GetStdHandle(STD_OUTPUT_HANDLE), verdict.data, verdict.len);

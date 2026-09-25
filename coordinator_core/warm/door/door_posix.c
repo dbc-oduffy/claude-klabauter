@@ -1218,18 +1218,25 @@ static void door_maybe_spawn_server(const char *engine_root, const char *svc_dir
 }
 
 static int hook_fall_through(int argc, char **argv, const char *engine_root) {
+    /* An advisory row stays silent on every failure below, as hook-run.py
+     * does; a guard row keeps the loud envelope. */
+    int advisory = door_argv_declares_advisory(argc, (const char *const *)argv);
+
     char script_path[PATH_MAX];
     if (resolve_fallback_script(engine_root, script_path) != 0) {
+        if (advisory) return 0;
         return emit_hook_pass_loudly("coordinator-door: engine unreachable and no cold entrypoint resolved");
     }
 
     int in_pipe[2], out_pipe[2];
     if (pipe(in_pipe) != 0) {
+        if (advisory) return 0;
         return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard could not be started");
     }
     if (pipe(out_pipe) != 0) {
         close(in_pipe[0]);
         close(in_pipe[1]);
+        if (advisory) return 0;
         return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard could not be started");
     }
 
@@ -1257,6 +1264,7 @@ static int hook_fall_through(int argc, char **argv, const char *engine_root) {
     if (rc != 0) {
         close(in_pipe[1]);
         close(out_pipe[0]);
+        if (advisory) return 0;
         return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard could not be started");
     }
 
@@ -1294,6 +1302,7 @@ static int hook_fall_through(int argc, char **argv, const char *engine_root) {
     }
     if (!answered || i == verdict.len) {
         if (verdict_ok) free(verdict.data);
+        if (advisory) return 0;
         return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard returned no verdict");
     }
     write_all_fd(STDOUT_FILENO, verdict.data, verdict.len);
