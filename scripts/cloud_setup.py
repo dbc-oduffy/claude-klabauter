@@ -107,7 +107,7 @@ CLONES: dict[str, dict[str, str]] = {
 #: the ``curl | python3`` line restores the real name for every retrieval-half
 #: step below, with no edit to this file and no change to what gets scrubbed.
 #: Unset, behavior is exactly what it was before this override existed.
-RETRIEVAL_REPO_SLUG = (os.environ.get("COORDINATOR_RETRIEVAL_REPO_SLUG") or "example-retrieval-repo").strip()
+RETRIEVAL_REPO_SLUG = (os.environ.get("COORDINATOR_RETRIEVAL_REPO_SLUG") or "project-rag").strip()
 RETRIEVAL_MODULE_PREFIX = RETRIEVAL_REPO_SLUG.replace("-", "_")
 RETRIEVAL_UE_ADDON_SLUG = f"{RETRIEVAL_REPO_SLUG}-ue-addon"
 
@@ -2329,7 +2329,7 @@ def _machine_local_argv() -> list[str]:
 
 
 def register_machine_local_repo_keys(report: Report) -> None:
-    """Write ``repos.example_retrieval_repo`` and ``repos.example_retrieval_repo_ue_addon`` into the
+    """Write ``repos.project_rag`` and ``repos.project_rag_ue_addon`` into the
     machine-local registry, so a session resolves either checkout by key rather
     than by a literal path this script happened to choose.
 
@@ -2903,7 +2903,7 @@ def _write_connect_helper(start_argv: list[str] | None, url: str) -> Path:
 
 
 def register_retrieval_mcp_entry(report: Report) -> None:
-    """Write ``mcpServers."example-retrieval-repo"`` into ``$HOME/.claude.json``, always.
+    """Write ``mcpServers."project-rag"`` into ``$HOME/.claude.json``, always.
 
     THIS STEP HAS NO DEPENDENCIES AND MUST NOT ACQUIRE ANY. The entry is a
     pointer to a loopback URL, not a reference to code: nothing about writing it
@@ -3017,7 +3017,7 @@ def arm_retrieval_connect_helper(report: Report) -> None:
 
 def verify_mcp_registration(report: Report) -> None:
     """Read `~/.claude.json` back OFF DISK and record what a session launched in
-    this VM will actually see for `mcpServers.example-retrieval-repo`.
+    this VM will actually see for `mcpServers.project-rag`.
 
     Never asserts what the installer reported doing: a session reads this file at
     startup and cannot be told afterwards, so the only fact worth recording is

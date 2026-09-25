@@ -342,7 +342,7 @@ class TestReadConfig(unittest.TestCase):
             self.assertEqual(read_config(), {})
 
     def test_reads_existing_file(self):
-        payload = {"mcpServers": {"example-retrieval-repo": {"type": "stdio"}}}
+        payload = {"mcpServers": {"project-rag": {"type": "stdio"}}}
         with _isolated_env(CLAUDE_HOME=str(self.tmp_path)):
             (self.tmp_path / ".claude.json").write_text(json.dumps(payload), encoding="utf-8")
             self.assertEqual(read_config(), payload)

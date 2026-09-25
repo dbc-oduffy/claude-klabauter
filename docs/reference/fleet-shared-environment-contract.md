@@ -509,7 +509,7 @@ authored into their trees).
   Windows, `<fleet-env-root>/bin/python` on POSIX, resolved via
   `coordinator_core.install.fleet_env.resolve_environment_root()` or
   `python3 coordinator/bin/fleet-env.py get`) instead of its own repo-local `.venv`'s interpreter,
-  and calls `register_sibling_binding("example_retrieval_repo", "<own-package>", <own repo root>)` for any
+  and calls `register_sibling_binding("project_rag", "<own-package>", <own repo root>)` for any
   in-process import surface it still needs on `sys.path` (its editable installs — `example_retrieval_repo`,
   `example_retrieval_repo_ue_addon`, `coordinator_whoami` — become `.pth`-style bindings rather than `pip
   install -e` targets inside a repo-local venv).

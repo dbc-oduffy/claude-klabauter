@@ -45,7 +45,7 @@
 # third-party PyPI specs and DO go into the union.
 
 [[source]]
-repo = "example_retrieval_repo"
+repo = "project_rag"
 manifest = "pyproject.toml"
 
 [[source]]
@@ -73,11 +73,11 @@ repo = "experiments"
 manifest = "review-experiments/pyproject.toml"
 
 [[source]]
-repo = "example_retrieval_repo_ue_addon"
+repo = "project_rag_ue_addon"
 manifest = "pyproject.toml"
 
 [[source]]
-repo = "example_retrieval_repo_ue_addon"
+repo = "project_rag_ue_addon"
 manifest = "requirements.txt"
 
 # --- Dispositions: manifests considered and ruled OUT ---------------------

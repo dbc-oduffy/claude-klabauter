@@ -252,12 +252,39 @@ WIRE_LITERAL_RE = re.compile(
     + r""")(?:[-._][\w./-]*)?['"]"""
 )
 
+# Exact functional literals a published caller reads as a wire value (an on-disk
+# directory name, a registry key, an MCP server id, a binary name) -- never a mention
+# subject to rewriting. Canonical source: `base.protected_literals` in
+# `setup/percolate-hooks/percolate-store.yaml` (makima side); pinned in parity by
+# `coordinator/bin/tests/test_check_persona_names_protected_literals_parity.py` against
+# that same store, so the two lists cannot drift apart silently. This file cannot import
+# that store directly -- it must run standalone against a published mirror with no
+# `project-makima` sibling guaranteed present -- so the literal values are carried here
+# verbatim, the same "the two lists have to agree by hand" precedent `_repo.py`'s
+# `SKIP_DIR_NAMES` docstring already names for this harness.
+PROTECTED_LITERALS = (
+    ".project-rag",
+    "repos.project_rag",
+    "repos.project_rag_ue_addon",
+    "repos.project_rag_plugin",
+    "mcp__project-rag__",
+    "project_rag_scripts/",
+    '"project-rag"',
+    '"project_rag"',
+    "'project_rag'",
+    '"project_rag_ue_addon"',
+)
+PROTECTED_LITERAL_RE = re.compile(
+    "|".join(re.escape(literal) for literal in PROTECTED_LITERALS)
+)
+
 
 def permitted_spans(text: str, path: str) -> list[tuple[int, int]]:
     spans = [m.span(1) for m in HANDLE_URL_RE.finditer(text)]
     spans += [m.span(1) for m in HANDLE_SLUG_RE.finditer(text)]
     spans += [m.span() for m in HANDLE_MENTION_RE.finditer(text)]
     spans += [m.span() for m in WIRE_LITERAL_RE.finditer(text)]
+    spans += [m.span() for m in PROTECTED_LITERAL_RE.finditer(text)]
     if is_attribution_surface(path):
         spans += [m.span() for m in PERSONAL_NAME_RE.finditer(text)]
         spans += [m.span() for m in SURNAME_RE.finditer(text)]
