@@ -448,24 +448,14 @@ def _measurement_record(message: Message) -> str:
 
 
 def _write_measurement_record(message: Message) -> None:
-    """Write the structured measurement record for `message` to fd 3, or a
-    documented fallback when fd 3 is not open (the common case outside a
-    harness -- fd 3 is not a channel any process is guaranteed to inherit).
+    """Write the structured measurement record for `message` to stdout, which
+    measurement mode leaves free (see `emit`).
 
-    Windows-safe: this never assumes POSIX fd semantics hold. The `os.write`
-    call is wrapped so a closed/unavailable fd 3 (any `OSError`, including
-    the Windows "bad file descriptor" shape) degrades to the fallback
-    instead of crashing the hook. The fallback is stdout: under measurement
-    mode this module never also writes the flattened channel output (see
-    `emit`), so stdout is free for the harness to read the SAME structured
-    line from instead."""
-    line = _measurement_record(message)
-    try:
-        os.write(3, (line + "\n").encode("utf-8"))
-        return
-    except Exception:
-        pass
-    sys.stdout.write(line + "\n")
+    Trap: never write to a bare inherited fd such as 3. Nothing opens one for
+    this record, so a bare fd is whatever the parent happened to leave there --
+    under pytest-xdist on Windows it is the worker's control pipe, and the
+    write hung the worker."""
+    sys.stdout.write(_measurement_record(message) + "\n")
 
 
 def emit(

@@ -95,7 +95,6 @@ class TestMessageEnvelope:
     def test_emit_measurement_mode_writes_structured_record(self, monkeypatch, capsys):
         monkeypatch.setenv(message_envelope.MEASURE_ENV_VAR, "1")
         msg = message_envelope.compose("hello", alternative=None, anchor=None)
-        # fd 3 is not open under pytest, so this falls back to stdout.
         result = message_envelope.emit(msg, message_envelope.CHANNEL_ADDITIONAL_CONTEXT)
         assert result is None
         out = capsys.readouterr().out

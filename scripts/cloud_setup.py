@@ -160,11 +160,15 @@ DEV_REPO_SENTINEL = ".coordinator-dev-repo"
 INSTALL_REPORT_PATH = Path("/root/cloud-setup-report.json")
 
 #: Binaries whose absence from a SESSION's PATH silently disables a whole plane:
-#: `python3` carries every coordinator hook registration, the two language
-#: servers carry the LSP plugins. Resolved here, pre-boot, so the value the
-#: cloud dialog's env-var box needs is determined off the image rather than
+#: `python3` carries every coordinator hook registration, `claude` every
+#: in-session `claude` spawn and verify-live's CLI probe, the two language
+#: servers the LSP plugins. Resolved here, pre-boot, so the value the cloud
+#: dialog's env-var box needs is determined off the image rather than
 #: re-derived by hand against a session that has already booted wrong.
-SESSION_PATH_BINARIES = ("python3", "pyright-langserver", "typescript-language-server")
+#: A directory enters the pinned PATH only if some binary here resolves into
+#: it — a binary that lives in a toolchain dir but is missing from this list
+#: drops that dir from the pin.
+SESSION_PATH_BINARIES = ("python3", "claude", "pyright-langserver", "typescript-language-server")
 
 #: Basenames of the two session-facing surfaces. `<claude_home>/rules/*.md` is
 #: loaded into session context by the harness itself, with no interpreter and no
@@ -293,6 +297,9 @@ STALE_PYTEST_TREE_PREFIX = "pytest-of-"
 #: concurrent run may still own a tree younger than this — mtime updates on
 #: every write beneath it — so only a tree this old is presumed abandoned.
 STALE_PYTEST_TREE_AGE_S = 6 * 60 * 60
+#: Bound on `uv cache clean`. A multi-GB cache is mostly unlinks; a clean
+#: blocked past this on uv's cache lock is recorded, never waited out.
+UV_CACHE_CLEAN_TIMEOUT_S = 120
 
 
 def retrieval_search_roots() -> "list[Path]":
@@ -403,6 +410,9 @@ class Report:
     #: `pytest-of-*` trees under the system temp dir were removed vs. left
     #: alone as too young, and the bytes freed.
     pytest_tree_reap: dict | None = None
+    #: Verdict of the post-install uv cache reclaim: the cache dir, bytes before
+    #: and after, or why nothing was cleaned. See `reclaim_uv_cache`.
+    uv_cache_reclaim: dict | None = None
     #: The engine corpus is never fetched here: it is the lazy tier, and nothing
     #: about launching a session needs it. Declared as a constant on the report
     #: rather than produced by a pipeline step — a step that assigns a literal
@@ -3536,6 +3546,69 @@ def reap_stale_pytest_trees(report: Report) -> None:
     )
 
 
+def _uv_cache_dir() -> Path:
+    """uv's cache root by its own precedence: `UV_CACHE_DIR`, then
+    `$XDG_CACHE_HOME/uv`, then `~/.cache/uv` — resolved in-process, not by a
+    `uv cache dir` spawn."""
+    explicit = os.environ.get("UV_CACHE_DIR")
+    if explicit:
+        return Path(explicit)
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    return (Path(xdg) if xdg else Path.home() / ".cache") / "uv"
+
+
+def reclaim_uv_cache(report: Report) -> None:
+    """Clear the uv cache the retrieval install leaves behind, and report the bytes.
+
+    The retrieval install's uv resolve leaves several GB in the cache (7.2 GB
+    observed, example-retrieval-repo-ue-addon#48 B3) that nothing in a session reuses, on a
+    volume the lazy engine-corpus extraction later needs: left in place it
+    turned that extraction into ENOSPC. The installed environment does not
+    depend on the cache, so clearing it costs only a re-download if a later
+    install resolves again.
+
+    Through `uv cache clean`, not an rmtree: uv holds a lock on its cache and
+    owns its layout. Never raises — no uv, no cache, or a failed clean is a
+    recorded verdict, not a broken pipeline step.
+    """
+    cache_dir = _uv_cache_dir()
+    verdict: dict = {"cache_dir": str(cache_dir)}
+    report.uv_cache_reclaim = verdict
+    # Keyed on the install having run, not on the cache existing: a cache this
+    # run did not fill is an operator's, and is not this step's to clear.
+    if report.rag_install is None:
+        verdict["skipped"] = "retrieval install did not run"
+        return
+    if not cache_dir.is_dir():
+        verdict["skipped"] = "no uv cache on disk"
+        return
+    uv = shutil.which("uv")
+    if uv is None:
+        verdict["skipped"] = "uv not on PATH"
+        return
+    verdict["bytes_before"] = _dir_size_bytes(cache_dir)
+    try:
+        result = subprocess.run(
+            [uv, "cache", "clean"],
+            capture_output=True,
+            text=True,
+            timeout=UV_CACHE_CLEAN_TIMEOUT_S,
+            # stdin explicitly closed, not inherited; see _git_clone's comment.
+            stdin=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        verdict["error"] = f"{type(e).__name__}: {e}"
+        return
+    if result.returncode != 0:
+        verdict["error"] = f"exit {result.returncode}: {result.stderr.strip()}"
+    verdict["bytes_after"] = _dir_size_bytes(cache_dir)
+    _safe_print(
+        "[cloud_setup] uv cache reclaim: freed "
+        f"{verdict['bytes_before'] - verdict['bytes_after']} byte(s)"
+    )
+
+
 def _record_session_surfaces_best_effort(report: Report) -> None:
     """Resolve the env-box PATH and land the verdict surface, swallowing failures.
 
@@ -3605,7 +3678,6 @@ def main() -> int:
     run_step("register plugin settings", register_plugin_settings, report)
     run_step("apply settings-manifest env", lambda: apply_settings_manifest_env(report), report)
     run_step("verify plugin settings", lambda: verify_plugin_settings(report), report)
-    run_step("pin session PATH", lambda: pin_session_path(report), report)
     run_step("register live plugin record", register_live_plugin_record, report)
     run_step("install global doctrine", lambda: install_global_doctrine(report), report)
     run_step("verify global doctrine", lambda: verify_global_doctrine(report), report)
@@ -3638,8 +3710,17 @@ def main() -> int:
         report,
     )
     run_step(f"{RETRIEVAL_REPO_SLUG} cloud install", lambda: run_example_retrieval_repo_cloud_install(report), report)
+    # Directly after the one step that fills the cache, so no later step runs
+    # on a volume still carrying it.
+    run_step("reclaim uv cache", lambda: reclaim_uv_cache(report), report)
     run_step("arm retrieval connect helper", lambda: arm_retrieval_connect_helper(report), report)
     run_step("verify MCP registration", lambda: verify_mcp_registration(report), report)
+    # AFTER the retrieval install, not beside the other settings writes: that
+    # install is what lands the language servers, and a directory enters the
+    # pin only when a session binary resolves into it. Pinned earlier, the
+    # toolchain dir they share with `claude` was left out of the session PATH
+    # while the report's later re-derivation showed it present.
+    run_step("pin session PATH", lambda: pin_session_path(report), report)
     # LAST of the pipeline, deliberately: the retrieval installer and
     # scripts/setup.py both touch plugin registration, so a check placed
     # beside the write above would attest to a record a later step could still

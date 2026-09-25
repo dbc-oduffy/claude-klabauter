@@ -110,7 +110,10 @@ import sys
 from typing import Any, Dict, Optional
 
 from coordinator_core._hook_envelope import allow_advisory, deny
-from coordinator_core.hooks.block_unenumerated_agent_type import resolve_model_pins
+from coordinator_core.hooks.block_unenumerated_agent_type import (
+    resolve_model_pins,
+    resolve_subagent_type,
+)
 
 CLASS = "hard-deny"
 MATCHERS = ("Agent",)
@@ -191,9 +194,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not isinstance(tool_input, dict):
         tool_input = {}
 
-    subagent_type = _clean_str(tool_input.get("subagent_type"))
-    if subagent_type is None:
-        return None
+    subagent_type = resolve_subagent_type(tool_input)
 
     passed_model = _clean_str(tool_input.get("model"))
     passed_effort = _clean_str(tool_input.get("effort"))

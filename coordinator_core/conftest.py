@@ -1359,3 +1359,77 @@ def _pin_environment_answered_mode_defaults(monkeypatch):
 @pytest.fixture(autouse=True)
 def _pin_auto_compact_window_absent(monkeypatch):
     monkeypatch.delenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", raising=False)
+
+
+# ---------------------------------------------------------------------------
+# Foreign-process kill tripwire
+# ---------------------------------------------------------------------------
+#
+# The suite runs on a box carrying dozens of live sessions; it must be unable
+# to signal any process it did not spawn. Installed at import, so it covers
+# every xdist worker. A test's own monkeypatch of `os.kill` still wins (it
+# replaces this wrapper for that test only), which is fine: a patched kill
+# reaches nothing.
+#
+# Traps: on Windows `os.kill(pid, 0)` is NOT a liveness probe -- signal 0 is
+# CTRL_C_EVENT, sent via GenerateConsoleCtrlEvent to every process in the
+# group, and pid 0 means the whole console, i.e. the session hosting pytest.
+# Only Python-level kills are caught; a raw ctypes TerminateProcess or a
+# `-c` child that never imports this conftest is outside the wrapper's reach.
+
+
+class ForeignProcessKill(RuntimeError):
+    pass
+
+
+def _is_own_process_tree(pid: int) -> bool:
+    me = os.getpid()
+    if pid == me:
+        return True
+    try:
+        import psutil
+    except ImportError:
+        return False
+    try:
+        return any(p.pid == me for p in psutil.Process(pid).parents())
+    except psutil.NoSuchProcess:
+        return True  # nothing there to hit
+    except psutil.Error:
+        return False
+
+
+def _refuse_foreign(pid, what: str) -> None:
+    if not isinstance(pid, int) or pid <= 0 or not _is_own_process_tree(pid):
+        raise ForeignProcessKill(
+            f"{what} targeted pid {pid!r}, outside this test process's tree -- "
+            "a test may only signal processes it spawned."
+        )
+
+
+_real_os_kill = os.kill
+
+
+def _guarded_os_kill(pid, sig):
+    _refuse_foreign(pid, f"os.kill(sig={sig!r})")
+    return _real_os_kill(pid, sig)
+
+
+os.kill = _guarded_os_kill
+
+try:
+    import psutil as _psutil_for_tripwire
+except ImportError:
+    _psutil_for_tripwire = None
+
+if _psutil_for_tripwire is not None:
+    def _wrap_psutil(name):
+        real = getattr(_psutil_for_tripwire.Process, name)
+
+        def guarded(self, *args, **kwargs):
+            _refuse_foreign(self.pid, f"psutil.Process.{name}")
+            return real(self, *args, **kwargs)
+
+        setattr(_psutil_for_tripwire.Process, name, guarded)
+
+    for _name in ("kill", "terminate", "send_signal", "suspend"):
+        _wrap_psutil(_name)

@@ -149,7 +149,10 @@ import sys
 from typing import Any, Dict, Optional
 
 from coordinator_core._hook_envelope import deny, rewrite_input
-from coordinator_core.hooks.block_unenumerated_agent_type import resolve_model_pins
+from coordinator_core.hooks.block_unenumerated_agent_type import (
+    resolve_model_pins,
+    resolve_subagent_type,
+)
 from coordinator_core.hooks.enforce_agent_model_pin import _clean_str
 from coordinator_core.transcript_tail import resolve_last_assistant_model
 
@@ -208,9 +211,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not isinstance(tool_input, dict):
         tool_input = {}
 
-    subagent_type = _clean_str(tool_input.get("subagent_type"))
-    if subagent_type is None:
-        return None
+    subagent_type = resolve_subagent_type(tool_input)
 
     if os.environ.get(_OVERRIDE_ENV):
         return None

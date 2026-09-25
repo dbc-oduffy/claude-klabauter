@@ -161,7 +161,6 @@ def _patch_linux_root(monkeypatch, cloud_mod):
 def _patch_network_steps_ok(monkeypatch, cloud_mod):
     """Stub every network/subprocess-touching step to a hermetic no-op success."""
     monkeypatch.setattr(cloud_mod, "clone_repo", lambda name: None)
-    monkeypatch.setattr(cloud_mod, "run_coordinator_install_trampoline", lambda: None)
 
     def _fake_run_claude_klabauter_setup(report):
         report.container_optin_requested = True
@@ -175,14 +174,10 @@ def _patch_network_steps_all_raise(monkeypatch, cloud_mod):
     def _raise_clone(name):
         raise RuntimeError(f"stubbed network failure: clone {name}")
 
-    def _raise_trampoline():
-        raise RuntimeError("stubbed network failure: install trampoline")
-
     def _raise_setup(report):
         raise RuntimeError("stubbed network failure: run scripts/setup.py")
 
     monkeypatch.setattr(cloud_mod, "clone_repo", _raise_clone)
-    monkeypatch.setattr(cloud_mod, "run_coordinator_install_trampoline", _raise_trampoline)
     monkeypatch.setattr(cloud_mod, "run_claude_klabauter_setup", _raise_setup)
 
 
@@ -225,7 +220,6 @@ def test_every_network_step_failing_is_named_not_silent(monkeypatch, tmp_path, c
     for step_name in (
         "clone coordinator-claude",
         "clone klabauter",
-        "coordinator-claude install orchestrator",
         "run scripts/setup.py",
     ):
         assert step_name in out
@@ -237,7 +231,6 @@ def test_every_network_step_failing_is_named_not_silent(monkeypatch, tmp_path, c
     for step_name in (
         "clone coordinator-claude",
         "clone klabauter",
-        "coordinator-claude install orchestrator",
         "run scripts/setup.py",
     ):
         assert step_name in steps_by_name, f"{step_name} missing from report"
@@ -289,45 +282,6 @@ def test_run_claude_klabauter_setup_argv_names_coordinator_root(monkeypatch, tmp
     # stdin=subprocess.DEVNULL
     # had zero coverage: this test's own _fake_run previously discarded kwargs,
     # so deleting the argument would not have failed anything.
-    assert captured_kwargs.get("stdin") is cloud_mod.subprocess.DEVNULL
-
-
-def test_run_coordinator_install_trampoline_argv_has_non_interactive(
-    monkeypatch, tmp_path, cloud_mod
-):
-    scratch_clones = _make_scratch_clones(cloud_mod, tmp_path)
-    monkeypatch.setattr(cloud_mod, "CLONES", scratch_clones)
-    orchestrator = (
-        Path(scratch_clones["klabauter"]["dest"]) / "coordinator_core" / "install" / "maximalist.py"
-    )
-    orchestrator.parent.mkdir(parents=True, exist_ok=True)
-    orchestrator.touch()
-
-    captured_argv = {}
-    captured_kwargs = {}
-
-    class _FakeCompletedProcess:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
-    def _fake_run(argv, **kwargs):
-        captured_argv["argv"] = argv
-        captured_kwargs.update(kwargs)
-        return _FakeCompletedProcess()
-
-    monkeypatch.setattr(cloud_mod.subprocess, "run", _fake_run)
-
-    cloud_mod.run_coordinator_install_trampoline()
-
-    argv = captured_argv["argv"]
-    assert "--non-interactive" in argv
-    # Asserted on the real argv passed
-    # to subprocess.run, not a re-stub of run_coordinator_install_trampoline
-    # itself, per code-reviewer's deferred coverage-gap finding (aabbbb3784):
-    # every other trampoline test monkeypatches the function out, so an
-    # accidental removal of "--non-interactive" from this argv list would not
-    # have been caught by this suite.
     assert captured_kwargs.get("stdin") is cloud_mod.subprocess.DEVNULL
 
 
@@ -388,7 +342,6 @@ def test_host_precondition_refuses_on_non_linux_and_records_nothing_executed(
         raise AssertionError("no step may run when the host precondition fails")
 
     monkeypatch.setattr(cloud_mod, "clone_repo", _fail_if_called)
-    monkeypatch.setattr(cloud_mod, "run_coordinator_install_trampoline", _fail_if_called)
     monkeypatch.setattr(cloud_mod, "run_claude_klabauter_setup", _fail_if_called)
 
     rc = cloud_mod.main()

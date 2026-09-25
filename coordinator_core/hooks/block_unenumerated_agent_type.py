@@ -203,6 +203,20 @@ _HARNESS_BUILTIN_TYPES: FrozenSet[str] = frozenset({
     "workflow-subagent",
 })
 
+#: What the harness runs when an Agent call omits `subagent_type`.
+_HARNESS_DEFAULT_TYPE = "general-purpose"
+
+
+def resolve_subagent_type(tool_input: Dict[str, Any]) -> str:
+    """The type an Agent dispatch will actually run as. Every PreToolUse(Agent)
+    leg must key on this, never on the raw field: an omitted type is the
+    harness default, and treating it as "nothing to check" is the hole every
+    model guard fell through."""
+    value = tool_input.get("subagent_type")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return _HARNESS_DEFAULT_TYPE
+
 #: (c), plugin leg -- the ONLY top-level `~/.claude/plugins/<entry>`
 #: directory name that must never be walked for `agents/*.md`.
 #: `_pre-refresh-snapshots` holds pre-refresh backups of plugin trees,
@@ -895,10 +909,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     `PreToolUse(Agent)` payload.
 
     `subagent_type`/`name`/`prompt` are read from `tool_input` ONLY (see
-    module docstring "INPUT TRUST"). A `tool_input` carrying no
-    `subagent_type` at all is out of scope for this guard (nothing to
-    enumerate against) and passes silently -- that shape is a different
-    guard's problem, not this one's.
+    module docstring "INPUT TRUST"). An omitted `subagent_type` is the
+    harness default `general-purpose`, not "out of scope" -- passing it
+    through silently skipped the composed model legs, so an unnamed
+    general-purpose dispatch inherited an Opus parent unrewritten.
     """
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
@@ -907,10 +921,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not isinstance(tool_input, dict):
         tool_input = {}
 
-    subagent_type = tool_input.get("subagent_type")
-    if not isinstance(subagent_type, str) or not subagent_type.strip():
-        return None
-    subagent_type = subagent_type.strip()
+    subagent_type = resolve_subagent_type(tool_input)
 
     prompt = tool_input.get("prompt")
     prompt_text = prompt if isinstance(prompt, str) else ""

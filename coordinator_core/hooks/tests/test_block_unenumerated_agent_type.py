@@ -485,10 +485,14 @@ def test_non_agent_tool_name_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
     assert mod.check(payload) is None
 
 
-def test_absent_subagent_type_out_of_scope(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_roster(monkeypatch, frozenset())
+def test_absent_subagent_type_resolves_to_harness_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_roster(monkeypatch, mod._HARNESS_BUILTIN_TYPES)
+    seen = []
+    monkeypatch.setattr(opus_gate_mod, "check", lambda payload: seen.append(payload) or None)
     payload = {"tool_name": "Agent", "tool_input": {"prompt": "no type given"}}
     assert mod.check(payload) is None
+    assert seen == [payload]  # composed model legs ran, not skipped
+    assert mod.resolve_subagent_type(payload["tool_input"]) == "general-purpose"
 
 
 # ---------------------------------------------------------------------------

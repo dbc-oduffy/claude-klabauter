@@ -188,10 +188,20 @@ def test_non_agent_tool_name_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
     assert mod.check(payload) is None
 
 
-def test_absent_subagent_type_out_of_scope(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_absent_subagent_type_under_opus_parent_rewrites_to_sonnet(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The harness runs an omitted type as general-purpose; the gate must too.
     _patch_pins(monkeypatch, {})
-    payload = {"tool_name": "Agent", "tool_input": {}}
-    assert mod.check(payload) is None
+    transcript = _write_transcript(tmp_path, model="claude-opus-5-5[1m]")
+    payload = {
+        "tool_name": "Agent",
+        "tool_input": {"prompt": "do the thing"},
+        "transcript_path": transcript,
+    }
+    envelope = mod.check(payload)
+    _assert_rewritten_to_sonnet(envelope, payload)
+    assert "subagent_type" not in envelope["hookSpecificOutput"]["updatedInput"]
 
 
 def test_payload_level_model_field_used_before_transcript(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -239,6 +249,29 @@ def test_composed_seam_rewrites_via_opus_gate_when_pin_leg_is_silent(
     }
     envelope = unenumerated_mod.check(payload)
     _assert_rewritten_to_sonnet(envelope, payload)
+
+
+def test_composed_seam_rewrites_absent_subagent_type(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        unenumerated_mod,
+        "resolve_roster",
+        lambda **_: (unenumerated_mod._HARNESS_BUILTIN_TYPES, None),
+    )
+    _patch_pins(monkeypatch, {})
+
+    import coordinator_core.hooks.enforce_agent_model_pin as pin_mod
+
+    monkeypatch.setattr(pin_mod, "resolve_model_pins", lambda **_: ({}, None))
+
+    transcript = _write_transcript(tmp_path, model="claude-opus-5-5[1m]")
+    payload = {
+        "tool_name": "Agent",
+        "tool_input": {"prompt": "do the thing", "description": "x"},
+        "transcript_path": transcript,
+    }
+    _assert_rewritten_to_sonnet(unenumerated_mod.check(payload), payload)
 
 
 def test_composed_seam_pin_deny_short_circuits_before_opus_gate(
