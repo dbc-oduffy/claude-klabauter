@@ -52,6 +52,7 @@ _EXPECTED_GUARD_NAMES = frozenset(
         "block_memo_status_hand_edit",
         "block_oss_mirror_memo_delivery",
         "block_priority_ledger_edit",
+        "block_sizing_object_schema_violation",
         "block_subagent_archive_write",
         "block_subagent_grant_record_write",
         "block_subagent_guard_grant_write",

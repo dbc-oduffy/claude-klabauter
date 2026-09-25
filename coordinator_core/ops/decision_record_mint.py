@@ -63,7 +63,7 @@ waiting out the TTL — see that op's own docstring.
 Candidate selection + the actual race
 ----------------------------------------
 1. Scan `docs/decisions/DR-<N>-*.md` (and the bare `DR-<N>.md` shape) for the
-   highest existing `N`.
+   highest existing `N`, folding in every file's frontmatter `id: DR-<N>`.
 2. Sweep expired reservations (above), then scan what remains for the
    highest reserved `N`.
 3. candidate = max(existing_max, reserved_max) + 1.
@@ -135,6 +135,11 @@ _RESERVATIONS_RELDIR = Path("state") / "decision-record-reservations"
 _DR_FILENAME_RE = re.compile(r"^DR-(\d+)(?:-.*)?\.md$", re.IGNORECASE)
 _RESERVATION_FILENAME_RE = re.compile(r"^DR-(\d+)\.reserved$", re.IGNORECASE)
 
+# Frontmatter leads the file; a bounded head read finds `id:` without a full read.
+_FRONTMATTER_MAX_LINES = 20
+_FRONTMATTER_ID_LINE_RE = re.compile(r"^id:\s*(\S+)\s*$")
+_FRONTMATTER_ID_VALUE_RE = re.compile(r"^DR-(\d+)$", re.IGNORECASE)
+
 _RESERVATION_TTL_DAYS = 14
 _MAX_MINT_ATTEMPTS = 1000
 
@@ -151,17 +156,47 @@ def _reservation_path(reservations_dir: Path, number: int) -> Path:
     return reservations_dir / f"DR-{number}.reserved"
 
 
+def _read_frontmatter_dr_number(path: Path) -> Optional[int]:
+    """Frontmatter `id: DR-<N>` number, or None. Never raises: a malformed
+    record must not break minting."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            for _ in range(_FRONTMATTER_MAX_LINES):
+                line = f.readline()
+                if not line:
+                    break
+                m = _FRONTMATTER_ID_LINE_RE.match(line.rstrip("\n"))
+                if not m:
+                    continue
+                value_match = _FRONTMATTER_ID_VALUE_RE.match(m.group(1))
+                if value_match is None:
+                    return None
+                return int(value_match.group(1))
+    except (OSError, UnicodeDecodeError):
+        return None
+    return None
+
+
 def _existing_dr_max(decisions_dir: Path) -> int:
-    """Highest `N` among `docs/decisions/DR-<N>[-*].md`, or 0 if none/absent."""
+    """Highest `N` over filenames and frontmatter ids in `docs/decisions`.
+
+    Trap: frontmatter is read for EVERY file, not only unparsed names. A
+    date-named record (`DR-2026-09-10-x.md`, `id: DR-2050`) parses as 2026
+    from its filename, and gating on that hid its real id and minted a
+    claimed number.
+    """
     if not decisions_dir.is_dir():
         return 0
     best = 0
     for entry in decisions_dir.iterdir():
-        if not entry.is_file():
+        if not entry.is_file() or not entry.name.lower().endswith(".md"):
             continue
         m = _DR_FILENAME_RE.match(entry.name)
         if m:
             best = max(best, int(m.group(1)))
+        fm_number = _read_frontmatter_dr_number(entry)
+        if fm_number is not None:
+            best = max(best, fm_number)
     return best
 
 

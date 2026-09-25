@@ -205,6 +205,65 @@ def test_ac1_mkdir_write_sink_to_not_yet_existing_dir_bumps(repos, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# `fetch` is a read for this guard's purposes -- false-positive report
+# (2026-09-25, peer session doing ordinary cross-repo verification): `fetch`
+# only writes remote-tracking refs/objects into the TARGET's own gitdir, never
+# a worktree, the index, a local branch, or HEAD, so it carries none of the
+# foreign-mutation risk this guard exists to catch.
+# ---------------------------------------------------------------------------
+
+
+def test_reported_incident_cd_fetch_merge_base_log_show_never_bumps(repos, monkeypatch):
+    """The exact command reported blocked: `cd` into a sibling repo, then a
+    chain of `fetch`/`merge-base`/`log`/`show` -- pure inspection, per the
+    report. `cd` legitimately re-anchors later segments' `effective_cwd`
+    (that tracking is correct and untouched by this fix); the false bump
+    came from `fetch` alone sitting in `_GIT_WRITE_SUBCOMMANDS`."""
+    _set_anchor(monkeypatch, repos, "sess-fetch-chain")
+    foreign = _posix(repos["foreign"])
+    cmd = (
+        f"cd {foreign}; git fetch -q origin main; "
+        "git merge-base --is-ancestor HEAD HEAD; git log; git show HEAD"
+    )
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-fetch-chain", str(repos["anchor"]), {})
+
+    assert result is None
+
+
+def test_cd_and_git_fetch_then_mutating_verb_still_bumps(repos, monkeypatch):
+    """A mutating verb in the SAME `cd`-anchored chain that reproduced the
+    false positive still bumps -- `fetch` losing its write-membership must
+    not widen to "any verb after a `cd` into a sibling is safe"."""
+    _set_anchor(monkeypatch, repos, "sess-fetch-then-write")
+    foreign = _posix(repos["foreign"])
+    cmd = f"cd {foreign}; git fetch -q origin main; git commit --allow-empty -m x"
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-fetch-then-write", str(repos["anchor"]), {}
+    )
+
+    assert result is not None
+    assert "hookSpecificOutput" in result
+
+
+def test_fetch_with_colon_refspec_destination_still_bumps(repos, monkeypatch):
+    """`git fetch <remote> <src>:<dst>` writes the local ref `<dst>` directly
+    -- unlike a bare `git fetch origin main`, this is not read-only and must
+    still bump."""
+    _set_anchor(monkeypatch, repos, "sess-fetch-refspec")
+    foreign = _posix(repos["foreign"])
+    cmd = f"cd {foreign}; git fetch origin feature:main"
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-fetch-refspec", str(repos["anchor"]), {}
+    )
+
+    assert result is not None
+    assert "hookSpecificOutput" in result
+
+
+# ---------------------------------------------------------------------------
 # GIT_DIR/GIT_WORK_TREE/GIT_COMMON_DIR/--git-dir/--work-tree evasion --
 # 2026-08-06 live incident: a command that never `cd`s and never passes
 # `-C` still reaches a foreign repo's WRITE surface through these, since
@@ -347,6 +406,7 @@ def test_evasion_env_git_dir_write_subcommand_reproduces_live_incident_bumps(rep
         "count-objects -v",
         "grep -n needle",
         "whatchanged -1",
+        "fetch -q origin main",
     ],
 )
 def test_readonly_git_verb_outside_the_old_eight_never_bumps(repos, monkeypatch, verb):

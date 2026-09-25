@@ -37,10 +37,12 @@ from coordinator_core.ops.fleet.memo_draft import (
     REJECTION_CLASS_REGISTRY_ERROR,
     REJECTION_CLASS_UNKNOWN_RECEIVER,
     _classify_receiver_for_draft,
+    owner_name_advisory,
     _memo_draft,
     _validate_draft_params,
     _validate_scoped_to,
     compose_draft_frontmatter,
+    detect_unqualified_display_names,
 )
 from coordinator_core.ops.fleet._memo_resolver import resolve_receiver_inbox, unique_nearest_receiver
 from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS, SUMMARY_PLACEHOLDER
@@ -187,7 +189,7 @@ class TestValidateDraftParams:
         result = _validate_draft_params(_base_params(dry_run=False, kind="ask", summary="hi"))
         assert result == (
             False, "some-topic", "example-retrieval-repo-em", "A draft memo", "hi", "ask", None, False,
-            None, None, None, None,
+            None, None, None, None, None,
         )
 
     def test_bad_classify_receiver_type(self):
@@ -206,7 +208,7 @@ class TestValidateDraftParams:
         result = _validate_draft_params(_base_params(dry_run=False, summary=long_summary))
         assert result == (
             False, "some-topic", "example-retrieval-repo-em", "A draft memo", long_summary,
-            "fyi", None, False, None, None, None, result[11],
+            "fyi", None, False, None, None, None, result[11], None,
         )
         advisory = result[11]
         assert advisory is not None
@@ -219,7 +221,7 @@ class TestValidateDraftParams:
         result = _validate_draft_params(_base_params(dry_run=False, summary=at_cap_summary))
         assert result == (
             False, "some-topic", "example-retrieval-repo-em", "A draft memo", at_cap_summary,
-            "fyi", None, False, None, None, None, None,
+            "fyi", None, False, None, None, None, None, None,
         )
 
 
@@ -291,7 +293,7 @@ class TestScopedToValidation:
         result = _validate_draft_params(_base_params(scoped_to=scoped_to))
         assert result == (
             True, "some-topic", "example-retrieval-repo-em", "A draft memo", None, "fyi", scoped_to, False,
-            None, None, None, None,
+            None, None, None, None, None,
         )
 
 
@@ -1074,7 +1076,7 @@ class TestSpaceParam:
         result = _validate_draft_params(_base_params(dry_run=False))
         assert result == (
             False, "some-topic", "example-retrieval-repo-em", "A draft memo", None, "fyi", None, False,
-            None, None, None, None,
+            None, None, None, None, None,
         )
 
     def test_space_is_stripped(self):
@@ -1171,3 +1173,74 @@ class TestNoMemoIndex:
             f"memo_draft module must not accumulate new module-level mutable state "
             f"across handler calls. New names: {sorted(names_after - names_before)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Owner-display-name advisory (2026-09-25 defect item 3)
+# ---------------------------------------------------------------------------
+
+class TestDisplayNameAdvisory:
+    def test_bare_display_name_warns(self):
+        names = detect_unqualified_display_names(
+            "example-retrieval-repo-26 is building the _index.md generator"
+        )
+        assert names == ["example-retrieval-repo-26"]
+        assert owner_name_advisory("memo.draft", names) is not None
+
+    def test_display_name_with_nearby_uuid_does_not_warn(self):
+        names = detect_unqualified_display_names(
+            "example-retrieval-repo-26 (9e9a9d74-eea9-4d5b-a812-b70179ba5cf7) is building "
+            "the _index.md generator"
+        )
+        assert names == []
+        assert owner_name_advisory("memo.draft", names) is None
+
+    def test_display_name_with_nearby_claim_ref_does_not_warn(self):
+        names = detect_unqualified_display_names(
+            "example-retrieval-repo-26 (see claim ref queue-item-42) is building it"
+        )
+        assert names == []
+
+    def test_utf8_does_not_false_positive(self):
+        assert detect_unqualified_display_names("encode the body as utf-8") == []
+
+    def test_sha256_does_not_false_positive(self):
+        assert detect_unqualified_display_names("pin the sha-256 of the artifact") == []
+
+    def test_no_text_returns_empty(self):
+        assert detect_unqualified_display_names(None) == []
+        assert detect_unqualified_display_names("") == []
+
+    def test_draft_dry_run_surfaces_advisory_on_title(self, tmp_path):
+        sender = _make_sender_git_repo(tmp_path)
+        common_dir = sender / ".git"
+        result = _run(_memo_draft(
+            _base_params(
+                dry_run=True, topic="owner-advisory-1",
+                title="example-retrieval-repo-26 owns this",
+            ),
+            repo_root=common_dir,
+        ))
+        assert result["candidates"][0]["display_name_advisory"] is not None
+
+    def test_draft_dry_run_no_advisory_on_clean_title(self, tmp_path):
+        sender = _make_sender_git_repo(tmp_path)
+        common_dir = sender / ".git"
+        result = _run(_memo_draft(
+            _base_params(dry_run=True, topic="owner-advisory-2"),
+            repo_root=common_dir,
+        ))
+        assert result["candidates"][0]["display_name_advisory"] is None
+
+    def test_draft_act_still_writes_with_advisory(self, tmp_path):
+        sender = _make_sender_git_repo(tmp_path)
+        common_dir = sender / ".git"
+        result = _run(_memo_draft(
+            _base_params(
+                dry_run=False, topic="owner-advisory-3",
+                title="example-retrieval-repo-26 owns this",
+            ),
+            repo_root=common_dir,
+        ))
+        assert result["exit_code"] == 0
+        assert result["acted"][0]["display_name_advisory"] is not None

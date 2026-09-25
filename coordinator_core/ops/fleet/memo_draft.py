@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import datetime
 import os
+import re
 from pathlib import Path
 from typing import Any, Optional
 
@@ -295,6 +296,91 @@ def _validate_scoped_to(dry_run: bool, value: Any):
 
 
 # ---------------------------------------------------------------------------
+# Owner-display-name advisory (2026-09-25 defect item 3, DoE-claude memo
+# state/cross-repo/inbox/2026-09-25-doe-claude-em-engine-friction-sizing-
+# scaffold-memo-owner-safe-commit-emit-cap.md) — a session display name
+# (`<repo>-<nn>`, e.g. Example-retrieval-repo-26) gets reused across sessions, so
+# naming an owner by display name alone leaves a later reader unable to
+# find who was actually meant. WARN (advisory, still writes) when
+# free text names a display name with no session id (UUID) or claim
+# reference nearby — mirrors the summary-cap advisory split
+# (validate_explicit_summary / summary_cap_advisory above): draft-time
+# text is still editable, so it advises rather than refuses.
+#
+# Negative-spec: never refuses at draft (matches the summary-cap split —
+# hard refusal, if any, belongs at memo.compose/memo.send, not here), and
+# never matches an ordinary hyphenated technical term (sha-256, utf-8) —
+# the pattern is restricted to KNOWN repo-name prefixes, not a bare
+# `\w+-[0-9a-f]{1,3}` sweep.
+# ---------------------------------------------------------------------------
+
+#: Known repo prefixes this fleet actually mints session display names for
+#: (`<repo>-<nn>` convention) — restricts the digit-suffix match below to
+#: real repo names so an ordinary hyphenated technical term never matches.
+_KNOWN_REPO_PREFIXES = (
+    "example-retrieval-repo", "claude-klabauter", "doe-claude", "coordinator-claude",
+    "claude-klabauter",
+)
+
+#: `<repo>-<suffix>` where suffix is 1-3 hex/digit chars (display-name
+#: convention, e.g. Example-retrieval-repo-26, claude-klabauter-6e, doe-claude-c0).
+_DISPLAY_NAME_RE = re.compile(
+    r"\b(?:%s)-[0-9a-f]{1,3}\b" % "|".join(re.escape(p) for p in _KNOWN_REPO_PREFIXES),
+    re.IGNORECASE,
+)
+
+#: A UUID (session id) anywhere nearby qualifies the mention as traceable.
+_UUID_RE = re.compile(
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+    re.IGNORECASE,
+)
+
+#: A claim-reference qualifier nearby (claim ref, session id, etc.).
+_CLAIM_REF_RE = re.compile(r"\bclaim\b|\bsession[\s-]?id\b", re.IGNORECASE)
+
+#: How far (chars, either side) a UUID/claim-ref may sit and still qualify
+#: a display-name mention.
+_DISPLAY_NAME_PROXIMITY_CHARS = 80
+
+
+def detect_unqualified_display_names(text: Optional[str]) -> list:
+    """Distinct session-style display names (`<repo>-<nn>`) in `text` with no
+    UUID or claim-reference within `_DISPLAY_NAME_PROXIMITY_CHARS` chars —
+    in first-seen order. Empty list on no text or no unqualified mention.
+
+    A display name is reused across sessions, so naming an owner by it alone
+    leaves a later reader unable to find who was actually meant (2026-09-25
+    DoE-claude report, item 3). A UUID or claim-reference nearby
+    disambiguates it, so only the unqualified case is returned.
+    """
+    if not text:
+        return []
+    seen: list = []
+    seen_set: set = set()
+    for match in _DISPLAY_NAME_RE.finditer(text):
+        start = max(0, match.start() - _DISPLAY_NAME_PROXIMITY_CHARS)
+        end = min(len(text), match.end() + _DISPLAY_NAME_PROXIMITY_CHARS)
+        window = text[start:end]
+        if _UUID_RE.search(window) or _CLAIM_REF_RE.search(window):
+            continue
+        candidate = match.group(0)
+        if candidate not in seen_set:
+            seen_set.add(candidate)
+            seen.append(candidate)
+    return seen
+
+
+def owner_name_advisory(op: str, names: list) -> Optional[str]:
+    """One fact plus a terse alternative; None when `names` is empty."""
+    if not names:
+        return None
+    return (
+        "%s: owner named by session display name only (%s). Add the session "
+        "id or claim ref beside it." % (op, ", ".join(names))
+    )
+
+
+# ---------------------------------------------------------------------------
 # Optional receiver classification (classify_receiver: true) — C5 AC5 addition
 #
 # Reuses the SAME resolution authority memo.send uses (_memo_resolver) so a
@@ -441,7 +527,8 @@ def _validate_draft_params(params: dict):
     memo_send._validate_supersedes_param).
 
     Returns (dry_run, topic, to, title, summary, kind, scoped_to,
-    classify_receiver, in_reply_to, space, supersedes, summary_cap_advisory)
+    classify_receiver, in_reply_to, space, supersedes, summary_cap_advisory,
+    display_name_advisory)
     on success, or an exit_code:1 setup-error envelope dict on any
     validation failure. These are plain param-validation failures, NOT
     receiver-classification rejections — the envelope this function returns
@@ -455,6 +542,12 @@ def _validate_draft_params(params: dict):
     draft split) — the caller (`_memo_draft`) decides how to surface the
     advisory and keep the original text recoverable without writing it into
     `summary:` (AC1, AC2).
+
+    `display_name_advisory` (str | None) is
+    `owner_name_advisory("memo.draft", detect_unqualified_display_names(...))` scanned
+    over `title` + `summary` — None when neither names an unqualified session
+    display name, else the advisory message. Never fails this function loud —
+    same warn-not-refuse posture as summary_cap_advisory.
     """
     dry_run = params.get("dry_run")
     if not isinstance(dry_run, bool):
@@ -566,9 +659,14 @@ def _validate_draft_params(params: dict):
     if space_error is not None:
         return space_error
 
+    display_name_advisory = owner_name_advisory("memo.draft", 
+        detect_unqualified_display_names(f"{title}\n{summary or ''}")
+    )
+
     return (
         dry_run, topic, to, title, summary, kind, scoped_to, classify_receiver,
         in_reply_to, space, supersedes, summary_cap_advisory,
+        display_name_advisory,
     )
 
 
@@ -785,6 +883,13 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
         their own C3 handling); the over-cap text is kept out of `summary:`
         and preserved verbatim in the draft body instead (AC1, AC2).
 
+        Both also carry an additive `display_name_advisory` field (str |
+        None) — None when neither `title` nor `summary` names a
+        session-style display name (`<repo>-<nn>`) without a nearby session
+        id (UUID) or claim reference, else the advisory message. This NEVER
+        blocks the draft either — see `detect_unqualified_display_names` /
+        `owner_name_advisory` above.
+
         On a classify_receiver:true rejection, the exit_code:1 setup-error
         envelope carries an ADDITIONAL `rejection_class` wire field (str,
         2026-07-21 addition — DoE claude-central-em consult: their CLI
@@ -832,7 +937,8 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
         return validated  # exit_code:1 setup-error envelope
 
     (dry_run, topic, to, title, summary, kind, scoped_to, classify_receiver,
-     in_reply_to, space, supersedes, summary_cap_advisory) = validated
+     in_reply_to, space, supersedes, summary_cap_advisory,
+     display_name_advisory) = validated
 
     if classify_receiver:
         classification = _classify_receiver_for_draft(to, dry_run)
@@ -881,6 +987,10 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
             # Never blocks the draft — see `summary_cap_advisory` below for
             # the act-path handling of the same condition.
             "summary_cap_advisory": summary_cap_advisory,
+            # Additive, non-fatal notice: present iff title/summary names a
+            # session display name with no session id/claim ref nearby.
+            # Never blocks the draft.
+            "display_name_advisory": display_name_advisory,
         }])
 
     # ── act path ──────────────────────────────────────────────────────────
@@ -960,6 +1070,12 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
             # draft was still written (see body_prefix above for where the
             # original text landed). Never present on a clean draft.
             "summary_cap_advisory": summary_cap_advisory,
+            # Additive, non-fatal notice (2026-09-25 owner-display-name
+            # advisory) — present iff title/summary named a session display
+            # name with no session id/claim ref nearby. Never blocks the
+            # draft (see detect_unqualified_display_names /
+            # owner_name_advisory above).
+            "display_name_advisory": display_name_advisory,
         }],
         [],
         [],

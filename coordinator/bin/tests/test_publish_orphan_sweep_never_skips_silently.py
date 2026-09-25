@@ -1,0 +1,186 @@
+"""coordinator/bin/tests/test_publish_orphan_sweep_never_skips_silently.py --
+regression coverage for the `renamed_file_names is None` silent skip in
+`publish.py`'s top-level mirror orphan sweep.
+
+Defect (reported by DoE): near `process_target`'s `dispatch_mirror_like`
+call, `sweep_top_level_orphans` was computed as `_dest_is_owned_subdir(...)
+and renamed_file_names is not None` -- when the rename exemption could not
+resolve (engine unavailable, ledger/store lookup raised), `renamed_file_names`
+stayed `None`, the sweep silently disabled itself, and NOTHING was printed to
+say so. After DoE's wiki reorg, a stale flat file survived a real (non-dry)
+publish of `coordinator-claude-toplevel-wiki` (229 vs 230 files) because the
+skip left no trace.
+
+`resolve_effective_renamed_file_names` is the pure decision this proves:
+- an already-resolved exemption passes through unchanged;
+- an unresolved exemption on a row CONFIRMED to declare no renames has
+  nothing for the sweep to protect, so it degrades to an EMPTY set and the
+  sweep runs (the "run safely without it" fix, per the ask);
+- an unresolved exemption on a row that DOES declare renames, or whose
+  declaration could not even be checked, still cannot sweep safely -- it
+  returns `None` so the caller fails closed, but (per
+  `_candidate_top_level_orphans` below and `process_target`'s own WARNING
+  print) never in silence.
+
+`_candidate_top_level_orphans` is the read-only preview `process_target`
+prints by name in that fail-closed case -- pure filesystem listing, no git
+spawn, no delete.
+
+Run: python -m pytest coordinator/bin/tests/test_publish_orphan_sweep_never_skips_silently.py -n 4
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import sys
+import types
+from pathlib import Path
+
+_BIN_DIR = Path(__file__).resolve().parents[1]
+
+
+def _load_publish_module():
+    """Import `coordinator/bin/publish.py` by path -- a hyphen-free but
+    non-package script, so there is no import name for it."""
+    spec = importlib.util.spec_from_file_location(
+        "publish_orphan_sweep_never_skips_silently_under_test", _BIN_DIR / "publish.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+publish = _load_publish_module()
+resolve_effective = publish.resolve_effective_renamed_file_names
+
+
+# ---------------------------------------------------------------------------
+# resolve_effective_renamed_file_names -- pure decision
+# ---------------------------------------------------------------------------
+
+
+def test_already_resolved_exemption_passes_through_unchanged():
+    """A resolved exemption (empty or not) is not this function's business --
+    it is returned verbatim, `lookup_ok`/`declares` notwithstanding."""
+    for resolved in (frozenset(), frozenset({"renamed.txt"})):
+        assert resolve_effective(
+            renamed_file_names=resolved,
+            basename_rename_lookup_ok=False,
+            declares_basename_rename=True,
+        ) is resolved
+
+
+def test_none_with_confirmed_no_declared_rename_degrades_to_empty_set():
+    """THE FIX. The store was consulted and confirmed this row declares no
+    `basename_rename` at all -- the unresolved exemption has nothing to
+    protect, so the sweep must be allowed to run rather than silently
+    skipped."""
+    result = resolve_effective(
+        renamed_file_names=None,
+        basename_rename_lookup_ok=True,
+        declares_basename_rename=False,
+    )
+    assert result == frozenset()
+    assert result is not None
+
+
+def test_none_with_declared_rename_stays_none_fail_closed():
+    """The row DOES declare a rename and the exemption still could not
+    resolve -- sweeping blind risks deleting a legitimately-renamed
+    published file, so this must stay `None` (the caller's signal to skip,
+    loudly, not silently)."""
+    assert resolve_effective(
+        renamed_file_names=None,
+        basename_rename_lookup_ok=True,
+        declares_basename_rename=True,
+    ) is None
+
+
+def test_none_with_failed_lookup_stays_none_fail_closed():
+    """`basename_rename_lookup_ok=False` means "cannot tell", not "no
+    renames" -- `declares_basename_rename` is `False` in this case too (its
+    own tolerated-degradation default), so this is the case that proves the
+    two flags are NOT interchangeable: a failed lookup must fail closed
+    exactly like a confirmed declaration, never fall through to the empty-set
+    arm."""
+    assert resolve_effective(
+        renamed_file_names=None,
+        basename_rename_lookup_ok=False,
+        declares_basename_rename=False,
+    ) is None
+
+
+# ---------------------------------------------------------------------------
+# _candidate_top_level_orphans -- read-only preview for the loud warning
+# ---------------------------------------------------------------------------
+
+
+def _stub_publish_sync_module():
+    stub = types.ModuleType("stub_publish_sync_for_candidate_orphans")
+    stub.load_ignore = lambda path: _NullIgnoreMatcher()
+    stub._archived_or_orphan = lambda rel_path: False
+    return stub
+
+
+class _NullIgnoreMatcher:
+    def matches(self, rel_path: str) -> bool:
+        return False
+
+
+def test_candidate_top_level_orphans_names_a_file_dropped_from_source(tmp_path):
+    """The exact DoE shape: a file the mirror still ships but the source no
+    longer has is named, not silently dropped."""
+    src_dir = tmp_path / "src"
+    dst_dir = tmp_path / "dst"
+    src_dir.mkdir()
+    dst_dir.mkdir()
+    (dst_dir / "stale-flat-file.md").write_text("stale")
+    (dst_dir / "still-current.md").write_text("current")
+    (src_dir / "still-current.md").write_text("current")
+
+    result = publish._candidate_top_level_orphans(
+        _stub_publish_sync_module(), src_dir, dst_dir
+    )
+
+    assert result == ["stale-flat-file.md"]
+
+
+def test_candidate_top_level_orphans_skips_dotfiles_and_ignored(tmp_path):
+    """Dotfiles are publish machinery / repo-owned, never a row's payload --
+    same contract as `_sweep_mirror_top_level_orphans` itself -- and a file
+    the ignore matcher already excludes is not this row's business either."""
+    src_dir = tmp_path / "src"
+    dst_dir = tmp_path / "dst"
+    src_dir.mkdir()
+    dst_dir.mkdir()
+    (dst_dir / ".hidden").write_text("x")
+
+    stub = _stub_publish_sync_module()
+
+    class _AllMatch:
+        def matches(self, rel_path: str) -> bool:
+            return True
+
+    stub.load_ignore = lambda path: _AllMatch()
+    (dst_dir / "ignored.md").write_text("x")
+
+    result = publish._candidate_top_level_orphans(stub, src_dir, dst_dir)
+
+    assert result == []
+
+
+def test_candidate_top_level_orphans_empty_when_dest_missing(tmp_path):
+    """No destination directory means nothing to preview -- returns an empty
+    list rather than raising, matching `_sweep_mirror_top_level_orphans`'s
+    own `not dst_dir.is_dir(): return 0` guard."""
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    missing_dst = tmp_path / "does-not-exist"
+
+    result = publish._candidate_top_level_orphans(
+        _stub_publish_sync_module(), src_dir, missing_dst
+    )
+
+    assert result == []

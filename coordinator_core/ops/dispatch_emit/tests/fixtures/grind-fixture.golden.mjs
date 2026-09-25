@@ -89,6 +89,8 @@ const MAX_AGENT_CALLS = 40;
 
 const BUDGET_TOKENS = null;
 
+if (!args || !args.run_stamp || !args.script_path || !args.profile_dir || !/^\d{8}/.test(String(args.run_stamp).replace(/-/g, ''))) { throw new Error('queue-grind fire args: need {run_stamp, script_path, profile_dir}, run_stamp starting YYYYMMDD (e.g. 20260922T221000Z); got ' + JSON.stringify(args ?? null) + '. Re-fire with the Workflow call emit-dispatch-workflow printed.'); }
+
 const RUN_ID = args.run_stamp;
 
 const SCRIPT_PATH = args.script_path;
@@ -96,8 +98,6 @@ const SCRIPT_PATH = args.script_path;
 const PROFILE_NAME = 'fixture';
 
 const PROFILE_DIR = args.profile_dir;
-
-if (!args || !args.run_stamp || !args.script_path || !args.profile_dir || !/^\d{8}/.test(String(args.run_stamp).replace(/-/g, ''))) { throw new Error('queue-grind fire args: need {run_stamp, script_path, profile_dir}, run_stamp starting YYYYMMDD (e.g. 20260922T221000Z); got ' + JSON.stringify(args ?? null) + '. Re-fire with the Workflow call emit-dispatch-workflow printed.'); }
 
 const APPETITE_NAME = 'standard';
 

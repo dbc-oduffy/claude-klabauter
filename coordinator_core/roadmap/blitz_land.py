@@ -56,7 +56,9 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from coordinator_core.locked_write import MutateAbort, locked_rmw
+import yaml
+
+from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.artifact_id_slug import id_slug
 from coordinator_core.frontmatter.schema_validate import HANDOFF_PHASE_KINDS
 from coordinator_core.session.claimed_write import create_exclusive
@@ -291,6 +293,145 @@ def _link_baton_to_plan(
 
     locked_rmw(baton_abs, _link, repo_root=worktree_root)
     return True
+
+
+_SIZING_SCHEMA_PATH = (
+    Path(__file__).resolve().parents[1] / "frontmatter" / "schemas" / "sizing-object.schema.json"
+)
+
+
+def _planning_report_size(wave_result: Dict[str, Any], entry: Dict[str, Any]) -> Optional[str]:
+    """The size the wave's OWN planning pass declared for this baton, off its
+    planning-report's `size:` frontmatter field.
+
+    The wave result's verdict row carries `route` but never `size` — a
+    blitz-em that re-sizes a baton at plan time writes the revised estimate
+    onto the planning report alone, so this is the one place the landing can
+    still read it. Mirrors `_plan_path_from_trail`'s own slot-file lookup.
+    """
+    slot = wave_result.get("trailSlotDir") or wave_result.get("trailDir")
+    baton_id = entry.get("batonId")
+    if not slot or not baton_id:
+        return None
+    report = Path(str(slot).replace("\\", "/")) / f"{baton_id}.planning-report.md"
+    try:
+        text = report.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    return _read_field(text, "size")
+
+
+def _reconcile_sizing_object(
+    worktree_root: Path,
+    plan_abs: Path,
+    tshirt: Optional[str],
+    route: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """Bring a plan's cited sizing-object's `estimate.tshirt`/`route` into
+    agreement with what the wave actually decided.
+
+    A sizing-object is minted at scout time carrying a coarse first guess
+    (routinely the generator defaults, `XS`/`dispatch`), and a blitz-em that
+    later re-sizes the baton at plan time writes the revised estimate onto
+    the PLAN alone — the sizing-object nobody touches again, and every later
+    reader of it (a sizing-lobby query, a dangling-citation check) sees a
+    stale size forever. This is the one write that closes that gap.
+
+    Fires only for a `ready` verdict routed to a plan-carrying lane (`plan`,
+    `spec-dispatch`) — those are the only lanes with both a plan on disk and
+    a `sizing_object:` citation to follow. Writes only when the sizing-object
+    disagrees with the plan's own declared `tshirt`/`route`; an agreeing
+    sizing-object is a byte-identical no-op, never rewritten.
+
+    Never touches a sizing-object outside `state/sizings/` — an ARCHIVED one
+    has already shipped its size decision and its own convention says it is
+    frozen (mirrors `block_sizing_object_schema_violation`'s own path scope,
+    which guards `state/sizings/*.yaml` only).
+
+    Returns None when there is nothing to reconcile (no `size`/`route` read,
+    no `sizing_object:` citation, or the citation resolves outside
+    `state/sizings/`) — a landing with nothing to say about sizing, not a
+    failure. Otherwise a per-baton report dict, never raised: a reconcile
+    failure (lock contention, a schema violation the mutation would
+    introduce) is reported on the row, exactly like every other best-effort
+    side-write `land_wave` already makes (see `_continue_replanned_source`).
+    """
+    if not tshirt or not route:
+        return None
+    try:
+        plan_text = plan_abs.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    cited = _read_field(plan_text, "sizing_object")
+    if not cited:
+        return None
+
+    from coordinator_core.ops._sizing_citation import resolve_sizing_citation
+
+    resolved = resolve_sizing_citation(worktree_root, cited)
+    if resolved is None:
+        return None
+    try:
+        resolved.relative_to(worktree_root / "state" / "sizings")
+    except ValueError:
+        return None  # archived (or otherwise not live) — frozen, not this landing's to touch
+
+    from coordinator_core.frontmatter.primitives import (
+        read_fm_field_unquoted,
+        read_fm_nested_field,
+        replace_fm_field,
+        write_fm_nested_field,
+    )
+    from coordinator_core.frontmatter.schema_validate import (
+        format_validation_errors,
+        validate_frontmatter,
+    )
+
+    _state: Dict[str, Any] = {"applied": False}
+
+    def mutate(old_text: str) -> str:
+        current_route = read_fm_field_unquoted(old_text, "route")
+        estimate_block = read_fm_nested_field(old_text, "estimate") or ""
+        # A bare-token capture, deliberately not a `.+?` run-to-end-of-line one:
+        # a real sizing-object's `tshirt:` line routinely carries a trailing
+        # `# XS | S | M | ...` doc-comment, and the tshirt/route enum values
+        # are themselves always single tokens — so the first non-whitespace
+        # run after the colon IS the value, comment and all else left alone.
+        tshirt_match = re.search(r"^\s*tshirt:\s*(\S+)", estimate_block, re.MULTILINE)
+        current_tshirt = tshirt_match.group(1).strip("\"'") if tshirt_match else None
+        if current_tshirt == tshirt and current_route == route:
+            return old_text  # already agrees — idempotent no-op
+
+        text = old_text
+        if tshirt_match and current_tshirt != tshirt:
+            new_block = (
+                estimate_block[: tshirt_match.start(1)]
+                + tshirt
+                + estimate_block[tshirt_match.end(1) :]
+            )
+            text = write_fm_nested_field(text, "estimate", new_block)
+        if current_route != route:
+            text = replace_fm_field(text, "route", route)
+
+        try:
+            parsed = yaml.safe_load(text) or {}
+        except Exception as exc:  # noqa: BLE001
+            raise MutateAbort(f"reconcile: sizing-object no longer parses as YAML: {exc}")
+        errors = validate_frontmatter(parsed, _SIZING_SCHEMA_PATH)
+        if errors:
+            raise MutateAbort(
+                "reconcile: post-mutation schema validation failed: "
+                + format_validation_errors(errors)
+            )
+        _state["applied"] = True
+        return text
+
+    try:
+        locked_rmw(resolved, mutate, repo_root=worktree_root)
+    except (LockTimeout, MutateAbort, OSError) as exc:
+        return {"sizing_path": cited, "reconciled": False, "note": str(exc)}
+
+    return {"sizing_path": cited, "reconciled": _state["applied"]}
 
 
 def approve_ready(
@@ -880,6 +1021,21 @@ def land_wave(
                     worktree_root,
                 )
             )
+            # The sizing-object cited by this plan is reconciled against what the
+            # wave actually decided BEFORE the route branch below, so every
+            # plan-carrying lane (the ordinary approval, the spec-dispatch
+            # fallback, and the S-lane execution stamp) attaches the same report —
+            # see `_reconcile_sizing_object`'s own docstring.
+            sizing_recon = (
+                _reconcile_sizing_object(
+                    worktree_root,
+                    worktree_root / plan_path,
+                    _planning_report_size(wave_result, entry),
+                    route,
+                )
+                if plan_path
+                else None
+            )
             # The S lane parks its spec onto the baton and marks it execution-ready,
             # so `/execute-plan` resolves it as a straight dispatch instead of
             # handing back an un-actioned baton. Everything else takes the ordinary
@@ -911,6 +1067,8 @@ def land_wave(
                     f"kind {baton_kind!r} is not one "
                     f"H-CROSS-EXEC-2 admits ({', '.join(sorted(_EXECUTION_PHASE_KINDS))})"
                 )
+                if sizing_recon is not None:
+                    row["sizing_reconciled"] = sizing_recon
                 approved.append(row)
             elif entry.get("route") == "spec-dispatch":
                 row = authorize_execution(
@@ -923,6 +1081,8 @@ def land_wave(
                         f"S-lane spec parked, execution-ready"
                     ),
                 )
+                if sizing_recon is not None:
+                    row["sizing_reconciled"] = sizing_recon
                 if row.get("execution_ready"):
                     execution_ready.append(row)
                 else:
@@ -934,9 +1094,10 @@ def land_wave(
                         }
                     )
             else:
-                approved.append(
-                    approve_ready(worktree_root, baton_path, plan_path, report)
-                )
+                row = approve_ready(worktree_root, baton_path, plan_path, report)
+                if sizing_recon is not None:
+                    row["sizing_reconciled"] = sizing_recon
+                approved.append(row)
         except (LandingRefused, MutateAbort, OSError) as exc:
             refused.append({"baton": entry.get("batonId"), "reason": str(exc)})
 

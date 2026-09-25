@@ -73,7 +73,11 @@ from coordinator_core.git.commit import (
     commit_paths,
     hash_worktree_blobs_via_spawn,
 )
-from coordinator_core.git.commit_trailers import _UUID_RE, apply_missing_trailers
+from coordinator_core.git.commit_trailers import (
+    _UUID_RE,
+    apply_missing_trailers,
+    message_missing_subject,
+)
 from coordinator_core.git.index_write import IndexStaleAfterCommit
 from coordinator_core.git.eol_declared import (
     find_declared_eol_drift,
@@ -527,6 +531,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     message = params.get("message")
     if not isinstance(message, str) or not message.strip():
         return _error("params.message is required and must be a non-empty string")
+
+    # Before trailers are appended, or a trailer-only message would pass.
+    if message_missing_subject(message):
+        return _error(
+            "commit message has no subject line (first line is a trailer). "
+            "Put a one-line subject first."
+        )
 
     raw_prefer_staged = params.get("prefer_staged") or []
     if not isinstance(raw_prefer_staged, list) or not all(

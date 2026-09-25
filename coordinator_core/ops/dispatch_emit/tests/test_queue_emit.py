@@ -192,6 +192,7 @@ def _expected_signature() -> inspect.Signature:
         run_dir: Path,
         session_id: Optional[str] = None,
         agent_type_host: Optional[str] = None,
+        preamble: Optional[str] = None,
     ) -> QueueEmission: ...
 
     return inspect.signature(emit_queue_script)
@@ -371,7 +372,7 @@ def test_cli_round_trip_produces_same_bytes_as_the_op(tmp_path):
     # Same parent directory as the op's own output_path -- `run_dir` is the
     # guarded output path's PARENT, so a different parent would legitimately
     # emit a different script (the run_dir string is baked into it).
-    cli_output = output_path.parent / "cli-out.mjs"
+    cli_output = output_path.parent / "cli-out.workflow.mjs"
     argv = [
         "--queue", str(queue_dir),
         "--profile", "fixture",
@@ -394,7 +395,7 @@ def test_cli_omitted_profile_dir_defaults_to_content_root_queue_profiles(tmp_pat
     )
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(content_root))
     monkeypatch.delenv("COORDINATOR_SOURCE_MODE", raising=False)
-    cli_output = output_path.parent / "cli-default-dir.mjs"
+    cli_output = output_path.parent / "cli-default-dir.workflow.mjs"
     argv = [
         "--queue", str(queue_dir),
         "--profile", "fixture",

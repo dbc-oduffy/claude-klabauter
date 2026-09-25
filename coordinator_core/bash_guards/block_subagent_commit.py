@@ -1599,22 +1599,35 @@ def _tokens_reach_commit_after_git(tokens: list) -> bool:
     literal ``"git commit"`` or ``"git -C ... commit"`` shape misses it
     entirely -- this was one of the three confirmed 2026-07-25 bypasses.
     """
+    return _git_commit_chain_scan(tokens)[0]
+
+
+def _git_commit_chain_scan(tokens: "Sequence[str]") -> "Tuple[bool, Optional[str]]":
+    """The single walk `_tokens_reach_commit_after_git` and
+    `_explicit_git_dash_c_value` both need: whether some `git ... commit`
+    chain exists in `tokens`, and the last `-C <path>` seen inside that
+    same chain. One function so the two questions can't silently diverge
+    on what counts as a commit chain -- see `_tokens_reach_commit_after_git`
+    for the walk's own reasoning (global-option skip, break-on-non-flag)."""
     n = len(tokens)
     for start in range(n):
         if not _token_matches_binary(tokens[start], _GIT_BINARY):
             continue
         i = start + 1
+        last_dash_c: Optional[str] = None
         while i < n:
             tok = tokens[i]
             if tok == "commit":
-                return True
+                return True, last_dash_c
             if not tok.startswith("-"):
                 break
             if tok in _GIT_GLOBAL_OPTS_WITH_SEP_ARG:
+                if tok == "-C" and i + 1 < n:
+                    last_dash_c = tokens[i + 1]
                 i += 2
                 continue
             i += 1
-    return False
+    return False, None
 
 
 #: Shell interpreters whose ``-c <string>`` argument is itself a shell
@@ -6175,6 +6188,59 @@ def _repo_relativize_pathspec(
     return rewritten, False
 
 
+def _explicit_invoke_repo_flag_value(op_idx: int, seq: "Sequence[str]") -> Optional[str]:
+    """The invoke-level ``--repo <value>``/``--repo=value`` before ``op_idx``."""
+    i = 0
+    while i < op_idx:
+        tok = seq[i]
+        if tok.startswith("-") and tok.split("=", 1)[0] == "--repo":
+            if "=" in tok:
+                return tok.split("=", 1)[1]
+            return seq[i + 1] if i + 1 < op_idx else None
+        i += 1
+    return None
+
+
+def _explicit_git_dash_c_value(seg_tokens: "Sequence[str]") -> Optional[str]:
+    """The last ``-C <path>`` in a git chain that reaches ``commit``. Same
+    walk as ``_tokens_reach_commit_after_git`` -- both delegate to
+    ``_git_commit_chain_scan``, so the two agree on what a commit chain
+    is."""
+    tokens = _peeled_effective_tokens(seg_tokens)
+    if not tokens:
+        return None
+    return _git_commit_chain_scan(tokens)[1]
+
+
+def _explicit_absolute_root_from_cmd(cmd: str) -> Optional[str]:
+    """The explicit ABSOLUTE root a commit command names (``git -C <abs>``,
+    or invoke ``--repo <abs>`` on a committing op), slash-normalized; else
+    ``None``. A relative root cannot be anchored without the cwd that
+    already failed. A JSON ``repo_root`` is not read: commit_v2 treats it
+    as an assertion, never the worktree source.
+    """
+    tokens = _tokenize_full_command(cmd)
+    if tokens is None:
+        return None
+    for seg_tokens in _segments_from_tokens(tokens):
+        if not seg_tokens:
+            continue
+        for op_idx, seq in _invoke_op_token_indices(seg_tokens):
+            if seq[op_idx] not in _COMMITTING_OP_NAMES:
+                continue
+            candidate = _explicit_invoke_repo_flag_value(op_idx, seq)
+            if candidate:
+                candidate_posix = candidate.replace("\\", "/")
+                if _pathspec_element_is_absolute(candidate_posix):
+                    return candidate_posix
+        candidate = _explicit_git_dash_c_value(seg_tokens)
+        if candidate:
+            candidate_posix = candidate.replace("\\", "/")
+            if _pathspec_element_is_absolute(candidate_posix):
+                return candidate_posix
+    return None
+
+
 def _git_commit_agent_may_commit(
     cmd: str,
     git_root: Optional[str],
@@ -6572,13 +6638,12 @@ _LEG_ABSOLUTE_OUT_OF_REPO = "leg:absolute-out-of-repo"
 #:
 #: This is the shape a rootless session produces: on a managed remote
 #: container a session anchored outside every repo it holds (no launch
-#: anchor, cwd a plain parent directory) resolves NO toplevel, so this leg
-#: fires on every commit attempt regardless of the pathspec. Naming it is
-#: what lets the reader escalate instead of iterate. VERDICT UNCHANGED --
-#: this leg still denies, and deliberately: `_pathspec_shape_permitted`'s
-#: sweeping-element test resolves candidates AGAINST the root
-#: (`_pathspec_element_is_sweeping` returns the fail-closed True without
-#: one), so there is no root-free path that still enforces it.
+#: anchor, cwd a plain parent directory) resolves NO toplevel from `cwd`
+#: alone. A command naming its own ABSOLUTE root (`git -C <abs>`, invoke
+#: `--repo <abs>`) is resolved against that root instead, once it validates
+#: as a git toplevel. This leg still denies, fail-closed, when no absolute
+#: root is named or it fails validation: `_pathspec_element_is_sweeping`
+#: has nothing to resolve candidates against without one.
 _LEG_UNRESOLVABLE_GIT_ROOT = "leg:unresolvable-git-root"
 
 #: Per-leg deny prose. Each names its OWN cause and the single edit that
@@ -6882,6 +6947,16 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     cwd = payload.get("cwd")
     git_root = resolve_git_root(cwd)
+    if git_root is None:
+        # A session anchored above its repos resolves no root from cwd; a
+        # command that names its own absolute root is validated against it.
+        explicit_root = _explicit_absolute_root_from_cmd(cmd_for_scan)
+        if explicit_root is not None:
+            validated_root = resolve_git_root(explicit_root)
+            if validated_root is not None and os.path.normcase(
+                os.path.normpath(validated_root)
+            ) == os.path.normcase(os.path.normpath(explicit_root)):
+                git_root = validated_root
     session_id = payload.get("session_id") or ""
     agent_id = _resolve_subagent_identity(raw_agent_id, session_id)
 

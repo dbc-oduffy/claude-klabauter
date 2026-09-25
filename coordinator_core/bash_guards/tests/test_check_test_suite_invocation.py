@@ -776,6 +776,35 @@ def test_wrapper_spellings_all_recognized(grant_repo, free_mutex, wrapper):
     assert guard.check(_payload(cmd, grant_repo)) is None
 
 
+def test_wrapper_leg_accepts_direct_form_not_only_bash_c(grant_repo, free_mutex):
+    """Issue #86.4: the wrapper leg accepts the DIRECT ``with-suite-mutex --
+    python3 -m pytest ...`` shape, not only a ``with-suite-mutex -- bash -c
+    '<payload>'`` re-exec shape -- both are valid and neither is
+    privileged over the other by this leg."""
+    _write_live_session(grant_repo, _GRANT_SID)
+    assert grant_module.write_tier_u_grant(
+        "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
+    )
+    direct = "with-suite-mutex -- python3 -m pytest -m 'not cadence'"
+    via_bash_c = "with-suite-mutex -- bash -c 'python3 -m pytest -m \"not cadence\"'"
+    assert guard.check(_payload(direct, grant_repo)) is None
+    assert guard.check(_payload(via_bash_c, grant_repo)) is None
+
+
+def test_wrapper_leg_denial_names_the_accepted_wrapped_form(grant_repo, free_mutex):
+    """Issue #86.4: a refusal on this leg names the accepted shape (the
+    caller's own command, wrapped) rather than asserting a single literal
+    ``bash -c`` shape is the only one accepted."""
+    _write_live_session(grant_repo, _GRANT_SID)
+    assert grant_module.write_tier_u_grant(
+        "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
+    )
+    cmd = "python3 -m pytest -q"
+    reason = _reason(guard.check(_payload(cmd, grant_repo)))
+    assert "with-suite-mutex -- " + cmd in reason
+    assert "bash -c" not in reason
+
+
 def test_wrapper_leg_still_requires_a_live_grant_first(grant_repo, free_mutex):
     """Ordering: an UNGRANTED caller is denied on the grant leg, never told
     to wrap a command it has no standing to run at all."""

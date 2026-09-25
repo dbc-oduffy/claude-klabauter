@@ -39,8 +39,14 @@ Negative-spec:
     `contained_path`). On the plan route `--repo-root` is pure prompt
     anchoring and genuinely optional; on the queue route it is load-bearing
     for `--queue`/`--profile-dir` containment (`op.py ::
-    QueueRootMissingError` fires without it) — treat the two routes'
-    requirement on this flag as different, not one shared "optional" claim.
+    QueueRootMissingError` fires without a resolved root) — treat the two
+    routes' requirement on this flag as different, not one shared
+    "optional" claim. an OMITTED `--repo-root` on the queue route
+    is no longer automatically `QueueRootMissingError` — `main()` defaults
+    it from cwd's own `.git` ancestor first (`_default_repo_root_from_cwd`,
+    mirroring `op.py :: _repo_root_for_plan`'s walk), so the refusal is now
+    reached only from a cwd with no `.git` ancestor at all, same as before
+    for that narrower case.
   - Does NOT invent a second session-identity resolution. `--restamp`
     resolves via `coordinator_core.session.core.resolve_session_id`, the
     same fleet-canonical ladder `op.py :: _receipt_session_id` reads —
@@ -69,6 +75,12 @@ from coordinator_core.ops.dispatch_emit.op import (
 )
 from coordinator_core.ops.dispatch_emit.queue_emit import QueuePathEscapeError
 from coordinator_core.session.core import resolve_session_id
+
+#: `--out` must land on the ONE surface this CLI is licensed to write over:
+#: a fireable Workflow script. Every other extension is either a doc/spine
+#: (`.md`, clobberable committed prose) or an unrelated file this CLI has
+#: no business overwriting at all.
+_REQUIRED_OUT_SUFFIX = ".workflow.mjs"
 
 #: Exit codes. 0 emission/restamp/fire succeeded; 1 a data/refusal error
 #: (mutually-exclusive params, foreign emission, foreign restamp session,
@@ -197,9 +209,51 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--repo-root",
         default=None,
-        help="repo root anchoring the op's containment/prompt resolution (default: none)",
+        help="repo root anchoring the op's containment/prompt resolution (default: the "
+        "queue route derives one by walking up from cwd to the nearest .git; the "
+        "plan/inventory route stays unanchored unless given explicitly)",
+    )
+    parser.add_argument(
+        "--preamble",
+        dest="preamble_path",
+        default=None,
+        metavar="FILE",
+        help="a run-wide posture block rendered once into every executor "
+        "prompt this emission composes; its path and sha256 are recorded in the "
+        "emission receipt",
     )
     return parser
+
+
+def _default_repo_root_from_cwd() -> "Optional[Path]":
+    """Walk up from the process cwd to the nearest ``.git`` -- the same
+    per-ancestor walk ``op.py :: _repo_root_for_plan`` already does for the
+    plan route, mirrored here for the queue route.
+
+    The queue route's own ``--repo-root``/``target_root`` requirement
+    (``op.py :: QueueRootMissingError``) is real -- ``queue``/``run_dir``
+    containment needs SOME root -- but every published skill's queue-route
+    call omits ``--repo-root`` and still worked before this CLI resolved
+    ``repo_root`` at all, because callers ran it FROM the repo whose queue
+    it was closing. Defaulting from cwd restores that documented call
+    rather than widening the guard: an explicit ``--repo-root`` still wins
+    outright, and a cwd with no ``.git`` ancestor returns ``None``, which
+    keeps today's ``QueueRootMissingError`` refusal exactly as it is now.
+
+    Negative-spec: never shells out (``git rev-parse``) -- a plain parent
+    walk, matching the no-tree-survey discipline the sibling function
+    documents. Never applied to the plan/inventory route, whose own
+    negative-spec (module docstring) keeps ``--repo-root`` genuinely
+    optional and prompt-anchoring only.
+    """
+    try:
+        here = Path.cwd()
+    except OSError:
+        return None
+    for candidate in (here, *here.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return None
 
 
 def _do_restamp(script_arg: str) -> int:
@@ -211,6 +265,50 @@ def _do_restamp(script_arg: str) -> int:
         return EXIT_DATA_ERROR
     print(json.dumps(receipt, indent=2, sort_keys=True))
     return EXIT_OK
+
+
+def _print_workflow_invocation(
+    result: dict, *, is_queue_route: bool, profile_dir: "Optional[str]" = None
+) -> None:
+    """Print the exact ``Workflow({...})`` call to make against the just-
+    written script, to stderr, on EVERY route.
+
+    the skills that document this emitter claim it prints this
+    invocation. It printed nothing at all on the queue route -- the only
+    way to find the required fire-time args (``run_stamp``, ``script_path``,
+    ``profile_dir``, per ``grind_compose._FIRE_ARGS_CHECK``) was to read the
+    emitted script's own guard. This runs unconditionally after a successful
+    emit, on both routes, so the printed line is never route-dependent.
+
+    The queue route's ``run_stamp`` is a caller-chosen run id, not something
+    this CLI mints (module docstring, ``emit.py`` — this module never
+    reads a clock) — the printed line therefore names it as a placeholder
+    the caller fills in, rather than inventing a value.
+    """
+    script_path = result.get("path")
+    if not script_path:
+        return
+    if is_queue_route:
+        print(
+            "\n  Workflow({ scriptPath: "
+            f"{json.dumps(script_path)}, args: {{ run_stamp: '<YYYYMMDDThhmmssZ>', "
+            f"script_path: {json.dumps(script_path)}, profile_dir: "
+            f"{json.dumps(profile_dir)} }} }})",
+            file=sys.stderr,
+        )
+    else:
+        fire_args = result.get("fire_args")
+        if fire_args:
+            print(
+                f"\n  Workflow({{ scriptPath: {json.dumps(script_path)}, args: "
+                f"{json.dumps(fire_args)} }})",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"\n  Workflow({{ scriptPath: {json.dumps(script_path)} }})   # no args",
+                file=sys.stderr,
+            )
 
 
 def main(argv: "Optional[list[str]]" = None) -> int:
@@ -278,13 +376,54 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         print("emit-dispatch-workflow: ERROR — --out is required", file=sys.stderr)
         return EXIT_USAGE
 
+    # refuse before anything is written. A ``--out`` naming a
+    # committed spine (or any other non-script path) wrote the emitted
+    # script's TEXT into it and exited 0.
+    out_path = Path(args.out_path)
+    if not out_path.name.endswith(_REQUIRED_OUT_SUFFIX):
+        print(
+            f"emit-dispatch-workflow: ERROR — --out {args.out_path!r} does not end "
+            f"{_REQUIRED_OUT_SUFFIX!r} -- refusing to write an emitted script over a "
+            f"path that is not named as one. Name --out ending {_REQUIRED_OUT_SUFFIX!r}.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    preamble_text: "Optional[str]" = None
+    preamble_sha256: "Optional[str]" = None
+    if args.preamble_path:
+        import hashlib
+
+        try:
+            preamble_bytes = Path(args.preamble_path).read_bytes()
+        except OSError as exc:
+            print(
+                f"emit-dispatch-workflow: ERROR — --preamble {args.preamble_path!r} "
+                f"unreadable: {exc}",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        preamble_text = preamble_bytes.decode("utf-8")
+        preamble_sha256 = hashlib.sha256(preamble_bytes).hexdigest()
+
     repo_root = Path(args.repo_root).resolve() if args.repo_root else None
+    if repo_root is None and is_queue_route:
+        # the queue route's own containment requires SOME root
+        # (op.py :: QueueRootMissingError) -- default it from cwd's own
+        # worktree so the documented call (no --repo-root) works, mirroring
+        # the plan route's own cwd-independent anchor
+        # (op.py :: _repo_root_for_plan).
+        repo_root = _default_repo_root_from_cwd()
 
     params: dict = {"force": args.force, "output_path": args.out_path}
     if args.plan:
         params["plan_path"] = args.plan
     if args.inventory:
         params["inventory_path"] = args.inventory
+    if preamble_text is not None:
+        params["preamble"] = preamble_text
+        params["preamble_path"] = args.preamble_path
+        params["preamble_sha256"] = preamble_sha256
 
     if is_queue_route:
         params["queue"] = args.queue
@@ -323,6 +462,9 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         return EXIT_DATA_ERROR
 
     print(json.dumps(result, indent=2, sort_keys=True))
+    _print_workflow_invocation(
+        result, is_queue_route=is_queue_route, profile_dir=args.profile_dir
+    )
 
     if not result["ok"]:
         return EXIT_DATA_ERROR

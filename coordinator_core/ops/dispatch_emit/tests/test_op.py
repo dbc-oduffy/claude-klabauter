@@ -6,7 +6,9 @@ Spec backlink: pln-the-emitter-turns-a-plan-spine-d08dda § C5.
 
 from __future__ import annotations
 
+import json
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -417,6 +419,70 @@ def test_dispatch_emit_force_overwrites_a_different_emission(tmp_path):
 
     assert result["ok"] is True
     assert "a peer's emission" not in output_path.read_text(encoding="utf-8")
+
+
+def test_dispatch_emit_overwrites_its_own_earlier_emission_same_session(tmp_path):
+    """#90 item 3: a session re-emitting its own earlier output (a changed
+    plan, a retry) is not a foreign write -- only the byte diff said so, and
+    the receipt's own session_id is the evidence that tells the two apart.
+    """
+    plan_path = _write_fixture_plan(tmp_path)
+    output_path = tmp_path / "emitted.mjs"
+
+    first = _dispatch_emit(
+        {
+            "plan_path": str(plan_path),
+            "output_path": str(output_path),
+            "description": "first pass",
+            "session_id": "session-same",
+        }
+    )
+    assert first["ok"] is True
+
+    second = _dispatch_emit(
+        {
+            "plan_path": str(plan_path),
+            "output_path": str(output_path),
+            "description": "second pass",
+            "session_id": "session-same",
+        }
+    )
+
+    assert second["ok"] is True
+    landed = output_path.read_text(encoding="utf-8")
+    assert "second pass" in landed
+    receipt = json.loads(Path(second["receipt"]).read_text(encoding="utf-8"))
+    assert receipt["session_id"] == "session-same"
+
+
+def test_dispatch_emit_still_refuses_a_genuinely_different_session(tmp_path):
+    """The narrowing above must not relax the peer case: a DIFFERENT
+    session's earlier emission is refused exactly as before."""
+    plan_path = _write_fixture_plan(tmp_path)
+    output_path = tmp_path / "emitted.mjs"
+
+    _dispatch_emit(
+        {
+            "plan_path": str(plan_path),
+            "output_path": str(output_path),
+            "description": "first pass",
+            "session_id": "session-a",
+        }
+    )
+    before = output_path.read_bytes()
+
+    with pytest.raises(ForeignEmissionError):
+        _dispatch_emit(
+            {
+                "plan_path": str(plan_path),
+                "output_path": str(output_path),
+                "description": "second pass",
+                "session_id": "session-b",
+            }
+        )
+
+    # The refusal must not have written anything -- session-a's bytes stand.
+    assert output_path.read_bytes() == before
 
 
 def test_dispatch_emit_accepts_plan_and_out_path_spellings(tmp_path):

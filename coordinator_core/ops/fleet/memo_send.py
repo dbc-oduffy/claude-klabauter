@@ -184,6 +184,7 @@ from coordinator_core.ops.fleet._memo_resolver import (
     never_inbox_mirror_refusal as _never_inbox_mirror_refusal,
     resolve_receiver_inbox as _resolve_receiver_inbox,
     suggest_nearest_receiver as _suggest_nearest_receiver,
+    undeliverable_checkout_refusal as _undeliverable_checkout_refusal,
 )
 from coordinator_core.ops.fleet._memo_summary import has_prose_body, is_placeholder_summary
 from coordinator_core.ops.fleet.memo_draft import legacy_outbox_dir, outbox_dir, resolve_outbox_draft_path
@@ -832,6 +833,11 @@ def _resolve_cc_targets(cc_list: list) -> tuple[Optional[list], Optional[str]]:
         mirror_refusal = _never_inbox_mirror_refusal(name, receiver_repo_path)
         if mirror_refusal is not None:
             return None, f"memo.send: cc target {name!r}: {mirror_refusal}"
+        # Unregistered names skip this so UNKNOWN CC RECEIVER can suggest one.
+        if receiver_repo_path is not None:
+            checkout_refusal = _undeliverable_checkout_refusal(name, receiver_repo_path)
+            if checkout_refusal is not None:
+                return None, f"memo.send: cc target {name!r}: {checkout_refusal}"
         if inbox_dir is None:
             suggestion = _suggest_nearest_receiver(name, all_repos)
             suggestion_clause = f" Did you mean {suggestion!r}?" if suggestion else ""
@@ -1698,6 +1704,12 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     mirror_refusal = _never_inbox_mirror_refusal(to, receiver_repo_path)
     if mirror_refusal is not None:
         return build_setup_error_result(_MODE, dry_run, mirror_refusal)
+
+    # Unregistered names skip this so UNKNOWN RECEIVER can suggest one.
+    if receiver_repo_path is not None:
+        checkout_refusal = _undeliverable_checkout_refusal(to, receiver_repo_path)
+        if checkout_refusal is not None:
+            return build_setup_error_result(_MODE, dry_run, checkout_refusal)
 
     if inbox_dir is None:
         suggestion = _suggest_nearest_receiver(to, all_repos)

@@ -380,6 +380,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "hooks.nudge_plan_test_surface_tier": OpClass.MUTATING,
     "hooks.preuse_agent_dispatch": OpClass.MUTATING,
     "hooks.preuse_skill_dispatch": OpClass.MUTATING,
+    "hooks.preuse_search_dispatch": OpClass.MUTATING,
     "hooks.enforce_agent_dispatch_mode": OpClass.MUTATING,
     "hooks.block_unenumerated_agent_type": OpClass.MUTATING,
     "hooks.guard_named_dispatch_tool_restriction": OpClass.MUTATING,

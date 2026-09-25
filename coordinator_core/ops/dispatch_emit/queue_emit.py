@@ -165,9 +165,14 @@ def emit_queue_script(
     run_dir: Path,
     session_id: Optional[str] = None,
     agent_type_host: Optional[str] = None,
+    preamble: Optional[str] = None,
 ) -> QueueEmission:
     """Turn a profile, an appetite and one or more queue directories into one
     composed queue-grind script plus its receipt extras. See module docstring.
+
+    ``preamble`` forwards straight to ``grind_compose.
+    compose_grind_script`` -- see that function's own docstring. Never
+    opened, parsed or otherwise interpreted here.
     """
     repo_root = Path(repo_root).resolve()
 
@@ -214,6 +219,7 @@ def emit_queue_script(
         run_dir=Path(os.path.relpath(guarded_run_dir, repo_root)).as_posix(),
         appetite=appetite,
         agent_type_host=agent_type_host,
+        preamble=preamble,
     )
 
     profile_digest = hashlib.sha256(loaded_profile.source_path.read_bytes()).hexdigest()

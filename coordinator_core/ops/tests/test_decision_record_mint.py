@@ -86,6 +86,51 @@ def test_outstanding_reservation_raises_floor_above_md_max(tmp_path: Path) -> No
     assert second != first
 
 
+def test_date_named_file_frontmatter_id_is_not_shadowed_by_filename_digits(tmp_path: Path) -> None:
+    """Regression: `DR-2026-09-10-live-tree-currency-disposition.md` (a
+    date-named record whose real id lives in frontmatter as `DR-2050`) must
+    not let its filename's leading date digits (`2026`) parse as the DR
+    number and shadow the real, higher frontmatter id — the exact bug that
+    let `decision_record.mint_id` hand out the already-claimed `DR-2050`
+    (issue #85).
+    """
+    decisions = tmp_path / "docs" / "decisions"
+    decisions.mkdir(parents=True)
+    (decisions / "DR-2026-09-10-live-tree-currency-disposition.md").write_bytes(
+        b"---\nid: DR-2050\n---\n"
+    )
+
+    number = mint_next_dr_id(tmp_path)
+    assert number == 2051
+
+
+def test_date_named_file_plus_stale_reservation_never_returns_claimed_id(tmp_path: Path) -> None:
+    """Regression: reproduces the full issue #85 repro shape — a date-named
+    `.md` record carrying the claimed id in frontmatter, PLUS a stale
+    reservation sitting at the same claimed number. Minting twice in a row
+    must never hand back `DR-2050` (already claimed by the .md file) or
+    `DR-2051` (claimed by the stale reservation) a second time.
+    """
+    decisions = tmp_path / "docs" / "decisions"
+    decisions.mkdir(parents=True)
+    (decisions / "DR-2026-09-10-live-tree-currency-disposition.md").write_bytes(
+        b"---\nid: DR-2050\n---\n"
+    )
+
+    reservations_dir = _reservations_dir(tmp_path)
+    reservations_dir.mkdir(parents=True)
+    # A live (unexpired) reservation already sitting at 2051 — mirrors a
+    # concurrent/prior mint that reserved but never wrote its DR file yet.
+    _reservation_path(reservations_dir, 2051).write_bytes(b'{"reserved_at": "now"}\n')
+
+    first = mint_next_dr_id(tmp_path)
+    assert first not in (2050, 2051)
+    assert first == 2052
+
+    second = mint_next_dr_id(tmp_path)
+    assert second not in (2050, 2051, first)
+
+
 def test_expired_reservation_is_swept_and_reclaimed(tmp_path: Path, monkeypatch) -> None:
     reservations_dir = _reservations_dir(tmp_path)
     reservations_dir.mkdir(parents=True)

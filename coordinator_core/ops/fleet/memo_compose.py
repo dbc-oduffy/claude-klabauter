@@ -100,6 +100,8 @@ from coordinator_core.ops.fleet._common import (
 )
 from coordinator_core.ops.fleet.memo_draft import (
     compose_draft_frontmatter,
+    detect_unqualified_display_names,
+    owner_name_advisory,
     resolve_outbox_draft_path,
 )
 from coordinator_core.ops.fleet._memo_compose import (
@@ -310,6 +312,10 @@ def _memo_compose(params: dict, repo_root=None) -> dict:
 
     (dry_run, topic, body, explicit_summary, summary_cap_advisory,
      summary_over_cap_original) = validated
+    # The body is where an owner gets named; memo.draft never sees it.
+    display_name_advisory = owner_name_advisory(
+        "memo.compose", detect_unqualified_display_names(body)
+    )
 
     if repo_root is None:
         return build_setup_error_result(
@@ -429,6 +435,7 @@ def _memo_compose(params: dict, repo_root=None) -> dict:
             # over cap; None on a clean/absent/placeholder summary.
             "summary_cap_advisory": summary_cap_advisory,
             "summary_over_cap_original": summary_over_cap_original,
+            "display_name_advisory": display_name_advisory,
         }])
 
     # ── act path — rewrite frontmatter + body, keep status: draft ───────────
@@ -474,6 +481,7 @@ def _memo_compose(params: dict, repo_root=None) -> dict:
             # fields above.
             "summary_cap_advisory": summary_cap_advisory,
             "summary_over_cap_original": summary_over_cap_original,
+            "display_name_advisory": display_name_advisory,
         }],
         [],
         [],

@@ -52,7 +52,6 @@ rename-with-remote-delete — stays a PM-gated ask, unchanged.
 from __future__ import annotations
 
 import os
-import subprocess
 import time
 from pathlib import Path
 from typing import NamedTuple, Optional
@@ -367,16 +366,15 @@ def _humanize(secs: float) -> str:
 
 
 def _current_branch(repo_root: str) -> str:
-    """The one git spawn on the early-return path. See the boot-cost
-    negative-spec in this module's docstring before adding a second."""
-    from coordinator_core.win_portability import no_console_creationflags
+    """Current branch, or ``""`` for a genuinely detached HEAD.
 
-    proc = subprocess.run(
-        ["git", "branch", "--show-current"],
-        cwd=repo_root,
-        capture_output=True,
-        **no_console_creationflags(),
-    )
-    if proc.returncode != 0:
-        return ""
-    return proc.stdout.decode("utf-8", errors="replace").strip()
+    Trap: never spawn ``git branch --show-current`` and read a non-zero exit
+    as detached. A cloud clone owned by another UID fails git's ownership
+    check while HEAD is on a real branch; that misread both reported
+    "detached HEAD" and starved the cloud learn-arm of a branch to record.
+    ``resolve_branch`` reads HEAD/refs off disk (zero spawns) and only falls
+    back to a spawn when the walk is inconclusive.
+    """
+    from coordinator_core.hooks.auto_push import resolve_branch
+
+    return resolve_branch(repo_root) or ""

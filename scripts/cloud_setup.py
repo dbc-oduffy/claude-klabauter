@@ -170,6 +170,14 @@ INSTALL_REPORT_PATH = Path("/root/cloud-setup-report.json")
 #: drops that dir from the pin.
 SESSION_PATH_BINARIES = ("python3", "claude", "pyright-langserver", "typescript-language-server")
 
+#: Tools recorded on `report.session_tools` — informational only, unlike
+#: `SESSION_PATH_BINARIES` (which gates the PATH pin). Images drift between
+#: boots (`pwsh`, `zstd` have each been absent), so posture reads this boot's.
+SESSION_TOOLS_INVENTORY = (
+    "python3", "python", "claude", "git", "node", "npx", "npm",
+    "pwsh", "powershell", "bash", "sh", "zstd", "gzip", "tar", "uv", "pip", "pip3",
+)
+
 #: Basenames of the two session-facing surfaces. `<claude_home>/rules/*.md` is
 #: loaded into session context by the harness itself, with no interpreter and no
 #: hook — which is the property these files are chosen for, not a convenience.
@@ -376,7 +384,12 @@ class Report:
     #: and a resolvable `.doe-root` at each
     #: location the no-launcher fences read. The one check that converts "wired
     #: nothing" from byte-identical-to-healthy into a named failure.
+    #: `doe_root_bin_resolves` records (never raises) whether that root carries
+    #: the `coordinator/bin` the fences exec.
     hook_plane: dict | None = None
+    #: `binaries` (name -> path or None), `present`, `absent` for this boot's
+    #: image. See `session_tools_inventory`.
+    session_tools: dict | None = None
     #: `settings.json` hooks removed because the coordinator plugin already
     #: delivers them on the same event (`drop_double_fired_settings_hooks`).
     hook_dedupe: dict | None = None
@@ -1067,6 +1080,13 @@ def assert_hook_plane_armed(report: Report) -> None:
     rungs[str(legacy)] = _first_line_or_none(legacy)
     doe_root_resolves = any(value for value in rungs.values())
 
+    # A rung naming a root does not prove the root carries `coordinator/bin`
+    # (a flat doctrine mirror does not). Recorded, never raised: a bin-less
+    # mirror is legitimate, only worth naming.
+    resolved_doe_root = next((value for value in rungs.values() if value), None)
+    doe_root_bin_dir = str(Path(resolved_doe_root) / "coordinator" / "bin") if resolved_doe_root else None
+    doe_root_bin_resolves = bool(doe_root_bin_dir and Path(doe_root_bin_dir).is_dir())
+
     report.hook_plane = {
         "settings_path": str(settings_path),
         "hooks_registered": hooks_present,
@@ -1076,6 +1096,8 @@ def assert_hook_plane_armed(report: Report) -> None:
         "plugin_hooks": plugin,
         "doe_root_resolves": doe_root_resolves,
         "doe_root_rungs": rungs,
+        "doe_root_bin_dir": doe_root_bin_dir,
+        "doe_root_bin_resolves": doe_root_bin_resolves,
     }
 
     problems: list[str] = []
@@ -3147,6 +3169,23 @@ def resolve_session_path(report: Report) -> None:
     }
 
 
+def session_tools_inventory(report: Report) -> None:
+    """Record which session-facing tools THIS boot's image actually carries.
+
+    Images drift between boots, so a prior run's report is never carried
+    forward. `shutil.which` only, no `--version` spawns. Informational: never
+    raises, never gates.
+    """
+    default_entries = _image_default_path().split(":")
+    search_path = _image_search_path(default_entries)
+    found = {name: shutil.which(name, path=search_path) for name in SESSION_TOOLS_INVENTORY}
+    report.session_tools = {
+        "binaries": found,
+        "present": sorted(name for name, path in found.items() if path),
+        "absent": sorted(name for name, path in found.items() if not path),
+    }
+
+
 def _hook_plane_status_line(report: Report) -> str:
     """`HOOK PLANE: ARMED|UNARMED (delivery: <surface>)` — the literal FIRST line
     of the verdict surface, on every run, healthy or not.
@@ -3665,6 +3704,9 @@ def main() -> int:
     # volume already filled by a prior wave's leaked pytest trees fails those
     # steps with ENOSPC before this reaper ever gets a turn.
     run_step("reap stale pytest trees", lambda: reap_stale_pytest_trees(report), report)
+    # Cheap, dependency-free (no clone required), so it runs early and
+    # survives every later step's failure — see `session_tools_inventory`.
+    run_step("session tools inventory", lambda: session_tools_inventory(report), report)
     run_step("clone coordinator-claude", lambda: clone_repo("coordinator-claude"), report)
     run_step("clone klabauter", lambda: clone_repo("klabauter"), report)
     run_step("set engine env", lambda: set_engine_env(report), report)

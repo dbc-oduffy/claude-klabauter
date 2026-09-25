@@ -159,6 +159,17 @@ def _join_prompt_parts(parts: Sequence[tuple[str, str]]) -> str:
     return " + ".join(pieces) if pieces else "''"
 
 
+def _preamble_parts(preamble_expr: Optional[str]) -> list[tuple[str, str]]:
+    """The run-wide posture block, as ``_join_prompt_parts`` parts
+    prepended ahead of a stage's own prompt text -- a bare runtime
+    expression (``PREAMBLE``, the const ``grind_compose.py`` declares ONCE
+    when ``--preamble`` is given), never the literal text inlined here.
+    Empty when ``preamble_expr`` is ``None``."""
+    if not preamble_expr:
+        return []
+    return [("expr", preamble_expr), ("lit", "\n\n")]
+
+
 def _list_parts(files: Sequence[str], files_js: Optional[str]) -> list[tuple[str, str]]:
     """One or more ``_join_prompt_parts`` parts rendering a file/row-id list
     clause: a live ``files_js`` JS expression (joined with ``', '`` at run
@@ -184,6 +195,7 @@ def compose_triage_call(
     run_id_js: Optional[str] = None,
     agent_type_host: Optional[str] = None,
     repo_root: str = ".",
+    preamble_expr: Optional[str] = None,
 ) -> str:
     """`triage` (general-purpose, sonnet, medium). Runs `backlog-grind-assemble grind-row check`
     first, then per row returns verdict, evidence, a t-shirt size plus
@@ -206,6 +218,7 @@ def compose_triage_call(
     script_part: tuple[str, str] = ("expr", script_path_js) if script_path_js else ("lit", "<script>")
     run_id_part: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", "<run-id>")
     parts: list[tuple[str, str]] = [
+        *_preamble_parts(preamble_expr),
         ("lit", "You are the triage stage. Your rows (row_id/path/digest) are: "),
         rows_part,
         ("lit", ". Run `backlog-grind-assemble grind-row check --manifest "),
@@ -294,6 +307,7 @@ def compose_refute_close_call(
     run_id_js: Optional[str] = None,
     agent_type_host: Optional[str] = None,
     repo_root: str = ".",
+    preamble_expr: Optional[str] = None,
 ) -> str:
     """`refute-close` (general-purpose, sonnet, medium). Tries to refute
     each close proposal it is handed. Closes only the confirmed ones, via
@@ -313,6 +327,7 @@ def compose_refute_close_call(
     profile_dir_part: tuple[str, str] = ("expr", profile_dir_js) if profile_dir_js else ("lit", profile_dir)
     run_id_part: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", "<run-id>")
     parts: list[tuple[str, str]] = [
+        *_preamble_parts(preamble_expr),
         ("lit", "You are the refute-close stage. Your close proposals (row_id/path/digest/evidence/origin) are: "),
         proposals_part,
         (
@@ -409,6 +424,7 @@ def compose_resize_call(
     close_verdict: Optional[str] = None,
     agent_type_host: Optional[str] = None,
     repo_root: str = ".",
+    preamble_expr: Optional[str] = None,
 ) -> str:
     """`resize` (general-purpose, sonnet, medium). One read-only re-size per
     triage batch, called before any baton hand-back for that batch's
@@ -448,6 +464,7 @@ def compose_resize_call(
     else:
         plan_note = "no fix-kind edge is resolvable off triage for this profile, so `plan-weight` has no `--outcome` value to write"
     parts: list[tuple[str, str]] = [
+        *_preamble_parts(preamble_expr),
         (
             "lit",
             "You are the resize stage. This batch's rows were routed to a "
@@ -529,6 +546,7 @@ def compose_fix_call(
     run_id_js: Optional[str] = None,
     repo_root: str = ".",
     agent_type_host: Optional[str] = None,
+    preamble_expr: Optional[str] = None,
 ) -> str:
     """`fix` (general-purpose, sonnet, high). Holds the lock on its files
     plus `ledger:<row-id>`. Pre-checks its locked files for peer dirt
@@ -557,6 +575,7 @@ def compose_fix_call(
         "] plus `ledger:"
     )
     parts: list[tuple[str, str]] = [
+        *_preamble_parts(preamble_expr),
         ("lit", "You are the fix stage for row "),
         row_id_part,
         ("lit", ". You hold the lock on ["),
@@ -656,6 +675,7 @@ def compose_verify_agent_call(
     evidence_js: Optional[str] = None,
     fix_plan_js: Optional[str] = None,
     agent_type_host: Optional[str] = None,
+    preamble_expr: Optional[str] = None,
 ) -> str:
     """`verify` in its agent form (general-purpose, sonnet, high). Tries to
     reject the fix it is handed. Read-only apart from the named tests.
@@ -666,6 +686,7 @@ def compose_verify_agent_call(
     the verifier is handed something to verify rather than a bare
     "reject the fix" instruction with no row context."""
     parts: list[tuple[str, str]] = [
+        *_preamble_parts(preamble_expr),
         ("lit", "You are the verify stage for row "),
         ("expr", row_id_js) if row_id_js else ("lit", "<row id>"),
         ("lit", " at "),
@@ -964,6 +985,7 @@ def compose_undo_call(
     created_files: Sequence[str] = (),
     created_files_js: Optional[str] = None,
     agent_type_host: Optional[str] = None,
+    preamble_expr: Optional[str] = None,
 ) -> str:
     """`undo` (general-purpose, sonnet, low). Restores the fixer's own
     touched files from HEAD and removes the files it created.
@@ -971,7 +993,7 @@ def compose_undo_call(
     ``touched_files_js``/``created_files_js`` name JS expressions (the
     fixer's own returned touched/created lists) to interpolate at RUN time
     instead of the static lists."""
-    parts: list[tuple[str, str]] = [("lit", "Restore these files from HEAD: [")]
+    parts: list[tuple[str, str]] = [*_preamble_parts(preamble_expr), ("lit", "Restore these files from HEAD: [")]
     parts.extend(_list_parts(touched_files, touched_files_js))
     parts.append(("lit", "], and remove these files the fix created: ["))
     parts.extend(_list_parts(created_files, created_files_js))

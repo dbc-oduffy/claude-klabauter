@@ -31,6 +31,7 @@ Spec backlink: coordinator_core/bash_guards/block_subagent_commit.py
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -1888,6 +1889,142 @@ def test_landing_order_safety_git_root_unresolvable_denies(monkeypatch):
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
+# ---------------------------------------------------------------------------
+# A cwd above every repo resolves no root; a command naming its own absolute
+# root (`git -C <abs>`, invoke `--repo <abs>`) is validated against it.
+# ---------------------------------------------------------------------------
+
+
+def _cwd_unresolvable_explicit_root_resolves(monkeypatch, explicit_root=_FAKE_REPO_ROOT):
+    """Wire ``resolve_git_root`` to fail for the session's own (unresolvable)
+    ``cwd`` but succeed -- as a real toplevel would -- for ``explicit_root``
+    specifically, so the fallback's validation call is exercised for real
+    rather than trivially short-circuited by a cwd-blind stub.
+    """
+    calls = _git_commit_agent_setup(monkeypatch, git_root=None)
+
+    def _resolve(cwd):
+        return explicit_root if cwd == explicit_root else None
+
+    monkeypatch.setattr(guard, "resolve_git_root", _resolve)
+    return calls
+
+
+def test_git_dash_c_absolute_root_resolves_when_cwd_unresolvable(monkeypatch):
+    _cwd_unresolvable_explicit_root_resolves(monkeypatch)
+    payload = _payload(
+        f'git -C {_FAKE_REPO_ROOT} commit -m "msg" -- src/foo.py',
+        agent_type=_GIT_COMMIT_AGENT_TYPE,
+    )
+    assert guard.check(payload) is None
+
+
+def test_git_dash_c_relative_root_still_denies(monkeypatch):
+    """A RELATIVE ``-C`` value names nothing this guard can anchor without
+    the still-unresolved ``cwd`` -- the fallback must not treat it as
+    explicit.
+    """
+    _cwd_unresolvable_explicit_root_resolves(monkeypatch, explicit_root="relative/repo")
+    payload = _payload(
+        'git -C relative/repo commit -m "msg" -- src/foo.py',
+        agent_type=_GIT_COMMIT_AGENT_TYPE,
+    )
+    result = guard.check(payload)
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_git_dash_c_root_failing_toplevel_validation_still_denies(monkeypatch):
+    """An absolute ``-C`` value that is NOT actually a git toplevel (the
+    validation call to the same ``resolve_git_root`` helper returns ``None``
+    or a divergent path) must not be trusted as the root.
+    """
+    calls = _git_commit_agent_setup(monkeypatch, git_root=None)
+    monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: None)
+    payload = _payload(
+        'git -C /not/a/repo commit -m "msg" -- src/foo.py',
+        agent_type=_GIT_COMMIT_AGENT_TYPE,
+    )
+    result = guard.check(payload)
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert calls == []
+
+
+def test_commit_v2_cli_dash_dash_repo_absolute_resolves_when_cwd_unresolvable(monkeypatch):
+    _cwd_unresolvable_explicit_root_resolves(monkeypatch)
+    payload = _payload(
+        "python3 -m coordinator_core.invoke --repo %s ceremony.commit_v2 "
+        '\'{"paths": ["src/foo.py"], "message": "x"}\'' % _FAKE_REPO_ROOT,
+        agent_type=_GIT_COMMIT_AGENT_TYPE,
+    )
+    assert guard.check(payload) is None
+
+
+@pytest.mark.parametrize("key", ["repo", "repo_root"])
+def test_commit_v2_json_repo_keys_are_not_read_as_explicit_root(monkeypatch, key):
+    """commit_v2 refuses ``repo`` and treats ``repo_root`` as an assertion,
+    never the worktree source -- neither anchors the commit, even when the
+    named path would validate."""
+    calls = _cwd_unresolvable_explicit_root_resolves(monkeypatch)
+    payload = _payload(
+        "coordinator-invoke ceremony.commit_v2 "
+        '\'{"paths": ["src/foo.py"], "message": "x", "%s": "%s"}\''
+        % (key, _FAKE_REPO_ROOT),
+        agent_type=_GIT_COMMIT_AGENT_TYPE,
+    )
+    result = guard.check(payload)
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert calls == []
+
+
+def test_no_explicit_root_named_still_denies_unresolvable(monkeypatch):
+    """No ``-C``/``--repo``/``repo_root`` anywhere -- the ordinary
+    unresolvable-root deny is unchanged.
+    """
+    calls = _git_commit_agent_setup(monkeypatch, git_root=None)
+    monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: None)
+    payload = _payload(
+        'git commit -m "msg" -- src/foo.py',
+        agent_type=_GIT_COMMIT_AGENT_TYPE,
+    )
+    result = guard.check(payload)
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert calls == []
+
+
+# --- Direct unit coverage of the extractor itself ---
+
+
+def test_explicit_absolute_root_from_cmd_picks_last_dash_c():
+    cmd = f'git -C /wrong -C {_FAKE_REPO_ROOT} commit -m "msg" -- src/foo.py'
+    assert guard._explicit_absolute_root_from_cmd(cmd) == _FAKE_REPO_ROOT
+
+
+def test_explicit_absolute_root_from_cmd_none_without_commit_subcommand():
+    """A ``-C <abs>`` on a NON-commit git invocation names no root for this
+    guard's purpose -- the walk requires the chain to actually reach
+    ``commit``, mirroring ``_tokens_reach_commit_after_git``.
+    """
+    assert guard._explicit_absolute_root_from_cmd(f"git -C {_FAKE_REPO_ROOT} status") is None
+
+
+def test_explicit_absolute_root_from_cmd_none_for_relative_repo_flag():
+    cmd = 'coordinator-invoke --repo relative ceremony.commit_v2 \'{"paths": ["a.py"], "message": "x"}\''
+    assert guard._explicit_absolute_root_from_cmd(cmd) is None
+
+
+def test_explicit_absolute_root_from_cmd_windows_drive_absolute():
+    # abs-path-ok: a literal fixture string the tokenizer parses as a
+    # Windows drive-absolute -C value, never a real host path. Forward-slash
+    # form -- an unescaped backslash is this module's tokenizer's own escape
+    # character (Bash dialect), same as every other argument position here.
+    cmd = 'git -C C:/repo commit -m "msg" -- src/foo.py'
+    assert guard._explicit_absolute_root_from_cmd(cmd) == "C:/repo"
+
+
 def test_ownership_scope_rejection_denies(monkeypatch):
     """AC11/AC12-adjacent defense-in-depth: an ownership-scope rejection
     (a path outside the calling session's own claimed scope) denies even
@@ -2421,6 +2558,8 @@ def test_pathspec_element_is_sweeping_bracket_glob_with_star_still_a_glob(tmp_pa
     ``?``) is never eligible for the literal-existence carve-out, even if a
     same-named path happens to exist on disk.
     """
+    if sys.platform == "win32":
+        pytest.skip("`*` is not a legal Windows filename character")
     (tmp_path / "[slug]*").mkdir()
     assert guard._pathspec_element_is_sweeping("[slug]*", str(tmp_path)) is True
 

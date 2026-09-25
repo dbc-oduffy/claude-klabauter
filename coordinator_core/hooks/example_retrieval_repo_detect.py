@@ -12,8 +12,8 @@ exit, no stdout):
                   git history
   SKIP          — fail-open message when a required probe (stat/git) itself
                   fails
-  ""            — kill-switch set, example-game-repo context detected, or no
-                  .example-retrieval-repo/manifest.json marker found walking up from cwd
+  ""            — kill-switch set, example-game-repo context detected, or no index
+                  marker found walking up from cwd (see find_example_retrieval_repo_dir)
 
 Disposition: PORT (the Staff Engineer adjudication item, W4b §2.8). Both `.ps1` and `.sh`
 oracles implement IDENTICAL logic — a bounded upward directory walk for two
@@ -64,6 +64,25 @@ def _find_marker_upward(start_dir: str, marker: str, max_levels: int = _MAX_LEVE
     return None
 
 
+_INDEX_MARKERS = ("graph.db", "state.json")
+
+
+def find_example_retrieval_repo_dir(start_dir: str, max_levels: int = _MAX_LEVELS) -> str | None:
+    """Walk up from start_dir for a `.example-retrieval-repo/` dir holding an indexer
+    artifact. Trap: the bare dir name is not a marker — `~/.example-retrieval-repo/` is
+    the server's global config home and would claim every repo beneath it."""
+    d = start_dir
+    for _ in range(max_levels):
+        rag_dir = os.path.join(d, ".example-retrieval-repo")
+        if any(os.path.isfile(os.path.join(rag_dir, m)) for m in _INDEX_MARKERS):
+            return rag_dir
+        parent = os.path.dirname(d)
+        if not parent or parent == d:
+            break
+        d = parent
+    return None
+
+
 def _git(repo_root: str, *args: str) -> str | None:
     """Run `git -C repo_root <args>`, return stripped stdout or None on any failure."""
     import subprocess
@@ -102,11 +121,10 @@ def detect_banner(cwd: str) -> str:
         return ""
 
     # --- Generic example-retrieval-repo detection via marker file ---
-    manifest_path = _find_marker_upward(cwd, os.path.join(".example-retrieval-repo", "manifest.json"))
-    if not manifest_path:
+    example_retrieval_repo_dir = find_example_retrieval_repo_dir(cwd)
+    if not example_retrieval_repo_dir:
         return ""
 
-    example_retrieval_repo_dir = os.path.dirname(manifest_path)
     repo_root = os.path.dirname(example_retrieval_repo_dir)
 
     db_path = os.path.join(example_retrieval_repo_dir, "graph.db")

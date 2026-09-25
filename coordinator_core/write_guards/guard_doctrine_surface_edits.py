@@ -47,6 +47,12 @@ the tree, e.g. coordinator/tests/CLAUDE.md, is NOT protected):
   - <repo-root>/CLAUDE.md          (class 1, repo-root project instructions)
   - <repo-root>/coordinator.local.md                      (class 2)
 
+PLUS, generically (`_foreign_repo_root_surface`): ANY other
+repo's own `<its-root>/CLAUDE.md` or `<its-root>/coordinator.local.md`, when
+the edit targets it directly regardless of the session's own repo_root —
+e.g. a example-retrieval-repo session editing `example-retrieval-repo-ue-addon/CLAUDE.md`. Owning
+root for the sentinel lookup is that repo's own root, never the session's.
+
 Negative spec — do NOT "split" this guard by gating coordinator.local.md's
 prose body while ungating its frontmatter keys. That is the intuitive split
 and it is exactly inverted: the frontmatter is the executed/authority half.
@@ -317,6 +323,36 @@ def _protected_paths(repo_root: "str | None") -> "list[str]":
     return [path for path, _ in _protected_entries(repo_root)]
 
 
+_FOREIGN_ROOT_BASENAMES = ("CLAUDE.md", "coordinator.local.md")
+
+
+def _foreign_repo_root_surface(target: str) -> "str | None":
+    """The target's own repo root, when `target` is that repo's root-level
+    `CLAUDE.md` or `coordinator.local.md`, independent of the session's
+    `repo_root`.
+
+    `_protected_entries` anchors only on the session root and `_doe_root()`,
+    so a sibling repo's root doctrine file (example-retrieval-repo-ue-addon/CLAUDE.md
+    edited from a example-retrieval-repo session) would otherwise pass unguarded. The
+    basename gate keeps the walk-only root resolution off every other path.
+    """
+    basename = os.path.basename(target)
+    if basename not in _FOREIGN_ROOT_BASENAMES:
+        return None
+    try:
+        target_root = resolve_repo_root(cwd=os.path.dirname(target)) or None
+    except Exception:
+        return None
+    if not target_root:
+        return None
+    try:
+        if target != _norm(os.path.join(target_root, basename)):
+            return None
+    except Exception:
+        return None
+    return _norm(target_root)
+
+
 def _sentinel_state(repo_root: "str | None") -> str:
     """Returns "allow", "deny-absent", or "deny-expired".
 
@@ -572,7 +608,13 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             owning_root = entry_root
             break
     if not matched:
-        return None
+        # A sibling repo's own root doctrine file -- see
+        # `_foreign_repo_root_surface`.
+        foreign_root = _foreign_repo_root_surface(target)
+        if foreign_root is None:
+            return None
+        matched = True
+        owning_root = foreign_root
 
     # The approval is read at the root that OWNS the matched surface, falling
     # back to the session's repo root -- see `_protected_entries`. An entry
@@ -588,7 +630,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "permissionDecision": "deny",
             "permissionDecisionReason": _deny_reason(
                 target_raw,
-                is_local_config=(target == _local_config_path(repo_root)),
+                is_local_config=(os.path.basename(target) == "coordinator.local.md"),
                 payload=payload,
             ),
         }

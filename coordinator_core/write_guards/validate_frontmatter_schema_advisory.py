@@ -623,13 +623,24 @@ def _merge_memo_schemas(schemas: dict) -> dict:
 _STOP_DENY = ("deny", None)
 
 
-def _compute_content_to_probe(
+def write_or_multiedit_content(
     tool_name: str, tool_input: dict, abs_file_path: str
 ) -> Optional[str]:
+    """The `Write`/`MultiEdit` legs of "prospective content", shared with
+    `block_sizing_object_schema_violation._compute_prospective_content` —
+    both tools apply identically regardless of which schema is being
+    probed. `Edit` is NOT included: this module treats it as `new_string`
+    verbatim (matches at write time, before the guard framework applies
+    the edit itself), while the sizing guard applies it against the
+    on-disk file, and that difference is deliberate in both -- a shared
+    branch here would either weaken one or diverge from what each caller
+    already does with `Edit`, so each keeps its own.
+
+    Returns `None` for any other `tool_name`, including `Edit` -- callers
+    handle `Edit` themselves before reaching this.
+    """
     if tool_name == "Write":
         return tool_input.get("content") or ""
-    if tool_name == "Edit":
-        return tool_input.get("new_string") or ""
     if tool_name == "MultiEdit":
         try:
             with open(abs_file_path, "r", encoding="utf-8") as fh:
@@ -646,6 +657,14 @@ def _compute_content_to_probe(
             multi_edit_probe = result
         return multi_edit_probe
     return None
+
+
+def _compute_content_to_probe(
+    tool_name: str, tool_input: dict, abs_file_path: str
+) -> Optional[str]:
+    if tool_name == "Edit":
+        return tool_input.get("new_string") or ""
+    return write_or_multiedit_content(tool_name, tool_input, abs_file_path)
 
 
 def _memo_guards_decision(

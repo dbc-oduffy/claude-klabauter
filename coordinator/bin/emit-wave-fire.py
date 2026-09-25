@@ -637,6 +637,36 @@ def _trail_provenance(trail_dir: Path, fresh_ref: dict) -> list[str]:
     return lines
 
 
+def _write_fire_receipt(script_path: Path) -> None:
+    """Write `<script_path>.emitted.json` beside a just-written fire, via the
+    engine's own `dispatch_emit.op._write_emission_receipt` — the ONE writer,
+    so this CLI's receipt and `dispatch.emit`'s can never drift in shape
+    (module docstring "The receipt is a property of emitting, not of one
+    repo's wrapper"). `hooks.block_workflow_foreign_emission` reads receipts
+    by shape alone, never by which emitter wrote them.
+
+    This script already bootstraps the engine and imports from
+    `coordinator_core` elsewhere in this module (`_bind`, `_slot_order_fn`),
+    so calling the op's writer in-process costs nothing extra; `params={}`
+    makes it fall back to `resolve_session_id`'s own env-var ladder, same as
+    a bare-CLI caller with no bound per-request session identity gets.
+
+    Best-effort, mirroring the op's own contract: a receipt that fails to
+    write narrates on stderr and never fails the emit — the script is the
+    deliverable, the receipt is evidence about it.
+    """
+    try:
+        import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
+        from cc_invoke import require_colocated_engine_on_path
+
+        require_colocated_engine_on_path(__file__)
+        from coordinator_core.ops.dispatch_emit.op import _write_emission_receipt
+
+        _write_emission_receipt(script_path, None, {})
+    except Exception as exc:  # noqa: BLE001 -- best-effort; must never fail the emit
+        print(f"  WARNING: could not write emission receipt for {script_path.name}: {exc}", file=sys.stderr)
+
+
 def _bind(
     script_path: Path,
     args: dict,
@@ -1031,6 +1061,7 @@ def _emit_repair(args, repo_root: Path, trail_dir: Path, plugin_root: Path, engi
     )
     out = trail_dir / f"repair-fire-{n}.mjs"
     out.write_text(text, encoding="utf-8", newline="\n")
+    _write_fire_receipt(out)
 
     manifest = [{"fire": n, "scriptPath": str(out), "batons": [e["batonId"] for e in entries]}]
     if args.json:
@@ -1490,6 +1521,7 @@ def main(argv=None) -> int:
         # LF on every host: Windows newline translation writes a CR per line, and the harness
         # refuses a Workflow script carrying control characters its approval dialog would hide.
         out.write_text(text, encoding="utf-8", newline="\n")
+        _write_fire_receipt(out)
         manifest.append(
             {"fire": n, "scriptPath": str(out), "batons": [b["id"] for b in batch]}
         )

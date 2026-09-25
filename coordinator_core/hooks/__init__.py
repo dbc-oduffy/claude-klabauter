@@ -192,6 +192,7 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.nudge_plan_test_surface_tier",  # registers "hooks.nudge_plan_test_surface_tier"
     "coordinator_core.hooks.preuse_agent_dispatch",  # registers "hooks.preuse_agent_dispatch"
     "coordinator_core.hooks.preuse_skill_dispatch",  # registers "hooks.preuse_skill_dispatch"
+    "coordinator_core.hooks.preuse_search_dispatch",  # registers "hooks.preuse_search_dispatch"
     "coordinator_core.hooks.enforce_agent_dispatch_mode",  # registers "hooks.enforce_agent_dispatch_mode"
     "coordinator_core.hooks.block_unenumerated_agent_type",  # registers "hooks.block_unenumerated_agent_type"
     "coordinator_core.hooks.guard_named_dispatch_tool_restriction",  # registers "hooks.guard_named_dispatch_tool_restriction"

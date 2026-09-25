@@ -345,8 +345,14 @@ _WORK_TREE_ENV_NAME = "GIT_WORK_TREE"
 #: Membership therefore replaces non-membership: an UNKNOWN verb does not
 #: bump, matching this module's fail-open posture everywhere else, and a
 #: read-only verb git adds in some future release cannot regress this.
-#: `fetch` is included: it writes remote-tracking refs and objects into the
-#: foreign repo's gitdir.
+#: `fetch` is a DUAL-MODE member (see `_fetch_is_read` below): a bare
+#: `git fetch <remote>` writes only remote-tracking refs and objects in the
+#: target's gitdir, never its worktree, index, branches or HEAD, and is the
+#: first step of read-only cross-repo verification -- but `git fetch
+#: <remote> <src>:<dst>` writes directly to the local ref named by `<dst>`,
+#: exactly the "never...branches" case this guard exists to catch. A blanket
+#: exclusion here would let a colon-refspec-destination fetch reach a
+#: foreign repo's local branch pointer unbumped.
 #:
 #: A DUAL-MODE verb -- one whose read and write spellings differ only by
 #: flag or sub-word (`branch --show-current` vs `branch -d`, `stash list` vs
@@ -765,6 +771,26 @@ def _apply_is_read(args: List[str]) -> bool:
     return _flag_present(args, _APPLY_READ_FLAGS)
 
 
+#: A refspec positional carrying an explicit `<src>:<dst>` destination (the
+#: optional `+` force-prefix included) -- the one `fetch` shape that writes
+#: a local ref rather than only remote-tracking refs/objects. A bare branch
+#: name (`main`, `feature`) has no colon and stays read.
+_FETCH_REFSPEC_DST_RE = re.compile(r"^\+?[^:\s]+:[^:\s]+$")
+
+
+def _fetch_is_read(args: List[str]) -> bool:
+    """`git fetch` writes only remote-tracking refs/objects, UNLESS one of
+    its positionals is a colon-refspec naming a local-ref destination
+    (`git fetch origin feature:main`) -- that writes the local branch `main`
+    directly, regardless of `cwd`. Any such positional lands on write;
+    everything else (bare `git fetch`, `git fetch origin`, `git fetch
+    origin main`) stays read. Checked over EVERY positional, not just the
+    first after the remote name, since `git fetch origin main
+    feature:main` mixes a plain branch name with a refspec destination in
+    the same invocation."""
+    return not any(_FETCH_REFSPEC_DST_RE.match(tok) for tok in _positionals(args))
+
+
 def _hash_object_is_read(args: List[str]) -> bool:
     """Review finding (classifier-first-pass, P3): `git hash-object` only
     writes the blob into the target's object database when `-w` is given;
@@ -804,6 +830,7 @@ _DUAL_MODE_READ_PREDICATES = {
     "bisect": _bisect_is_read,
     "branch": _branch_is_read,
     "config": _config_is_read,
+    "fetch": _fetch_is_read,
     "hash-object": _hash_object_is_read,
     "notes": _notes_is_read,
     "reflog": _reflog_is_read,

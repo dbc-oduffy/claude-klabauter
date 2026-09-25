@@ -638,6 +638,42 @@ def test_preflight_call_binds_its_result_and_gates_the_run():
     assert "return { halted:" in script
 
 
+def test_preflight_probes_git_root_from_the_commit_phases_own_cwd(tmp_path):
+    """DoE#98 ask 3: the preflight must resolve git-root from the SAME cwd
+    the commit phase will use (repoRoot, after a standalone `cd`) and halt
+    the run -- via the existing PREFLIGHT-BLOCKED gate, unchanged label --
+    before any executor phase spends time, if that root does not resolve."""
+    from coordinator_core.ops.dispatch_emit.emit import emit_script
+
+    plan_path = tmp_path / "a-plan.md"
+    plan_path.write_text(
+        "---\ntitle: \"a plan\"\nsizing_object: null\n---\n\n# a plan\n\n"
+        "## Problem\n\nTest fixture.\n\n## Tasks\n\n```yaml plan-tasks\n"
+        "- id: C1\n  title: Do the thing\n  change_kind: doc-edit\n"
+        "  surface: a.py\n  writes:\n    - a.py\n  queue_scope: project\n"
+        "  disposition: open\n  body: |\n    Do the thing.\n```\n",
+        encoding="utf-8",
+    )
+    script = emit_script(plan_path, repo_root=tmp_path)
+
+    # Label unchanged -- DoE's test_emit_dispatch_workflow.py matches on it.
+    assert "preflight:commit-claimability" in script
+
+    body_start = script.index("};\n") + len("};\n")  # end of the meta block
+    preflight_start = script.index("Preflight: commit claimability", body_start)
+    wave_start = script.index("Wave 1", body_start)
+    preflight_block = script[preflight_start:wave_start]
+
+    assert "git -C" in preflight_block
+    assert "rev-parse --show-toplevel" in preflight_block
+    assert "PREFLIGHT-BLOCKED git root did not resolve" in preflight_block
+    # Runs before any pathspec path check -- the root-check text precedes
+    # the "Preflight only" pathspec-verification paragraph in the same block.
+    assert preflight_block.index(
+        "rev-parse --show-toplevel"
+    ) < preflight_block.index("Preflight only -- do not stage or commit")
+
+
 def test_preflight_blocked_token_match_is_anchored_not_substring():
     import re
 
@@ -842,22 +878,29 @@ def test_diff_stat_is_not_the_sole_verification_signal():
 
 def test_untracked_additions_named_by_a_report_are_not_treated_as_divergence():
     """The added untracked-file leg must apply the same
-    named-in-a-report-vs-named-by-none discriminator the tracked-hunk check
-    already applies -- not a bare string match on 'untracked' appearing
-    somewhere in the block."""
+    named-in-a-report-file-vs-named-by-none discriminator the tracked-hunk
+    check already applies -- not a bare string match on 'untracked'
+    appearing somewhere in the block. DoE#99: the discriminator is now the
+    report FILE's own touched-files list, not the terse return line, and
+    "peer" additionally requires a LIVE holder -- absence alone is not
+    evidence."""
     block = _provenance_block()
     untracked_idx = block.index("git status --porcelain -- <your pathspec>")
-    surrounding = block[untracked_idx : untracked_idx + 600]
-    assert "named by a report" in surrounding
-    assert "named by no report" in surrounding
+    surrounding = block[untracked_idx : untracked_idx + 800]
+    assert "report FILE" in surrounding
+    assert "LIVE holder is the peer case" in surrounding
     assert "STOP" in surrounding
 
 
-def test_the_halt_discriminator_is_a_file_no_report_mentions():
-    """Halting on any unreported hunk would fire on ordinary under-itemised
-    executor reports; halting on none leaves the peer case silent."""
+def test_the_halt_discriminator_requires_a_live_holder_not_mere_absence():
+    """DoE#99: halting on any unreported hunk would fire on ordinary
+    under-itemised executor reports; halting on none leaves the peer case
+    silent. The discriminator is a LIVE holder, never absence from a
+    report."""
     block = _provenance_block()
-    assert "NO report mentions at all is the peer case" in block
+    assert "NOT evidence of a peer by itself" in block
+    assert "LIVE holder is the peer case" in block
+    assert "session-claim-cli who-claims-path" in block
     # The non-halting arm is stated explicitly, or the agent will over-halt.
     assert "do not halt on those" in block
 
@@ -1597,6 +1640,29 @@ def test_emit_script_honors_explicit_name_and_description(tmp_path):
     assert "description: 'custom description'" in script
 
 
+def test_emit_script_preamble_reaches_every_executor_prompt_once(tmp_path):
+    """#89 K2: a run-wide posture block is rendered ONCE, as a `_shared`
+    const, and reaches every executor row's prompt via that const's
+    reference -- never inlined per row (module docstring's SharedBlocks
+    "declared once" discipline)."""
+    plan_path = tmp_path / "fixture-plan.md"
+    plan_path.write_text(_FIXTURE_PLAN, encoding="utf-8")
+
+    preamble = "RUN POSTURE: this is a resumed run; do not re-plan."
+    script = emit_script(plan_path, preamble=preamble)
+
+    assert_zero_errors(script)
+    # Declared exactly once, inside the `_shared` const array.
+    assert script.count(preamble) == 1
+    # Both fixture rows' prompts resolve through the same `_shared[i]` slot
+    # -- two `agent(` call sites, one shared reference.
+    assert script.count("agent(") >= 2
+
+    # Omitted preamble renders byte-for-byte as before (back-compat).
+    baseline = emit_script(plan_path)
+    assert preamble not in baseline
+
+
 # ---------------------------------------------------------------------------
 # (a) Review phases -- tier derivation + fixture roster fragment composition
 # ---------------------------------------------------------------------------
@@ -2174,18 +2240,38 @@ def test_compose_script_commit_prompt_names_every_measured_false_refusal():
     assert "UNCHANGED DECLARED PATHS" in script
     assert "A PARTIAL WAVE STILL COMMITS" in script
     assert "ALREADY COMMITTED" in script
-    assert "THE CALL RETURNS THE SHA" in script
-    assert "ON THE CALL IS A WRONG KEYWORD, NOT AN ABSENT ROUTE" in script
-    assert "IS A MISSING" in script and "blob_fallback" in script
-    assert "hash_worktree_blobs_via_spawn" in script
-    # The refusing set is a property of the TARGET repo's .gitattributes,
-    # not of file extension: an emitted script cannot know its target tree,
-    # so a file-kind list here would tell a committer dispatched into a
-    # blanket-`* text=auto` repo that the case it is about to hit does not
-    # happen (doe-claude-9f, 2026-08-30, measured both ways).
-    assert "property of the TARGET REPO" in script
-    assert "check-attr text eol" in script
-    assert "UNCONDITIONALLY" in script
+    assert "coordinator-invoke ceremony.commit_v2" in script
+    assert "Read fields by name" in script
+    assert "fix the JSON and re-issue" in script
+    assert "FilterUnsupported" in script
+
+
+def test_commit_prompt_names_the_repo_root_on_the_invoke_call(tmp_path):
+    """A cloud session's cwd can resolve no git root at all (e.g. anchored
+    above every repo it holds), which denies every commit attempt at
+    `block_subagent_commit`'s `leg:unresolvable-git-root` regardless of
+    pathspec. The fix is naming the root on the invoke call itself --
+    `coordinator-invoke --repo <repoRoot> ceremony.commit_v2 ...` -- which
+    `block_subagent_commit` reads directly rather than depending on a prior
+    standalone `cd` call setting the caller's cwd."""
+    from coordinator_core.ops.dispatch_emit.emit import emit_script
+
+    plan_path = tmp_path / "a-plan.md"
+    plan_path.write_text(
+        "---\ntitle: \"a plan\"\nsizing_object: null\n---\n\n# a plan\n\n"
+        "## Problem\n\nTest fixture.\n\n## Tasks\n\n```yaml plan-tasks\n"
+        "- id: C1\n  title: Do the thing\n  change_kind: doc-edit\n"
+        "  surface: a.py\n  writes:\n    - a.py\n  queue_scope: project\n"
+        "  disposition: open\n  body: |\n    Do the thing.\n```\n",
+        encoding="utf-8",
+    )
+    script = emit_script(plan_path, repo_root=tmp_path)
+
+    assert "coordinator-invoke --repo" in script
+    assert "ceremony.commit_v2" in script
+    invoke_index = script.index("coordinator-invoke --repo")
+    repo_index = script.index(str(tmp_path).replace("\\", "/"), invoke_index)
+    assert repo_index < script.index("ceremony.commit_v2", invoke_index)
 
     errors = [f for f in run_checks(script) if f.severity is Severity.ERROR]
     assert errors == []
@@ -2545,6 +2631,40 @@ def test_commit_prompt_tells_a_void_wave_to_report_rather_than_refuse():
     # The two things a void report must never do.
     assert "do NOT fabricate an empty or placeholder commit" in script
     assert "as though it were yours" in script
+
+
+def test_commit_gate_tolerates_a_space_and_colon_in_place_of_the_documented_token():
+    """GH#90 item 1: a committer wrote a space instead of the documented
+    hyphen, plus a trailing colon, and the anchored gate halted a run whose
+    commit had actually landed.
+
+    The gate must accept the reported shape without relaxing the anchoring
+    or the hex-sha requirement -- ``test_markdown_emphasis_does_not_reopen_
+    the_quoting_fail_open`` and its VOID sibling already pin that a refusal
+    quoting the prompt's ``<sha>`` placeholder still fails, and this test
+    changes none of that.
+    """
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    gate = _emitted_gate(script)
+
+    # The measured defect, verbatim.
+    assert gate.search("COMMIT LANDED: 086b7e5d\n")
+    # Same tolerance for its siblings.
+    assert gate.search("COMMIT VOID: 5eb6df2ece10cac6f0af23b6f5ceef820eaad17c\n")
+    # The documented hyphenated, colon-less form still passes.
+    assert gate.search("COMMIT-LANDED 5eb6df2ece10cac6f0af23b6f5ceef820eaad17c\n")
+
+    partial_frag_gate = re.compile(
+        re.search(
+            r"/(\^\[\*_\]\{0,2\}\(\?:COMMIT-PARTIAL[^/]*)/m",
+            script,
+        ).group(1),
+        re.M,
+    )
+    assert partial_frag_gate.search(
+        "COMMIT PARTIAL: 5e4a76ea706dd35cc1045f22708f20d64b0d9a91 "
+        "withheld: chunks/D4.py\n"
+    )
 
 
 def test_commit_gate_is_not_defeated_by_a_refusal_that_quotes_the_token():

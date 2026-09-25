@@ -240,6 +240,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.nudge_plan_test_surface_tier":     "none",
     "hooks.preuse_agent_dispatch":            "none",
     "hooks.preuse_skill_dispatch":            "none",
+    "hooks.preuse_search_dispatch":           "none",
     "hooks.enforce_agent_dispatch_mode":      "none",
     "hooks.block_unenumerated_agent_type":    "none",
     "hooks.guard_named_dispatch_tool_restriction": "none",

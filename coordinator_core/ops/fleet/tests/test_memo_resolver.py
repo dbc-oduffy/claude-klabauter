@@ -34,6 +34,7 @@ from coordinator_core.ops.fleet._memo_resolver import (
     read_doe_identity,
     read_publish_mirrors,
     read_registry_repos,
+    receiver_checkout_defect,
     receiver_em_to_repo_key,
     registry_home,
     reroute_owner,
@@ -41,6 +42,7 @@ from coordinator_core.ops.fleet._memo_resolver import (
     resolve_self_em_id,
     same_repo_path,
     suggest_nearest_receiver,
+    undeliverable_checkout_refusal,
 )
 
 
@@ -827,3 +829,48 @@ class TestPublishMirrorReroute:
         assert reroute_owner("example-retrieval-repo-em") is None
         _inbox, repo, _all = resolve_receiver_inbox("example-retrieval-repo-em")
         assert same_repo_path(repo, repo_path)
+
+
+class TestReceiverCheckoutDefect:
+    """DoE #92 defect 1: structural publish-mirror / no-checkout detection —
+    a receiver path that would silently land a delivery where no EM reads."""
+
+    def test_none_path_is_no_checkout(self):
+        assert receiver_checkout_defect(None) == "no-checkout"
+
+    def test_nonexistent_path_is_no_checkout(self, tmp_path):
+        assert receiver_checkout_defect(tmp_path / "never-existed") == "no-checkout"
+
+    def test_directory_with_no_git_entry_is_no_checkout(self, tmp_path):
+        repo = tmp_path / "copied-not-cloned"
+        repo.mkdir()
+        assert receiver_checkout_defect(repo) == "no-checkout"
+
+    def test_ordinary_git_checkout_is_deliverable(self, tmp_path):
+        repo = tmp_path / "example-retrieval-repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        assert receiver_checkout_defect(repo) is None
+        assert undeliverable_checkout_refusal("example-retrieval-repo-em", repo) is None
+
+    def test_flat_plugin_manifest_marker_is_publish_mirror(self, tmp_path):
+        repo = tmp_path / "coordinator-claude"
+        (repo / ".claude-plugin").mkdir(parents=True)
+        (repo / ".claude-plugin" / "plugin.json").write_text("{}\n", encoding="utf-8")
+        (repo / ".git").mkdir()
+        assert receiver_checkout_defect(repo) == "publish-mirror"
+
+    def test_path_equal_to_claude_plugin_root_env_is_publish_mirror(self, tmp_path, monkeypatch):
+        repo = tmp_path / "root" / "coordinator-claude"
+        repo.mkdir(parents=True)
+        (repo / ".git").mkdir()
+        monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(repo))
+        assert receiver_checkout_defect(repo) == "publish-mirror"
+
+    def test_refusal_names_the_github_issue_fallback(self, tmp_path):
+        assert "GitHub issue" in undeliverable_checkout_refusal("doe-claude-em", None)
+        repo = tmp_path / "no-git-dir"
+        repo.mkdir()
+        text = undeliverable_checkout_refusal("doe-claude-em", repo)
+        assert "GitHub issue" in text
+        assert "[session <id>]" in text

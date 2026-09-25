@@ -293,8 +293,8 @@ behaviour.
 No ``mode:``/permission-mode key is ever placed on an emitted ``agent()``
 call — DoE's live-tool capture found no permission-mode carrier on the
 ``Workflow`` agent-call path at all (options: ``label``, ``phase``,
-``schema``, ``model``, ``effort``, ``isolation``, ``agentType``, nothing
-else). This module has no code path that emits one.
+``schema``, ``model``, ``effort``, ``isolation``, ``agentType``,
+``stallMs``, nothing else). This module has no code path that emits one.
 
 ## Vehicle: EM-dispatched Agent, not a fired-and-forgotten Workflow (live upstream defect)
 
@@ -344,6 +344,9 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
     commit_prefixes,
     terminal_test_scope,
     candidate_test_additions,
+)
+from coordinator_core.ops.dispatch_emit.cross_plan_write_overlap import (
+    check_cross_plan_write_overlap,
 )
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, read_spine
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow, _normalize_path, build_waves
@@ -420,6 +423,14 @@ _AGENT_MODELS = {
     _COMMIT_AGENT_TYPE: "haiku",
     _TEST_AGENT_TYPE: "haiku",
 }
+
+#: The Workflow runtime aborts an agent call after this many stalled ms
+#: (no progress) and retries it up to 5 times; the runtime default (180000)
+#: is one long Write away from tripping on an ordinary executor-tier row.
+#: 360000 (360s), not 600000: a flaky-network stall should still recover
+#: fast, and 360s already covers one long Write. Executor-tier only --
+#: commit/preflight/test phases are unchanged.
+_EXECUTOR_STALL_MS = 360000
 
 
 def _model_opt(agent_type: str, agent_model: Optional[str] = None) -> str:
@@ -1240,6 +1251,16 @@ _REPO_ANCHOR_LINE = (
     "with the same relative name is the wrong file, not a divergence to report."
 )
 
+#: The preflight runs first, so an unresolvable root halts the run before any
+#: executor spends time. Existence only, not path equality: `rev-parse`
+#: prints forward slashes and may differ in drive-letter case from `{root}`
+#: on Windows.
+_PREFLIGHT_CD_AND_ROOT_CHECK = (
+    "Run `git -C {root} rev-parse --show-toplevel`; if that fails or prints "
+    "nothing, check no paths and report BLOCKED, ending with the line "
+    "'{blocked_token} git root did not resolve from {root}'."
+)
+
 #: The commit-phase-only line naming the session that emitted this script
 #: (coordinator-claude#52b). ``ceremony.commit_v2`` reads a ``session_id``
 #: kwarg to attribute a ``Session-Id`` trailer to the DISPATCHING session
@@ -1313,6 +1334,21 @@ _WRITE_TOOL_ONLY_CLAUSE = (
 #: The per-row head ``_row_prompt`` opens with and ``_wave_agent_calls`` hoists
 #: into one ``_shared`` const, so neither clause is repeated per row.
 _ROW_PROMPT_HEAD = f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n{_WRITE_TOOL_ONLY_CLAUSE}"
+
+
+def _prompt_head(preamble: Optional[str]) -> str:
+    """``_ROW_PROMPT_HEAD``, or ``preamble`` spliced ahead of it.
+
+    ONE function so ``_row_prompt`` (the text it returns) and
+    ``_wave_agent_calls._prompt_literal`` (the split point it hoists into
+    ``_shared``) can never compute two different heads for the same
+    ``preamble`` -- a drift between them would make the shared-block
+    dedupe in ``_prompt_literal`` silently stop matching and inline the
+    preamble per row instead of once (the defect K2 exists to avoid).
+    """
+    if not preamble:
+        return _ROW_PROMPT_HEAD
+    return f"{preamble}\n\n{_ROW_PROMPT_HEAD}"
 
 # The section-heading vocabulary this module reads out of a plan BODY.
 # `## Goal` is C3a's own scaffolded heading (out of C4's write scope --
@@ -1809,7 +1845,9 @@ def _plan_scoped_stop_gate(stopped_var: str) -> str:
     )
 
 
-def _row_return_contract(row: WaveRow, plan_path: str) -> str:
+def _row_return_contract(
+    row: WaveRow, plan_path: str, *, shared: Optional[SharedBlocks] = None
+) -> str:
     """Render the executor return contract (``executor_return_contract``)
     for one wave row: the footprint constraint (when the row declares
     ``writes``), the self-verify constraint, and the DONE-summary
@@ -1833,6 +1871,14 @@ def _row_return_contract(row: WaveRow, plan_path: str) -> str:
     ``executor_return_contract.done_summary_constraint``, whose fixed spine
     does not carry a changed-path-list clause at all (see that module's own
     docstring).
+
+    ``shared`` (optional), when supplied, threads through to
+    ``_shared_pathspec_text`` for both this function's own path renderings
+    -- the footprint-constraint list and the DONE-summary porcelain
+    command -- so a large ``row.writes`` is deferred to one runtime array
+    instead of baked into this prompt's static text twice over. ``None``
+    (the default, and every pre-existing caller) renders exactly as
+    before, byte-for-byte.
     """
     report_path = _dispatch_report_path(plan_path, row.id)
 
@@ -1842,8 +1888,10 @@ def _row_return_contract(row: WaveRow, plan_path: str) -> str:
         parts.append(
             FOOTPRINT_CONSTRAINT_TEMPLATE.replace(
                 "[list]",
-                ", ".join(
-                    _fenced_paths(footprint, row.writes_under, row.surface)
+                _shared_pathspec_text(
+                    _fenced_paths(footprint, row.writes_under, row.surface),
+                    shared,
+                    ", ",
                 ),
             )
         )
@@ -1857,7 +1905,7 @@ def _row_return_contract(row: WaveRow, plan_path: str) -> str:
         )
     )
 
-    porcelain_paths = " ".join(footprint)
+    porcelain_paths = _shared_pathspec_text(footprint, shared, " ")
     extra_fields = [
         "the output of `git status --porcelain -- "
         f"{porcelain_paths} | cut -c4-`"
@@ -1971,6 +2019,9 @@ def _row_prompt(
     row: WaveRow,
     plan_path: Optional[str] = None,
     plan_context: Optional[PlanContext] = None,
+    *,
+    shared: Optional[SharedBlocks] = None,
+    preamble: Optional[str] = None,
 ) -> str:
     """Compose one executor row's dispatch prompt.
 
@@ -1998,10 +2049,21 @@ def _row_prompt(
     and what that plan is for before it reads its own row's spec pointer.
     Omitted (``None``) keeps the pre-existing shape unchanged, for any
     caller not yet threading plan context.
+
+    ``shared`` (optional) forwards straight to ``_row_return_contract`` --
+    see that function's docstring.
+
+    ``preamble`` (optional), when supplied, is a run-wide posture
+    block spliced AHEAD of ``_ROW_PROMPT_HEAD`` -- see ``_prompt_head``. It
+    is caller-authored text (an operator-named ``--preamble FILE``), unlike
+    ``plan_context``'s preamble, which this module derives from the plan
+    itself; the two compose (preamble, then plan context, then the row body)
+    rather than replacing one another. Both are no-ops when omitted.
     """
     head = f"Execute {row.id}: {row.title}"
+    prompt_head = _prompt_head(preamble)
     if not plan_path:
-        return f"{_ROW_PROMPT_HEAD}\n\n{head}"
+        return f"{prompt_head}\n\n{head}"
     body = (
         f"{head}\n\n"
         f"Your spec is the row with `id: {row.id}` in the `## Tasks` plan-spine "
@@ -2012,11 +2074,11 @@ def _row_prompt(
         "spec from the title, from a file search, or from surrounding code — if "
         "you cannot read that row, stop and report BLOCKED rather than "
         "improvising."
-        f"\n\n{_row_return_contract(row, plan_path)}"
+        f"\n\n{_row_return_contract(row, plan_path, shared=shared)}"
     )
     if plan_context is not None:
         body = f"{_plan_context_preamble(plan_context)}\n\n{body}"
-    return f"{_ROW_PROMPT_HEAD}\n\n{body}"
+    return f"{prompt_head}\n\n{body}"
 
 
 def _wave_agent_calls(
@@ -2028,6 +2090,7 @@ def _wave_agent_calls(
     shared: Optional[SharedBlocks] = None,
     agent_type_host: Optional[str] = None,
     skip_check: bool = False,
+    preamble: Optional[str] = None,
 ) -> str:
     """Compose the ``phase()`` + agent-dispatch call(s) for one executor wave.
 
@@ -2055,20 +2118,23 @@ def _wave_agent_calls(
     at runtime is never dispatched -- ``_skipIfHalted`` returns a synthetic
     ``BLOCKED: ...`` reply in its place, which the status check classifies
     as incomplete (never as an unanswered brief) and the commit agent drops.
+
+    ``preamble`` (optional) forwards straight to ``_row_prompt``/
+    ``_prompt_head`` -- see ``_row_prompt``'s docstring; a no-op when omitted.
     """
     phase_call = f"  phase({_js_string_literal(phase_title)});"
     binder = f"const {results_var} = " if results_var else ""
 
     def _prompt_literal(row: WaveRow) -> str:
-        prompt = _row_prompt(row, plan_path, plan_context)
+        prompt = _row_prompt(row, plan_path, plan_context, shared=shared, preamble=preamble)
         if shared is None:
             return _js_string_literal(prompt)
-        head = f"{_ROW_PROMPT_HEAD}\n\n"
+        head = f"{_prompt_head(preamble)}\n\n"
         if plan_context is not None:
             head += f"{_plan_context_preamble(plan_context)}\n\n"
         if not prompt.startswith(head):
-            return _js_string_literal(prompt)
-        return f"{shared.expr(head)} + {_js_string_literal(prompt[len(head):])}"
+            return _resolve_markers_plus(prompt)
+        return f"{shared.expr(head)} + {_resolve_markers_plus(prompt[len(head):])}"
 
     def _agent_call_expr(row: WaveRow) -> str:
         row_agent_type = _row_agent_type(row)
@@ -2079,7 +2145,8 @@ def _wave_agent_calls(
             f"label: {_js_string_literal(build_work_label(row.id))}, "
             f"phase: {_js_string_literal(phase_title)}, "
             f"agentType: {_js_string_literal(_degrade_agent_type(row_agent_type, agent_type_host))}, "
-            f"{_model_opt(row_agent_type, row.agent_model)} "
+            f"{_model_opt(row_agent_type, row.agent_model)}, "
+            f"stallMs: {_EXECUTOR_STALL_MS} "
             "})"
         )
 
@@ -2131,6 +2198,7 @@ def _escape_for_js_template_literal(text: str) -> str:
 
 
 _SHARED_VAR = "_shared"
+_SHARED_PATHS_VAR = "_sharedPaths"
 
 
 class SharedBlocks:
@@ -2151,6 +2219,8 @@ class SharedBlocks:
     def __init__(self) -> None:
         self._texts: list[str] = []
         self._index: dict[str, int] = {}
+        self._path_lists: list[tuple[str, ...]] = []
+        self._path_index: dict[tuple[str, ...], int] = {}
 
     def expr(self, text: str) -> str:
         """The JS expression reading ``text`` back: ``_shared[i]``."""
@@ -2163,11 +2233,124 @@ class SharedBlocks:
         """``expr`` as a template-literal interpolation."""
         return "${%s}" % self.expr(text)
 
+    def path_list_expr(self, paths: list[str]) -> str:
+        """Register ``paths`` once as a runtime JS array; return the bare JS
+        expression reading it back (``_sharedPaths[i]``).
+
+        Dedupes on exact path-tuple equality, the same discipline ``expr``
+        already applies to text blocks. Above threshold, the join is
+        deferred to a runtime array rather than baked into the script once
+        per call site -- see ``_shared_pathspec_text``.
+        """
+        key = tuple(paths)
+        if key not in self._path_index:
+            self._path_index[key] = len(self._path_lists)
+            self._path_lists.append(key)
+        return "%s[%d]" % (_SHARED_PATHS_VAR, self._path_index[key])
+
     def declaration(self) -> Optional[str]:
         if not self._texts:
             return None
         items = ",\n".join(f"    `{_escape_for_js_template_literal(t)}`" for t in self._texts)
         return f"  const {_SHARED_VAR} = [\n{items}\n  ];"
+
+    def path_list_declaration(self) -> Optional[str]:
+        if not self._path_lists:
+            return None
+        items = ",\n".join(
+            "    [" + ", ".join(_js_string_literal(p) for p in lst) + "]"
+            for lst in self._path_lists
+        )
+        return f"  const {_SHARED_PATHS_VAR} = [\n{items}\n  ];"
+
+
+#: A byte value that never occurs in composed prompt text, used to delimit a
+#: deferred-to-runtime path-list join inside an otherwise-plain-text prompt
+#: string (see ``_shared_pathspec_text``). Text is split on this delimiter
+#: at the one place each prompt composer finally turns its Python string
+#: into JS source (``_resolve_markers_plus``/``_resolve_markers_template``);
+#: every ODD-indexed split segment is a bare JS expression to splice in
+#: verbatim, every EVEN-indexed segment is literal prompt text.
+_SHARED_PATH_MARKER_DELIM = "\x01"
+
+#: Below this many paths, ``_shared_pathspec_text`` renders the exact
+#: literal join this module always has -- every existing fixture's
+#: pathspec is well under it, so every pre-existing byte-pin/golden test
+#: keeps seeing identical script text. Only a pathologically large
+#: ``writes:``/pathspec list (the measured defect: ~1200 paths on one row)
+#: crosses it and gets deferred to a runtime array instead.
+_SHARED_PATH_ARRAY_THRESHOLD = 20
+
+
+def _shared_pathspec_text(
+    paths: list[str], shared: Optional[SharedBlocks], sep: str
+) -> str:
+    """``sep.join(paths)``, or -- once ``shared`` is available and ``paths``
+    is above threshold -- a delimited marker that defers the join to a
+    runtime array ``shared`` registers once, rather than this module baking
+    the joined text into the script at every call site that needs the same
+    list.
+
+    Returns plain literal text, unmarked, when ``shared`` is ``None`` or
+    ``paths`` is at or under ``_SHARED_PATH_ARRAY_THRESHOLD``.
+    """
+    if shared is None or len(paths) <= _SHARED_PATH_ARRAY_THRESHOLD:
+        return sep.join(paths)
+    expr = f"{shared.path_list_expr(paths)}.join({sep!r})"
+    return f"{_SHARED_PATH_MARKER_DELIM}{expr}{_SHARED_PATH_MARKER_DELIM}"
+
+
+def _split_marker_segments(text: str):
+    """Split ``text`` on ``_SHARED_PATH_MARKER_DELIM`` pairs, yielding
+    ``(is_marker, segment)`` per piece in order -- literal text at even
+    indices, a marker's raw JS expression at odd ones. Shared by
+    ``_resolve_markers_plus`` and ``_resolve_markers_template``, whose only
+    difference is how each piece is rendered.
+    """
+    parts = text.split(_SHARED_PATH_MARKER_DELIM)
+    for index, part in enumerate(parts):
+        yield index % 2 == 1, part
+
+
+def _resolve_markers_plus(text: str) -> str:
+    """Turn ``text`` (possibly carrying ``_shared_pathspec_text`` markers)
+    into one JS expression: literal segments as single-quoted string
+    literals, marker segments spliced in verbatim as bare JS expressions,
+    joined by ``+``.
+
+    Degrades to plain ``_js_string_literal(text)`` when no marker is
+    present. Pairs with prompt composers that quote their static text with
+    ``_js_string_literal`` (single-quoted, not a template literal):
+    ``_row_prompt``'s per-row prompt and the preflight prompt.
+    """
+    if _SHARED_PATH_MARKER_DELIM not in text:
+        return _js_string_literal(text)
+    pieces = []
+    for is_marker, part in _split_marker_segments(text):
+        if is_marker:
+            pieces.append(part)
+        elif part:
+            pieces.append(_js_string_literal(part))
+    return " + ".join(pieces) if pieces else "''"
+
+
+def _resolve_markers_template(text: str) -> str:
+    """The template-literal counterpart to ``_resolve_markers_plus``: turn
+    ``text`` into the literal content of a backtick template literal,
+    escaping literal segments via ``_escape_for_js_template_literal`` and
+    splicing each marker segment in as a genuine ``${...}`` interpolation.
+
+    Degrades to plain ``_escape_for_js_template_literal(text)`` when no
+    marker is present. Pairs with ``_commit_agent_call``, whose prompt is
+    always a backtick template literal (it already interpolates the
+    preflight sha).
+    """
+    if _SHARED_PATH_MARKER_DELIM not in text:
+        return _escape_for_js_template_literal(text)
+    rendered = []
+    for is_marker, part in _split_marker_segments(text):
+        rendered.append(("${%s}" % part) if is_marker else _escape_for_js_template_literal(part))
+    return "".join(rendered)
 
 
 #: Dispatch-layer bookkeeping surfaces an executor may legitimately write
@@ -2275,6 +2458,20 @@ _COMMIT_PARTIAL_TOKEN = "COMMIT-PARTIAL"
 #: why the reported sha makes the claim auditable after the fact.
 _COMMIT_VOID_TOKEN = "COMMIT-VOID"
 
+
+def _tolerant_commit_token_regex(token: str) -> str:
+    """``COMMIT-<WORD>`` or ``COMMIT <WORD>`` as a non-capturing alternation.
+    Widens only what the gate accepts; the prompt still instructs the hyphen.
+    An alternation, not ``[- ]``, so the hyphenated token stays a literal
+    substring the tests locate the gate by.
+
+    Swaps EVERY hyphen for a space, not just the first -- a token with more
+    than one hyphen (e.g. a future ``COMMIT-FOO-BAR``) still gets the fully
+    space-tolerant alternative rather than a partial swap that leaves an
+    inner hyphen un-widened."""
+    return f"(?:{token}|{token.replace('-', ' ')})"
+
+
 #: Where the evidence for every rule in ``_PROVENANCE_HEADING`` lives. The
 #: brief states rules; the measured incidents behind them (``ef3bbb1663``, the
 #: 2-2 tool-use split, the 2026-08-31 claim halts, ``874cf35dd``, the
@@ -2302,16 +2499,16 @@ _PROVENANCE_HEADING = (
     "\n2. `git status --porcelain -- <your pathspec>`. `git diff --stat` is "
     "not the sole verification signal: it diffs TRACKED content only, so a "
     "new untracked file never appears in it."
-    "\n3. Account for every path those two commands show against the reports "
-    "above. A tracked hunk or untracked addition named by a report is that "
-    "executor's own work and yours to commit -- do not halt on those. "
-    "A pathspec path "
-    "showing changes that NO report "
-    "mentions at all is the peer case: named by no report, STOP -- confirm "
-    "it's inside your pathspec, then name the "
-    "file and its unaccounted hunks, and emit no success token. Never revert, "
-    "stash, or check out a hunk to \"clean\" the path; the hunks are someone "
-    "else's."
+    "\n3. Account for every path those two commands show against each report "
+    "FILE's touched-files list (per step 1's READ, not the bare `<STATUS>: "
+    "<report path>` return line) -- a path that file names is that "
+    "executor's own work and yours to commit; do not halt on those. Absence "
+    "from every report file is NOT evidence of a peer by itself -- run "
+    "`session-claim-cli who-claims-path <path>` first. A LIVE holder is the "
+    "peer case: STOP, name the file and its unaccounted hunks, emit no "
+    "success token. No live holder -> commit it, naming the path above your "
+    "token line as unreported. Never revert, stash, or check out a hunk to "
+    "\"clean\" a live holder's path; those hunks are someone else's."
     "\n4. PASTE THE `git diff --stat` OUTPUT VERBATIM into your report, above "
     "your token line, under the heading `DIFF OBSERVED:` -- the raw lines "
     "with their real counts, never a summary or a table you built from them, "
@@ -2433,40 +2630,23 @@ _PROVENANCE_HEADING = (
     f"'{_COMMIT_PARTIAL_TOKEN} <sha> withheld: <path1>, <path2>' naming each "
     "orphan, so the EM, who holds the executor report, commits it. This "
     "never relaxes a peer-claimed path."
-    "\n\nTHE CALL RETURNS THE SHA: "
-    "`coordinator_core.git.commit.commit_paths(repo, paths, message, *, "
-    "deleted_paths=(), ...)` returns a `CommitOutcome` whose `.sha` IS the "
-    "landed commit, or raises `CommitRefused`. There is no "
-    "`exit_code`/`landed`/`committed_sha` triple to read, and a "
-    "`ModuleNotFoundError` importing `run_commit_pipeline` means that route no "
-    "longer exists, not that this one is unavailable."
-    "\n- `CommitOutcome.no_delta` non-empty -> paths YOU DECLARED whose bytes "
-    "already matched HEAD. The commit and its sha are real; those paths are "
-    "not in it, and the one that drops out is disproportionately the one the "
-    "wave existed to deliver (measured: `874cf35dd`). Name every `no_delta` "
-    "path in your report ABOVE the success token line and say it did not "
-    "land in this commit. A REPORT, never a refusal -- a commit that "
-    "delivers part of its pathspec still reports landed."
-    "\n- A `TypeError` "
-    "ON THE CALL IS A WRONG KEYWORD, NOT AN ABSENT ROUTE. The repo "
-    "argument is `repo` (positional-or-keyword), NOT `repo_root`. Correct the "
-    "call and re-issue it. Do NOT fall through to a raw `git commit`; that is "
-    "denied to you by caller identity."
-    "\n- A `FilterUnsupported` (`N path(s) need a checkin conversion this "
-    "module does not reproduce`) "
-    "IS A MISSING `blob_fallback`, NOT AN ABSENT ROUTE EITHER: "
-    "your pathspec holds a path "
-    "whose blob sha `commit_paths` refuses to guess. WHICH paths those are "
-    "is a property of the TARGET REPO's "
-    "`.gitattributes` and does NOT travel between repos, so do not predict it "
-    "from file extension -- `git check-attr text eol -- <path>` settles one "
-    "path. Pass the fallback UNCONDITIONALLY, never on a prediction about your "
-    "pathspec's composition."
-    "\n\n    from functools import partial"
-    "\n    from coordinator_core.git.commit import hash_worktree_blobs_via_spawn"
-    "\n    commit_paths(repo, paths, message, deleted_paths=deleted,"
-    "\n                 blob_fallback=partial(hash_worktree_blobs_via_spawn,"
-    "\n                                       cwd=repo))"
+    "\n\nLAND THE COMMIT IN ONE UNCOMPOUNDED CALL: `coordinator-invoke "
+    "<<REPO_FLAG>>ceremony.commit_v2 '<json params>'` (`.exe` on "
+    "PowerShell). No `&&`, `|`, heredoc or `python -c`: the guard denies a "
+    "compounded command, and in-process `commit_paths` skips the Session-Id "
+    "trailer. Params are one-line JSON: `{\"paths\": [...], \"message\": "
+    "\"...\"}` plus `deleted_paths`, `prefer_staged`, "
+    "`prefer_deliberate_stage`, `session_id`, `declared_reverts` as called "
+    "for below."
+    "\n\nThe call prints JSON: `{\"committed\": true, \"sha\": ..., "
+    "\"no_delta\": [...]}` or `{\"committed\": false, \"error\": ...}`. "
+    "Read fields by name."
+    "\n- `no_delta` non-empty -> declared paths already matching HEAD. They "
+    "are not in the commit and are often the wave's point (measured: "
+    "`874cf35dd`): name each above your token line. Still landed."
+    "\n- `error` about params -> fix the JSON and re-issue. Never fall back "
+    "to raw `git commit`."
+    "\n- `FilterUnsupported` -> report it verbatim; no retry fixes it."
 )
 
 
@@ -2487,6 +2667,13 @@ def _interpolate_preflight_sha(escaped: str) -> str:
         _PREFLIGHT_SHA_PLACEHOLDER,
         '${%s || "(no sha reported)"}' % _PREFLIGHT_SHA_VAR,
     )
+
+
+def _invoke_repo_flag(repo_root: Optional[str]) -> str:
+    """``--repo <root> `` (trailing space) when ``repo_root`` is known, else
+    ``""`` -- spliced directly ahead of the op name in a
+    ``coordinator-invoke`` call line."""
+    return f"--repo {repo_root} " if repo_root else ""
 
 
 def _commit_agent_call(
@@ -2584,23 +2771,21 @@ def _commit_agent_call(
         else ""
     )
     deliverable_rule = (
-        " A Deliverable-Id trailer is attached to this commit automatically"
-        " -- via the SAME resolver `ceremony.commit_v2` calls internally"
-        " (`coordinator_core.git.commit_trailers.apply_missing_trailers`),"
-        " not a git hook. `commit_paths` fires no git hooks of its own"
-        " (it lands via commit-tree plumbing), so nothing attaches the"
-        " trailer unless you call the resolver yourself: BEFORE calling"
-        " `commit_paths`, run"
-        f" `message = apply_missing_trailers(message, repo, paths,"
-        f' deliverable_id_override="{deliverable_id}")`.'
-        f" This wave's own Deliverable-Id is `{deliverable_id}`; the override"
-        " forwards it verbatim -- it does not invent one, and it takes"
-        " precedence over any other artifact in the pathspec. Do not"
-        " hand-write a Deliverable-Id line into the message body yourself;"
-        " if your own message already carries a different Deliverable-Id"
-        " line, delete it before calling `commit_paths`. If the trailer"
-        " resolves to an id you did not expect, report it; that is never"
-        " grounds to amend, reset, or re-commit."
+        " `ceremony.commit_v2`'s params carry no `deliverable_id` field, so"
+        " the op's own trailer resolver (`apply_missing_trailers`) cannot be"
+        " told this wave's id and falls back to ambient session state,"
+        " which is as often a stale id from an unrelated workstream as the"
+        " right one. Hand-write the trailer into `message` yourself instead:"
+        f' append a line `Deliverable-Id: {deliverable_id}` to the commit'
+        " message text you place in the JSON params' `message` field."
+        f" This wave's own Deliverable-Id is `{deliverable_id}`;"
+        " `apply_missing_trailers` only fills a trailer that is MISSING, so"
+        " a line you already wrote is left untouched -- do not also expect"
+        " the op to add or correct one. If your own message already carries"
+        " a different Deliverable-Id line, replace it with this one before"
+        " sending the call. If the result carries a different id than you"
+        " wrote, report it; that is never grounds to amend, reset, or"
+        " re-commit."
         if deliverable_id
         else ""
     )
@@ -2611,7 +2796,8 @@ def _commit_agent_call(
     if session_paragraph:
         lead += session_paragraph.lstrip("\n") + "\n\n"
     wave_part = (
-        f"Commit wave {index + 1}'s work. Pathspec: [{', '.join(pathspec)}]."
+        f"Commit wave {index + 1}'s work. Pathspec: "
+        f"[{_shared_pathspec_text(pathspec, shared, ', ')}]."
         f"{prefix_rule}{subject_rule}"
     )
     doctrine = (
@@ -2708,7 +2894,10 @@ def _commit_agent_call(
     static_prompt = f"{lead}{wave_part}{doctrine}{staleness}"
 
     if results_var:
-        provenance = f"\n\n{_PROVENANCE_HEADING}\n\nExecutor report(s):"
+        provenance_heading = _PROVENANCE_HEADING.replace(
+            "<<REPO_FLAG>>", _invoke_repo_flag(repo_root)
+        )
+        provenance = f"\n\n{provenance_heading}\n\nExecutor report(s):"
         if shared is None:
             escaped_static = _interpolate_preflight_sha(
                 _escape_for_js_template_literal(static_prompt + provenance)
@@ -2716,7 +2905,7 @@ def _commit_agent_call(
         else:
             escaped_static = (
                 shared.ref(lead)
-                + _escape_for_js_template_literal(wave_part)
+                + _resolve_markers_template(wave_part)
                 + shared.ref(doctrine)
                 + _interpolate_preflight_sha(_escape_for_js_template_literal(staleness))
                 + shared.ref(provenance)
@@ -2730,7 +2919,7 @@ def _commit_agent_call(
         # text `${preflightHeadSha}` into the agent's prompt verbatim.
         prompt_literal = "`{}`".format(
             _interpolate_preflight_sha(
-                _escape_for_js_template_literal(static_prompt)
+                _resolve_markers_template(static_prompt)
             )
         )
 
@@ -2914,14 +3103,17 @@ def _commit_halt_gate(commit_var: str, phase_title: str) -> str:
     # void wave reports the HEAD sha it observed rather than a commit it
     # made; both mean "the run may proceed", and only one means "work
     # landed", which is the commit-agent report's job to say in prose.
+    landed_frag = _tolerant_commit_token_regex(_COMMIT_LANDED_TOKEN)
+    void_frag = _tolerant_commit_token_regex(_COMMIT_VOID_TOKEN)
+    partial_frag = _tolerant_commit_token_regex(_COMMIT_PARTIAL_TOKEN)
     return (
         f"  if (!{commit_var} || "
-        f"!/^[*_]{{0,2}}({_COMMIT_LANDED_TOKEN}|{_COMMIT_VOID_TOKEN})"
-        f"[*_]{{0,2}} +[*_]{{0,2}}"
+        f"!/^[*_]{{0,2}}({landed_frag}|{void_frag})"
+        f"[*_]{{0,2}}:? +[*_]{{0,2}}"
         f"[0-9a-f]{{7,40}}[*_]{{0,2}} *$/m.test(String({commit_var}))) {{\n"
         f"    const partialMatch = {commit_var} ? "
-        f"String({commit_var}).match(/^[*_]{{0,2}}{_COMMIT_PARTIAL_TOKEN}"
-        f"[*_]{{0,2}} +[*_]{{0,2}}[0-9a-f]{{7,40}}[*_]{{0,2}}.*?withheld:"
+        f"String({commit_var}).match(/^[*_]{{0,2}}{partial_frag}"
+        f"[*_]{{0,2}}:? +[*_]{{0,2}}[0-9a-f]{{7,40}}[*_]{{0,2}}.*?withheld:"
         f"\\s*(.+)$/m) : null;\n"
         f"    const halted = partialMatch\n"
         f"      ? {_js_string_literal(partial_reason)} + \" Withheld: \" + "
@@ -2964,6 +3156,7 @@ def _preflight_agent_call(
     prefixes: list[str] | None = None,
     agent_type_host: Optional[str] = None,
     gitignore_filter_degraded: bool = False,
+    shared: Optional[SharedBlocks] = None,
 ) -> str:
     """Compose the preflight phase's ``phase()`` + ``agent()`` call (AC14).
 
@@ -2991,6 +3184,11 @@ def _preflight_agent_call(
     the ``writes_under:`` prefix clause is untouched -- prefixes are never
     filtered by ``_gitignored_paths``, so the model is still the only check
     for them.
+
+    ``shared`` (optional), when supplied, defers a large ``pathspec`` to a
+    runtime array instead of baking the full joined list into this static
+    prompt -- see ``_shared_pathspec_text``. ``None`` (the default) renders
+    exactly as before, byte-for-byte.
     """
     phase_call = f"  phase({_js_string_literal(phase_title)});"
     prefix_clause = (
@@ -3017,13 +3215,19 @@ def _preflight_agent_call(
     prompt = (
         f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n"
         + (f"{_REPO_ANCHOR_LINE.format(root=repo_root)}\n\n" if repo_root else "")
+        + (
+            f"{_PREFLIGHT_CD_AND_ROOT_CHECK.format(root=repo_root, blocked_token=_PREFLIGHT_BLOCKED_TOKEN)}\n\n"
+            if repo_root
+            else ""
+        )
         + "Preflight only -- do not stage or commit anything. Every path below is "
         "EXPECTED to be unchanged or nonexistent right now: the chunks that write "
         "them have not run yet, so 'no diff' is the correct state and is NOT a "
         "refusal. Report BLOCKED only if a path would be refused by "
         f"{refusal_reasons}, or if it is a DIRECTORY (see "
         "below). Verify that "
-        f"every path in [{', '.join(pathspec)}] is currently claimable and "
+        f"every path in [{_shared_pathspec_text(pathspec, shared, ', ')}] is "
+        "currently claimable and "
         "committable by you."
         + mechanical_ignore_clause
         + prefix_clause
@@ -3051,7 +3255,7 @@ def _preflight_agent_call(
     preflight_var = "preflightResult"
     call = (
         f"  const {preflight_var} = await agent("
-        f"{_js_string_literal(prompt)}, "
+        f"{_resolve_markers_plus(prompt)}, "
         "{ "
         f"label: {_js_string_literal('preflight:commit-claimability')}, "
         f"phase: {_js_string_literal(phase_title)}, "
@@ -3476,6 +3680,7 @@ def compose_script(
     falsifier: Optional[dict] = None,
     session_id: Optional[str] = None,
     agent_type_host: Optional[str] = None,
+    preamble: Optional[str] = None,
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``.
 
@@ -3520,6 +3725,13 @@ def compose_script(
     ``close-out-and-stamp`` needs. It is likewise resolved only in
     ``emit_script``; a plan declaring none emits commit prompts that name
     none, never a guessed or placeholder id.
+
+    ``preamble`` (optional) is a run-wide posture block forwarded to
+    every ``_wave_agent_calls`` call -- EXECUTOR prompts only, never the
+    commit/preflight/review/test phases, which carry their own fixed
+    doctrine and are not per-plan posture. Rendered once as a ``_shared``
+    const (module docstring § reuse of ``SharedBlocks``), never inlined per
+    row -- see ``_prompt_head``.
     """
     if not waves:
         raise NoWavesError(
@@ -3631,6 +3843,7 @@ def compose_script(
             prefixes=preflight_prefixes,
             agent_type_host=agent_type_host,
             gitignore_filter_degraded=gitignore_filter_degraded,
+            shared=shared,
         )
     )
 
@@ -3664,6 +3877,7 @@ def compose_script(
                     shared,
                     agent_type_host=agent_type_host,
                     skip_check=_multi_plan,
+                    preamble=preamble,
                 )
             )
             stopped_var = f"_stopped{results_var[0].upper()}{results_var[1:]}"
@@ -3765,6 +3979,9 @@ def compose_script(
     body_blocks.append(_completion_return(waves, phase_titles))
 
     meta_block = _meta_block(name, description, phase_titles)
+    path_list_declaration = shared.path_list_declaration() if shared is not None else None
+    if path_list_declaration is not None:
+        body_blocks.insert(0, path_list_declaration)
     declaration = shared.declaration() if shared is not None else None
     if declaration is not None:
         body_blocks.insert(0, declaration)
@@ -3991,6 +4208,7 @@ def emit_script(
     session_id: Optional[str] = None,
     review_roster_fragment: Optional[dict] = None,
     agent_type_host: Optional[str] = None,
+    preamble: Optional[str] = None,
 ) -> str:
     """Read ``plan_path``'s task spine and compose one Workflow script text.
 
@@ -4090,6 +4308,8 @@ def emit_script(
     }
     check_unschedulable_rows(rows, raw_by_id)
 
+    check_cross_plan_write_overlap(plan_path, rows, repo_root)
+
     waves = build_waves(rows)
 
     review_tier = derive_review_tier(plan_path, repo_root=repo_root, plan_text=plan_text)
@@ -4119,6 +4339,7 @@ def emit_script(
         falsifier=falsifier,
         session_id=session_id,
         agent_type_host=agent_type_host,
+        preamble=preamble,
     )
 
 

@@ -71,59 +71,47 @@ def _write_plan(tmp_path: Path, deliverable_line: str) -> Path:
     return plan_path
 
 
-def test_commit_prompt_names_no_flag_and_states_the_trailer_is_automatic():
-    """`scoped-git-commit` has no `--deliverable-id` flag (verified against
-    `coordinator_core/git/commit.py :: commit_paths`'s own signature) -- the
-    trailer is attached by the commit route itself, via
-    `ceremony.commit_v2`'s `apply_missing_trailers` call
-    (`coordinator_core/git/commit_trailers.py :: apply_missing_trailers`),
-    NOT by any git hook -- `commit_paths` lands via `commit-tree` plumbing,
-    which fires no hooks. The prompt must say so, never instruct a flag
-    that does not exist and never name `prepare-commit-msg`."""
+def test_commit_prompt_names_no_flag_and_states_the_trailer_is_hand_written():
+    """`ceremony.commit_v2`'s params carry no `deliverable_id` field
+    (verified against `coordinator_core/ops/ceremony/commit_v2.py`'s own
+    handler), so nothing attaches the trailer automatically. The prompt
+    must say so, never instruct a flag that does not exist and never name
+    `prepare-commit-msg`."""
     call = _commit_agent_call(
         ["a.py"], "Commit wave 1", 0, ["C1"], deliverable_id="dlv-a-plan-99b845"
     )
     assert "--deliverable-id" not in call
     assert "prepare-commit-msg" not in call
     lowered = call.lower()
-    assert "automatically" in lowered
     assert "apply_missing_trailers" in lowered or "commit_v2" in lowered
 
 
-def test_commit_prompt_instructs_the_agent_to_actually_call_the_resolver():
-    """`commit_paths` -- the only commit route this prompt shows a worked
-    call for (its own FilterUnsupported clause a few paragraphs down) --
-    fires no git hooks (`coordinator_core/git/commit.py :: commit_paths`,
-    "this route fires no native hook"), so nothing attaches a Deliverable-Id
-    trailer unless the agent calls the resolver itself. The prior wording
-    asserted attachment was automatic without ever naming that call, which
-    left every agent free to either land no trailer or hand-improvise one
-    from ambient state -- state/bug-backlog/2026-09-19-a-wave-commit-
-    strands-what-the-chunk-row-38555becc9a2.yaml's second, independent
-    defect (observed trailers included another live session's deliverable
-    id and the current branch name). The prompt must name the call
-    verbatim, not just gesture at `ceremony.commit_v2`."""
+def test_commit_prompt_instructs_the_agent_to_hand_write_the_trailer():
+    """`ceremony.commit_v2` has no `deliverable_id` param, so its internal
+    `apply_missing_trailers` call cannot be handed this wave's id and falls
+    back to ambient session state -- the same failure mode
+    state/bug-backlog/2026-09-19-a-wave-commit-strands-what-the-chunk-row-
+    38555becc9a2.yaml recorded (observed trailers carrying another live
+    session's deliverable id). With no override parameter to forward it
+    through, the only remaining attach point is the commit message text
+    itself, which `apply_missing_trailers` leaves untouched once present."""
     call = _commit_agent_call(
         ["a.py"], "Commit wave 1", 0, ["C1"], deliverable_id="dlv-a-plan-99b845"
     )
-    assert (
-        'apply_missing_trailers(message, repo, paths, deliverable_id_override="dlv-a-plan-99b845")'
-        in call
-    )
-    assert "before calling" in call.lower()
+    assert "Deliverable-Id: dlv-a-plan-99b845" in call
+    assert "deliverable_id" in call.lower()
 
 
-def test_commit_prompt_names_the_literal_id_and_forbids_hand_writing_it():
-    """AC5: the prompt states the literal id and the exact override call,
-    never `--deliverable-id`, and tells the agent to delete a pre-existing,
-    differing `Deliverable-Id:` line from its own message rather than
-    leave it for the resolver to reconcile."""
+def test_commit_prompt_names_the_literal_id_and_tells_the_agent_to_replace_a_stale_one():
+    """AC5: the prompt states the literal id, never a `--deliverable-id`
+    flag, and tells the agent to replace a pre-existing, differing
+    `Deliverable-Id:` line with this wave's own rather than leave two."""
     call = _commit_agent_call(
         ["a.py"], "Commit wave 1", 0, ["C1"], deliverable_id="dlv-a-plan-99b845"
     )
     assert "dlv-a-plan-99b845" in call
     assert "--deliverable-id" not in call
-    assert "delete" in call.lower()
+    assert "replace" in call.lower()
     assert "deliverable-id" in call.lower()
 
 

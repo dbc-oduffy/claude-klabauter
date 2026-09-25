@@ -1279,13 +1279,111 @@ def _check_first_agent_dispatch_sync(session_id: str, tool_name: str) -> str:
 # arbitrary object) — the record is embedded inside a larger transcript line
 # that is not itself valid standalone JSON, the same reason terminal.py's
 # _TASK_NOTIFICATION_RE matches by regex rather than by json.loads.
+#
+# taskId/runId are captured with the SAME charset this module treats as a safe
+# filesystem-path component (_SAFE_ID_RE, below), not `[^"]*` — both values
+# flow unmodified into `_workflow_run_record_path`/`_workflow_monitor_sentinel_
+# path`'s os.path.join, and the harness's own task/run ids are opaque
+# hex/uuid-shaped tokens, so narrowing the capture costs nothing real while
+# closing the path-traversal opening a permissive `[^"]*` transcript-text
+# capture left.
 _ASYNC_LAUNCH_RE = re.compile(
     r'"status"\s*:\s*"async_launched"'
-    r'[^{}]*?"taskId"\s*:\s*"(?P<task_id>[^"]*)"'
+    r'[^{}]*?"taskId"\s*:\s*"(?P<task_id>[A-Za-z0-9_-]*)"'
     r'[^{}]*?"taskType"\s*:\s*"(?P<task_type>[^"]*)"'
-    r'[^{}]*?"runId"\s*:\s*"(?P<run_id>[^"]*)"'
+    r'[^{}]*?"runId"\s*:\s*"(?P<run_id>[A-Za-z0-9_-]*)"'
     r'[^{}]*?"transcriptDir"\s*:\s*"(?P<transcript_dir>[^"]*)"'
 )
+
+# Defensive, best-effort ONLY — unlike _ASYNC_LAUNCH_RE above, neither of these
+# is pinned to a confirmed harness field order/shape: `scriptPath`/`args` are
+# the Workflow tool's INPUT, not part of the toolUseResult record this module
+# already parses, and no evidence transcript in this repo confirms whether/how
+# they're echoed back near the async_launched record. Scanned independently
+# over the same tail text (last occurrence wins, mirroring the "last match is
+# this launch" premise above) so that a miss here degrades to "id captured,
+# scriptPath/args unknown" rather than losing the run id capture too.
+_SCRIPT_PATH_RE = re.compile(r'"scriptPath"\s*:\s*"(?P<script_path>[^"]*)"')
+_ARGS_RE = re.compile(r'"args"\s*:\s*')
+
+# Charset a session_id/task_id must satisfy before either is used to build a
+# filesystem path under tmpdir. Both values can originate from data an agent
+# can influence (transcript text, harness-forwarded session_id) — rejecting
+# anything outside this set (no `/`, `\`, `..`, or quoting characters) keeps
+# every path built from them inside tmpdir, never traversing out of it.
+_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _workflow_run_record_path(tmpdir: str, session_id: str, task_id: str) -> str:
+    """Build the per-(session, task) run-record path, or raise ValueError.
+
+    Both ids are validated against `_SAFE_ID_RE` before any path is built —
+    never trust `os.path.join` alone to keep the result inside `tmpdir`: a
+    `task_id` containing `/`, `\\`, or `..` steers the write target outside it. Callers must handle ValueError; every
+    current caller already runs inside a `try/except Exception` fail-open
+    block for other reasons, so this raises rather than silently degrading to
+    an unsafe path.
+    """
+    if not _SAFE_ID_RE.fullmatch(session_id) or not _SAFE_ID_RE.fullmatch(task_id):
+        raise ValueError("unsafe session_id/task_id for workflow run record path")
+    return os.path.join(tmpdir, f"workflow-run-{session_id}-{task_id}.json")
+
+
+def _capture_script_path_and_args(text: str) -> "tuple[str | None, dict | list | None]":
+    """Best-effort scriptPath/args capture from the same tail text already
+    read for the async_launched record. Never raises -- any parse failure
+    yields (None, None), which the caller persists as-is rather than
+    guessing. See the module comment above _SCRIPT_PATH_RE/_ARGS_RE for why
+    this is defensive rather than pinned."""
+    script_path = None
+    for m in _SCRIPT_PATH_RE.finditer(text):
+        try:
+            script_path = json.loads('"' + m.group("script_path") + '"')
+        except Exception:
+            continue
+    args = None
+    decoder = json.JSONDecoder()
+    for m in _ARGS_RE.finditer(text):
+        try:
+            candidate, _ = decoder.raw_decode(text, m.end())
+        except Exception:
+            continue
+        if isinstance(candidate, (dict, list)):
+            args = candidate
+    return script_path, args
+
+
+def _persist_workflow_run_record(
+    tmpdir: str,
+    session_id: str,
+    task_id: str,
+    run_id: str,
+    script_path: "str | None",
+    args: "dict | list | None",
+) -> None:
+    """Persist `{run_id, scriptPath, args, fired_at, session_id}` at fire time
+    so a later PreCompact (context_pressure_precompact.py) can carry the exact
+    `Workflow({scriptPath, args, resumeFromRunId})` resume call across a
+    compaction that killed the background run's own session state.
+
+    Best-effort, fail-open -- a write failure here must never affect the
+    advisory this leg returns. One record per (session_id, task_id); a repeat
+    fire for the same task id (unlikely -- task ids aren't reused) overwrites
+    rather than accumulating.
+    """
+    try:
+        record = {
+            "run_id": run_id,
+            "scriptPath": script_path,
+            "args": args,
+            "fired_at": int(time.time()),
+            "session_id": session_id,
+        }
+        path = _workflow_run_record_path(tmpdir, session_id, task_id)
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(record, fh)
+    except Exception:
+        pass
 
 
 def _workflow_monitor_sentinel_path(tmpdir: str, session_id: str, task_id: str) -> str:
@@ -1364,13 +1462,20 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
     # function can see the tool call it is firing on — the hook's declared
     # input carries no tool_response — so where the tail holds more than one
     # candidate launch, the right answer is to say so, not to pick one.
+    # Materialized (not iterated once) so the chosen match's own capture
+    # window (below) can be bounded by its NEIGHBOURS in this list — the
+    # previous match's end and the next match's start — rather than scanning
+    # the whole tail for scriptPath/args.
+    all_launches = list(_ASYNC_LAUNCH_RE.finditer(text))
     match = None
+    match_index = -1
     # Scoped to local_workflow launches only
     # (the different-taskType case is handled by the breadcrumb branch below);
     # named accordingly so a future reader doesn't assume general-purpose scope.
     seen_local_workflow_task_ids: list[str] = []
-    for candidate in _ASYNC_LAUNCH_RE.finditer(text):
+    for idx, candidate in enumerate(all_launches):
         match = candidate
+        match_index = idx
         if candidate.group("task_type") == "local_workflow":
             task = candidate.group("task_id")
             if task and task not in seen_local_workflow_task_ids:
@@ -1434,6 +1539,31 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
 
     # Use tempfile.gettempdir(); /tmp/ absent on Windows.
     tmpdir = _tempfile().gettempdir()
+
+    # Persist the run-id capture ahead of (and independent from) this leg's
+    # own once-per-task advisory dedup below: the compaction-recovery reader
+    # (context_pressure_precompact.py) needs the record on every fire, not
+    # just the first, and must not be starved by the monitor-arm sentinel.
+    #
+    # Scoped to the text strictly between the PRECEDING async_launched record
+    # (or start of text) and the FOLLOWING one (or end of text) -- not the
+    # whole tail. `scriptPath`/`args` are observed to precede the record they
+    # belong to (the tool's own input, echoed ahead of its result), so the
+    # window must reach backward, not merely forward from this match. A
+    # multi-launch tail otherwise lets an unrelated call's scriptPath/args
+    # blob get persisted against the wrong run's record, since
+    # _SCRIPT_PATH_RE/_ARGS_RE previously scanned unbounded and kept the LAST
+    # occurrence in the whole tail.
+    window_start = all_launches[match_index - 1].end() if match_index > 0 else 0
+    window_end = (
+        all_launches[match_index + 1].start()
+        if match_index + 1 < len(all_launches)
+        else len(text)
+    )
+    capture_window = text[window_start:window_end]
+    script_path, args = _capture_script_path_and_args(capture_window)
+    _persist_workflow_run_record(tmpdir, session_id, task_id, run_id, script_path, args)
+
     sentinel = _workflow_monitor_sentinel_path(tmpdir, session_id, task_id)
     if os.path.isfile(sentinel):
         return ""

@@ -205,12 +205,18 @@ EXIT_BUSINESS_FAIL = 1
 EXIT_USAGE = 2
 EXIT_TRANSPORT_FAIL = 3
 
-# Same dir sets as the monolith (contract § artifact) — a live baton may sit
-# un-actioned in a LIVE_DIRS entry, or have been swept to its paired
-# ARCHIVE_DIRS entry. Kept identical because callers on both sides of the
-# cutover (C11) must see the same resolution.
-LIVE_DIRS = ("cross-repo/inbox", "state/handoffs", "docs/plans")
-ARCHIVE_DIRS = ("cross-repo/archive", "archive/handoffs", "archive/completed")
+# A live baton may sit un-actioned in a LIVE_DIRS entry, or have been swept
+# to its paired ARCHIVE_DIRS entry — LIVE_DIRS[i] pairs with ARCHIVE_DIRS[i]
+# by index; keep that invariant when editing either tuple.
+#
+# The memo pair is `state/cross-repo/{inbox,archive}` (the C10a-migrated
+# convention `coordinator_core.memo_corpus.memo_corpus_root` resolves to for
+# THIS repo) with the legacy `cross-repo/{inbox,archive}` pair kept as a
+# lower-priority fallback — the fleet-wide migration is repo-by-repo
+# (memo_corpus.py's own docstring), so a caller citing a memo in a peer repo
+# that has not yet migrated still resolves.
+LIVE_DIRS = ("state/cross-repo/inbox", "state/handoffs", "docs/plans", "cross-repo/inbox")
+ARCHIVE_DIRS = ("state/cross-repo/archive", "archive/handoffs", "archive/completed", "cross-repo/archive")
 
 CLAIM_CLASS_HANDOFF = "handoff"
 CLAIM_CLASS_MEMO = "memo"

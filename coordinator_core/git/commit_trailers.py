@@ -714,6 +714,33 @@ def _resolve_deliverable_id(
 _TRAILER_LINE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*:\s")
 _TRAILER_CONT_RE = re.compile(r"^\s")
 
+#: Trailer keys this repo appends. A first line that is one of these,
+#: colon-suffixed, is a trailer in the subject's place. Lowercase.
+BARE_TRAILER_KEYS = frozenset(
+    {"session-id", "deliverable-id", "attempt-id", "co-authored-by", "signed-off-by", "closes", "reverts"}
+)
+
+
+def _first_non_blank_line(text: str) -> Optional[str]:
+    """Return `text`'s first non-blank line, or `None` if `text` is empty or
+    whitespace-only."""
+    for line in text.splitlines():
+        if line.strip():
+            return line
+    return None
+
+
+def message_missing_subject(message: str) -> bool:
+    """True iff `message` is blank or its first non-blank line is a known
+    trailer. Keyed on known keys, never the generic `Token-Token:` shape,
+    which is also how ordinary subjects read (`percolate-round: ...`).
+    Check the caller's message before trailers are appended."""
+    first_line = _first_non_blank_line(message)
+    if first_line is None:
+        return True
+    key = first_line.strip().split(":", 1)[0].strip().lower()
+    return ":" in first_line and key in BARE_TRAILER_KEYS
+
 
 def _extract_trailer_block(text: str) -> List[str]:
     """Return the lines of `text`'s trailing trailer block, or `[]` if the

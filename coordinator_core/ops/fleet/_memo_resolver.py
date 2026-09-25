@@ -1431,3 +1431,70 @@ def never_inbox_mirror_refusal(
         f"  Send coordinator/doctrine topics to {_repo_key_to_self_em_id('repos.doe_claude')}; "
         f"engine/klabauter topics to {_repo_key_to_self_em_id('repos.claude_klabauter')}."
     )
+
+
+# ---------------------------------------------------------------------------
+# Structural undeliverable-checkout detection. `never_inbox_mirror_refusal`
+# knows two mirror basenames; this catches any publish mirror or missing
+# checkout by properties of the path itself, never a second name list.
+# ---------------------------------------------------------------------------
+
+#: Reason codes `receiver_checkout_defect` returns — named so a caller can
+#: compose a reason-specific message without re-deriving the classification.
+_CHECKOUT_DEFECT_NO_CHECKOUT = "no-checkout"
+_CHECKOUT_DEFECT_PUBLISH_MIRROR = "publish-mirror"
+
+
+def receiver_checkout_defect(receiver_repo_path: Optional[Path]) -> Optional[str]:
+    """Why `receiver_repo_path` is not a receivable EM working tree, or None.
+
+    First match wins: missing/not a dir, or no `.git` -> 'no-checkout';
+    `.claude-plugin/plugin.json` at the root (the published-plugin marker) or
+    equal to this session's `CLAUDE_PLUGIN_ROOT` -> 'publish-mirror'. A stat
+    error counts as the check not firing, never as a refusal.
+    """
+    if receiver_repo_path is None:
+        return _CHECKOUT_DEFECT_NO_CHECKOUT
+    try:
+        path = Path(receiver_repo_path)
+        if not path.is_dir():
+            return _CHECKOUT_DEFECT_NO_CHECKOUT
+    except Exception:
+        return _CHECKOUT_DEFECT_NO_CHECKOUT
+    try:
+        if not (path / ".git").exists():
+            return _CHECKOUT_DEFECT_NO_CHECKOUT
+    except Exception:
+        return _CHECKOUT_DEFECT_NO_CHECKOUT
+    try:
+        if (path / ".claude-plugin" / "plugin.json").is_file():
+            return _CHECKOUT_DEFECT_PUBLISH_MIRROR
+    except Exception:
+        pass
+    plugin_root_env = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    if plugin_root_env:
+        try:
+            if same_repo_path(path, Path(plugin_root_env)):
+                return _CHECKOUT_DEFECT_PUBLISH_MIRROR
+        except Exception:
+            pass
+    return None
+
+
+def undeliverable_checkout_refusal(
+    receiver_em_id: str, receiver_repo_path: Optional[Path],
+) -> Optional[str]:
+    """Refusal text for `receiver_checkout_defect`, or None when deliverable.
+    Check before any write, alongside `never_inbox_mirror_refusal`."""
+    reason = receiver_checkout_defect(receiver_repo_path)
+    if reason is None:
+        return None
+    if reason == _CHECKOUT_DEFECT_PUBLISH_MIRROR:
+        what = "a publish mirror, not an EM working tree"
+    else:
+        what = "no checkout on this machine"
+    return (
+        f"memo: {receiver_em_id!r} resolves to {what} — refusing the send.\n"
+        f"  Fallback: file a GitHub issue on the receiver's repo, prefixed "
+        f"'[session <id>]'."
+    )

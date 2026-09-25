@@ -125,6 +125,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.nudge_plan_test_surface_tier":     "coordinator_core.hooks",
     "hooks.preuse_agent_dispatch":            "coordinator_core.hooks",
     "hooks.preuse_skill_dispatch":            "coordinator_core.hooks",
+    "hooks.preuse_search_dispatch":           "coordinator_core.hooks",
     "hooks.enforce_agent_dispatch_mode":      "coordinator_core.hooks",
     "hooks.block_unenumerated_agent_type":    "coordinator_core.hooks",
     "hooks.guard_named_dispatch_tool_restriction": "coordinator_core.hooks",

@@ -728,3 +728,158 @@ def test_a_repeated_launch_record_for_one_task_is_not_ambiguity(tmp_path, capsys
 
     assert "CHECK BEFORE PASTING" not in result
     assert "local_workflow launches" not in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# Run-id capture persistence (mise-workflow-run-id-across-compaction memo):
+# _persist_workflow_run_record writes {run_id, scriptPath, args, fired_at,
+# session_id} at fire time so context_pressure_precompact.py can carry the
+# resume call across a /compact. This capture is independent of the
+# once-per-task advisory sentinel above -- it must land on every fire, not
+# just the first.
+# ---------------------------------------------------------------------------
+
+
+def _record_with_script_path(task_id="task-cap", run_id="wf_cap1", script_path="a/b.workflow.mjs", args=None):
+    payload = {
+        "status": "async_launched",
+        "taskId": task_id,
+        "taskType": "local_workflow",
+        "runId": run_id,
+        "transcriptDir": "/tmp/wf-dir",
+    }
+    lines = ["some assistant tool_use noise "]
+    if script_path is not None:
+        lines.append(json.dumps({"scriptPath": script_path}))
+    if args is not None:
+        lines.append(json.dumps({"args": args}))
+    lines.append(" some noise " + json.dumps(payload) + " trailing\n")
+    return "".join(lines)
+
+
+def test_persists_run_record_with_script_path_and_args(tmp_path, monkeypatch):
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    transcript_path = _write_transcript(
+        tmp_path,
+        _record_with_script_path(task_id="task-cap1", run_id="wf_cap1", script_path="a/b.workflow.mjs", args=["--x"]),
+    )
+
+    pad._check_workflow_monitor_arm_sync(SESSION, transcript_path, "Workflow")
+
+    record_path = pad._workflow_run_record_path(str(tmp_path), SESSION, "task-cap1")
+    assert os.path.isfile(record_path)
+    with open(record_path, encoding="utf-8") as fh:
+        record = json.load(fh)
+    assert record["run_id"] == "wf_cap1"
+    assert record["scriptPath"] == "a/b.workflow.mjs"
+    assert record["args"] == ["--x"]
+    assert record["session_id"] == SESSION
+    assert isinstance(record["fired_at"], int)
+
+
+def test_persists_run_record_with_scriptpath_missing_as_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    transcript_path = _write_transcript(
+        tmp_path, _async_launched_record(task_id="task-cap2", run_id="wf_cap2")
+    )
+
+    pad._check_workflow_monitor_arm_sync(SESSION, transcript_path, "Workflow")
+
+    record_path = pad._workflow_run_record_path(str(tmp_path), SESSION, "task-cap2")
+    with open(record_path, encoding="utf-8") as fh:
+        record = json.load(fh)
+    assert record["run_id"] == "wf_cap2"
+    assert record["scriptPath"] is None
+    assert record["args"] is None
+
+
+def test_persist_happens_even_when_monitor_arm_advisory_is_already_sentinelled(tmp_path, monkeypatch):
+    """The advisory's own once-per-task sentinel must not starve the run-id
+    capture -- a second Workflow PostToolUse fire re-persists the record even
+    though the monitor-arm advisory itself stays silent."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    transcript_path = _write_transcript(
+        tmp_path, _record_with_script_path(task_id="task-cap3", run_id="wf_cap3", script_path="a/b.workflow.mjs")
+    )
+
+    first = pad._check_workflow_monitor_arm_sync(SESSION, transcript_path, "Workflow")
+    assert first != ""
+    second = pad._check_workflow_monitor_arm_sync(SESSION, transcript_path, "Workflow")
+    assert second == ""  # advisory sentinel suppresses the second fire
+
+    record_path = pad._workflow_run_record_path(str(tmp_path), SESSION, "task-cap3")
+    assert os.path.isfile(record_path)
+
+
+def test_persist_never_raises_on_unwritable_target(tmp_path):
+    """_persist_workflow_run_record fails open (module docstring's own
+    contract) -- a nonexistent tmpdir means the open() call raises internally,
+    and the function must swallow it rather than propagate."""
+    missing_dir = str(tmp_path / "does" / "not" / "exist")
+    pad._persist_workflow_run_record(missing_dir, SESSION, "task-x", "wf_x", None, None)  # must not raise
+
+
+def test_capture_script_path_and_args_defensive_on_garbage_text():
+    assert pad._capture_script_path_and_args("not json at all {{{") == (None, None)
+
+
+def test_capture_accepts_object_args():
+    from coordinator_core.hooks.postuse_advisory_dispatch import _capture_script_path_and_args
+
+    text = '{"scriptPath":"w/a.workflow.mjs","args":{"run_stamp":"x","ids":[1,2]}}'
+    assert _capture_script_path_and_args(text) == (
+        "w/a.workflow.mjs",
+        {"run_stamp": "x", "ids": [1, 2]},
+    )
+
+
+def test_persisted_record_is_not_contaminated_by_a_later_unrelated_launch(tmp_path, monkeypatch):
+    """A later, unrelated tool call's scriptPath/args in the same transcript
+    tail must not be persisted against an earlier launch's record --
+    _capture_script_path_and_args is now scoped to the text between this
+    launch's own async_launched record and the next one."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    first = _record_with_script_path(
+        task_id="task-first", run_id="wf_first", script_path="first.workflow.mjs", args=["--first"]
+    )
+    second = _record_with_script_path(
+        task_id="task-second", run_id="wf_second", script_path="second.workflow.mjs", args=["--second"]
+    )
+    transcript_path = _write_transcript(tmp_path, first, second)
+
+    pad._check_workflow_monitor_arm_sync(SESSION, transcript_path, "Workflow")
+
+    # _check_workflow_monitor_arm_sync picks the LAST local_workflow match
+    # ("last match wins") -- here that is task-second, and the fix must scope
+    # its capture window to that record only, not leak the first record's
+    # values by mistake in the other direction either.
+    record_path = pad._workflow_run_record_path(str(tmp_path), SESSION, "task-second")
+    with open(record_path, encoding="utf-8") as fh:
+        record = json.load(fh)
+    assert record["scriptPath"] == "second.workflow.mjs"
+    assert record["args"] == ["--second"]
+
+
+def test_workflow_run_record_path_rejects_unsafe_task_id():
+    """`_workflow_run_record_path` must never build a path outside tmpdir --
+    a task_id containing a path separator or traversal segment is rejected
+    rather than silently joined in."""
+    with pytest.raises(ValueError):
+        pad._workflow_run_record_path("/tmp", SESSION, "../../etc/passwd")
+    with pytest.raises(ValueError):
+        pad._workflow_run_record_path("/tmp", "not/safe", "task-ok")
+
+
+def test_async_launch_regex_task_id_excludes_path_separators():
+    """_ASYNC_LAUNCH_RE's taskId group must not admit '/', '\\\\', or '..' --
+    the capture is now bounded to the same safe charset the path-builder
+    enforces, so a hostile transcript value simply fails to match rather than
+    reaching a path join."""
+    text = _async_launched_record(task_id="../../etc/passwd")
+    match = pad._ASYNC_LAUNCH_RE.search(text)
+    # The unsafe taskId is outside the narrowed charset -- the regex either
+    # fails to match this record at all, or (if it partially matches some
+    # other field ordering) never captures the traversal segment.
+    if match is not None:
+        assert "/" not in match.group("task_id")
+        assert ".." not in match.group("task_id")

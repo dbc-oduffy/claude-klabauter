@@ -259,6 +259,30 @@ class TestActRewritesDraft:
         split = split_frontmatter(target.read_text(encoding="utf-8"))
         assert read_fm_field(split.fm_text, "summary") == '"Explicit summary wins."'
 
+    def test_body_naming_owner_by_display_name_only_warns(self, tmp_path):
+        sender = _draft_first(tmp_path)
+        body = "example-retrieval-repo-26 is building the _index.md generator.\n"
+        result = _run(_memo_compose(
+            {"dry_run": False, "topic": "some-topic", "body": body},
+            repo_root=sender / ".git",
+        ))
+        assert result["exit_code"] == 0
+        advisory = result["acted"][0]["display_name_advisory"]
+        assert advisory is not None and "example-retrieval-repo-26" in advisory
+
+    def test_body_display_name_with_session_id_does_not_warn(self, tmp_path):
+        sender = _draft_first(tmp_path)
+        body = (
+            "example-retrieval-repo-26 (session 9e9a9d74-eea9-4d5b-a812-b70179ba5cf7) is "
+            "building the _index.md generator.\n"
+        )
+        result = _run(_memo_compose(
+            {"dry_run": False, "topic": "some-topic", "body": body},
+            repo_root=sender / ".git",
+        ))
+        assert result["exit_code"] == 0
+        assert result["acted"][0]["display_name_advisory"] is None
+
     def test_explicit_summary_over_cap_substitutes_and_warns(self, tmp_path):
         """End-to-end (2026-08-07 PM ruling, AC9/AC10): _memo_compose SUCCEEDS
         on an over-cap explicit summary — the body-derived summary is written

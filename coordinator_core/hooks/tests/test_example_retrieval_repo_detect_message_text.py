@@ -43,7 +43,7 @@ def _assert_clean(banner: str) -> None:
 def test_uninitialized_banner_names_no_repo(tmp_path):
     example_retrieval_repo_dir = tmp_path / ".example-retrieval-repo"
     example_retrieval_repo_dir.mkdir()
-    (example_retrieval_repo_dir / "manifest.json").write_text("{}")
+    (example_retrieval_repo_dir / "state.json").write_text("{}")
 
     banner = example_retrieval_repo_detect.detect_banner(str(tmp_path))
 
@@ -55,7 +55,7 @@ def test_uninitialized_banner_names_no_repo(tmp_path):
 def _make_marker(tmp_path):
     example_retrieval_repo_dir = tmp_path / ".example-retrieval-repo"
     example_retrieval_repo_dir.mkdir()
-    (example_retrieval_repo_dir / "manifest.json").write_text("{}")
+    (example_retrieval_repo_dir / "state.json").write_text("{}")
     (example_retrieval_repo_dir / "graph.db").write_text("db")
     return example_retrieval_repo_dir
 

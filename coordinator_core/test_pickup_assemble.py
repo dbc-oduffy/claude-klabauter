@@ -6701,6 +6701,44 @@ class TestArchivedMemoClassification:
         assert artifact["classification"] == "archived"
         assert artifact["resolution"]["archived_class"] == "memo"
 
+    def test_memo_cited_by_inbox_path_resolves_after_move_to_real_archive_layout(self, tmp_path):
+        """A memo cited by its ORIGINAL `state/cross-repo/inbox/` path (the
+        real, C10a-migrated corpus layout — not the legacy `cross-repo/`
+        fixture dirs the rest of this file uses) that has since been swept to
+        `state/cross-repo/archive/` must still resolve via the archive
+        fallback, exactly as the legacy-layout case does above."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        live = repo / "state" / "cross-repo" / "inbox" / "m1.md"
+        live.parent.mkdir(parents=True, exist_ok=True)
+        live.write_text(
+            "---\n"
+            "kind: fyi\n"
+            "status: open\n"
+            "from: sender-session\n"
+            "to: receiver-session\n"
+            "summary: A test memo.\n"
+            "created: 2026-01-01\n"
+            "---\n\nBody.\n",
+            encoding="utf-8",
+        )
+        _git(repo, "add", str(live.relative_to(repo)))
+        _git(repo, "commit", "-m", "add m1.md")
+
+        archived = repo / "state" / "cross-repo" / "archive" / "m1.md"
+        archived.parent.mkdir(parents=True, exist_ok=True)
+        text = live.read_text(encoding="utf-8").replace("status: open", "status: in_progress")
+        archived.write_text(text, encoding="utf-8")
+        _git(repo, "rm", "-q", str(live.relative_to(repo)))
+        _git(repo, "add", str(archived.relative_to(repo)))
+        _git(repo, "commit", "-m", "archive m1.md")
+
+        artifact = pb.resolve_artifact("state/cross-repo/inbox/m1.md", repo)
+
+        assert artifact["classification"] == "archived"
+        assert artifact["resolution"]["archived_class"] == "memo"
+        assert artifact["path"] == "state/cross-repo/archive/m1.md"
+
     def test_drop_on_archived_memo_invokes_memo_revert_not_handoff_unconsume(self, tmp_path, monkeypatch):
         repo = tmp_path / "repo"
         _init_repo(repo)

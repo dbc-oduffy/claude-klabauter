@@ -286,8 +286,10 @@ def _repo_root_for_plan(plan_path: str) -> Optional[Path]:
     return None
 
 
-def _refuse_foreign_emission(output_path: Path, script: str) -> None:
-    """Refuse to overwrite an existing emission whose bytes differ from ours.
+def _refuse_foreign_emission(output_path: Path, script: str, session_id: str) -> None:
+    """Refuse to overwrite an existing emission whose bytes differ from ours,
+    unless its receipt names ``session_id``: re-emitting your own output is
+    not a foreign write.
 
     Compares against the bytes the write would actually land (``newline=""``,
     so the script's own "
@@ -301,6 +303,14 @@ def _refuse_foreign_emission(output_path: Path, script: str) -> None:
     ours = script.encode("utf-8")
     if existing == ours:
         return
+    receipt_path = emission_receipt_path(output_path)
+    if session_id and receipt_path.is_file():
+        try:
+            recorded = json.loads(receipt_path.read_text(encoding="utf-8")).get("session_id")
+        except (OSError, ValueError):
+            recorded = None
+        if recorded == session_id:
+            return
     mtime = datetime.fromtimestamp(output_path.stat().st_mtime).isoformat(timespec="seconds")
     raise ForeignEmissionError(
         f"{output_path} already holds a DIFFERENT emission "
@@ -580,6 +590,18 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             provenance receipt; falls back to the fleet-canonical
             ``session.core.resolve_session_id`` ladder, then to "". Never
             minted -- see ``_receipt_session_id``.
+        preamble (str, optional): a run-wide posture block rendered
+            once (a ``_shared``/``PREAMBLE`` const, route-dependent) into
+            every EXECUTOR-tier prompt this emission composes -- never the
+            commit/preflight/verify-op/test phases. Forwarded verbatim to
+            ``emit.emit_script`` (plan route) or ``queue_emit.
+            emit_queue_script`` (queue route); this op never opens or reads
+            a preamble FILE itself.
+        preamble_path (str, optional): the ``--preamble FILE`` path the
+            caller read ``preamble`` from -- recorded in the receipt
+            alongside ``preamble_sha256``, never resolved or re-read here.
+        preamble_sha256 (str, optional): the caller-computed digest of the
+            preamble file's bytes -- recorded verbatim, never recomputed.
 
     Returns:
         {"path": str, "ok": bool, "findings": [<finding dict>, ...],
@@ -695,6 +717,17 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     receipt_extras: Optional[dict] = None
     receipt_plan_path: Optional[str] = plan_path
+    preamble = params.get("preamble")
+
+    # recorded verbatim, whichever route runs -- the caller (the
+    # `--preamble FILE` CLI leg) already read the file and hashed its bytes;
+    # this op never opens the file itself, matching the negative-spec every
+    # other param here keeps (does not derive facts a caller already holds).
+    if params.get("preamble_path") or params.get("preamble_sha256"):
+        receipt_extras = {
+            "preamble_path": params.get("preamble_path"),
+            "preamble_sha256": params.get("preamble_sha256"),
+        }
 
     if is_queue_route:
         if not queue:
@@ -719,9 +752,10 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             run_dir=guarded_path.parent,
             session_id=emitting_session_id,
             agent_type_host=agent_type_host,
+            preamble=preamble,
         )
         script = emission.script
-        receipt_extras = emission.receipt_extras
+        receipt_extras = {**emission.receipt_extras, **(receipt_extras or {})}
         receipt_plan_path = None
     else:
         script = emit_script(
@@ -731,6 +765,7 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             repo_root=repo_root or _repo_root_for_plan(plan_path),
             session_id=emitting_session_id,
             agent_type_host=agent_type_host,
+            preamble=preamble,
         )
 
     findings = run_checks(script)
@@ -743,7 +778,7 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
     # fires it (control characters in the approval payload), making an emitted
     # script unfireable on the platform this repo treats as first-class.
     if not params.get("force"):
-        _refuse_foreign_emission(guarded_path, script)
+        _refuse_foreign_emission(guarded_path, script, emitting_session_id)
 
     guarded_path.write_text(script, encoding="utf-8", newline="")
 

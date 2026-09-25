@@ -106,6 +106,31 @@ class TestSizingObjectScaffoldParity:
         args = _parser.parse_args(directive["args"])
         assert args.title == "Ship the scaffold emitter"
 
+    def test_long_intent_caps_title_and_slug(self) -> None:
+        intent = (
+            "I like it and we should size it, it seems like an S fan-out job "
+            "to me, so go ahead and take the whole thing including the "
+            "handling of the ask end to end"
+        )
+        result = sizing_assemble.route(estimate={"tshirt": "M"}, intent=intent)
+        directive = _directive(result["directives"], "d-scaffold-sizing-object")
+        args = _parser.parse_args(directive["args"])
+        assert args.title == "I like it and we should size it,..."
+        slug = Path(args.out).stem.split("-", 3)[3]
+        assert len(slug) <= sizing_assemble._SLUG_MAX_CHARS
+        assert "handling" not in args.out
+
+    def test_name_overrides_intent_for_title_and_slug(self) -> None:
+        result = sizing_assemble.route(
+            estimate={"tshirt": "M"},
+            intent="I like it and we should size it, seems like an S job",
+            name="Engine friction fixes",
+        )
+        directive = _directive(result["directives"], "d-scaffold-sizing-object")
+        args = _parser.parse_args(directive["args"])
+        assert args.title == "Engine friction fixes"
+        assert args.out.endswith("-engine-friction-fixes.yaml")
+
     def test_intent_absent_omits_title_and_still_parses(self) -> None:
         result = sizing_assemble.route(estimate={"tshirt": "M"})
         directive = _directive(result["directives"], "d-scaffold-sizing-object")

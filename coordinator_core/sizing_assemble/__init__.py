@@ -250,18 +250,18 @@ from coordinator_core.roadmap_planning_assemble.scaffold_directive import (
 # this host's one emitted row (coordinator_core/ops/doctype_hosts.py, keyed
 # (type="sizing-object", ceremony="sizing-assemble"), module=this package).
 # `--title` is `sizing-object`'s one caller-facing content field, and it is
-# NOT free text supplied fresh at scaffold time: it is `resolved["intent"]`
-# -- this module's own `intent` param, the PM's ask verbatim, already
-# resolved ceremony state by the time `route()` is called (AC3). Optional
-# here (never `required=True`): `intent` is itself optional on `route()`
-# (echoed, never parsed), and the real CLI's own placeholder-title arm
+# NOT free text supplied fresh at scaffold time: it is `resolved["title"]`
+# -- `route()`'s `name` param, else a word-capped label of its `intent`
+# (the PM's ask verbatim, often a whole utterance -- never the title or
+# path uncapped). Optional here (never `required=True`): both are optional
+# on `route()`, and the real CLI's own placeholder-title arm
 # covers the caller who genuinely has none -- but see `route()`'s own
 # `--title` validation, which refuses a placeholder for `--type
 # sizing-object` at write time; that refusal is the EXECUTOR's problem
 # (dispatches the emitted directive), never this compute half's to guess
 # a title in place of.
 _SIZING_OBJECT_FLAG_SPEC: tuple[Flag, ...] = (
-    Flag("--title", "intent", required=False),
+    Flag("--title", "title", required=False),
 )
 
 
@@ -283,7 +283,38 @@ def _slug(text: str) -> str:
     return "".join(out).strip("-") or "untitled"
 
 
-def _sizing_object_scaffold_directive(intent: Optional[str]) -> dict[str, Any]:
+# Caps for the intent-derived fallback label. `intent` is the PM's words
+# verbatim and can run to a paragraph; the title and filename slug must stay a
+# short label either way.
+_LABEL_MAX_WORDS = 8
+_SLUG_MAX_CHARS = 60
+
+
+def _short_label(name: Optional[str], intent: Optional[str]) -> Optional[str]:
+    """The sizing object's title: `name` as given, else the first
+    `_LABEL_MAX_WORDS` words of `intent` (marked with an ellipsis when cut)."""
+    if name and name.strip():
+        return name.strip()
+    if not intent or not intent.strip():
+        return None
+    words = intent.split()
+    if len(words) <= _LABEL_MAX_WORDS:
+        return " ".join(words)
+    return " ".join(words[:_LABEL_MAX_WORDS]) + "..."
+
+
+def _capped_slug(text: str) -> str:
+    slug = _slug(text)
+    if len(slug) <= _SLUG_MAX_CHARS:
+        return slug
+    cut = slug[:_SLUG_MAX_CHARS]
+    # Break on a word boundary when one exists in the kept span.
+    return (cut.rsplit("-", 1)[0] if "-" in cut else cut).strip("-") or "untitled"
+
+
+def _sizing_object_scaffold_directive(
+    intent: Optional[str], name: Optional[str] = None
+) -> dict[str, Any]:
     """C4: emits the `sizing-object` scaffold directive through the shared
     constructor -- called from every `route()` arm EXCEPT `express_lane`
     (D3: "no sizing-object litter for trivial asks", AC7's costs-~zero
@@ -293,9 +324,10 @@ def _sizing_object_scaffold_directive(intent: Optional[str]) -> dict[str, Any]:
     CLI's own default so `already_satisfied` (AC4) can be computed here."""
     root = Path.cwd()
     today = date.today().isoformat()
-    slug = _slug(intent) if intent else "untitled"
+    title = _short_label(name, intent)
+    slug = _capped_slug(title) if title else "untitled"
     resolved: dict[str, Any] = {
-        "intent": intent,
+        "title": title,
         "out": f"state/sizings/{today}-{slug}.yaml",
     }
     return build_scaffold_directive(
@@ -791,6 +823,7 @@ def route(
     intent_source: Optional[str] = None,
     precedent: Optional[str] = None,
     probe_raise_basis: Optional[str] = None,
+    name: Optional[str] = None,
 ) -> dict[str, Any]:
     """Resolves the sizing-object's route/detents/fork fields (C1 shape).
 
@@ -1266,7 +1299,7 @@ def route(
         # the object is minted regardless of RESOLVED route; only D3's
         # short-circuit above skips it), so this directive is unconditional
         # here rather than gated on `resolved_route`.
-        "directives": [_sizing_object_scaffold_directive(intent)],
+        "directives": [_sizing_object_scaffold_directive(intent, name)],
     }
 
 
@@ -1288,6 +1321,7 @@ def _usage(prog: str, stream=None) -> int:
         "[--scout-evidence-kind mention-count|change-set|site-count] "
         "[--scout-evidence <str> ...] "
         "[--intent <str>] [--intent-source pm-verbatim|em-elaborated] "
+        "[--name <short label>] "
         "[--precedent shipped-before|novel] "
         "[--probe-raise-basis ask-scope|substrate-condition|breadth]",
         file=stream,
@@ -1311,6 +1345,7 @@ def main(argv: list[str]) -> int:
     scout_evidence_kind = None
     intent = None
     intent_source = None
+    name = None
     precedent = None
     probe_raise_basis = None
     scout_evidence: list[str] = []
@@ -1357,6 +1392,9 @@ def main(argv: list[str]) -> int:
         elif tok == "--intent-source" and i + 1 < len(argv):
             intent_source = argv[i + 1]
             i += 2
+        elif tok == "--name" and i + 1 < len(argv):
+            name = argv[i + 1]
+            i += 2
         elif tok == "--precedent" and i + 1 < len(argv):
             precedent = argv[i + 1]
             i += 2
@@ -1388,6 +1426,7 @@ def main(argv: list[str]) -> int:
             intent_source=intent_source,
             precedent=precedent,
             probe_raise_basis=probe_raise_basis,
+            name=name,
         )
     except SizingAssembleError as exc:
         print(f"{prog}: {exc}", file=sys.stderr)

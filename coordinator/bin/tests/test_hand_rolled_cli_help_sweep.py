@@ -466,6 +466,9 @@ class TestHandRolledCliHelpSweep(unittest.TestCase):
             **_no_console_kw(str(_BIN_DIR)),
         )
         self.assertEqual(result.returncode, 0, result.stderr[-500:])
+        # On stdout, not stderr: the warm door keeps only "usage"-bearing
+        # stderr lines, which reduced this help to a bare `Usage:`.
+        self.assertIn('coordinator-safe-commit --blanket "<subject>"', result.stdout)
 
     def test_a_genuinely_unknown_flag_still_refuses_nonzero(self):
         # Negative case: adding --help/-h recognition must not have made

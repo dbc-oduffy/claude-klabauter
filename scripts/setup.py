@@ -1464,8 +1464,8 @@ def provision_deps(
                 file=sys.stderr,
             )
             print(
-                f"  Remediation: {candidate.path} -m pip install --no-deps -e <claude-klabauter "
-                "checkout>, or run that checkout's scripts/setup.py.",
+                "  Remediation: python3 <claude-klabauter checkout>/scripts/setup.py, or "
+                f"{candidate.path} -m pip install --no-deps -e <claude-klabauter checkout>.",
                 file=sys.stderr,
             )
             sys.exit(EXIT_ENGINE_AT_DEV_TREE)

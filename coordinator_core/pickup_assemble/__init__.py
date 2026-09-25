@@ -190,24 +190,30 @@ EXIT_BUSINESS_FAIL = 1
 EXIT_USAGE = 2
 EXIT_TRANSPORT_FAIL = 3
 
-# The three known archive dirs a swept baton may have landed in (contract
+# The known archive dirs a swept baton may have landed in (contract
 # § archive-fallback, mirrors pickup/SKILL.md's own enumeration verbatim).
-ARCHIVE_DIRS = ("cross-repo/archive", "archive/handoffs", "archive/completed")
+# The memo pair is `state/cross-repo/{inbox,archive}` (the C10a-migrated
+# convention `coordinator_core.memo_corpus.memo_corpus_root` resolves to for
+# THIS repo), with the legacy `cross-repo/{inbox,archive}` pair kept as a
+# lower-priority fallback for a peer repo the fleet-wide migration has not
+# yet reached (memo_corpus.py's own docstring: repo-by-repo, not all at once).
+ARCHIVE_DIRS = ("state/cross-repo/archive", "archive/handoffs", "archive/completed", "cross-repo/archive")
 
-# The three known LIVE dirs a baton may still be sitting in, un-actioned —
+# The known LIVE dirs a baton may still be sitting in, un-actioned —
 # each paired with its `ARCHIVE_DIRS` sweep destination above (same index
-# order): `cross-repo/inbox` sweeps to `cross-repo/archive`, `state/handoffs`
-# sweeps to `archive/handoffs`, and `docs/plans` sweeps to `archive/completed`
-# (`fleet.archive_completed_plans` — `archive/completed` is dated-completed
-# PLANS, not a generic memo/handoff dump; verified against this repo's own
-# `archive/completed/2026-07/` contents, which are all `docs/plans/`-shaped
-# filenames). 2026-07-25 defect: `_archive_fallback_search` only ever looked
-# at where a baton is swept TO, never at where it actually LIVES — a bare
-# basename for an open, un-actioned `cross-repo/inbox/` memo reported as
+# order): `state/cross-repo/inbox` sweeps to `state/cross-repo/archive`,
+# `state/handoffs` sweeps to `archive/handoffs`, `docs/plans` sweeps to
+# `archive/completed` (`fleet.archive_completed_plans` — `archive/completed`
+# is dated-completed PLANS, not a generic memo/handoff dump; verified
+# against this repo's own `archive/completed/2026-07/` contents, which are
+# all `docs/plans/`-shaped filenames), and the legacy `cross-repo/inbox`
+# sweeps to `cross-repo/archive`. 2026-07-25 defect: `_archive_fallback_search`
+# only ever looked at where a baton is swept TO, never at where it actually
+# LIVES — a bare basename for an open, un-actioned inbox memo reported as
 # unresolvable, sending the operator hunting archives for a file sitting in
 # plain sight. Live hits and archive hits are searched and reported
 # separately (never merged into one bucket) — see `resolve_artifact`.
-LIVE_DIRS = ("cross-repo/inbox", "state/handoffs", "docs/plans")
+LIVE_DIRS = ("state/cross-repo/inbox", "state/handoffs", "docs/plans", "cross-repo/inbox")
 
 # Minimum length (after stripping a trailing `.md`) a passed slug must carry
 # before the suffix-match fallback tier (2026-07-28, PM-ruled) will attempt

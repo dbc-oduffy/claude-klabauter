@@ -72,6 +72,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from coordinator_core.contract import grind_vocab as vocab
@@ -832,6 +833,7 @@ def compose_grind_script(
     run_dir: Any,
     appetite: str = "standard",
     agent_type_host: Optional[str] = None,
+    preamble: Optional[str] = None,
 ) -> str:
     """Compose one top-level `.mjs` Workflow script implementing § Design §
     Composer over ``manifest``/``profile``/``knobs``. Pure function of its
@@ -845,8 +847,26 @@ def compose_grind_script(
     ``run_stamp`` (run id and the only timestamp), ``script_path`` (this
     script's path, which ``grind-row check --manifest`` reads) and
     ``profile_dir`` (the profile directory, which may live in another repo
-    per DR-404's DoE-owned profiles)."""
-    run_dir_s = str(run_dir)
+    per DR-404's DoE-owned profiles).
+
+    ``preamble`` (optional) is a run-wide posture block declared
+    ONCE as a ``const PREAMBLE`` and prepended, at RUN time via a bare
+    ``PREAMBLE +`` expression, to every general-purpose (executor-tier)
+    stage prompt -- triage, refute-close, resize, fix, verify-agent, undo.
+    Never inlined per call site (mirrors the ``_shared`` write-set array's
+    own discipline, ``emit.py``'s ``SharedBlocks``), and never spliced into
+    ``verify-op`` or ``commit``, which are not executor prompts. A no-op
+    when omitted."""
+    # POSIX-normalized regardless of platform: the composed script text is a
+    # deterministic function of its arguments (module docstring, "Pure
+    # function"), and a bare `str(Path(...))` renders OS-native separators on
+    # Windows -- a `\` spliced into a single-quoted JS literal changes the
+    # path the runtime resolves, not merely the golden's bytes. Production's
+    # one caller (`queue_emit.emit_queue_script`) already pre-converts via
+    # `.as_posix()`, so this only bit a caller passing a bare `Path` directly
+    # (every test in this module does) -- `Path(run_dir).as_posix()` makes
+    # the guarantee hold for any caller, not only the one that remembered.
+    run_dir_s = Path(run_dir).as_posix()
     grouped = _group_into_batches(manifest, knobs)
     window = int(knobs.get("window", 6))
     batch_size_knob = knobs.get("batch_size", 4)
@@ -912,11 +932,21 @@ def compose_grind_script(
     lines.append(f"const RESERVE = {batch_reserve(reserve_batch_size)};")
     lines.append(f"const MAX_AGENT_CALLS = {json.dumps(max_agent_calls)};")
     lines.append(f"const BUDGET_TOKENS = {json.dumps(budget_tokens)};")
+    # the guard MUST run before any `const ... = args.*` read below --
+    # `args` is a fire-time global the Workflow runner supplies, absent
+    # entirely on a bare `Workflow({scriptPath})` fire with no `args`. A
+    # read ahead of this check throws a raw `TypeError: Cannot read
+    # properties of undefined` instead of `_FIRE_ARGS_CHECK`'s named,
+    # actionable refusal -- exactly the defect this ordering fixes.
+    lines.append(_FIRE_ARGS_CHECK)
     lines.append(f"const RUN_ID = args.run_stamp;")
     lines.append(f"const SCRIPT_PATH = args.script_path;")
     lines.append(f"const PROFILE_NAME = {_js_string_literal(profile.name)};")
     lines.append("const PROFILE_DIR = args.profile_dir;")
-    lines.append(_FIRE_ARGS_CHECK)
+    preamble_expr: Optional[str] = None
+    if preamble:
+        lines.append(f"const PREAMBLE = {_js_string_literal(preamble)};")
+        preamble_expr = "PREAMBLE"
     lines.append(f"const APPETITE_NAME = {_js_string_literal(str(appetite))};")
     lines.append(
         f"const RESOLVED_KNOBS = {json.dumps({k: v for k, v in knobs.items() if k != 'appetite'}, sort_keys=True)};"
@@ -970,7 +1000,7 @@ def compose_grind_script(
         verdicts=profile.verdicts,
         batch_id_js="batchId", triage_depth_js="TRIAGE_DEPTH_BY_KEY[batchKey]",
         rows_js="JSON.stringify(rowsData)", script_path_js="SCRIPT_PATH", run_id_js="RUN_ID",
-        agent_type_host=agent_type_host, repo_root=".",
+        agent_type_host=agent_type_host, repo_root=".", preamble_expr=preamble_expr,
     )
     lines.append(
         "async function _triageCall(batchId, batchKey, rowIds) {\n"
@@ -989,7 +1019,7 @@ def compose_grind_script(
         label="resize", phase_title="Grind", profile=profile.name,
         rows_js="JSON.stringify(rowsData)", run_id_js="RUN_ID",
         fix_verdict=resize_fix_verdict, close_verdict=resize_close_verdict,
-        agent_type_host=agent_type_host, repo_root=".",
+        agent_type_host=agent_type_host, repo_root=".", preamble_expr=preamble_expr,
     )
     lines.append(
         "async function _resizeCall(rowIds) {\n"
@@ -1006,7 +1036,7 @@ def compose_grind_script(
             label="close", phase_title="Grind", profile=profile.name,
             profile_dir_js="PROFILE_DIR",
             proposals_js="JSON.stringify(proposals)", run_id_js="RUN_ID", agent_type_host=agent_type_host,
-            repo_root=".",
+            repo_root=".", preamble_expr=preamble_expr,
         )
         lines.append(
             "async function _closeCall(proposals) {\n" + _indent_block(_capture(close_raw, "refute-close"), "  ") + "\n}"
@@ -1024,7 +1054,7 @@ def compose_grind_script(
             "row.refuteNote) : '')"
         ),
         profile=profile.name, profile_dir_js="PROFILE_DIR", row_path_js="row.path", digest_js="row.digest",
-        run_id_js="RUN_ID", agent_type_host=agent_type_host,
+        run_id_js="RUN_ID", agent_type_host=agent_type_host, preamble_expr=preamble_expr,
     )
     lines.append("async function _fixCall(row) {\n" + _indent_block(_capture(fix_raw, "fix"), "  ") + "\n}")
 
@@ -1032,7 +1062,7 @@ def compose_grind_script(
         label="verify-agent", phase_title="Grind",
         row_id_js="row.rowId", row_path_js="row.path", touched_files_js="row.touchedFiles",
         evidence_js="row.evidence", fix_plan_js="row.fixPlan",
-        agent_type_host=agent_type_host,
+        agent_type_host=agent_type_host, preamble_expr=preamble_expr,
     )
     verify_op_raw = stages.compose_verify_op_call(
         label="verify-op", phase_title="Grind", run_dir=run_dir_s, op_js="spec.op", batch_id_js="row.batchId",
@@ -1072,7 +1102,7 @@ def compose_grind_script(
         label="undo", phase_title="Grind",
         touched_files_js="row.touchedFiles.concat(row.closeResult ? [row.closeResult.old] : [])",
         created_files_js="row.createdFiles.concat(row.closeResult ? [row.closeResult.new] : [])",
-        agent_type_host=agent_type_host,
+        agent_type_host=agent_type_host, preamble_expr=preamble_expr,
     )
     lines.append("async function _undoCall(row) {\n" + _indent_block(_capture(undo_raw, "undo"), "  ") + "\n}")
 

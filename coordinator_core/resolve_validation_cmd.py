@@ -975,6 +975,58 @@ def _metachar_warn(s: str, step: str, caller: str = "cs_resolve_fast_test_cmd") 
     return ""
 
 
+def _pytest_plugin_available(mod_name: str) -> bool:
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec(mod_name) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+_WORKER_FLAG_RE = re.compile(r"(?:^|\s)-n\s+\S+")
+_RESULT_FLAG_RE = re.compile(r"(?:^|\s)-r[a-zA-Z]+")
+
+
+def _augment_full_test_cmd(cmd: str, say) -> str:
+    """Fit a resolved pytest full_test_cmd inside with-suite-mutex's
+    `--max-runtime` ceiling: a serial full suite has no upper bound, so a
+    healthy run can lose the race to the ceiling.
+
+    - No worker flag and xdist importable: add a bounded `-n <cap>`
+      (`derive_worker_cap.derive_cap`).
+    - No `-r` flag: add `-rfE` so a killed run has already named its failures.
+
+    Trap: plugin presence is probed on THIS interpreter, not the one the
+    command runs under. A wrong `-n` guess fails loudly at startup, so it is
+    tolerable; never use the same probe to DROP a configured flag, which
+    would fail silently. Non-pytest commands pass through; never raises.
+    """
+    if "pytest" not in cmd:
+        return cmd
+
+    if not _WORKER_FLAG_RE.search(cmd):
+        if not _pytest_plugin_available("xdist"):
+            say("[cs_resolve_full_test_cmd] step=worker-bound pytest-xdist not importable; command left serial.")
+        else:
+            try:
+                from coordinator_core.install.derive_worker_cap import derive_cap
+
+                cap = derive_cap()
+                cmd = f"{cmd} -n {cap}"
+                say(f"[cs_resolve_full_test_cmd] step=worker-bound added -n {cap}.")
+            except Exception as exc:
+                say(
+                    "[cs_resolve_full_test_cmd] step=worker-bound skipped "
+                    f"({type(exc).__name__}: {exc}); command left serial."
+                )
+
+    if not _RESULT_FLAG_RE.search(cmd):
+        cmd = f"{cmd} -rfE"
+
+    return cmd
+
+
 def resolve_full_test_cmd(repo_root: Optional[str] = None) -> ResolveResult:
     """Bin-shape sibling of cs_resolve_full_test_cmd above — see module
     docstring's Output contract."""
@@ -999,6 +1051,7 @@ def resolve_full_test_cmd(repo_root: Optional[str] = None) -> ResolveResult:
             return ResolveResult("", 126, "".join(stderr_acc))
         except InterpreterMissing:
             return ResolveResult("", 127, "".join(stderr_acc))
+        norm = _augment_full_test_cmd(norm, _say)
         return ResolveResult(norm + "\n", 0, "".join(stderr_acc))
 
     # Step 2 — coordinator.local.md flat top-level full_test_cmd: key
@@ -1015,6 +1068,7 @@ def resolve_full_test_cmd(repo_root: Optional[str] = None) -> ResolveResult:
             return ResolveResult("", 126, "".join(stderr_acc))
         except InterpreterMissing:
             return ResolveResult("", 127, "".join(stderr_acc))
+        norm = _augment_full_test_cmd(norm, _say)
         return ResolveResult(norm + "\n", 0, "".join(stderr_acc))
 
     # Step 3 — FALL BACK to the fast tier (not skip). fast-tier diags are

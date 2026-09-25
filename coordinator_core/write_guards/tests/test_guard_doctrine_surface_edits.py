@@ -559,6 +559,69 @@ def test_per_repo_surfaces_still_anchor_on_the_session_repo(two_roots, name):
 
 
 # ---------------------------------------------------------------------------
+# Foreign-repo (non-DoE) root doctrine files -- bug-blitz issue #88.
+# `_protected_entries` only ever anchors on the session's own repo_root and
+# the registry-pointed DoE root, so a THIRD repo's own root CLAUDE.md (e.g.
+# a example-retrieval-repo session editing example-retrieval-repo-ue-addon/CLAUDE.md) was
+# invisible to the guard even though it is the same always-loaded-per-its-
+# own-sessions class of file DoE's surfaces are.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def foreign_third_repo(tmp_path, monkeypatch):
+    """A session repo and an unrelated THIRD repo -- neither the DoE root
+    nor the session's own repo_root -- to isolate the generic
+    `_foreign_repo_root_surface` fallback from the DoE-specific anchor.
+    """
+    session_repo = tmp_path / "example-retrieval-repo"
+    third_repo = tmp_path / "example-retrieval-repo-ue-addon"
+    _make_repo(session_repo)
+    _make_repo(third_repo)
+
+    guard._doe_root_memo.clear()
+    monkeypatch.setattr(guard, "read_doe_root_pointer", lambda: "")
+    monkeypatch.setattr(guard, "_git_root", lambda: str(session_repo))
+    yield session_repo, third_repo
+    guard._doe_root_memo.clear()
+
+
+@pytest.mark.parametrize("name", ["CLAUDE.md", "coordinator.local.md"])
+def test_foreign_third_repo_root_doctrine_is_protected(foreign_third_repo, name):
+    """The consistency bug itself: editing another repo's own root doctrine
+    file from a session rooted elsewhere must deny, exactly as editing the
+    session's own root doctrine file does.
+    """
+    _session_repo, third_repo = foreign_third_repo
+    assert _verdict(third_repo / name) == "deny"
+
+
+def test_foreign_third_repo_approval_is_read_at_its_own_root(foreign_third_repo):
+    """Sentinel-follows-owning-repo holds for the generic fallback too: an
+    approval sitting in the editing session's repo must not authorize an
+    edit to a third repo's doctrine.
+    """
+    session_repo, third_repo = foreign_third_repo
+    target = third_repo / "CLAUDE.md"
+
+    _fresh(session_repo / _SENTINEL_NAME)
+    assert _verdict(target) == "deny"
+
+    _fresh(third_repo / _SENTINEL_NAME)
+    assert _verdict(target) == "allow"
+
+
+def test_nested_claude_md_in_a_foreign_repo_stays_unprotected(foreign_third_repo):
+    """The exact-match, not substring/basename, contract survives the
+    generalization: a CLAUDE.md nested below a foreign repo's root (not
+    the root itself) must not match."""
+    _session_repo, third_repo = foreign_third_repo
+    nested = third_repo / "coordinator" / "tests" / "CLAUDE.md"
+    nested.parent.mkdir(parents=True)
+    assert _verdict(nested) == "allow"
+
+
+# ---------------------------------------------------------------------------
 # C3 (docs/plans/2026-09-23-guard-dispatch-residuals.md): the EM-audience
 # override-keys-doc pointer names an approval route (create the sentinel at
 # its owning root) that a cloud session cannot reach -- the operator who

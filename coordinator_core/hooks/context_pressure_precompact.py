@@ -265,6 +265,96 @@ def _build_handoffs_section(state_root: str) -> List[str]:
     return lines
 
 
+# Both scriptPath and runId are echoed back verbatim into the PreCompact
+# state-snapshot markdown, which is read back into agent context after
+# compaction and trusted as harness-authored state -- a value carrying a
+# quote, backtick, or newline could otherwise break out of the rendered line
+# and inject fabricated lines. Reject
+# either outright rather than merely escaping: this text is a paste-ready
+# command, not free-form prose, so a control character means the captured
+# value is already suspect.
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _render_resume_call(run: dict) -> str:
+    """Render the exact `Workflow({...})` call an EM pastes to resume a run
+    that a `/compact` killed mid-flight. `scriptPath`/`args` may be `None`
+    (the capture side -- postuse_advisory_dispatch.py's
+    `_capture_script_path_and_args` -- is best-effort, not pinned to a
+    confirmed harness field), in which case only `resumeFromRunId` is named
+    and the reader is told the rest is unknown rather than shown a
+    fabricated value.
+
+    Every interpolated value is rendered through `json.dumps`, not an f-string
+    quote -- a raw f-string (the prior shape for `scriptPath`) lets an
+    embedded quote close the string early and splice arbitrary text into the
+    snapshot. `run_id` is control-character-checked despite already carrying
+    quotes via json.dumps: a newline inside it still breaks the ONE-LINE
+    assumption the state-snapshot renderer makes elsewhere in this module.
+    """
+    run_id = run.get("run_id")
+    script_path = run.get("scriptPath")
+    args = run.get("args")
+    if not isinstance(run_id, str) or not run_id or _CONTROL_CHAR_RE.search(run_id):
+        return ""
+    if (
+        not isinstance(script_path, str)
+        or not script_path
+        or _CONTROL_CHAR_RE.search(script_path)
+    ):
+        return (
+            "Workflow({scriptPath: <unknown -- capture missed it>, "
+            f"resumeFromRunId: {json.dumps(run_id)}}})"
+        )
+    parts = [f"scriptPath: {json.dumps(script_path)}"]
+    if isinstance(args, (dict, list)) and args:
+        try:
+            parts.append("args: " + json.dumps(args))
+        except Exception:
+            pass
+    parts.append(f"resumeFromRunId: {json.dumps(run_id)}")
+    return "Workflow({" + ", ".join(parts) + "})"
+
+
+def _build_workflow_runs_section(tmpdir: str, session_id: str) -> List[str]:
+    """`## Active Workflow Runs` -- one line per persisted run-id capture
+    (postuse_advisory_dispatch.py's `_persist_workflow_run_record`, written at
+    `Workflow` PostToolUse fire time) for THIS session, so a `/compact` that
+    kills a background run's context still leaves the harness's `wf_…` id
+    (and the resume call it composes) recoverable from disk.
+
+    Known gap, named rather than silently assumed: there is no persisted
+    "finished" signal in this cohort's scope, so every record found for this
+    session is treated as active/not-finished -- a completed run's record
+    still renders here until the temp file is cleaned up by the OS or a
+    later chunk adds a finish marker.
+    """
+    lines = ["", "## Active Workflow Runs"]
+    if not session_id:
+        lines.append("(none)")
+        return lines
+    pattern = os.path.join(tmpdir, f"workflow-run-{session_id}-*.json")
+    try:
+        matches = sorted(_glob.glob(pattern))
+    except Exception:
+        matches = []
+    rendered: List[str] = []
+    for path in matches[:10]:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                record = json.load(fh)
+        except Exception:
+            continue
+        if not isinstance(record, dict):
+            continue
+        resume_call = _render_resume_call(record)
+        if not resume_call:
+            continue
+        rendered.append(f"- resume: {resume_call}")
+    lines.extend(rendered if rendered else ["(none)"])
+    return lines
+
+
 def _write_state_snapshot(tmpdir: str, session_id: str) -> None:
     """Write the best-effort state-snapshot file.
 
@@ -292,6 +382,7 @@ def _write_state_snapshot(tmpdir: str, session_id: str) -> None:
 
         lines.extend(_build_active_plans_section(git_root))
         lines.extend(_build_handoffs_section(state_root))
+        lines.extend(_build_workflow_runs_section(tmpdir, session_id))
 
         capped = lines[:_TOTAL_LINE_CAP]
         state_path = os.path.join(tmpdir, f"compaction-state-{session_id}.md")

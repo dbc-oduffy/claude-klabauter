@@ -267,27 +267,39 @@ def test_bare_python_falls_back_to_ambient_without_venv(tmp_path, monkeypatch):
     assert result.stdout.strip() == f"{_EXP_INTERP} -m pytest"
 
 
-def test_explicit_interpreter_is_not_rewritten_by_venv(tmp_path, monkeypatch):
+def test_explicit_python3_is_rewritten_by_venv(tmp_path, monkeypatch):
     # Platform-shaped fixture, matching test_bare_python_prefers_repo_venv's
     # convention — a POSIX-only "bin/python" fixture is never is_executable()
     # on Windows (no PATHEXT-recognized extension), so this test would pass
-    # vacuously there without ever exercising the not-rewritten assertion.
+    # vacuously there without ever exercising the rewrite assertion.
+    #
+    # A bare `python3` token IS rewritten when a repo-local `.venv` exists —
+    # `_normalize_python_token`'s own docstring (unlike the core
+    # `normalize_python_token` sibling, which leaves `python3` untouched):
+    # venv-first resolution can resolve to a different interpreter than a
+    # bare `python3` on PATH would, so leaving `python3` unnormalized would
+    # skip the venv-first preference this function exists to provide. A
+    # stale "not rewritten" assertion here would pass on a POSIX box with no
+    # `.venv`-recognizing fixture quirk to expose it, which is why the
+    # fixture is platform-shaped rather than skipped.
     if os.name == "nt":
         venv_bin = tmp_path / ".venv" / "Scripts"
         venv_bin.mkdir(parents=True)
-        (venv_bin / "python.exe").write_text("")
+        interp = venv_bin / "python.exe"
+        interp.write_text("")
     else:
         venv_bin = tmp_path / ".venv" / "bin"
         venv_bin.mkdir(parents=True)
-        (venv_bin / "python").write_text("#!/bin/sh\n")
-        (venv_bin / "python").chmod(0o755)
+        interp = venv_bin / "python"
+        interp.write_text("#!/bin/sh\n")
+        interp.chmod(0o755)
     _write_local_md_with_cmd(str(tmp_path), "python3 -m pytest")
     monkeypatch.delenv("COORDINATOR_FAST_TEST_CMD", raising=False)
 
     result = rvc.resolve_fast_test_cmd(str(tmp_path))
 
     assert result.returncode == 0
-    assert result.stdout.strip() == "python3 -m pytest"
+    assert result.stdout.strip() == f"{shlex.quote(str(interp))} -m pytest"
 
 
 # ---------------------------------------------------------------------------
@@ -396,6 +408,77 @@ def test_full_unconfigured_both_tiers(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Issue #86: resolve_full_test_cmd's ceiling-compatibility augmentation
+# (worker bound, -rfE).
+# ---------------------------------------------------------------------------
+
+def test_full_adds_bounded_worker_count_when_xdist_available(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("COORDINATOR_FULL_TEST_CMD", "python3 -m pytest --timeout=300")
+    monkeypatch.setattr(core_rvc, "_pytest_plugin_available", lambda name: True)
+    monkeypatch.setattr(
+        "coordinator_core.install.derive_worker_cap.derive_cap", lambda: 4
+    )
+
+    result = rvc.resolve_full_test_cmd(str(tmp_path))
+    stderr = capsys.readouterr().err
+
+    assert result.returncode == 0
+    assert "-n 4" in result.stdout
+    assert "-rfE" in result.stdout
+    assert "step=worker-bound" in stderr
+
+
+def test_full_leaves_command_serial_when_xdist_unavailable(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("COORDINATOR_FULL_TEST_CMD", "python3 -m pytest --timeout=300")
+    monkeypatch.setattr(core_rvc, "_pytest_plugin_available", lambda name: name != "xdist")
+
+    result = rvc.resolve_full_test_cmd(str(tmp_path))
+    stderr = capsys.readouterr().err
+
+    assert result.returncode == 0
+    assert "-n " not in result.stdout
+    assert "--timeout=300" in result.stdout
+    assert "pytest-xdist not importable" in stderr
+
+
+def test_full_never_bounds_an_explicit_worker_count(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_FULL_TEST_CMD", "python3 -m pytest -n 2 --timeout=300")
+    monkeypatch.setattr(core_rvc, "_pytest_plugin_available", lambda name: True)
+
+    result = rvc.resolve_full_test_cmd(str(tmp_path))
+
+    assert result.stdout.count("-n ") == 1
+    assert "-n 2" in result.stdout
+
+
+def test_full_never_drops_a_configured_timeout(tmp_path, monkeypatch):
+    # The plugin probe runs on the resolver's interpreter, not the suite's.
+    monkeypatch.setenv("COORDINATOR_FULL_TEST_CMD", "python3 -m pytest --timeout=300")
+    monkeypatch.setattr(core_rvc, "_pytest_plugin_available", lambda name: name != "pytest_timeout")
+
+    result = rvc.resolve_full_test_cmd(str(tmp_path))
+
+    assert "--timeout=300" in result.stdout
+
+
+def test_full_leaves_existing_result_flag_untouched(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_FULL_TEST_CMD", "python3 -m pytest -rfE --timeout=300")
+    monkeypatch.setattr(core_rvc, "_pytest_plugin_available", lambda name: True)
+
+    result = rvc.resolve_full_test_cmd(str(tmp_path))
+
+    assert result.stdout.count("-rfE") == 1
+
+
+def test_full_non_pytest_command_untouched_by_augmentation(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_FULL_TEST_CMD", "pnpm run tier:full")
+
+    result = rvc.resolve_full_test_cmd(str(tmp_path))
+
+    assert result.stdout.strip() == "pnpm run tier:full"
+
+
+# ---------------------------------------------------------------------------
 # Tests 10-13: _normalize_python_token
 # ---------------------------------------------------------------------------
 
@@ -404,9 +487,17 @@ def test_normalize_bare_python():
     assert out == f"{_EXP_INTERP} .github/scripts/run-all-checks.py"
 
 
-def test_python3_untouched():
+def test_bare_python3_also_normalized():
+    # Unlike the core `normalize_python_token` sibling (which deliberately
+    # leaves `python3` untouched), this bin-shape function ALSO normalizes a
+    # bare `python3` token so venv-first resolution applies to it too — see
+    # `_normalize_python_token`'s own docstring. On POSIX this is easy to
+    # miss: the ambient PATH fallback resolves to the literal string
+    # "python3", so a stale "untouched" assertion passes there by
+    # coincidence rather than by actually exercising this behaviour. `_EXP_INTERP`
+    # forces the real resolved value (an absolute path on this Windows box).
     out = rvc._normalize_python_token("python3 -m pytest x")
-    assert out == "python3 -m pytest x"
+    assert out == f"{_EXP_INTERP} -m pytest x"
 
 
 def test_non_python_untouched():
@@ -421,6 +512,15 @@ def test_missing_interpreter_fails_loud(monkeypatch):
     # `shutil.which` leaves that branch resolving successfully. Starve both
     # so the "no interpreter at all" path is genuinely reached cross-platform.
     monkeypatch.setattr(rvc.sys, "executable", "")
+    # The Windows leg resolves via the shared ladder BEFORE either of the
+    # above (`_shared_console_python()` / `python_interp.resolve_console_python`),
+    # entirely independent of `shutil.which`/`sys.executable` — leaving it
+    # unpatched means a real console interpreter is still found on any
+    # Windows box with Python installed, and the "missing interpreter" path
+    # never actually fires. Starve it too so this test exercises the true
+    # no-interpreter-anywhere case rather than passing only on a POSIX box
+    # with no console-python ladder to sidestep.
+    monkeypatch.setattr(core_rvc, "_shared_console_python", lambda: None)
     try:
         rvc._normalize_python_token("python x.py")
         assert False, "expected InterpreterMissing"
