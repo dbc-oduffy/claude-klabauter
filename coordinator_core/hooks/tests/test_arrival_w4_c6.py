@@ -189,11 +189,11 @@ def test_mcp_tool_prefixes_derives_from_config_keys(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(ops, "_resolve_mcp_topology_path", lambda: topo)
     prefixes = ops.mcp_tool_prefixes()
-    assert prefixes == frozenset({"mcp__example_retrieval_repo__", "mcp__example_game_repo-control__"})
+    assert prefixes == frozenset({"mcp__project-rag__", "mcp__example_game_repo-control__"})
 
 
 def test_mcp_tool_prefix_span_matches_derived_prefix():
-    assert ops.MCP_TOOL_PREFIX_SPAN.match("mcp__example_retrieval_repo__project_file")
+    assert ops.MCP_TOOL_PREFIX_SPAN.match("mcp__project-rag__project_file")
 
 
 def test_resolve_mcp_topology_path_returns_path_or_none():

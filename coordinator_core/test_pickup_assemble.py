@@ -2325,6 +2325,31 @@ class TestTreeQuiescence:
         assert result["verdict"] == "quiet"
         assert result["repos"][0]["dirty"] == []
 
+    def test_degraded_local_read_is_distinguishable_from_clean(self, tmp_path, monkeypatch):
+        """P014-C6: a failed local porcelain read must surface as
+        `verdict == "degraded"` with evidence on the repo entry — never
+        silently reported as `"quiet"` (the R-10 fail-open this chunk
+        fixes: the old `_porcelain_dirty_paths` returned `[]` on
+        `returncode != 0`, indistinguishable from a genuinely clean scope)."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+
+        def fake_dirty_paths(worktree_root, *, pathspecs=None, **kwargs):
+            return {"degraded": True, "evidence": "git status --porcelain failed: returncode=128", "source": "fake"}
+
+        import coordinator_core.session.session_facts as session_facts_mod
+
+        monkeypatch.setattr(session_facts_mod, "_dirty_paths", fake_dirty_paths)
+
+        result = pa.compute_tree_quiescence(repo, ["README.md"])
+
+        assert result["verdict"] == "degraded"
+        assert result["verdict"] != "quiet"
+        local = result["repos"][0]
+        assert local["degraded"] is True
+        assert local["dirty"] == []
+        assert "returncode=128" in local["evidence"]
+
     def test_dirty_local_path_is_detected(self, tmp_path):
         repo = tmp_path / "repo"
         _init_repo(repo)
@@ -2430,15 +2455,24 @@ class TestTreeQuiescence:
     def test_windows_drive_letter_sibling_path_resolves_via_pathlib(self, tmp_path, monkeypatch):
         """AC12, moved to C1a: a sibling repo resolved to a Windows
         drive-letter path is handled through `pathlib.Path`, never a raw
-        string concatenation — the resolved `cwd` handed to `_run_git` must
-        be a `Path` instance carrying the registry value verbatim."""
-        calls: list[tuple[list[str], Path]] = []
+        string concatenation — the resolved `worktree_root` handed to the
+        P014-C1 producer must be a `Path` instance carrying the registry
+        value verbatim.
 
-        def fake_run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
-            calls.append((args, cwd))
-            return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+        Re-pointed (P014-C6): `_porcelain_dirty_paths` no longer spawns
+        through `pa._run_git` (it converts onto
+        `session_facts._dirty_paths`), so this intercepts the producer call
+        itself rather than a `_run_git` mock that would now sit downstream
+        of the spawn and never fire."""
+        calls: list[tuple[Path, tuple]] = []
 
-        monkeypatch.setattr(pa, "_run_git", fake_run_git)
+        def fake_dirty_paths(worktree_root: Path, *, pathspecs=None, **kwargs):
+            calls.append((worktree_root, tuple(pathspecs or ())))
+            return {"degraded": False, "value": {"paths": set(), "entries": []}, "source": "fake", "collision": False}
+
+        import coordinator_core.session.session_facts as session_facts_mod
+
+        monkeypatch.setattr(session_facts_mod, "_dirty_paths", fake_dirty_paths)
         windows_root = "C:\\Users\\test\\X\\claude-klabauter"
         monkeypatch.setattr(
             pa, "registry_get",
@@ -2449,11 +2483,11 @@ class TestTreeQuiescence:
         result = pa.compute_tree_quiescence(repo, ["claude-klabauter: coordinator_core\\dag.py"])
 
         assert result["verdict"] == "quiet"
-        sibling_calls = [c for c in calls if isinstance(c[1], Path) and str(c[1]) == windows_root]
+        sibling_calls = [c for c in calls if isinstance(c[0], Path) and str(c[0]) == windows_root]
         assert len(sibling_calls) == 1
-        args, cwd = sibling_calls[0]
-        assert isinstance(cwd, Path)
-        assert "coordinator_core\\dag.py" in args
+        worktree_root, pathspecs = sibling_calls[0]
+        assert isinstance(worktree_root, Path)
+        assert "coordinator_core\\dag.py" in pathspecs
 
     def test_drive_letter_local_path_is_never_misread_as_a_sibling_prefix(self, tmp_path):
         """A bare Windows-absolute local scope entry (`C:\\...`, no space
@@ -3566,9 +3600,12 @@ class TestSelfClaimUnmistakableAtBriefSurface:
 class TestExitCodeContractTransportFailure:
     """Finding 11 — `EXIT_TRANSPORT_FAIL` (exit 3) was never exercised.
     Covers both `_TransportFailure` (repo-root unresolvable) and, per
-    Finding 4b, the new catch-all backstop for an UNEXPECTED exception —
-    both must still emit a JSON decision-object-shaped payload, never a bare
-    exit code."""
+    Finding 4b, the catch-all backstop for an UNEXPECTED exception — both
+    must emit exit 3 with nothing on stdout and a non-empty stderr
+    diagnostic naming the failure (completion-evidence contract, DR-442,
+    `docs/plans/2026-09-23-completion-evidence-contract.md` C5): exit 3
+    means compute never ran, so a synthetic stdout envelope would assert a
+    decision no one computed."""
 
     def test_transport_failure_exit_three(self, monkeypatch, capsys):
         monkeypatch.setattr(pb, "resolve_repo_root", lambda *a, **k: None)
@@ -3577,9 +3614,8 @@ class TestExitCodeContractTransportFailure:
 
         assert rc == pa.EXIT_TRANSPORT_FAIL
         captured = capsys.readouterr()
-        payload = json.loads(captured.out.strip().splitlines()[-1])
-        assert payload["transport_failure"] is True
-        assert "error" in payload
+        assert captured.out == ""
+        assert captured.err != ""
 
     def test_unexpected_exception_still_exit_three_with_json_object(self, monkeypatch, capsys):
         def _boom(*a, **k):
@@ -3591,9 +3627,8 @@ class TestExitCodeContractTransportFailure:
 
         assert rc == pa.EXIT_TRANSPORT_FAIL
         captured = capsys.readouterr()
-        payload = json.loads(captured.out.strip().splitlines()[-1])
-        assert payload["transport_failure"] is True
-        assert "boom" in payload["error"]
+        assert captured.out == ""
+        assert "boom" in captured.err
 
 
 class TestBriefSpinoffKindVariants:
@@ -4296,10 +4331,13 @@ class TestBriefResultSitesCarryNarrationAndNextMove:
 
 
 class TestMainTransportFailurePayloadsCarryNextMove:
-    """AC15: `main()`'s three error-payload sites — `_TransportFailure`, the
-    generic-exception backstop, and the result-serialization backstop — must
-    each emit a `next_move`, not a bare `{"error": ..., "transport_failure":
-    True}`."""
+    """AC15, superseded by the completion-evidence contract (DR-442,
+    `docs/plans/2026-09-23-completion-evidence-contract.md` C5): `main()`'s
+    error-payload sites — `_TransportFailure` and the generic-exception
+    backstop — no longer synthesize a stdout JSON payload at all (compute
+    never ran, so there is no decision to narrate). Each must still emit
+    exit 3, empty stdout, and a non-empty stderr diagnostic naming the
+    failure."""
 
     def test_transport_failure_site_carries_next_move(self, monkeypatch, capsys):
         monkeypatch.setattr(pb, "resolve_repo_root", lambda *a, **k: None)
@@ -4307,10 +4345,9 @@ class TestMainTransportFailurePayloadsCarryNextMove:
         rc = pb.main(["brief", "state/handoffs/h1.md"])
 
         assert rc == pa.EXIT_TRANSPORT_FAIL
-        payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-        assert payload["transport_failure"] is True
-        assert payload.get("next_move")
-        assert payload.get("narration")
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err != ""
 
     def test_unexpected_exception_site_carries_next_move(self, monkeypatch, capsys):
         def _boom(*a, **k):
@@ -4321,10 +4358,9 @@ class TestMainTransportFailurePayloadsCarryNextMove:
         rc = pb.main(["brief", "state/handoffs/h1.md"])
 
         assert rc == pa.EXIT_TRANSPORT_FAIL
-        payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-        assert payload["transport_failure"] is True
-        assert payload.get("next_move")
-        assert payload.get("narration")
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "boom" in captured.err
 
     def test_serialization_failure_site_carries_next_move(self, monkeypatch, capsys):
         class _Unserializable:
@@ -4346,10 +4382,9 @@ class TestMainTransportFailurePayloadsCarryNextMove:
         rc = pb.main(["brief", "state/handoffs/h1.md"])
 
         assert rc == pa.EXIT_TRANSPORT_FAIL
-        payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-        assert payload["transport_failure"] is True
-        assert payload.get("next_move")
-        assert payload.get("narration")
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err != ""
 
 
 # ---------------------------------------------------------------------------

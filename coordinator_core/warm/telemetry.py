@@ -193,10 +193,20 @@ def record_client_cold_fallback(
     engine_root: Optional[Path] = None,
     op: Optional[str] = None,
     pid: Optional[int] = None,
+    reason: Optional[str] = None,
 ) -> None:
     """Append one line recording a cold fallback observed by a CLIENT
     process -- the instrument `warm/client.py`'s `try_warm_dispatch` calls
     on every outcome that sends its caller down the cold dispatch path.
+
+    `reason` (AC3, plan 2026-09-06-the-p90-reopens-on-a-measurement-not-a-
+    rebuild.md § C2): one of `warm.client.COLD_BUCKET_SPAWN_TRIGGERING_MISS`
+    or `warm.client.COLD_BUCKET_DRAIN_WINDOW_ZERO_BYTE_CLOSE` -- the two
+    shared buckets every `_try_warm_dispatch_inner` None-return site
+    classifies into, using (not replacing) `client._cold_reason`'s existing
+    never-overwrite/first-reason-wins mechanism. Omitted, like `op`/`pid`,
+    when the caller cannot name one, so the pre-AC3 rows on disk keep their
+    exact shape.
 
     An APPEND log, matching `ServerTelemetry.flush()`'s own shape and for
     the same reason: many short-lived client processes each contribute at
@@ -224,6 +234,8 @@ def record_client_cold_fallback(
         record["op"] = op
     if pid is not None:
         record["pid"] = pid
+    if reason is not None:
+        record["reason"] = reason
     path = client_cold_path(engine_root)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

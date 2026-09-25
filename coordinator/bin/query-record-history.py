@@ -83,6 +83,7 @@ snapshot a derived copy — every invocation re-derives from live git history.
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import re
@@ -224,18 +225,33 @@ def main(argv: list[str] | None = None) -> int:
         print(msg, file=sys.stderr)
         return 2
 
-    if args.since is not None and not _SINCE_RE.match(args.since):
-        print(
-            f"query-record-history: --since {args.since!r} is not an ISO date "
-            "(YYYY-MM-DD)",
-            file=sys.stderr,
-        )
-        return 2
+    if args.since is not None:
+        since_ok = bool(_SINCE_RE.match(args.since))
+        if since_ok:
+            try:
+                datetime.date.fromisoformat(args.since)
+            except ValueError:
+                since_ok = False
+        if not since_ok:
+            print(
+                f"query-record-history: --since {args.since!r} is not an ISO date "
+                "(YYYY-MM-DD)",
+                file=sys.stderr,
+            )
+            return 2
 
     # Comma-split multi-value (`--type a,b`), not a repeatable flag. A single
     # value with no comma passes through as a bare string so the op's
     # existing single-type response envelope stays byte-for-byte (P083-C4 R3).
-    type_members = [t for t in args.type_.split(",") if t]
+    raw_type_members = args.type_.split(",")
+    if any(not t for t in raw_type_members):
+        print(
+            f"query-record-history: --type {args.type_!r} has an empty member "
+            "(leading/trailing/doubled comma)",
+            file=sys.stderr,
+        )
+        return 2
+    type_members = raw_type_members
     record_type: str | list[str] = type_members[0] if len(type_members) == 1 else type_members
 
     repo_root = os.path.abspath(args.root) if args.root else _resolve_repo_root()

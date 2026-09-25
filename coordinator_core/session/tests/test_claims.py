@@ -45,6 +45,7 @@ from coordinator_core.session import (
     claims,
     core,
     scope,
+    session_facts,
     shape,
     touch_record,
 )
@@ -3127,6 +3128,31 @@ class TestReleasePhantomClaims:
             assert name not in offer["safe_paths"]
 
 
+def _dirty_paths_computed(paths: set) -> dict:
+    """A `session_facts._dirty_paths` computed-record stub, for monkeypatching
+    the producer seam `_warn_dead_holder_residue` (P014-C3) now reads through."""
+    return {
+        "degraded": False,
+        "value": {"paths": paths, "entries": []},
+        "source": "x",
+        "collision": bool(paths),
+    }
+
+
+def _dirty_paths_degraded(
+    evidence: str = "returncode=128 stderr='fatal: not a git repository'",
+) -> dict:
+    """A `session_facts._dirty_paths` degraded-record stub, same seam as above."""
+    return {"degraded": True, "evidence": evidence, "source": "x"}
+
+
+def _write_holder_record(record_dir: Path, sid: str, *paths: str) -> None:
+    record_dir.mkdir(parents=True, exist_ok=True)
+    with open(record_dir / "touch-record.jsonl", "wb") as fh:
+        for p in paths:
+            fh.write(touch_record.encode_line(session_id=sid, agent_id=None, verb="T", path=p))
+
+
 class TestDeadHolderResidueWarning:
     """A stale takeover is correct about the CLAIM and silent about the WORK.
 
@@ -3149,11 +3175,16 @@ class TestDeadHolderResidueWarning:
                     )
                 )
 
+    _computed = staticmethod(_dirty_paths_computed)
+    _degraded = staticmethod(_dirty_paths_degraded)
+
     def test_residue_in_a_live_session_dir_is_named(self, tmp_path, monkeypatch, capsys):
         sid = "11111111-2222-3333-4444-555555555555"
         sdir = tmp_path / ".git" / "coordinator-sessions" / sid
         self._holder_record(sdir, sid, "a.py", "b.py")
-        monkeypatch.setattr(claims, "_dirty_paths", lambda cwd=None: {"a.py", "zzz.py"})
+        monkeypatch.setattr(
+            session_facts, "_dirty_paths", lambda *a, **k: self._computed({"a.py", "zzz.py"})
+        )
         monkeypatch.setattr(
             claims, "_dead_holder_record_dir", lambda held_sid, cwd=None: str(sdir)
         )
@@ -3176,7 +3207,9 @@ class TestDeadHolderResidueWarning:
         base.mkdir(parents=True, exist_ok=True)
         monkeypatch.setattr(core, "sessions_dir", lambda cwd=None: str(base))
         monkeypatch.setattr(core, "session_dir", lambda s, cwd=None: "")
-        monkeypatch.setattr(claims, "_dirty_paths", lambda cwd=None: {"orphan.py"})
+        monkeypatch.setattr(
+            session_facts, "_dirty_paths", lambda *a, **k: self._computed({"orphan.py"})
+        )
 
         assert claims._dead_holder_record_dir(sid, str(tmp_path)) == str(archived)
 
@@ -3191,7 +3224,48 @@ class TestDeadHolderResidueWarning:
         sid = "22222222-3333-4444-5555-666666666666"
         sdir = tmp_path / ".git" / "coordinator-sessions" / sid
         self._holder_record(sdir, sid, "committed.py")
-        monkeypatch.setattr(claims, "_dirty_paths", lambda cwd=None: set())
+        monkeypatch.setattr(session_facts, "_dirty_paths", lambda *a, **k: self._computed(set()))
+        monkeypatch.setattr(
+            claims, "_dead_holder_record_dir", lambda held_sid, cwd=None: str(sdir)
+        )
+        claims._warn_dead_holder_residue("plan", "p", sid, str(tmp_path))
+        assert capsys.readouterr().err == ""
+
+    def test_degraded_with_claimed_paths_prints_degraded_line(self, tmp_path, monkeypatch, capsys):
+        """P014-C3's declared behaviour change: a `git status` failure on the
+        takeover path is no longer silent (fail-open) when the dead holder
+        claimed at least one path -- it prints a degraded-evidence line
+        distinguishable from both a clean tree and residue."""
+        sid = "66666666-7777-8888-9999-aaaaaaaaaaaa"
+        sdir = tmp_path / ".git" / "coordinator-sessions" / sid
+        self._holder_record(sdir, sid, "a.py")
+        monkeypatch.setattr(
+            session_facts,
+            "_dirty_paths",
+            lambda *a, **k: self._degraded("returncode=127 stderr='git: not found'"),
+        )
+        monkeypatch.setattr(
+            claims, "_dead_holder_record_dir", lambda held_sid, cwd=None: str(sdir)
+        )
+
+        claims._warn_dead_holder_residue("plan", "some-plan", sid, str(tmp_path))
+
+        err = capsys.readouterr().err
+        assert "'a.py'" in err, err
+        assert "git status failed" in err, err
+        assert "whether they are uncommitted is unknown" in err, err
+
+    def test_degraded_with_no_claimed_paths_is_silent(self, tmp_path, monkeypatch, capsys):
+        """No claimed paths at all short-circuits before the producer is even
+        called -- a degraded read with nothing claimed prints nothing, same as
+        the clean-tree case."""
+        sid = "77777777-8888-9999-aaaa-bbbbbbbbbbbb"
+        sdir = tmp_path / ".git" / "coordinator-sessions" / sid
+        sdir.mkdir(parents=True, exist_ok=True)
+        (sdir / "touch-record.jsonl").write_bytes(b"")
+        monkeypatch.setattr(
+            session_facts, "_dirty_paths", lambda *a, **k: self._degraded()
+        )
         monkeypatch.setattr(
             claims, "_dead_holder_record_dir", lambda held_sid, cwd=None: str(sdir)
         )
@@ -3212,10 +3286,10 @@ class TestDeadHolderResidueWarning:
         claims._warn_dead_holder_residue("plan", "p", "sid", str(tmp_path))
 
         # Third leg, and the one the first version of this test missed
-        # (reviewer P2): _dirty_paths carries its own internal try/except, so
+        # (reviewer P2): the producer carries its own internal try/except, so
         # nothing escapes it TODAY. Exploding it here pins that the OUTER
-        # try/except is what actually carries this leg -- so removing
-        # _dirty_paths's internal guard later cannot quietly make claim-taking
+        # try/except is what actually carries this leg -- so removing the
+        # producer's internal guard later cannot quietly make claim-taking
         # raise.
         sid = "33333333-4444-5555-6666-777777777777"
         sdir = tmp_path / ".git" / "coordinator-sessions" / sid
@@ -3224,7 +3298,7 @@ class TestDeadHolderResidueWarning:
             claims, "_dead_holder_record_dir", lambda held_sid, cwd=None: str(sdir)
         )
         monkeypatch.setattr(claims, "_read_holder_claims", lambda sink: ({"x.py"}, True))
-        monkeypatch.setattr(claims, "_dirty_paths", _boom)
+        monkeypatch.setattr(session_facts, "_dirty_paths", _boom)
         claims._warn_dead_holder_residue("plan", "p", sid, str(tmp_path))
 
     def test_unresolvable_holder_is_lookup_fail_not_error(self, tmp_path, monkeypatch):
@@ -3243,44 +3317,32 @@ class TestDeadHolderResidueParsing:
     stop a caller reaching by default.
     """
 
-    def test_rename_reports_both_sides(self, monkeypatch):
-        """`git status --porcelain` renders a rename as `R  old -> new`. Parsed
-        naively that yields the literal "old -> new", matching no real path, so
-        a renamed residue path vanishes from the intersection. Rename-in-progress
-        is a plausible successor-restructuring shape, so both sides count."""
-        out = "R  old/name.py -> new/name.py\n M plain.py\n?? untracked.py\n"
-
-        class _Result:
-            stdout = out
-            # `_dirty_paths` gained a `result.timed_out or result.returncode
-            # == 127` guard after this stub was written, and the stub was not
-            # updated -- it raised AttributeError on `.returncode` instead of
-            # exercising the rename-splitting this test is about, so the
-            # assertions below had not run against production in some time.
-            returncode = 0
-            timed_out = False
-
-        # Patch `run_git`, NOT `subprocess.run`. This stub has now decayed
-        # TWICE by the same mechanism, and the second time was worse than the
-        # first. `_dirty_paths` moved off a direct `subprocess.run` onto
-        # `coordinator_core.git.run.run_git`; the old patch target stopped
-        # intercepting anything, and instead of erroring the test ran
-        # `git status --porcelain` against the REAL repo and asserted
-        # `"old/name.py" in <this checkout's actual dirty files>`. That fails
-        # or passes on working-tree state unrelated to the code under test --
-        # on a clean tree it is a false green.
-        #
-        # `_dirty_paths` imports `run_git` inside its own body, so patching
-        # the SOURCE module is what takes effect; there is no module-level
-        # attribute on `claims` to replace.
+    def test_rename_reports_both_sides(self, tmp_path, monkeypatch, capsys):
+        """`_warn_dead_holder_residue` (P014-C3) now reads dirty paths through
+        `session_facts._dirty_paths(keep_rename_source=True)`, which is the
+        producer's own contract for surfacing both halves of a rename -- the
+        porcelain-line splitting itself is that producer's test surface, not
+        this module's. This pins that claims.py passes `keep_rename_source=True`
+        (a residue claim on either half of an in-progress rename is caught),
+        by asserting the OLD half alone still intersects and is reported."""
+        sid = "88888888-9999-aaaa-bbbb-cccccccccccc"
+        sdir = tmp_path / ".git" / "coordinator-sessions" / sid
+        _write_holder_record(sdir, sid, "old/name.py")
         monkeypatch.setattr(
-            "coordinator_core.git.run.run_git", lambda *a, **k: _Result()
+            session_facts,
+            "_dirty_paths",
+            lambda *a, **k: _dirty_paths_computed({"old/name.py", "new/name.py"})
+            if k.get("keep_rename_source")
+            else _dirty_paths_computed(set()),
         )
-        got = claims._dirty_paths(".")
-        assert "old/name.py" in got, got
-        assert "new/name.py" in got, got
-        assert "plain.py" in got and "untracked.py" in got, got
-        assert not any("->" in p for p in got), f"unsplit rename leaked through: {got}"
+        monkeypatch.setattr(
+            claims, "_dead_holder_record_dir", lambda held_sid, cwd=None: str(sdir)
+        )
+
+        claims._warn_dead_holder_residue("plan", "p", sid, str(tmp_path))
+
+        err = capsys.readouterr().err
+        assert "old/name.py" in err, err
 
     def test_archive_match_is_date_anchored_not_a_bare_prefix(self, tmp_path, monkeypatch):
         """A session id that is a string-prefix of another must not match its
@@ -3325,3 +3387,93 @@ class TestDeadHolderResidueParsing:
         monkeypatch.setattr(core, "session_dir", lambda s, cwd=None: str(live))
 
         assert claims._dead_holder_record_dir(sid, str(tmp_path)) == str(live)
+
+
+# ---------------------------------------------------------------------------
+# P026-C4 -- AC10's report-only half (docs/plans/2026-09-07-a-claim-is-
+# written-twice-and-nothing-compares-them.md). All twelve resolve_session_id
+# call sites carry a written verdict and report a warm-uncarried fallback;
+# NONE refuses in this row -- that is C5's job, gated separately. These
+# tests pin the "no site refuses" falsifier for the eight sites in this
+# module and the reporting mechanism itself.
+# ---------------------------------------------------------------------------
+
+_SERVER_OWNER = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+
+
+class TestReportWarmUncarriedResolve:
+    """Direct coverage of `claims._report_warm_uncarried_resolve`."""
+
+    def test_fires_when_warm_and_uncarried(self, monkeypatch, capsys):
+        for var in core.SESSION_ENV_PRECEDENCE:
+            monkeypatch.setenv(var, _SERVER_OWNER)
+        with core.warm_served_request():
+            claims._report_warm_uncarried_resolve("some_site")
+        err = capsys.readouterr().err
+        assert "claims.some_site" in err
+        assert "report-only, not refused" in err
+
+    def test_silent_when_carried(self, monkeypatch, capsys):
+        for var in core.SESSION_ENV_PRECEDENCE:
+            monkeypatch.setenv(var, _SERVER_OWNER)
+        with core.warm_served_request():
+            with core.session_identity_override(_SERVER_OWNER):
+                claims._report_warm_uncarried_resolve("some_site")
+        assert capsys.readouterr().err == ""
+
+    def test_silent_when_cold(self, monkeypatch, capsys):
+        for var in core.SESSION_ENV_PRECEDENCE:
+            monkeypatch.setenv(var, _SERVER_OWNER)
+        claims._report_warm_uncarried_resolve("some_site")
+        assert capsys.readouterr().err == ""
+
+
+class TestAcquireSideSitesReportOnlyUnderC4:
+    """The five acquire-side sites (AC10) keep `resolve_session_id` and
+    report, never refuse, in this row -- C5 (a later, gated chunk) is what
+    converts them to `attributable_session_id` refusal."""
+
+    def test_claim_artifact_does_not_refuse_warm_uncarried(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        repo = _make_repo(tmp_path)
+        for var in core.SESSION_ENV_PRECEDENCE:
+            monkeypatch.setenv(var, _SERVER_OWNER)
+        with core.warm_served_request():
+            ok = claims.claim_handoff("some-handoff.md", cwd=str(repo))
+        assert ok is True, (
+            "P026-C4: acquire-side sites report a warm-uncarried resolution "
+            "but must not refuse -- that is C5's job"
+        )
+        assert "claims.claim_artifact" in capsys.readouterr().err
+
+    def test_claim_plan_does_not_refuse_warm_uncarried(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        repo = _make_repo(tmp_path)
+        (repo / "docs" / "plans").mkdir(parents=True)
+        (repo / "docs" / "plans" / "some-plan.md").write_text("x")
+        for var in core.SESSION_ENV_PRECEDENCE:
+            monkeypatch.setenv(var, _SERVER_OWNER)
+        with core.warm_served_request():
+            ok = claims.claim_plan("some-plan", cwd=str(repo))
+        assert ok is True
+        assert "claims.claim_plan" in capsys.readouterr().err
+
+
+class TestReleaseSideSitesKeepResolveSessionIdPermanently:
+    """The three release/reap sites keep `resolve_session_id` permanently
+    (never hardened) -- hardening a release path would make a mis-attributed
+    claim unreleasable. They still report a warm-uncarried fallback."""
+
+    def test_release_artifact_still_releases_under_warm_uncarried(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        repo = _make_repo(tmp_path)
+        _make_claim(repo, "handoff", "some-handoff.md", session_id=_SERVER_OWNER)
+        for var in core.SESSION_ENV_PRECEDENCE:
+            monkeypatch.setenv(var, _SERVER_OWNER)
+        with core.warm_served_request():
+            ok = claims.release_artifact("handoff", "some-handoff.md", cwd=str(repo))
+        assert ok is True
+        assert "claims.release_artifact" in capsys.readouterr().err

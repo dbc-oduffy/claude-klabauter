@@ -86,7 +86,7 @@ class TestDistillFateSurvivesDelivery:
     ):
         sender_repo = _make_sender_git_repo(tmp_path)
         to_repo = _make_receiver_git_repo(tmp_path, name="to-repo")
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": to_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": to_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(
             sender_repo, "distill-fate-topic",
@@ -117,7 +117,7 @@ class TestDistillFateSurvivesDelivery:
         """
         sender_repo = _make_sender_git_repo(tmp_path)
         to_repo = _make_receiver_git_repo(tmp_path, name="to-repo")
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": to_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": to_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(
             sender_repo, "distill-fate-ratify-topic",
@@ -145,7 +145,7 @@ class TestDistillFateSurvivesDelivery:
         """
         sender_repo = _make_sender_git_repo(tmp_path)
         to_repo = _make_receiver_git_repo(tmp_path, name="to-repo")
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": to_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": to_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(
             sender_repo, "distill-fate-repro-topic",

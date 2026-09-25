@@ -88,6 +88,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.git.git_dir import resolve_git_common_dir
+from coordinator_core.git.push_stall import PUSH_STALL_MARKER
 from coordinator_core.win_portability import no_console_creationflags
 
 
@@ -388,6 +389,12 @@ _PAT_TRANSIENT_PACK_CONTENTION = re.compile(
     re.MULTILINE,
 )
 
+# Matches PUSH_STALL_MARKER's stable prefix (the "{secs}"-formatted
+# suffix varies per push, so the pattern only pins the text ahead of it).
+_PAT_PUSH_STALL = re.compile(
+    re.escape(PUSH_STALL_MARKER.split("{secs}")[0]),
+)
+
 
 def classify_error(stderr_text: str) -> str:
     """Classify git-push stderr to decide whether retry is safe.
@@ -399,6 +406,12 @@ def classify_error(stderr_text: str) -> str:
     """
     if not stderr_text or not stderr_text.strip():
         return "empty-stderr"
+    # Directly after the empty-stderr check, ahead of every other arm
+    # (network/timeout/auth included): a stall-marked blob is a partial
+    # pack-transfer that must not be claimed by a more specific-looking
+    # pattern below -- it is indeterminate, not a retry-worthy timeout.
+    if _PAT_PUSH_STALL.search(stderr_text):
+        return "push-stalled"
     if _PAT_GH_PUSH_PROTECTION.search(stderr_text):
         return "gh-push-protection"
     if _PAT_GH_SIZE_LIMIT.search(stderr_text):

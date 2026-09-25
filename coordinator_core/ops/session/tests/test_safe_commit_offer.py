@@ -1335,6 +1335,255 @@ class TestAutoCommitSession:
         assert "NOT committed" in rendered
 
 
+class TestCommitGroupPhantomPreFilter:
+    """T3 (docs/plans/2026-09-07-a-confirmed-absent-caller-path-refuses-the-
+    commit.md § Design item 6) -- `_commit_group` pre-filters a declared
+    deletion absent from HEAD before it ever reaches `commit_paths`, so a
+    claim-recorder-defect phantom (state/bug-backlog/2026-09-06-...-
+    0f8bc9499721.yaml) is SKIPPED and reported rather than blocking the
+    close. Real git throughout: the classification and the `commit_paths`
+    refusal shape it is verifying are both real-git behaviour."""
+
+    def _report_of(self, group, worktree_root=None):
+        return {
+            "session_id": "mine",
+            "groups": [group],
+            "excluded": [],
+            "failed_groups": [],
+        }
+
+    def test_a_real_edit_plus_a_phantom_deletion_lands_the_edit_and_skips_the_phantom(
+        self, tmp_path
+    ):
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        (repo / "a.py").write_text("a")
+        scope.touch("mine", "a.py", cwd=str(repo))
+
+        result = asyncio.run(
+            safe_commit_offer._commit_group(
+                str(repo),
+                {"paths": ["a.py", "ghost.py"], "message": "m"},
+                "mine",
+            )
+        )
+
+        assert result["committed"] is True
+        assert result["commit_failed"] is False
+        assert result["declared_absent_from_head"] == ["ghost.py"]
+        landed = subprocess.run(
+            ["git", "show", "--name-only", "--format=", result["sha"]],
+            cwd=repo, capture_output=True, text=True,
+            **no_console_creationflags(),
+        ).stdout.split()
+        assert landed == ["a.py"], landed
+
+        rendered = safe_commit_offer._render_report(self._report_of(result), str(repo))
+        assert "SKIPPED 1 declared path(s)" in rendered
+        assert "ghost.py" in rendered
+
+    def test_phantom_only_group_is_a_benign_no_op_never_already_committed(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+
+        result = asyncio.run(
+            safe_commit_offer._commit_group(
+                str(repo), {"paths": ["ghost.py"], "message": "m"}, "mine"
+            )
+        )
+
+        assert result["committed"] is False
+        assert result["commit_failed"] is False
+        assert result["reason"] == "phantom-deletions-only"
+        assert result["declared_absent_from_head"] == ["ghost.py"]
+
+        rendered = safe_commit_offer._render_report(self._report_of(result), str(repo))
+        assert "SKIPPED 1 declared path(s)" in rendered
+        assert "ghost.py" in rendered
+        assert "already committed" not in rendered
+        assert "NOT committed" not in rendered
+
+    def test_a_clean_tracked_path_plus_a_phantom_raises_nothing_to_commit_and_still_reports_skipped(
+        self, tmp_path
+    ):
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        (repo / "a.py").write_text("a")
+        subprocess.run(
+            ["git", "add", "a.py"], cwd=repo, check=True, **no_console_passthrough_kwargs()
+        )
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "add a"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
+        )
+        scope.touch("mine", "a.py", cwd=str(repo))  # claimed, but unmodified since HEAD
+
+        result = asyncio.run(
+            safe_commit_offer._commit_group(
+                str(repo),
+                {"paths": ["a.py", "ghost.py"], "message": "m"},
+                "mine",
+            )
+        )
+
+        assert result["committed"] is False
+        assert result["commit_failed"] is True
+        assert result["declared_absent_from_head"] == ["ghost.py"]
+
+        rendered = safe_commit_offer._render_report(self._report_of(result), str(repo))
+        assert "NOT committed" in rendered
+        assert "SKIPPED 1 declared path(s)" in rendered
+        assert "ghost.py" in rendered
+
+    def test_a_head_tracked_member_deleted_on_disk_still_lands_as_a_real_deletion(
+        self, tmp_path
+    ):
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        (repo / "a.py").write_text("a")
+        subprocess.run(
+            ["git", "add", "a.py"], cwd=repo, check=True, **no_console_passthrough_kwargs()
+        )
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "add a"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
+        )
+        (repo / "a.py").unlink()
+        scope.touch("mine", "a.py", cwd=str(repo))
+
+        result = asyncio.run(
+            safe_commit_offer._commit_group(
+                str(repo), {"paths": ["a.py"], "message": "remove a.py"}, "mine"
+            )
+        )
+
+        assert result["committed"] is True
+        assert result["declared_absent_from_head"] == []
+        landed = subprocess.run(
+            ["git", "show", "--name-only", "--format=", result["sha"]],
+            cwd=repo, capture_output=True, text=True,
+            **no_console_creationflags(),
+        ).stdout.split()
+        assert landed == ["a.py"], landed
+
+    def test_a_forced_none_spine_passes_the_set_through_unfiltered(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+
+        monkeypatch.setattr(
+            safe_commit_offer, "partition_declared_deletions", lambda *a, **k: None
+        )
+
+        result = asyncio.run(
+            safe_commit_offer._commit_group(
+                str(repo), {"paths": ["ghost.py"], "message": "m"}, "mine"
+            )
+        )
+
+        # Nothing was classified by this call's own pre-filter (the spine
+        # could not be read), so nothing is reported absent here -- the
+        # engine (its own spine read) is what disposes of `ghost.py`.
+        assert result["declared_absent_from_head"] == []
+        assert result["commit_failed"] is True
+
+    def test_a_peer_commit_between_the_prefilter_and_the_engine_raises_phantom(
+        self, tmp_path, monkeypatch
+    ):
+        """T4 (§ Design item 4, 'two windows, both accepted and bounded').
+
+        `_commit_group`'s pre-filter classes `peer.py` tracked -- it is, at
+        the moment the pre-filter reads the spine. A peer lands a commit
+        that removes it from HEAD before `commit_paths` runs its own spine
+        read. The outcome is deterministic: `PhantomDeletionDeclared`, never
+        a disjunction with a CAS refusal, because `commit_paths` captures
+        `old_head` AFTER the peer commit, so CAS compares against a ref that
+        has not moved. Nothing partial is written, and the group is recorded
+        `commit_failed=True`.
+
+        Drives the window through the seam that already exists --
+        `monkeypatch.setattr(safe_commit_offer, "commit_paths", wrapper)`,
+        the module-level binding `_commit_group` calls through -- rather
+        than adding a production hook. `wrapper` lands the peer commit and
+        then calls the real `commit_paths`.
+        """
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        (repo / "peer.py").write_text("peer\n")
+        subprocess.run(
+            ["git", "add", "peer.py"], cwd=repo, check=True, **no_console_passthrough_kwargs()
+        )
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "add peer.py"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
+        )
+        (repo / "a.py").write_text("a")
+        scope.touch("mine", "a.py", cwd=str(repo))
+        scope.touch("mine", "peer.py", cwd=str(repo))
+        # A declared deletion, from THIS group's own view: `peer.py` is gone
+        # from disk, and at the pre-filter's spine read HEAD still carries
+        # it, so the pre-filter classes it tracked, not phantom.
+        (repo / "peer.py").unlink()
+
+        real_commit_paths = safe_commit_offer.commit_paths
+
+        def wrapper(worktree_root, paths, message, **kwargs):
+            # The peer lands the SAME deletion first, between the
+            # pre-filter's spine read (already done -- `peer.py` classed
+            # tracked) and this, `commit_paths`' own spine read. HEAD no
+            # longer carries `peer.py` by the time the engine reads it.
+            subprocess.run(
+                ["git", "add", "--", "peer.py"], cwd=repo, check=True,
+                **no_console_passthrough_kwargs(),
+            )
+            subprocess.run(
+                ["git", "commit", "-q", "-m", "peer removes peer.py"], cwd=repo,
+                check=True, **no_console_passthrough_kwargs(),
+            )
+            return real_commit_paths(worktree_root, paths, message, **kwargs)
+
+        monkeypatch.setattr(safe_commit_offer, "commit_paths", wrapper)
+        before = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True,
+            **no_console_creationflags(),
+        ).stdout.strip()
+
+        result = asyncio.run(
+            safe_commit_offer._commit_group(
+                str(repo),
+                {"paths": ["a.py", "peer.py"], "message": "m"},
+                "mine",
+            )
+        )
+
+        assert result["committed"] is False
+        assert result["commit_failed"] is True
+        assert "peer.py" in (result["error"] or "")
+
+        after = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True,
+            **no_console_creationflags(),
+        ).stdout.strip()
+        # The peer's own commit landed; nothing from THIS group did.
+        assert after != before
+        landed_files = subprocess.run(
+            ["git", "show", "--name-only", "--format=", after],
+            cwd=repo, capture_output=True, text=True, **no_console_creationflags(),
+        ).stdout.split()
+        assert landed_files == ["peer.py"]
+
+        # A re-run against the moved HEAD skips the now-absent member and
+        # lands the real path. `commit_paths` is unpatched: the peer's own
+        # commit already landed, so nothing left to intercept.
+        monkeypatch.undo()
+        rerun = asyncio.run(
+            safe_commit_offer._commit_group(
+                str(repo), {"paths": ["a.py", "peer.py"], "message": "m"}, "mine"
+            )
+        )
+        assert rerun["committed"] is True
+        assert rerun["declared_absent_from_head"] == ["peer.py"]
+
+
 # ---------------------------------------------------------------------------
 # (f) The op handler
 # ---------------------------------------------------------------------------
@@ -2162,7 +2411,7 @@ def _make_memo_send_claude_home(tmp_path, receiver_repo):
     (machine_local / "registry.toml").write_text("schema = 1\n", encoding="utf-8")
     toml_val = str(receiver_repo).replace("\\", "\\\\").replace('"', '\\"')
     (machine_local / "registry.local.toml").write_text(
-        f'"repos.example_retrieval_repo" = "{toml_val}"\n', encoding="utf-8"
+        f'"repos.project_rag" = "{toml_val}"\n', encoding="utf-8"
     )
     return claude_home
 
@@ -2193,10 +2442,6 @@ class TestMemoSendDeclaresOutboxWrites:
         monkeypatch.setenv("CLAUDE_SESSION_ID", "mine")
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
-        # The fixture receiver's inbox has no drain history, so memo.send's
-        # one-shot no-reader warning would refuse the first send before the
-        # ledger write this test guards.
-        monkeypatch.setenv("COORDINATOR_CAP_PEER_EMS_REACHABLE", "1")
 
         outbox = sender / "state" / "memo-outbox"
         outbox.mkdir(parents=True, exist_ok=True)

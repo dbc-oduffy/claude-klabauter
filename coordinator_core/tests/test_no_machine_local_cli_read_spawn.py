@@ -120,8 +120,8 @@ _SURFACE_MODULES = frozenset(
 # fix is to convert the site and remove its row, never to add rows freely.
 KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
     {
-        "coordinator/bin/claude-doe.py:592",
-        "coordinator/bin/claude-doe.py:613",
+        "coordinator/bin/claude-doe.py:597",
+        "coordinator/bin/claude-doe.py:618",
         "coordinator/bin/lib/git_hook_install.py:199",
         "coordinator/lib/resolve-coordinator-clone.py:225",
         "coordinator_core/engine_root.py:193",
@@ -130,35 +130,24 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
         "coordinator_core/ops/new_project_scaffold.py:164",
         "coordinator_core/ops/render_template_tree.py:99",
         "coordinator_core/ops/repo_bootstrap.py:135",
-        "coordinator_core/resolve_coordinator_clone.py:168",
         # 2026-08-20 C3 (resolver-call-indirection widening) -- this file's own
         # two sites, see "2026-08-20 C3 WIDENING" note below.
         "coordinator/bin/lib/coordinator_registry.py:174",
         "coordinator/bin/lib/coordinator_registry.py:439",
         # 2026-08-20 C3 widening also surfaced the pre-existing `_machine_local_get`
         # helper family below -- same shape, previously invisible. See note below.
-        "coordinator/bin/coordinator-doc-new.py:731",
-        "coordinator/bin/coordinator-doc-new.py:781",
         "coordinator/bin/coordinator-lesson-add.py:207",
         "coordinator/bin/fan-out-dispatch.py:372",
         "coordinator/bin/gen-claude-klabauter-root-pointer.py:139",
+        # The shared `_machine_local_get` helper: the per-module copies that
+        # delegate to it are one site here, not one each.
+        "coordinator_core/_claude_klabauter_root.py:104",
         # `cc_invoke.py:396` moved (not converted) to `engine_bootstrap.py:197`
         # in the C2 CLI-bootstrap-tax module split -- see the "cc_invoke.py
         # helper family" note below.
         "coordinator/bin/lib/engine_bootstrap.py:197",
-        "coordinator/bin/lib/cli_shared.py:233",
-        "coordinator/bin/lib/cli_shared.py:281",
         "coordinator/bin/tests/test_claude_machine_local.py:110",
         "coordinator/bin/workday-start-step0.py:206",
-        "coordinator_core/ops/check_arch_audit_staleness.py:118",
-        "coordinator_core/ops/check_weekly_staleness.py:123",
-        "coordinator_core/ops/deliverable_rollup.py:129",
-        "coordinator_core/ops/list_week_changelog.py:100",
-        "coordinator_core/ops/queue_append.py:791",
-        "coordinator_core/ops/workday_complete_backfill_scan.py:202",
-        "coordinator_core/orientation/regenerate_cache.py:300",
-        "coordinator_core/pyresolve.py:168",
-        "coordinator_core/roadmap/audit.py:221",
         # `repos.<key>` resolved via the 4-rung autodiscovery ladder, same
         # correctness-boundary class as the other `repos.*` rows above (see
         # "2026-08-16 REPOS.* LADDER-LOSS FIX" below) -- `registry_get` only

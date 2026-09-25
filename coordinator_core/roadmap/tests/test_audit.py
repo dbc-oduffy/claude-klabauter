@@ -75,6 +75,8 @@ def _write_stub(
     number: Optional[int] = None,
     kind: str = "spinoff-roadmap",
     covers: Optional[List[str]] = None,
+    blocks: Optional[List[str]] = None,
+    loe: Optional[str] = None,
 ) -> None:
     # `kind` defaults to the retired
     # spelling for byte-parity with every pre-existing caller, but callers
@@ -99,6 +101,8 @@ def _write_stub(
         lines.append(f"wave: {wave}")
     if gate_dependency is not None:
         lines.append(f'gate_dependency: "{gate_dependency}"')
+    if loe is not None:
+        lines.append(f"loe: {loe}")
     if covers is not None:
         lines.append("covers: [" + ", ".join(covers) + "]")
     if blocked_by:
@@ -107,6 +111,10 @@ def _write_stub(
             lines.append(f"  - {dep}")
     else:
         lines.append("blocked_by: []")
+    if blocks:
+        lines.append("blocks:")
+        for dep in blocks:
+            lines.append(f"  - {dep}")
     lines.append("---")
     lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -221,6 +229,34 @@ def test_dependency_order_unresolved_edge() -> None:
     assert result["unresolved"][0]["to"] == "missing-9"
 
 
+def test_dependency_order_blocks_dangling_edge_is_unresolved() -> None:
+    # C1 — referential integrity on the inverse `blocks:` direction. Same FAIL
+    # severity as a dangling `blocked_by:` edge (symmetry, per the C1 body).
+    stubs = [
+        {"stub_id": "a-1", "number": 1, "sprint": 1, "wave": 1, "blocked_by": [], "blocks": ["zz-ghost"]},
+    ]
+    result = check_dependency_order(stubs)
+    assert result["ok"] is False
+    assert len(result["unresolved"]) == 1
+    u = result["unresolved"][0]
+    assert u["to"] == "zz-ghost"
+    assert u["edge"] == "blocks"
+
+
+def test_dependency_order_blocks_resolved_edge_not_ordering_checked() -> None:
+    # A resolved `blocks:` edge must not be reported unresolved, and must NOT
+    # be fed into number/(sprint, wave) monotonicity -- re-deriving ordering
+    # from the inverse edge would double-report an edge declared both ways.
+    stubs = [
+        {"stub_id": "a-1", "number": 1, "sprint": 1, "wave": 1, "blocked_by": [], "blocks": ["a-2"]},
+        {"stub_id": "a-2", "number": 2, "sprint": 1, "wave": 2, "blocked_by": []},
+    ]
+    result = check_dependency_order(stubs)
+    assert result["ok"] is True
+    assert result["unresolved"] == []
+    assert result["violations"] == []
+
+
 def test_dependency_order_number_derived_from_stub_id_when_absent() -> None:
     # number omitted entirely — derived from trailing -<N> in stub_id.
     stubs = [
@@ -310,6 +346,130 @@ def test_run_audit_end_to_end_cyclic_roadmap(tmp_path: Path) -> None:
 
     assert exit_code == 1
     assert any("dependency cycle detected" in line for line in stderr_lines)
+
+
+def test_run_audit_loe_band_in_band_passes(tmp_path: Path) -> None:
+    root = _init_tree(tmp_path)
+    run_id = "zzz-e2e-loe-good"
+    handoffs = root / "state" / "handoffs"
+    _write_stub(handoffs / f"{run_id}-1.md", run_id, f"{run_id}-1", 1, 1, loe="M")
+    _write_reconciliation(root / "state" / "roadmap" / run_id / "reconciliation.md", 1)
+
+    exit_code, stdout_lines, stderr_lines = run_audit(run_id, root, root / "state")
+
+    assert exit_code == 0
+    assert any("Audit 7:" in line and line.startswith("PASS:") for line in stdout_lines)
+    assert stderr_lines == []
+
+
+def test_run_audit_loe_band_out_of_band_fails(tmp_path: Path) -> None:
+    root = _init_tree(tmp_path)
+    run_id = "zzz-e2e-loe-bad"
+    handoffs = root / "state" / "handoffs"
+    _write_stub(handoffs / f"{run_id}-1.md", run_id, f"{run_id}-1", 1, 1, loe="S")
+    _write_reconciliation(root / "state" / "roadmap" / run_id / "reconciliation.md", 1)
+
+    exit_code, _stdout_lines, stderr_lines = run_audit(run_id, root, root / "state")
+
+    assert exit_code == 1
+    joined = "\n".join(stderr_lines)
+    assert "Audit 7:" in joined
+    assert f"{run_id}-1" in joined
+    assert "loe='S'" in joined
+
+
+def test_run_audit_loe_band_absent_is_pass_with_count(tmp_path: Path) -> None:
+    root = _init_tree(tmp_path)
+    run_id = "zzz-e2e-loe-absent"
+    handoffs = root / "state" / "handoffs"
+    _write_stub(handoffs / f"{run_id}-1.md", run_id, f"{run_id}-1", 1, 1)
+    _write_reconciliation(root / "state" / "roadmap" / run_id / "reconciliation.md", 1)
+
+    exit_code, stdout_lines, stderr_lines = run_audit(run_id, root, root / "state")
+
+    assert exit_code == 0
+    assert stderr_lines == []
+    joined = "\n".join(stdout_lines)
+    assert "Audit 7:" in joined
+    assert "1 of 1 stub(s)" in joined
+    assert "carry no loe:" in joined
+
+
+def _write_spine_for_blocks_test(
+    path: Path, roadmap_id: str, stub_ids: List[str]
+) -> None:
+    """Minimal SPINE.md fixture -- one sprint, one cluster, no cross_sprint_edges.
+    Mirrors test_audit_sprint_scope.py's `_write_spine` shape, kept local
+    since this file must not edit that one (separate footprint)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "---",
+        'title: "Test spine"',
+        "created: 2026-09-23",
+        "kind: roadmap-spine",
+        f"roadmap_id: {roadmap_id}",
+        "synthesis: docs/research/synthesis.md",
+        "sprints:",
+        "  - id: sprint-a",
+        "    ordinal: 1",
+        '    jtbd: "do the thing"',
+        '    exit_condition: "done"',
+        "    stubs:",
+    ]
+    for sid in stub_ids:
+        lines.append(f"      - {sid}")
+    lines.append("cross_sprint_edges: []")
+    lines.append("---")
+    lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def test_run_audit_end_to_end_dangling_blocks_edge_fails_sprint_scoped(tmp_path: Path) -> None:
+    # Resolve pass E6 (C1 body) -- the widened unresolved-edge check runs on
+    # the sprint-scoped arm too, scoped to that arm's own stub cluster.
+    root = _init_tree(tmp_path)
+    run_id = "zzz-e2e-blocks-sprint"
+    handoffs = root / "state" / "handoffs"
+    _write_stub(
+        handoffs / f"{run_id}-1.md", run_id, f"{run_id}-1", 1, 1,
+        blocks=["zz-does-not-exist"], kind="roadmap-baton",
+    )
+    _write_spine_for_blocks_test(
+        root / "state" / "roadmap" / run_id / "SPINE.md", run_id, [f"{run_id}-1"]
+    )
+    _write_reconciliation(
+        root / "state" / "roadmap" / run_id / "sprint-1" / "reconciliation.md", 1
+    )
+
+    exit_code, _stdout_lines, stderr_lines = run_audit(
+        run_id, root, root / "state", sprint_id="sprint-a"
+    )
+
+    assert exit_code == 1
+    joined = "\n".join(stderr_lines)
+    assert "unresolved blocks edge" in joined
+    assert "zz-does-not-exist" in joined
+
+
+def test_run_audit_end_to_end_dangling_blocks_edge_fails_whole_roadmap(tmp_path: Path) -> None:
+    # C1's falsifier shape: a stub declaring `blocks:` against an id absent
+    # from the roadmap's stub set fails Audit 5 on the whole-roadmap arm --
+    # the same severity `blocked_by:` already gets.
+    root = _init_tree(tmp_path)
+    run_id = "zzz-e2e-blocks-dangling"
+    handoffs = root / "state" / "handoffs"
+    _write_stub(
+        handoffs / f"{run_id}-1.md", run_id, f"{run_id}-1", 1, 1,
+        blocks=["zz-does-not-exist"], kind="roadmap-baton",
+    )
+    _write_reconciliation(root / "state" / "roadmap" / run_id / "reconciliation.md", 1)
+
+    exit_code, _stdout_lines, stderr_lines = run_audit(run_id, root, root / "state")
+
+    assert exit_code == 1
+    joined = "\n".join(stderr_lines)
+    assert "Audit 5: unresolved blocks edge" in joined
+    assert "zz-does-not-exist" in joined
 
 
 def test_run_audit_dead_gate_zero_zero_fails(tmp_path: Path) -> None:

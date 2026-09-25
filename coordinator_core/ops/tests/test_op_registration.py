@@ -88,6 +88,7 @@ _CARTOGRAPHY_OPS = (
     "cartography.symbols",
     "cartography.edges",
 )
+_CARTOGRAPHY_OPS__SUBJECT_CLASS = "op-name"
 _ALL_OPS = _CARTOGRAPHY_OPS + (
     "memo.triage",
     "workflow.validate",
@@ -341,6 +342,7 @@ _BUDGET_OVERRIDES = {
     "cartography.count_references": 106,
     "cartography.chunk_table": 74,
 }
+_BUDGET_OVERRIDES__SUBJECT_CLASS = "op-name"
 
 
 @pytest.mark.parametrize("op_key", _BUDGET_MANIFEST_OPS)

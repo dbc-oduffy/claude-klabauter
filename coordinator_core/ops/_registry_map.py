@@ -177,6 +177,8 @@ OP_MODULE_MAP: Dict[str, str] = {
     "fleet.archive_completed_handoffs":       "coordinator_core.ops.fleet.archive_terminal_handoffs",
     "housekeeping.cycle":                     "coordinator_core.housekeeping.cycle",
     "fleet.archive_actioned_memos":           "coordinator_core.ops.fleet.archive_actioned_memos",
+    "fleet.delete_superseded_decisions":      "coordinator_core.ops.fleet.delete_superseded_decisions",
+    "fleet.prune_closed_bugs":                "coordinator_core.ops.fleet.prune_bugs",
     "fleet.archive_completed_plans":          "coordinator_core.ops.fleet.archive_plans",
     "fleet.archive_sweep_status":             "coordinator_core.ops.fleet.sweep_status",
     "fleet.handoffs_for_plan":                "coordinator_core.ops.fleet.plan_handoffs",

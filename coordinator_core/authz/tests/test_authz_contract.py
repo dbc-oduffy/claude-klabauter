@@ -399,6 +399,7 @@ _MEMO_WRITE_OP_MODULES = {
     "memo.draft": coordinator_core.ops.fleet.memo_draft,
     "memo.compose": coordinator_core.ops.fleet.memo_compose,
 }
+_MEMO_WRITE_OP_MODULES__SUBJECT_CLASS = "op-name"
 
 # Grep-level write-signal pattern: os.open with a write/create flag, open(...) in
 # a write/append/exclusive-create text mode, or os.replace (atomic write-in-place).

@@ -103,8 +103,8 @@ def _write_file_list(tmp_path: Path, *files: Path) -> Path:
 def test_registry_codename_guard_splits_medium_render(tmp_path):
     percolate_root = tmp_path / "percolate-root"
     _write_store(percolate_root, "alpha", guarded=True)
-    registry = _write_peer_registry(tmp_path, "alpha", "example-retrieval-repo")
-    mentions = _write_mentions_file(tmp_path, "example-retrieval-repo")
+    registry = _write_peer_registry(tmp_path, "alpha", "project-rag")
+    mentions = _write_mentions_file(tmp_path, "project-rag")
     file_list = _write_file_list(tmp_path, mentions)
 
     rc, out = _run_cli(
@@ -122,7 +122,7 @@ def test_registry_codename_guard_splits_medium_render(tmp_path):
     )
     assert rc == 0
     assert "registry_codenames guard" in out
-    assert "example-retrieval-repo" in out.split("registry_codenames guard")[1]
+    assert "project-rag" in out.split("registry_codenames guard")[1]
 
     # The plain (uncovered) MEDIUM group must show none — the covered hit
     # was routed to the new group, not duplicated into the old one.
@@ -130,7 +130,7 @@ def test_registry_codename_guard_splits_medium_render(tmp_path):
         "MEDIUM (identity / internal paths / peer-repo names -- surfaces to gate):"
     )[1].split("LOW")[0]
     assert "(none)" in plain_medium_section
-    assert "example-retrieval-repo" not in plain_medium_section
+    assert "project-rag" not in plain_medium_section
 
 
 def test_registry_codename_guard_informational_panel_excluded_from_gate_count(tmp_path):
@@ -148,16 +148,16 @@ def test_registry_codename_guard_informational_panel_excluded_from_gate_count(tm
     outputs with the same function under test elsewhere — a systematic bug
     in the shared parser must still be able to fail this test."""
     percolate_root = tmp_path / "percolate-root"
-    registry = _write_peer_registry(tmp_path, "alpha", "example-retrieval-repo")
-    mentions = _write_mentions_file(tmp_path, "example-retrieval-repo")
+    registry = _write_peer_registry(tmp_path, "alpha", "project-rag")
+    mentions = _write_mentions_file(tmp_path, "project-rag")
     file_list = _write_file_list(tmp_path, mentions)
 
     # Independently-derived expected count: exactly one line in the fixture
-    # mentions "example-retrieval-repo", so exactly one MEDIUM hit exists in the raw
+    # mentions "project-rag", so exactly one MEDIUM hit exists in the raw
     # scan, regardless of which panel it renders under.
     expected_raw_hits = sum(
         1 for line in mentions.read_text(encoding="utf-8").splitlines()
-        if "example-retrieval-repo" in line
+        if "project-rag" in line
     )
     assert expected_raw_hits == 1
 
@@ -214,8 +214,8 @@ def test_no_declared_transform_is_byte_identical_to_no_flag_run(tmp_path):
     permitted difference between the two invocation shapes."""
     percolate_root = tmp_path / "percolate-root"
     _write_store(percolate_root, "alpha", guarded=False)
-    registry = _write_peer_registry(tmp_path, "alpha", "example-retrieval-repo")
-    mentions = _write_mentions_file(tmp_path, "example-retrieval-repo")
+    registry = _write_peer_registry(tmp_path, "alpha", "project-rag")
+    mentions = _write_mentions_file(tmp_path, "project-rag")
     file_list = _write_file_list(tmp_path, mentions)
 
     base_args = [
@@ -293,8 +293,8 @@ def test_undeclared_target_degrades_to_no_split(tmp_path):
         encoding="utf-8",
     )
 
-    registry = _write_peer_registry(tmp_path, "alpha", "example-retrieval-repo")
-    mentions = _write_mentions_file(tmp_path, "example-retrieval-repo")
+    registry = _write_peer_registry(tmp_path, "alpha", "project-rag")
+    mentions = _write_mentions_file(tmp_path, "project-rag")
     file_list = _write_file_list(tmp_path, mentions)
 
     rc, out = _run_cli(
@@ -312,4 +312,4 @@ def test_undeclared_target_degrades_to_no_split(tmp_path):
     )
     assert rc == 0
     assert "registry_codenames guard" not in out
-    assert "example-retrieval-repo" in out
+    assert "project-rag" in out

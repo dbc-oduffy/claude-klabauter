@@ -32,7 +32,7 @@ read regardless of caller):
 | `agent_id` | Consumed indirectly, via `resolve_effective_types` |
 | `provision_key` | Optional; SUBSUME deterministic-path mode — see below |
 | `type` | Optional; SUBSUME template-type axis — see **`--type` axis / template registry** below |
-| `plan_path` | Optional; plan-derivable `report_sidecar` home for four named `subagent_type`s only — see **Plan-derivable `report_sidecar`** below |
+| `plan_path` | Optional; plan-derivable `report_sidecar` home for four named `subagent_type`s only — see **Plan-derivable `report_sidecar`** below. Second consumer: it also feeds the `target_plan` frontmatter field on ALL template types, not only the four-plus-one plan-derivable lens path — see § Starter-doc scaffold above. |
 
 **`session_id` is dual-purpose:** it is both (a) the path-sanitized directory leaf under
 `state/subagent-share/` (unchanged, pre-existing behavior) AND, as of the `lead_session_id`
@@ -102,6 +102,7 @@ status: open
 agent_type: <agent_type>
 spawned_at: <ISO-8601 UTC timestamp>
 lead_session_id: <requesting EM/lead session_id, raw (unsanitized), or literal null>
+target_plan: <repo-relative plan path from the payload's plan_path, or literal null>
 divergence:
   diverged: false
 commits: []
@@ -134,7 +135,7 @@ pre-populated with four fixed questions verbatim at provision time — the agent
 question, it does not invent or reorder the prompts.
 
 `status`/`agent_type`/`spawned_at`/`divergence` are the original narrow field set; `commits: []`,
-`dispatch_feed`, and `lead_session_id` are SUBSUME additions that make this scaffold a
+`dispatch_feed`, `lead_session_id`, and `target_plan` are SUBSUME additions that make this scaffold a
 **superset** of what the flight-recorder and DoE's spawn-hook migration expect to find on a
 freshly-provisioned doc — `commits` is a plain accumulator list (empty at spawn time, appended to
 over the agent's lifetime). `dispatch_feed` is now the **live field**: the pcli-04 emitter
@@ -155,8 +156,12 @@ never happens via `_provision` since `session_id` is required for eligibility in
 place). `lead_session_id` is a **distinct identity from `agent_id`**: `agent_id` (consumed via
 `resolve_effective_types`, never itself written into frontmatter) identifies the SPAWNED agent;
 `lead_session_id` identifies who dispatched it — the two must never be conflated by a downstream
-reader. **DoE owns the authoritative run-report doc-schema doctrine** (what each field means, how
-`divergence`/`commits`/`dispatch_feed`/`lead_session_id` get consumed downstream); **the engine
+reader. `target_plan` is a SUBSUME addition sourced from the existing `plan_path` payload key,
+stamped verbatim (RAW, unsanitized) at the same position `lead_session_id` uses; it renders the
+literal `null` on every dispatch shape that does not carry a `plan_path` — which today is every
+session-keyed dispatch, because claude-klabauter supplies no `plan_path` producer and DoE owns the values.
+**DoE owns the authoritative run-report doc-schema doctrine** (what each field means, how
+`divergence`/`commits`/`dispatch_feed`/`lead_session_id`/`target_plan` get consumed downstream); **the engine
 only writes these starter placeholders conforming to that doctrine** — it does not interpret or
 validate them past writing the literal scaffold above. This whole contract (provision_key grammar
 + this superset scaffold) is the wire-for-wire target DoE hard-binds their spawn-hook +

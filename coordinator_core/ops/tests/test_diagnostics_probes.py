@@ -35,6 +35,7 @@ _PROBE_OPS = (
     "diagnostics.always_refuses",
     "diagnostics.always_structural_pin",
 )
+_PROBE_OPS__SUBJECT_CLASS = "op-name"
 
 
 @pytest.mark.parametrize("op_key", _PROBE_OPS)

@@ -178,7 +178,12 @@ def _machine_local_get(key: str) -> Optional[str]:
     stub, so this in-process conversion no longer silently stops exercising
     those fakes. Registry-not-found (missing key, unreadable/missing file)
     degrades to None -- same "no signal" contract the subprocess shape had
-    for a missing binary, non-zero exit, or empty stdout."""
+    for a missing binary, non-zero exit, or empty stdout.
+
+    Kept as its own copy rather than moved onto `coordinator_core._claude_klabauter_root`
+    (Kira close-review ab37bb04 finding #2): that shared helper's
+    `_machine_local_get` is subprocess-based, the opposite policy of this
+    zero-spawn conversion."""
     return _machine_resolver.registry_get(key)
 
 

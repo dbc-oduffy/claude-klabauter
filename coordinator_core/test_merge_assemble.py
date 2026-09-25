@@ -528,3 +528,58 @@ class TestApplyDispatchTable:
         exit_code, report = merge_apply.apply(repo_root=tmp_path)
         assert exit_code == merge_apply.APPLY_EXIT_TRANSPORT_FAIL
         assert "error" in report
+
+
+# ---------------------------------------------------------------------------
+# _dispatch_tier_u_grant — P071-C3: one argv path shared with
+# backlog_grind_assemble, and a denied `check` raises here too.
+# ---------------------------------------------------------------------------
+
+class TestDispatchTierUGrant:
+    def test_denied_check_raises(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "coordinator_core.session.grant_directive.run_grant_directive",
+            lambda args, repo_root=None: (1, "check: gate denied -- no live grant"),
+        )
+        with pytest.raises(RuntimeError, match="gate denied"):
+            merge_apply._dispatch_tier_u_grant(["check"], tmp_path)
+
+    def test_granted_check_returns_ok_result(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "coordinator_core.session.grant_directive.run_grant_directive",
+            lambda args, repo_root=None: (0, ""),
+        )
+        result = merge_apply._dispatch_tier_u_grant(["check"], tmp_path)
+        assert result["returncode"] == 0
+        assert "degraded_reason" not in result
+
+    def test_failed_grant_still_degrades(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "coordinator_core.session.grant_directive.run_grant_directive",
+            lambda args, repo_root=None: (1, "grant: session id unresolvable"),
+        )
+        result = merge_apply._dispatch_tier_u_grant(["grant", "pm", "note"], tmp_path)
+        assert result["returncode"] == 1
+        assert "degraded_reason" in result
+
+    def test_usage_error_raises(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "coordinator_core.session.grant_directive.run_grant_directive",
+            lambda args, repo_root=None: (2, "grant directive: no verb"),
+        )
+        with pytest.raises(RuntimeError):
+            merge_apply._dispatch_tier_u_grant([], tmp_path)
+
+    def test_repo_root_threads_as_cwd(self, tmp_path, monkeypatch):
+        seen = {}
+
+        def _fake_run_grant_directive(args, repo_root=None):
+            seen["repo_root"] = repo_root
+            return (0, "")
+
+        monkeypatch.setattr(
+            "coordinator_core.session.grant_directive.run_grant_directive",
+            _fake_run_grant_directive,
+        )
+        merge_apply._dispatch_tier_u_grant(["check"], tmp_path)
+        assert seen["repo_root"] == str(tmp_path)

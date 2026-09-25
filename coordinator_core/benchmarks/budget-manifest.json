@@ -87,13 +87,6 @@
         "value": 0.2
       }
     },
-    "cartography.churn": {
-      "target_ms": 70,
-      "tolerance": {
-        "kind": "relative",
-        "value": 0.2
-      }
-    },
     "cartography.symbols": {
       "target_ms": 70,
       "tolerance": {

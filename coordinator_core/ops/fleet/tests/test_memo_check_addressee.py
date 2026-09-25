@@ -56,8 +56,8 @@ def _run(result):
 def _make_claude_home(tmp_path: Path, receiver_repos: dict) -> Path:
     """Minimal machine-local registry fixture (mirrors test_memo_list.py's factory).
 
-    receiver_repos: {registry_key_suffix: repo_path_str} e.g. {"example_retrieval_repo": "/..."}
-    -> writes "repos.example_retrieval_repo" = <path> in registry.local.toml.
+    receiver_repos: {registry_key_suffix: repo_path_str} e.g. {"project_rag": "/..."}
+    -> writes "repos.project_rag" = <path> in registry.local.toml.
     """
     claude_home = tmp_path / "claude-home"
     machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
@@ -166,12 +166,12 @@ class TestMatch:
 class TestMismatch:
     def test_to_resolves_to_a_different_registered_repo(self, tmp_path, monkeypatch):
         self_repo = tmp_path / "claude-klabauter"
-        other_repo = tmp_path / "example-retrieval-repo"
+        other_repo = tmp_path / "project-rag"
         self_repo.mkdir()
         other_repo.mkdir()
         claude_home = _make_claude_home(
             tmp_path,
-            {"claude_klabauter": str(self_repo), "example_retrieval_repo": str(other_repo)},
+            {"claude_klabauter": str(self_repo), "project_rag": str(other_repo)},
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 

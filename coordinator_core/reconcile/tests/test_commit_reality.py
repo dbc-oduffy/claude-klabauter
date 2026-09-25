@@ -72,6 +72,25 @@ class TestMechanicalDenylistPrefixNotSubstring:
         )
 
 
+class TestChoreHandoffsPrefixEntry:
+    """P029-T1 (docs/plans/2026-09-07-baton-lifecycle-refusal-drain-authz.md): `chore(handoffs):`
+    is a PREFIX entry in `_DEFAULT_MECHANICAL_DENYLIST`, not a `_SUBSTRING_FAMILY_TOKENS`
+    member — it must match the observed mechanical subject as a prefix, and must NOT match a
+    subject that merely contains the token mid-subject."""
+
+    def test_observed_mechanical_subject_is_denylisted(self) -> None:
+        assert _is_mechanical_subject(
+            "chore(handoffs): apply shipped/consumed",
+            list(_DEFAULT_MECHANICAL_DENYLIST),
+        )
+
+    def test_mid_subject_chore_handoffs_token_is_not_denylisted(self) -> None:
+        assert not _is_mechanical_subject(
+            "feat(cascade): stop chore(handoffs): subjects resolving as evidence",
+            list(_DEFAULT_MECHANICAL_DENYLIST),
+        )
+
+
 class TestEmptyDenylistDisablesFiltering:
     """An empty denylist list (as opposed to an absent key) is treated as a real,
     deliberately-empty value by `_is_mechanical_subject` — the caller

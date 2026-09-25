@@ -242,15 +242,15 @@ rag **observes**; it does not mutate. From `coordinator_core/ops/__init__.py`:
 | `coverage.gate` | **RETIRED — returns `-32601`** | **no — killed by K-001 (2026-08-16); see the retirement notice at the top and § 1.3** |
 | `handoff.has_live_children` | read-only (query) | yes — handoff-lineage source (command-type, see § 1.1) |
 | `artifact.emit` | **MUTATING** (writes `cockpit-emission.json`) | **no** |
-| `backlog.record` | **MUTATING** (backlog-history recorder) | **no** |
+| ~~`backlog.record`~~ | ~~MUTATING (backlog-history recorder)~~ **[REMOVED — op deleted]** | no — op no longer exists |
 | `hooks.*` (11 ops: 7 advisory + 4 bookkeeping) | advisory / bookkeeping-mutating | **no** |
 | ~~`health`~~ | ~~read-only~~ **[SUPERSEDED by DR-215 — retired]** | no — daemon liveness op no longer applies |
 <!-- Review: code-reviewer (F4) — pcore-08 added 4 bookkeeping hooks (track_touched_files, session_heartbeat, agent_completion_log, track_dispatched_agents); disk-verified coordinator_core/ops/__init__.py:25 -->
 <!-- 2026-07-10 amendment: `ping`/`health` rows marked [SUPERSEDED by DR-215] — both were resident-daemon liveness ops; DR-215 retired the daemon wholesale, so there is nothing left to ping/health-check. coverage.gate and handoff.has_live_children rows annotated to point at the command-type invocation in § 1.1 — the ops themselves survive, only the transport changed. -->
 
-**Invariant:** example-retrieval-repo never invokes `artifact.emit`, `backlog.record`, or any `hooks.*`
+**Invariant:** example-retrieval-repo never invokes `artifact.emit` or any `hooks.*`
 op. Claude-klabauter owns emission; rag consumes the emitted disk-truth. rag's only writes are to its
-own store.
+own store. (`backlog.record` has been removed entirely — it is no longer a registered op.)
 
 ### 1.3 `coverage.gate` — coverage-verdict source — **RETIRED, DOES NOT DISPATCH**
 

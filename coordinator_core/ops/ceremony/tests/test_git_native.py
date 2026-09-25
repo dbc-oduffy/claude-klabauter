@@ -299,6 +299,11 @@ _STDIN_INPUT_WRAPPERS = {"check_ignore", "update_refs_stdin"}
 #: reason for existing.
 _BYTES_MODE_WRAPPERS = {"cat_file_batch", "cat_file_batch_objects"}
 
+#: `push_streamed()` owns a `subprocess.Popen` plus a stderr reader thread (the
+#: stall watchdog), never `subprocess.run`, so the (a) harness cannot drive it.
+#: Covered directly by the `test_push_streamed_*` tests below.
+_STREAMING_WRAPPERS = {"push_streamed"}
+
 
 def test_all_public_wrappers_are_covered():
     """Guard: every public function in git_native.py (besides `_git` itself,
@@ -317,6 +322,7 @@ def test_all_public_wrappers_are_covered():
         - _NON_SUBPROCESS_HELPERS
         - _STDIN_INPUT_WRAPPERS
         - _BYTES_MODE_WRAPPERS
+        - _STREAMING_WRAPPERS
     )
     covered_funcs = {fn.__name__ for fn, _, _ in _WRAPPER_INVOCATIONS}
     assert public_funcs == covered_funcs, (
@@ -2795,3 +2801,312 @@ def test_commit_scoped_private_index_worktree_leg_uses_hash_worktree_blobs(tmp_p
 
     assert result.ok is True
     assert calls == [["file.txt"]]
+
+
+# ---------------------------------------------------------------------------
+# push_streamed -- the stall watchdog (P052-C6,
+# docs/plans/2026-09-10-push-cadence-hang-detection-over-elapsed-timeout.md).
+#
+# `subprocess.Popen` is monkeypatched at the `git_native` module reference
+# (precedent: test_check_shipped_on_main_batching.py's `_counting_popen`),
+# never a real `git` child -- no network, no real remote, per the plan's
+# Test surface. The fake process's `stderr` is an injected, controllable
+# line source so every case runs in a small fraction of a second: `Popen`
+# itself is never real, only its shape (`poll`/`terminate`/`wait`/`stderr`)
+# is faked.
+# ---------------------------------------------------------------------------
+
+import threading as _threading_mod
+import time as _time_mod
+
+
+class _ControllableStderr:
+    """Fake `Popen.stderr`: an iterator yielding pre-scheduled lines with a
+    real `time.sleep` delay before each, so the reader thread's real-time
+    behaviour is exercised without a real subprocess. `close()` (called by
+    `terminate()` on the fake process, mirroring what killing a real child
+    does to its pipe) ends the iteration immediately, including from inside
+    a `forever` schedule -- this is what lets the watchdog's `terminate()`
+    actually stop the reader thread rather than have it block forever.
+    """
+
+    def __init__(self, schedule, *, forever_line=None, forever_delay=None):
+        self._schedule = list(schedule)
+        self._idx = 0
+        self._forever_line = forever_line
+        self._forever_delay = forever_delay
+        self._stopped = _threading_mod.Event()
+
+    def close(self):
+        self._stopped.set()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._stopped.is_set():
+            raise StopIteration
+        if self._idx < len(self._schedule):
+            delay, line = self._schedule[self._idx]
+            self._idx += 1
+            if delay:
+                self._stopped.wait(delay)
+            if self._stopped.is_set():
+                raise StopIteration
+            return line
+        if self._forever_line is not None:
+            self._stopped.wait(self._forever_delay or 0.01)
+            if self._stopped.is_set():
+                raise StopIteration
+            return self._forever_line
+        raise StopIteration
+
+
+class _FakeProc:
+    """Fake `Popen` handle: `poll()`/`terminate()`/`wait()` shaped like the
+    real thing, `stderr` a `_ControllableStderr`. `exit_delay` (seconds
+    since construction) is when `poll()` starts reporting a clean exit on
+    its own, for the cases where the child ends without being killed;
+    `None` means it never exits on its own and only `terminate()` ends it
+    (mirroring a genuinely hung child).
+    """
+
+    def __init__(self, stderr, *, exit_delay=None, exit_returncode=0):
+        self.stderr = stderr
+        self.stdin = None
+        self._start = _time_mod.monotonic()
+        self._exit_delay = exit_delay
+        self._exit_returncode = exit_returncode
+        self._terminated = False
+        self._returncode = None
+
+    def poll(self):
+        if self._returncode is not None:
+            return self._returncode
+        if self._terminated:
+            return None
+        if self._exit_delay is not None and (_time_mod.monotonic() - self._start) >= self._exit_delay:
+            self._returncode = self._exit_returncode
+            return self._returncode
+        return None
+
+    def terminate(self):
+        self._terminated = True
+        self.stderr.close()
+
+    def wait(self, timeout=None):
+        if self._returncode is None:
+            self._returncode = -15 if self._terminated else self._exit_returncode
+        return self._returncode
+
+
+def _patched_popen(monkeypatch, fake_proc):
+    monkeypatch.setattr(git_native.subprocess, "Popen", lambda *a, **kw: fake_proc)
+
+
+def _active_thread_names():
+    return {t.name for t in _threading_mod.enumerate() if t.is_alive()}
+
+
+def test_push_streamed_default_stall_killed_is_false_on_a_plain_gitresult():
+    assert git_native.GitResult(returncode=0, stdout="", stderr="").stall_killed is False
+
+
+def test_push_streamed_streams_to_completion_not_killed(tmp_path, monkeypatch):
+    """(a) streams steadily to completion -- never killed, real returncode
+    kept, `stall_killed` False."""
+    stderr = _ControllableStderr([(0.01, "Writing objects: 50%\n"), (0.01, "Writing objects: 100%\n")])
+    fake = _FakeProc(stderr, exit_delay=0.03, exit_returncode=0)
+    _patched_popen(monkeypatch, fake)
+    before = _active_thread_names()
+
+    result = git_native.push_streamed(tmp_path, silence_secs=1.0, total_timeout=5.0)
+
+    assert result.stall_killed is False
+    assert result.returncode == 0
+    assert "Writing objects: 100%" in result.stderr
+    # The reader thread is joined before this function returns -- no thread
+    # this test started is still alive afterward.
+    assert _active_thread_names() <= before
+
+
+def test_push_streamed_goes_silent_past_window_is_killed(tmp_path, monkeypatch):
+    """(b) streams, then goes silent past `silence_secs` -- killed,
+    `stall_killed` True, real signal returncode kept (never rewritten to
+    -1), stderr carried verbatim plus the marker line."""
+    # Two lines, then nothing further -- the fake never exits on its own
+    # (exit_delay=None), so only the silence watchdog can end this call.
+    stderr = _ControllableStderr([(0.01, "Writing objects: 10%\n"), (0.01, "Writing objects: 20%\n")])
+    fake = _FakeProc(stderr, exit_delay=None)
+    _patched_popen(monkeypatch, fake)
+    before = _active_thread_names()
+
+    result = git_native.push_streamed(tmp_path, silence_secs=0.05, total_timeout=5.0)
+
+    assert result.stall_killed is True
+    # `terminate()` on this fake mirrors a real signal kill -- never git_
+    # native's synthesized "-1" (that meaning is reserved for OSError/
+    # TimeoutExpired, see GitResult's own docstring).
+    assert result.returncode == -15
+    assert result.returncode != -1
+    assert "Writing objects: 20%" in result.stderr
+    assert git_native.PUSH_STALL_MARKER.split("{secs}")[0] in result.stderr
+    assert _active_thread_names() <= before
+
+
+def test_push_streamed_silent_but_clean_exit_is_not_a_hang(tmp_path, monkeypatch):
+    """(c) exits cleanly with no output at all -- a quiet-but-healthy push
+    (C1's fast-push class) must not be classified as a hang."""
+    stderr = _ControllableStderr([])
+    fake = _FakeProc(stderr, exit_delay=0.01, exit_returncode=0)
+    _patched_popen(monkeypatch, fake)
+
+    result = git_native.push_streamed(tmp_path, silence_secs=1.0, total_timeout=5.0)
+
+    assert result.stall_killed is False
+    assert result.returncode == 0
+    assert result.stderr == ""
+
+
+def test_push_streamed_never_silent_but_terminated_by_total_bound(tmp_path, monkeypatch):
+    """(d) AC8 -- a child that emits a progress line every
+    `silence_secs - epsilon` forever is still terminated by the surviving
+    total-duration bound, never mistaken for a healthy push that runs
+    forever. `stall_killed` stays False: this kill is evidence of the total
+    bound firing, not of silence (see `push_streamed`'s own docstring)."""
+    silence_secs = 0.05
+    fake_stderr = _ControllableStderr(
+        [], forever_line="Writing objects: n%\n", forever_delay=silence_secs * 0.5
+    )
+    fake = _FakeProc(fake_stderr, exit_delay=None)
+    _patched_popen(monkeypatch, fake)
+    before = _active_thread_names()
+
+    start = _time_mod.monotonic()
+    result = git_native.push_streamed(
+        tmp_path, silence_secs=silence_secs, total_timeout=0.15
+    )
+    elapsed = _time_mod.monotonic() - start
+
+    assert result.stall_killed is False
+    assert result.returncode == -15
+    # Killed by the total bound (~0.15s), not left running indefinitely, and
+    # not mistaken for a silence stall despite never having gone silent.
+    assert elapsed < 1.0
+    assert _active_thread_names() <= before
+
+
+def test_stall_silence_secs_derived_from_measured_s_max():
+    """Constant relationship guard: `STALL_SILENCE_SECS` is the plan's `2 x
+    S_max` derivation, never an invented number -- and stays a small,
+    finite, positive figure sane for a poll loop."""
+    assert git_native.STALL_SILENCE_SECS > 0
+    assert git_native.STALL_SILENCE_SECS < 60.0
+
+
+# ---------------------------------------------------------------------------
+# status_porcelain / dirty_relpaths_from_porcelain -- P014-C1
+# (docs/plans/2026-09-01-the-dirty-tree-fact-is-served-not-re-imp.md).
+# ---------------------------------------------------------------------------
+
+
+def test_status_porcelain_default_argv_is_byte_identical_to_head(tmp_path):
+    """The two new keyword-only options (`untracked_files`, `quotepath_false`)
+    default to a no-op -- every existing caller's argv is unchanged. Pinned
+    directly against the spawned argv, not against output."""
+    repo = _init_real_repo(tmp_path)
+    with patch("subprocess.run", side_effect=lambda *a, **k: _make_completed(0, "", "")) as mock_run:
+        git_native.status_porcelain(repo)
+    argv = mock_run.call_args[0][0]
+    assert argv == ["git", "--no-optional-locks", "status", "--porcelain"]
+
+
+def test_status_porcelain_untracked_files_appends_the_flag(tmp_path):
+    repo = _init_real_repo(tmp_path)
+    with patch("subprocess.run", side_effect=lambda *a, **k: _make_completed(0, "", "")) as mock_run:
+        git_native.status_porcelain(repo, untracked_files="all")
+    argv = mock_run.call_args[0][0]
+    assert argv == [
+        "git", "--no-optional-locks", "status", "--porcelain", "--untracked-files=all",
+    ]
+
+
+def test_status_porcelain_quotepath_false_prepends_the_dash_c(tmp_path):
+    repo = _init_real_repo(tmp_path)
+    with patch("subprocess.run", side_effect=lambda *a, **k: _make_completed(0, "", "")) as mock_run:
+        git_native.status_porcelain(repo, quotepath_false=True)
+    argv = mock_run.call_args[0][0]
+    assert argv == [
+        "git", "-c", "core.quotepath=false", "--no-optional-locks", "status", "--porcelain",
+    ]
+
+
+def test_status_porcelain_both_options_compose_with_untracked_files_last(tmp_path):
+    repo = _init_real_repo(tmp_path)
+    with patch("subprocess.run", side_effect=lambda *a, **k: _make_completed(0, "", "")) as mock_run:
+        git_native.status_porcelain(repo, untracked_files="all", quotepath_false=True)
+    argv = mock_run.call_args[0][0]
+    assert argv == [
+        "git", "-c", "core.quotepath=false", "--no-optional-locks", "status", "--porcelain",
+        "--untracked-files=all",
+    ]
+
+
+def test_dirty_relpaths_from_porcelain_returns_the_same_set_before_and_after_projection(
+    tmp_path,
+):
+    """P014-C1 resolve pass R5: `dirty_relpaths_from_porcelain` is now a thin
+    fail-closed projection of the `session_facts` producer -- same rename-both-
+    halves, quoted-path, overflow-branch-directory-roots and fail-closed
+    behaviour as before."""
+    repo = _init_real_repo(tmp_path)
+    (repo / "a.txt").write_text("a")
+    _real_git(["add", "-A"], repo)
+    _real_git(["commit", "-q", "-m", "base"], repo)
+    (repo / "a.txt").write_text("a-changed")
+
+    dirty = git_native.dirty_relpaths_from_porcelain(repo, ["a.txt"])
+
+    assert dirty == {"a.txt"}
+
+
+def test_dirty_relpaths_from_porcelain_keeps_both_rename_halves(tmp_path, monkeypatch):
+    from coordinator_core.session import session_facts as _session_facts
+
+    monkeypatch.setattr(
+        _session_facts,
+        "_dirty_paths",
+        lambda worktree_root, **kw: {
+            "degraded": False,
+            "value": {
+                "paths": {"new.txt", "old.txt"},
+                "entries": [("R ", "new.txt", "old.txt")],
+            },
+            "source": _session_facts._SOURCE_DIRTY_PATHS,
+            "collision": True,
+        },
+    )
+
+    dirty = git_native.dirty_relpaths_from_porcelain(tmp_path, ["old.txt", "new.txt"])
+
+    assert dirty == {"old.txt", "new.txt"}
+
+
+def test_dirty_relpaths_from_porcelain_fails_closed_on_a_degraded_producer_record(
+    tmp_path, monkeypatch
+):
+    from coordinator_core.session import session_facts as _session_facts
+
+    monkeypatch.setattr(
+        _session_facts,
+        "_dirty_paths",
+        lambda worktree_root, **kw: {
+            "degraded": True,
+            "evidence": "boom",
+            "source": _session_facts._SOURCE_DIRTY_PATHS,
+        },
+    )
+
+    dirty = git_native.dirty_relpaths_from_porcelain(tmp_path, ["a.txt", "b.txt"])
+
+    assert dirty == {"a.txt", "b.txt"}

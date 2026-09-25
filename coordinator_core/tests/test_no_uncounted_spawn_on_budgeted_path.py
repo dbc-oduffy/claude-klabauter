@@ -1476,6 +1476,7 @@ _CLUSTER_D2_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/ops/ceremony/detached_spawn.py", "spawn_detached", "<dynamic>", 0),
     ),
 }
+_CLUSTER_D2_OPEN_DISPOSITION__SUBJECT_CLASS = "op-name"
 
 #: Entrypoints for the 11 D2-open ops, resolved the same (relpath, func_name) shape
 #: `_BUDGETED_ENTRYPOINTS` uses -- NOT merged into that dict (see the disposition text above for
@@ -1486,6 +1487,7 @@ _CLUSTER_D2_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
 _CLUSTER_D2_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "invoke.from_argv": ("coordinator_core/ops/invoke_from_argv.py", "_invoke_from_argv"),
 }
+_CLUSTER_D2_OPEN_ENTRYPOINTS__SUBJECT_CLASS = "op-name"
 
 #: The three cluster files this D2 disposition is scoped to -- matches the chunk's own `writes:`
 #: subject files (`coordinator_core/hooks/auto_push.py`,
@@ -1831,6 +1833,7 @@ _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     ),
     "tracker.push_suggestion": ("coordinator_core/ops/tracker/push_suggestion.py", "_handler"),
 }
+_CLUSTER_D3_OPEN_ENTRYPOINTS__SUBJECT_CLASS = "op-name"
 
 #: The nine cluster files this D3 disposition is scoped to -- matches the chunk's own dispatch
 #: brief's file list (`session/scope.py`, `session/core.py`, `ops/ceremony/git_native.py`,
@@ -2010,6 +2013,7 @@ _CLUSTER_D4_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "session.guard_settings_integrity": ("coordinator_core/ops/session/guard_settings_integrity.py", "_handler"),
     "workflow.fire": ("coordinator_core/ops/workflow_fire/op.py", "_workflow_fire"),
 }
+_CLUSTER_D4_OPEN_ENTRYPOINTS__SUBJECT_CLASS = "op-name"
 
 #: The five cluster files this D4 disposition is scoped to -- matches the chunk's own subject
 #: files (`coordinator_core/plugin_health/release_currency.py`, `coordinator_core/pyresolve.py`,
@@ -2092,6 +2096,7 @@ _CLUSTER_D4_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/warm/skew.py", "publish_lag", "git", 1),
     ),
 }
+_CLUSTER_D4_OPEN_DISPOSITION__SUBJECT_CLASS = "op-name"
 
 
 def test_cluster_d4_open_disposition_matches_live_measurement():
@@ -2247,6 +2252,7 @@ _CLUSTER_D5_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "workflow.fire": ("coordinator_core/ops/workflow_fire/op.py", "_workflow_fire"),
     "workflow.fire_status": ("coordinator_core/ops/workflow_fire/op.py", "_workflow_fire_status"),
 }
+_CLUSTER_D5_OPEN_ENTRYPOINTS__SUBJECT_CLASS = "op-name"
 
 #: The 22 cluster files this D5 disposition is scoped to -- matches the chunk's own subject
 #: files (this chunk's dispatch brief's `Your files:` list, verbatim).
@@ -3886,7 +3892,6 @@ _FROZEN_UNENROLLED_SPAWN_SITES: frozenset = frozenset(
     {
         ("coordinator_core/goals/reassess_krs.py", "_gather_signal", "<dynamic>", 0),
         ("coordinator_core/hooks/context_pressure_precompact.py", "_run_git", "git", 0),
-        ("coordinator_core/hooks/subagent_fabrication_check.py", "_git_porcelain_for_paths", "git", 0),
         ("coordinator_core/install/clone_sibling_repo.py", "clone_idempotent", "git", 0),
         ("coordinator_core/install/prereq_probe.py", "_check_windows_terminal_presence", "winget", 0),
         ("coordinator_core/install/prereq_probe.py", "_run", "<dynamic>", 0),
@@ -4732,18 +4737,6 @@ _NAMED_ARGV0_DISPOSITIONS: dict[tuple[str, str, str, int], str] = {
         "op and this site is not on any budgeted op's reachable set."
     ),
     (
-        "coordinator_core/hooks/subagent_fabrication_check.py",
-        "_git_porcelain_for_paths",
-        "git",
-        0,
-    ): (
-        "2026-08-23 exempt -- one `git status --porcelain` call per hook "
-        "invocation, already batched across every target path in a single "
-        "spawn per this function's own docstring; "
-        "`hooks.subagent_fabrication_check` is not a `_BUDGETED_ENTRYPOINTS` "
-        "op."
-    ),
-    (
         "coordinator_core/install/prereq_probe.py",
         "_check_windows_terminal_presence",
         "winget",
@@ -5079,7 +5072,6 @@ _TRANCHE_A_FILES: frozenset = frozenset({
     "coordinator_core/ops/release_tagging.py",
     "coordinator_core/ops/run_semgrep_scan.py",
     "coordinator_core/hooks/context_pressure_precompact.py",
-    "coordinator_core/hooks/subagent_fabrication_check.py",
     "coordinator_core/ops/ceremony/update_docs_scan.py",
     "coordinator_core/ops/distill_apply_disposal.py",
     "coordinator_core/ops/merge_quiet_activity_gate.py",
@@ -5117,15 +5109,18 @@ def test_named_argv0_sites_in_tranche_a_are_dispositioned_on_their_own_terms():
         "reaches outside tranche a's own file scope:\n"
         + "\n".join(f"  {k}" for k in stale)
     )
-    assert len(_NAMED_ARGV0_DISPOSITIONS) == 32, (
+    assert len(_NAMED_ARGV0_DISPOSITIONS) == 31, (
         f"_NAMED_ARGV0_DISPOSITIONS carries {len(_NAMED_ARGV0_DISPOSITIONS)} "
-        "entries, not the 32 expected after fleet.archive_completed_plans's kill "
+        "entries, not the 31 expected after fleet.archive_completed_plans's kill "
         "removed its 2 named-argv0 sites (archive_plans.py deleted whole) from "
-        "the dispatch brief's own tranche-a slice of 35, and "
+        "the dispatch brief's own tranche-a slice of 35, "
         "fleet.archive_shipped_handoffs's kill (2026-08-25, C1b) removed "
         "archive_handoffs.py's `_shipped_in_resolvable` site along with the "
-        "whole module -- a count drift here means either a site was missed or "
-        "one was double-counted."
+        "whole module, and P014-C3 (2026-09-24) converted "
+        "`hooks.subagent_fabrication_check._git_porcelain_for_paths` onto the "
+        "`session_facts` producer -- the site no longer exists as a direct "
+        "spawn here, so its row is deleted rather than re-keyed -- a count "
+        "drift here means either a site was missed or one was double-counted."
     )
 
 
@@ -6555,6 +6550,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "tracker.mint_person": 1,
     "workflow.fire_status": 1,
 }
+_STATIC_SPAWN_COUNT_PINS__SUBJECT_CLASS = "op-name"
 
 
 #: AC11's ratified headroom ceiling: 4 git-class spawns of headroom for a cold, import-paying
@@ -6597,6 +6593,7 @@ _STATIC_SPAWN_COUNT_OVER_BUDGET: dict[str, int] = {
     for op, count in _STATIC_SPAWN_COUNT_PINS.items()
     if count > _STATIC_SPAWN_COUNT_OVER_BUDGET_THRESHOLD
 }
+_STATIC_SPAWN_COUNT_OVER_BUDGET__SUBJECT_CLASS = "op-name"
 
 
 def test_static_spawn_count_pins_cover_every_unlegitimized_residual_op():

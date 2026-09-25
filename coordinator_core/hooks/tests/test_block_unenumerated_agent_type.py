@@ -117,7 +117,7 @@ def plugin_home(tmp_path: Path) -> Path:
     )
 
     # Leg 4 -- manifest: installed_plugins.json installPath (+ plugin/ nesting)
-    manifest_install_root = tmp_path / "manifest-installs" / "example-retrieval-repo"
+    manifest_install_root = tmp_path / "manifest-installs" / "project-rag"
     _write_agent_md(manifest_install_root / "plugin" / "agents" / "example-retrieval-repo-researcher.md", "example-retrieval-repo-researcher")
     plugins.mkdir(parents=True, exist_ok=True)
     (plugins / "installed_plugins.json").write_text(
@@ -204,7 +204,7 @@ def test_marketplace_style_plugin_leg_alone(tmp_path: Path) -> None:
 
 def test_manifest_style_plugin_leg_with_plugin_subdir_nesting(tmp_path: Path) -> None:
     plugins_root = tmp_path / "home" / ".claude" / "plugins"
-    install_root = tmp_path / "manifest-installs" / "example-retrieval-repo"
+    install_root = tmp_path / "manifest-installs" / "project-rag"
     _write_agent_md(install_root / "plugin" / "agents" / "example-retrieval-repo-researcher.md", "example-retrieval-repo-researcher")
     plugins_root.mkdir(parents=True, exist_ok=True)
     (plugins_root / "installed_plugins.json").write_text(

@@ -113,6 +113,7 @@ _ENV_VARS_TO_STRIP_FOR_MACHINE_LOCAL_ISOLATION = (
     "DOE_ROOT",
     "REPO_DOE_CLAUDE",
     "CLAUDE_KLABAUTER_ROOT",
+    _ENGINE_ROOT_VAR,
 )
 
 
@@ -127,18 +128,37 @@ _FAKE_MACHINE_LOCAL_TEMPLATE = """#!/usr/bin/env python3
 # and `get repos.claude_klabauter` with fixed fixture paths, exercising
 # coordinator_registry.doe_root()'s and cli_shared.claude_klabauter_root()'s real
 # machine-local-registry rungs without touching the real registry.local.toml.
+#
+# Two call shapes are exercised against this same file: coordinator_registry's
+# rung 5 subprocess-spawn fallback runs it as a CLI (`get <key>` via main()),
+# while cli_shared.machine_local_get() loads it in-process via
+# importlib.util and calls the kernel API directly (resolve_one/EXIT_OK) --
+# see cli_shared._load_machine_local_kernel(). Both shapes must resolve the
+# same two keys for both legs to see the fixture roots.
 import sys
 
 FAKE_DOE_ROOT = {fake_doe_root!r}
 FAKE_CLAUDE_KLABAUTER_ROOT = {fake_claude_klabauter_root!r}
 
+EXIT_OK = 0
+EXIT_NOT_FOUND = 1
+
+_REGISTRY = {{
+    "repos.doe_claude": FAKE_DOE_ROOT,
+    "repos.claude_klabauter": FAKE_CLAUDE_KLABAUTER_ROOT,
+}}
+
+
+def resolve_one(key, layers=None):
+    if key in _REGISTRY:
+        return (EXIT_OK, _REGISTRY[key])
+    return (EXIT_NOT_FOUND, None)
+
+
 def main() -> int:
     if len(sys.argv) >= 3 and sys.argv[1] == "get":
-        if sys.argv[2] == "repos.doe_claude":
-            print(FAKE_DOE_ROOT)
-            return 0
-        if sys.argv[2] == "repos.claude_klabauter":
-            print(FAKE_CLAUDE_KLABAUTER_ROOT)
+        if sys.argv[2] in _REGISTRY:
+            print(_REGISTRY[sys.argv[2]])
             return 0
     return 1
 

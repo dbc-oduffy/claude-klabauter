@@ -785,10 +785,11 @@ def test_at_close_out_the_ceiling_is_empty():
     writes onto the seam (entries/ceiling membership deleted) and
     recategorized eight more to-fix members that held no actual `state/`
     write to the category their real write target names (53 to 35 -- see
-    the register's C7 comment block for the full per-module breakdown)), so
+    the register's C7 comment block for the full per-module breakdown); retiring the
+    backlog-history shard deleted one to-fix module outright (35 to 34)), so
     a reader of this file at this commit does not mistake a non-empty
     ceiling for a defect."""
-    assert len(_TO_FIX_CEILING) == 35
+    assert len(_TO_FIX_CEILING) == 34
 
 
 def test_scan_cost_is_at_or_below_the_budget():

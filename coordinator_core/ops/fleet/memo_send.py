@@ -217,6 +217,14 @@ def _resolve_sent_by(fm: dict) -> str:
 
     Negative-spec: never RAISES on an unresolvable session — an un-nameable
     sender degrades the memo's repliability, it does not fail the delivery.
+
+    VERDICT (P088-C2, verify-and-pin, no production branch change): this
+    site is already warm-scoped via ``ops.session_context.resolve_current_session_id``,
+    which delegates to ``session.core.attributable_session_id`` — do not
+    re-resolve here. That accessor resolves tier-0 (``carried_session_id()``)
+    only under a warm dispatch and the full env-tier chain
+    (``resolve_session_id(cwd)``) cold, so this call already implements the
+    anti-forgery, warm-scoped policy without any further swap.
     """
     carried = fm.get("sent_by")
     if isinstance(carried, str) and carried.strip():
@@ -1106,7 +1114,7 @@ def _citation_lint_warning(paths: list) -> str:
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Environment gate: warn once where a memo would have no reader (C-env).
+# Warn-once acknowledgement bookkeeping, shared by every one-shot gate below.
 # ---------------------------------------------------------------------------
 
 #: Where the once-per-topic acknowledgement lands. Under the sender's own
@@ -1114,28 +1122,6 @@ def _citation_lint_warning(paths: list) -> str:
 #: never in a receiver's tree and never in git history — this is session-local
 #: bookkeeping about a warning, not a durable fleet artifact.
 _SEND_ACK_RELDIR = (".coordinator-local", "memo-send-ack")
-
-
-def _memo_has_no_reader(receiver_root=None):
-    """The capability, or `None` when this memo would be read.
-
-    Consults `peer_ems_reachable` against THE ADDRESSEE'S OWN INBOX, which is
-    a genuinely different question from the write bump's `fleet_present` and
-    now returns a genuinely different answer: the memo corpus stamps a drained
-    memo `picked_up_at`, so an inbox nobody is working is directly observable.
-    Measured 2026-09-06 on one container: `fleet_present=False` while
-    example-market-data-repo's inbox read `peer_ems_reachable=True` (drained 1d
-    ago). The two are not aliases.
-
-    Fail open: an unimportable capability layer means send exactly as before.
-    """
-    try:
-        from coordinator_core.environment import capability
-
-        reachable = capability("peer_ems_reachable", receiver_root=receiver_root)
-    except Exception:
-        return None
-    return None if reachable.value else reachable
 
 
 def _send_ack_path(sender_worktree: Path, topic: str) -> Path:
@@ -1152,47 +1138,7 @@ def _send_ack_path(sender_worktree: Path, topic: str) -> Path:
     return sender_worktree.joinpath(*_SEND_ACK_RELDIR) / digest
 
 
-def _no_reader_warning(evidence: str) -> str:
-    """The one-shot warning. A REGISTER, not an essay: one fact, the test the
-    EM applies, and the way through — no self-legitimacy, no apology, no
-    override key dressed up as a punishment.
-
-    It names WHAT WAS MEASURED, because the override is one keystroke and the
-    reasoning that justifies it is easy to fake to yourself. Measured 2026-09-11
-    on example-cockpit-repo: an EM read "no peer EM is reachable", knew it had been
-    exchanging live messages with that session all day, and overrode — answering
-    a claim the guard had not made. The guard was right; 21 memos from four repos
-    sat unstamped over nine days. Liveness and drainage are different facts, and
-    only drainage is observable from here, so only drainage is asserted.
-
-    It does not say "do not send". A memo is still the right artifact for
-    plan-weight work with no reader today, because it is a durable record for
-    whoever picks the repo up. It says what sending here does and does not
-    buy, and hands the decision back.
-    """
-    return (
-        "memo.send: nobody is draining that inbox, so this memo will not be "
-        "read — it is a record, not a dispatch.\n"
-        "  Not a claim that the session is dead. It may be live, and you may "
-        "be messaging it right\n"
-        "  now; what is not happening is anyone working its inbox.\n"
-        "  Measured: %s\n"
-        "\n"
-        "  If the work is a clear win you are confident in and within your "
-        "competence, doing it\n"
-        "  directly under PM assent beats filing a request nobody receives.\n"
-        "  If it is plan-weight complexity, the memo IS the right artifact — "
-        "re-run this exact\n"
-        "  command and it will send.\n"
-        "  If this host does carry a fleet, say so with "
-        "COORDINATOR_CAP_PEER_EMS_REACHABLE=1." % evidence
-    )
-
-
-def _warn_once(
-    sender_worktree: Path, ack_key: str, warning: str,
-    marker_text: str = "warned\n",
-) -> Optional[str]:
+def _warn_once(sender_worktree: Path, ack_key: str, warning: str) -> Optional[str]:
     """The one shared ack protocol every one-shot `memo.send` warning uses.
 
     `None` when `ack_key` was already warned about, or when the marker
@@ -1215,7 +1161,7 @@ def _warn_once(
         if ack.is_file():
             return None
         ack.parent.mkdir(parents=True, exist_ok=True)
-        ack.write_text(marker_text, encoding="utf-8", newline="\n")
+        ack.write_text("warned\n", encoding="utf-8", newline="\n")
     except OSError:
         return None
     return warning
@@ -1234,27 +1180,6 @@ def _held_once_refusal(warnings: list) -> str:
         "\n\n".join(warnings)
         + "\n  Nothing was written. %s once per topic; the next attempt sends."
         % noun
-    )
-
-
-def _no_reader_gate(
-    sender_worktree: Path, topic: str, dry_run: bool, receiver_root=None
-) -> Optional[str]:
-    """`None` to proceed; a warning string to refuse this one time.
-
-    Never gates a `dry_run` preview — a preview writes nothing, so warning
-    about delivery there would spend the operator's one warning on a call
-    that was never going to deliver.
-    """
-    if dry_run:
-        return None
-    unreachable = _memo_has_no_reader(receiver_root)
-    if unreachable is None:
-        return None
-
-    return _warn_once(
-        sender_worktree, topic, _no_reader_warning(unreachable.evidence),
-        marker_text="warned: %s\n" % unreachable.evidence,
     )
 
 
@@ -1727,15 +1652,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     # unresolvable receiver fails first and never uses up an ack) and before
     # the dry_run preview return (a preview never gates). Nothing has been
     # written yet, so a refusal still costs nothing.
-    #
-    # No reader: THIS RECEIVER's inbox shows no one draining it — the probe
-    # reads the addressee's own inbox rather than guessing from the venue.
     held = []
-    no_reader = _no_reader_gate(
-        sender_worktree, topic, dry_run, receiver_root=receiver_repo_path
-    )
-    if no_reader is not None:
-        held.append(no_reader)
 
     # Duplicate reply: THIS repo already answered `in_reply_to` from a
     # DIFFERENT session.

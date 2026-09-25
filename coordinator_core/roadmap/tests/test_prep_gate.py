@@ -852,7 +852,7 @@ def test_an_unreplaced_placeholder_path_is_its_own_defect_no_gate_clears(tmp_pat
 # ---------------------------------------------------------------------------
 
 
-def _reads_spine(entries: str, *, owner: str = "example-retrieval-repo") -> str:
+def _reads_spine(entries: str, *, owner: str = "project-rag") -> str:
     """A one-row spine reading a sibling path, with `entries` (already-indented
     YAML for `external_reads_ungated:`, or empty) spliced onto the row."""
     return (

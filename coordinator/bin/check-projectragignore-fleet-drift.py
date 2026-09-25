@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""check-projectragignore-fleet-drift — flag fleet repos whose `.example-retrieval-repo-ignore` is behind the template.
+"""check-projectragignore-fleet-drift — flag fleet repos whose `.project-rag-ignore` is behind the template.
 
 WHY THIS EXISTS. `scaffold_structure` (via `repo-setup` Phase 3e) copies
 `templates/dotprojectragignore.tmpl` into a fresh repo and, by design, **never clobbers an
@@ -58,7 +58,7 @@ import tomllib
 from pathlib import Path
 
 _TEMPLATE_REL = Path("templates") / "dotprojectragignore.tmpl"
-_IGNORE_NAME = ".example-retrieval-repo-ignore"
+_IGNORE_NAME = ".project-rag-ignore"
 _REPO_KEY_PREFIX = "repos."
 
 
@@ -213,7 +213,7 @@ def _classify(repo_root: Path, template_rules: list[str]) -> tuple[str, list[str
 
 def _apply(ignore_path: Path, missing: list[str]) -> None:
     """Append missing template rules verbatim. Append is safe for this surface in a way it is
-    not for a .gitignore: `.example-retrieval-repo-ignore` has no negation syntax, so order carries no
+    not for a .gitignore: `.project-rag-ignore` has no negation syntax, so order carries no
     meaning and a later line can never re-include what an earlier one pruned.
 
     Writes via temp-file + os.replace in the same directory: this is the one path that mutates
@@ -235,7 +235,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="check-projectragignore-fleet-drift",
         description=(
-            "Flag fleet repos whose .example-retrieval-repo-ignore lacks rules the coordinator template "
+            "Flag fleet repos whose .project-rag-ignore lacks rules the coordinator template "
             "ships. Report-only unless --apply is paired with an explicit --repo."
         ),
     )

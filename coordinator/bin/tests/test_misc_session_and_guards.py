@@ -188,7 +188,7 @@ class RagStalenessSurveyTests(unittest.TestCase):
     def test_resolve_example_retrieval_repo_cli_and_root_reads_claude_json(self):
         fake_config = {
             "mcpServers": {
-                "example-retrieval-repo": {
+                "project-rag": {
                     "args": ["-m", "example_retrieval_repo.cli", "/some/project/root"]
                 }
             }
@@ -202,7 +202,7 @@ class RagStalenessSurveyTests(unittest.TestCase):
     def test_resolve_example_retrieval_repo_cli_and_root_finds_py_arg(self):
         fake_config = {
             "mcpServers": {
-                "example-retrieval-repo": {
+                "project-rag": {
                     "args": ["/opt/rag/server.py", "/some/project/root"]
                 }
             }

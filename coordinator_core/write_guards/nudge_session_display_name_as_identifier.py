@@ -209,7 +209,7 @@ _KNOWN_SLUGS = (
     "claude-klabauter",
     "doe-claude",
     "klabauter",
-    "example-retrieval-repo",
+    "project-rag",
     "coordinator",
     "claude-central",
     "project-widgets",

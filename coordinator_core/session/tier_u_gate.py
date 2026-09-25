@@ -46,7 +46,7 @@ BEHAVIOR CONTRACT CHANGE (PM ruling, 2026-07-28) -- fail-closed default on
 an UNCLASSIFIABLE command. Previously, a command that ``classify_command``
 returned ZERO matches for (an opaque wrapper -- ``pnpm run tier:fast``,
 ``bash scripts/run-tests.sh --tier fast``, ``python
-example_retrieval_repo_scripts/run_tier_tests.py --tier sufficient``) fell through
+project_rag_scripts/run_tier_tests.py --tier sufficient``) fell through
 the same "no Tier-U matches" branch as a classified Tier-T/F command and
 proceeded unconditionally -- a fail-OPEN hole: the whole ladder silently
 bypassed for any repo whose fast tier is fronted by a wrapper the

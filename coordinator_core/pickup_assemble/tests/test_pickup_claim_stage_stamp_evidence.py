@@ -329,3 +329,144 @@ def test_mirror_only_evidence_satisfies_d2(tmp_path, as_session, monkeypatch):
     result = pa.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=False)
 
     assert _d2(result)["already_satisfied"] is True
+
+
+# ---------------------------------------------------------------------------
+# P026-C7 (AC8) — the comparator is called on apply()'s single post-directive
+# return, on every claim-banking exit. Read-only: it must never change the
+# exit code or `report`, only print a qualifying line to stderr.
+# ---------------------------------------------------------------------------
+
+import coordinator_core.pickup_assemble.apply as apply_mod
+from coordinator_core.claim_state import ClaimComparisonReport
+
+
+def test_apply_ok_exit_prints_an_unqualified_agree_verdict(
+    tmp_path, as_session, holder_reads_live, capsys
+):
+    """An `agree` verdict with no AC12 forward instrumentation on disk yet
+    (every row filed before C10 lands, including this one) is unqualified —
+    `ledger_resolver_source` degrades to `not-recorded` — so AC6/AC8 require
+    it print, not stay silent, on the ordinary `APPLY_EXIT_OK` happy path."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "h1.md")
+    as_session("sid-a")
+    holder_reads_live(True)
+
+    exit_code, report = apply_mod.apply(
+        "state/handoffs/h1.md", session_id="sid-a", repo_root=repo
+    )
+
+    assert exit_code == apply_mod.APPLY_EXIT_OK
+    err = capsys.readouterr().err
+    assert "claim-state comparator:" in err
+    assert "verdict=agree" in err
+    assert "ledger_resolver_source='not-recorded'" in err
+
+
+def test_apply_never_changes_exit_code_or_report_on_a_disagreeing_verdict(
+    tmp_path, as_session, holder_reads_live, capsys, monkeypatch
+):
+    """AC8's "changes no gate outcome" guarantee: force the comparator to
+    report a loudly non-agreeing verdict (a mismatched mirror holder) and
+    confirm `exit_code`/`report` are unaffected — the comparator call this
+    row adds is read-only regardless of what it finds."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "h1.md")
+    as_session("sid-a")
+    holder_reads_live(True)
+
+    monkeypatch.setattr(
+        apply_mod,
+        "compare_claim_state",
+        lambda *a, **k: ClaimComparisonReport(
+            verdict="holder-mismatch",
+            ledger_holder="sid-a",
+            mirror_holder="sid-other",
+            age=12.0,
+            ledger_resolver_source="not-recorded",
+            bound_seconds=300.0,
+            bound_exceeded=False,
+        ),
+    )
+
+    exit_code, report = apply_mod.apply(
+        "state/handoffs/h1.md", session_id="sid-a", repo_root=repo
+    )
+
+    assert exit_code == apply_mod.APPLY_EXIT_OK
+    assert "landed" in report
+    err = capsys.readouterr().err
+    assert "verdict=holder-mismatch" in err
+    assert "ledger_holder='sid-a'" in err
+    assert "mirror_holder='sid-other'" in err
+
+
+def test_apply_qualified_agree_is_silent(
+    tmp_path, as_session, holder_reads_live, capsys, monkeypatch
+):
+    """The negative case for AC6/AC8's qualification: an `agree` verdict
+    whose `ledger_resolver_source` names the hardened
+    `attributable_session_id` resolution prints nothing — "a fully-qualified
+    `agree` stays silent"."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "h1.md")
+    as_session("sid-a")
+    holder_reads_live(True)
+
+    monkeypatch.setattr(
+        apply_mod,
+        "compare_claim_state",
+        lambda *a, **k: ClaimComparisonReport(
+            verdict="agree",
+            ledger_holder="sid-a",
+            mirror_holder="sid-a",
+            age=None,
+            ledger_resolver_source="attributable_session_id:warm",
+            bound_seconds=300.0,
+            bound_exceeded=False,
+        ),
+    )
+
+    exit_code, report = apply_mod.apply(
+        "state/handoffs/h1.md", session_id="sid-a", repo_root=repo
+    )
+
+    assert exit_code == apply_mod.APPLY_EXIT_OK
+    err = capsys.readouterr().err
+    assert "claim-state comparator:" not in err
+
+
+def test_apply_transport_fail_exit_still_calls_the_comparator(
+    tmp_path, as_session, holder_reads_live, capsys, monkeypatch
+):
+    """AC8 names `APPLY_EXIT_TRANSPORT_FAIL` as one of the four gated exits —
+    the highest-divergence window in the system, per the row's own body.
+    Forcing `_execute_directives`'s reported exit_code to
+    `APPLY_EXIT_TRANSPORT_FAIL` drives the SAME post-directive-return path
+    this row instruments, keeping everything else (the ledger/mirror state
+    the comparator reads) on the real, unmocked path."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "h1.md")
+    as_session("sid-a")
+    holder_reads_live(True)
+
+    real_execute = apply_mod._execute_directives
+
+    def _forced_transport_fail(*args, **kwargs):
+        _exit_code, forced_report = real_execute(*args, **kwargs)
+        return apply_mod.APPLY_EXIT_TRANSPORT_FAIL, forced_report
+
+    monkeypatch.setattr(apply_mod, "_execute_directives", _forced_transport_fail)
+
+    exit_code, report = apply_mod.apply(
+        "state/handoffs/h1.md", session_id="sid-a", repo_root=repo
+    )
+
+    assert exit_code == apply_mod.APPLY_EXIT_TRANSPORT_FAIL
+    err = capsys.readouterr().err
+    assert "claim-state comparator:" in err

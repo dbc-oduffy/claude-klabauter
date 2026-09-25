@@ -162,8 +162,8 @@ class TestComposeTimeAssertionWarnsOnUnacceptedSender:
     def test_registered_defaulted_sender_passes(self, tmp_path, monkeypatch):
         """The positive twin of the rejection test above — a defaulted
         sender that DOES resolve to a registered receiver composes cleanly."""
-        sender = _make_sender_root(tmp_path / "example-retrieval-repo")
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": sender})
+        sender = _make_sender_root(tmp_path / "project-rag")
+        claude_home = _make_claude_home(tmp_path, {"project_rag": sender})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         resolved = resolve_and_assert_sender_id(None, root=str(sender))

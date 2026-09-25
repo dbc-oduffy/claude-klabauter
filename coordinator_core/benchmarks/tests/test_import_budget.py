@@ -31,6 +31,7 @@ _ENTRYPOINTS = [
     "coordinator_core.write_guards.engine",
     "coordinator_core.ipc",
 ]
+_ENTRYPOINTS__SUBJECT_CLASS = "op-name"
 
 
 def test_manifest_carries_entry_for_every_minimum_entrypoint():

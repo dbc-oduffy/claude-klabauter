@@ -296,11 +296,11 @@ from coordinator_core.git.commit import (
     FilterUnsupported,
     commit_paths,
     hash_worktree_blobs_via_spawn,
+    partition_declared_deletions,
 )
 from coordinator_core.git.commit_trailers import apply_missing_trailers
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.push import PUSH_STATUS_NOT_ATTEMPTED
-from coordinator_core.ops.dirty_tree_gate import parse_porcelain_paths
 from coordinator_core.session import core
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.session import claim_index
@@ -445,14 +445,19 @@ class GroupResult(TypedDict):
     # `_render_report`'s benign branch can say WHY, not merely that it was a
     # no-op. `None` on a landed commit or a genuine `commit_failed`.
     declared_absent_from_head: List[str]
-    # 8f787b71-c) — `outcome.declared_absent_from_head` (commit.py), threaded
-    # through so a claimed path this call classified as a phantom deletion
-    # (absent from the worktree AND from HEAD) is operator-visible here too,
-    # not just on the `commit_v2` ceremony route. `_commit_group` already
-    # does not commit these (caught by `commit_paths`' own logic); this key
-    # only carries the visibility half of the fix. `[]` when nothing was
-    # skipped as a phantom deletion, including on the `CommitRefused`/
-    # `FilterUnsupported` branch, where no `outcome` exists to read it from.
+    # 8f787b71-c, re-sourced T3 (docs/plans/2026-09-07-a-confirmed-absent-
+    # caller-path-refuses-the-commit.md) — sourced from `_commit_group`'s OWN
+    # `partition_declared_deletions` pre-filter, not from `outcome` (the
+    # engine's `CommitOutcome.declared_absent_from_head` field is scheduled
+    # for deletion once the engine raises instead of silently tolerating a
+    # phantom deletion). Threaded through so a claimed path this call
+    # classified as HEAD-absent (a claim-recorder defect, not a caller
+    # declaration) is operator-visible here too, not just on the `commit_v2`
+    # ceremony route. `_commit_group` pre-filters these out of the
+    # `deleted_paths` it hands `commit_paths`; this key only carries the
+    # visibility half. `[]` when nothing was classified as absent, including
+    # on a forced-`None` spine (nothing was classified) and on the
+    # `CommitRefused`/`FilterUnsupported` branch reached with a `None` spine.
 
 
 class DroppedGroup(TypedDict):
@@ -1363,34 +1368,21 @@ def _current_dirty_paths(cwd: Optional[str]) -> List[str]:
     ``?? state/`` line naming the directory, not its files — every file
     under it would then vanish from residue entirely rather than being
     named/grouped, exactly the invisibility AC3 exists to fix.
+
+    Converted (P014-C3) onto `session_facts._dirty_paths`, whole-tree scoped,
+    `quotepath_false=True` (the producer accepts it as a parameter rather
+    than this site hardcoding it). Posture unchanged: fails closed (empty
+    list) on a degraded read.
     """
-    try:
-        result = subprocess.run(
-            [
-                "git",
-                "-c",
-                "core.quotepath=false",
-                "status",
-                "--porcelain",
-                "--untracked-files=all",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            **no_console_creationflags(),
-        )
-    except OSError:
+    from coordinator_core.session.session_facts import _dirty_paths as _producer_dirty_paths
+
+    worktree_root = Path(cwd) if cwd is not None else Path.cwd()
+    result = _producer_dirty_paths(
+        worktree_root, untracked_files="all", quotepath_false=True
+    )
+    if result["degraded"]:
         return []
-    if result.returncode != 0:
-        return []
-    # Reuse the ONE sanctioned porcelain
-    # parser (`dirty_tree_gate.parse_porcelain_paths`) rather than a second
-    # hand-rolled copy; that function's own docstring forbids a second copy.
-    # `--untracked-files=all` is set on the `git status` call above, not by
-    # the parser — the parser only splits lines already produced by that
-    # call, so the all-files behavior this function's docstring promises is
-    # unaffected by delegating the line-splitting itself.
-    return [path for _xy, path in parse_porcelain_paths(result.stdout) if path.strip()]
+    return [path for _xy, path in result["value"]["entries"] if path.strip()]
 
 
 def _residue_class(path: str) -> str:
@@ -1772,7 +1764,42 @@ async def _commit_group(
     # the old `run_commit_pipeline`'s `stage_paths` auto-classification used
     # to do internally.
     present_paths = [p for p in group["paths"] if (Path(worktree_root) / p).exists()]
-    deleted_paths = [p for p in group["paths"] if p not in present_paths]
+    declared_deletions = [p for p in group["paths"] if p not in present_paths]
+    # Pre-filter (T3, docs/plans/2026-09-07-a-confirmed-absent-caller-path-
+    # refuses-the-commit.md § Design item 6). `declared_deletions`' phantoms
+    # come from the claim-recorder defect (state/bug-backlog/2026-09-06-...
+    # -0f8bc9499721.yaml), not from a caller declaration, so this route must
+    # not turn that defect into a close-blocker once the engine refuses a
+    # phantom outright. Zero git spawn, zero index read.
+    partition = partition_declared_deletions(worktree_root, declared_deletions)
+    if partition is None:
+        # Unreadable spine -- pass the set through unfiltered and let
+        # `commit_paths`' own "could not read HEAD's tree spine" refusal be
+        # the fail-closed abort. Nothing was classified, so nothing is
+        # reported absent.
+        deleted_paths = declared_deletions
+        absent_from_head: List[str] = []
+    else:
+        deleted_paths, absent_from_head = partition
+
+    if not present_paths and not deleted_paths:
+        # Phantom-deletions-only group: every declared deletion is absent
+        # from HEAD, and there is no present path either. Nothing for
+        # `commit_paths` to do -- return the benign no-op shape with the
+        # skipped set carried for `_render_report`, never "already
+        # committed" (that wording implies a prior commit actually landed
+        # these bytes).
+        return {
+            "paths": group["paths"],
+            "message": group["message"],
+            "committed": False,
+            "sha": None,
+            "push_state": PUSH_STATUS_NOT_ATTEMPTED,
+            "error": None,
+            "commit_failed": False,
+            "reason": "phantom-deletions-only",
+            "declared_absent_from_head": absent_from_head,
+        }
     # Engine-owned trailers (Session-Id/Deliverable-Id/Co-Authored-By): this
     # route lands via `commit_paths`' commit-tree plumbing, which fires no
     # git hooks, so `apply_missing_trailers` is its only attach point. The
@@ -1801,7 +1828,7 @@ async def _commit_group(
             "error": str(exc),
             "commit_failed": True,
             "reason": None,
-            "declared_absent_from_head": [],
+            "declared_absent_from_head": absent_from_head,
         }
     # Release this session's claims over the paths the commit just landed
     # (`session/scope.py :: release_committed_claims`). This route needs it
@@ -1839,7 +1866,7 @@ async def _commit_group(
         "error": None,
         "commit_failed": False,
         "reason": None,
-        "declared_absent_from_head": list(outcome.declared_absent_from_head),
+        "declared_absent_from_head": absent_from_head,
     }
 
 
@@ -2676,6 +2703,24 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
         elif g["commit_failed"]:
             detail = g.get("error") or "commit failed"
             lines.append("NOT committed — %s — %s" % (g["message"], detail))
+            absent = g.get("declared_absent_from_head") or []
+            if absent:
+                # T3 (docs/plans/2026-09-07-a-confirmed-absent-caller-path-
+                # refuses-the-commit.md § Design item 6) — the pre-filter's
+                # absent list survives a refused call too: a clean-touched
+                # path plus a phantom leaves `commit_paths` all-no-delta,
+                # which raises `NothingToCommit` here, and the phantom must
+                # still be reported SKIPPED rather than silently lost with
+                # the refusal.
+                sample = sorted(absent)[:5]
+                tail_absent = ", ".join(sample)
+                if len(absent) > 5:
+                    tail_absent += ", ..."
+                lines.append(
+                    "  SKIPPED %d declared path(s) — absent from both the "
+                    "worktree and HEAD, not committed as a deletion: %s"
+                    % (len(absent), tail_absent)
+                )
         else:
             # The benign no-op. "NOT committed" is reserved for a genuine
             # failure and must never appear here: an operator (or an automated
@@ -2684,10 +2729,31 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
             # The count here is pathspec breadth and is labelled as such: no
             # commit happened on this call, so no change count may be attached
             # to it (example-cockpit-repo-em memo, 2026-08-05).
-            lines.append(
-                "already committed — %s — %d file(s) in scope, nothing new to commit (%s)"
-                % (g["message"], len(g["paths"]), g.get("reason") or "no-op")
-            )
+            absent = g.get("declared_absent_from_head") or []
+            if absent:
+                # Phantom-deletions-only group (T3, § Design item 6) — every
+                # declared deletion was absent from HEAD, so nothing landed.
+                # "already committed" is never said here: no prior commit
+                # landed these bytes, so that wording would be false.
+                lines.append(
+                    "nothing to commit — %s — %d file(s) in scope, every "
+                    "declared deletion was a phantom (%s)"
+                    % (g["message"], len(g["paths"]), g.get("reason") or "no-op")
+                )
+                sample = sorted(absent)[:5]
+                tail_absent = ", ".join(sample)
+                if len(absent) > 5:
+                    tail_absent += ", ..."
+                lines.append(
+                    "  SKIPPED %d declared path(s) — absent from both the "
+                    "worktree and HEAD, not committed as a deletion: %s"
+                    % (len(absent), tail_absent)
+                )
+            else:
+                lines.append(
+                    "already committed — %s — %d file(s) in scope, nothing new to commit (%s)"
+                    % (g["message"], len(g["paths"]), g.get("reason") or "no-op")
+                )
 
     return "\n".join(lines)
 

@@ -204,9 +204,9 @@ class PreflightOracleError(Exception):
 FLEET_REPO_KEYS: Dict[str, str] = {
     "DoE-claude": "doe_claude",
     "claude-klabauter": "claude_klabauter",
-    "example-retrieval-repo": "example_retrieval_repo",
+    "project-rag": "project_rag",
     "cockpit": "example_cockpit_repo",
-    "example-retrieval-repo-ue-addon": "example_retrieval_repo_ue_addon",
+    "example-retrieval-repo-ue-addon": "project_rag_ue_addon",
     "example-game-workbench-repo": "example_game_workbench_repo",
     "example-market-data-repo": "example_market_data_repo",
 }

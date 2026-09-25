@@ -128,6 +128,41 @@ def test_already_correct_mode_is_a_no_op(tmp_path, publish):
     assert publish._normalize_dest_exec_bits(repo, [Path("bin")]) == []
 
 
+def test_a_hand_staged_then_removed_entry_refuses_the_whole_commit(
+    tmp_path, publish, capsys
+):
+    """P027-T5 census/publish AC: on a real-git mirror, a path is `git
+    add`-ed by hand, never committed, then removed from disk (`AD`), beside
+    one modified tracked file. `_commit_published_dests` returns `False`,
+    the mirror's HEAD is unmoved, and stderr names the `AD` path.
+    `publish.py` is unedited by this row (this test only exercises it)."""
+    repo = tmp_path / "mirror"
+    _init_repo(repo)
+    _write_tracked(repo, "bin/kept.py", "kept\n")
+    _git(repo, "commit", "-qm", "seed")
+    head_before = _git(repo, "rev-parse", "HEAD").strip()
+
+    # One modified tracked file, beside the hand-staged-then-removed entry.
+    (repo / "bin" / "kept.py").write_text("kept v2\n", encoding="utf-8")
+
+    ghost = repo / "bin" / "ghost.py"
+    ghost.write_text("ghost\n", encoding="utf-8")
+    _git(repo, "add", "--", "bin/ghost.py")
+    ghost.unlink()
+
+    ok = publish._commit_published_dests(
+        {repo: {Path("bin")}},
+        succeeded_row_names=["mirror"],
+        round_pinned_shas={},
+    )
+
+    assert ok is False
+    head_after = _git(repo, "rev-parse", "HEAD").strip()
+    assert head_after == head_before
+    err = capsys.readouterr().err
+    assert "bin/ghost.py" in err
+
+
 def test_binary_blob_does_not_derail_the_batch(tmp_path, publish):
     """A blob that is not UTF-8 decodable sits in the same `cat-file --batch`
     feed as the offenders; a parse that mis-slices on it would silently drop

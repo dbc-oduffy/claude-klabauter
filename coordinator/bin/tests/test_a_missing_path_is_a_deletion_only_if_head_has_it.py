@@ -179,6 +179,56 @@ def test_an_absent_directory_is_refused_not_called_a_deleted_file(tmp_path, caps
     assert "BLOCKED: pkg is neither in the worktree nor in HEAD" in err
 
 
+def test_percolate_round_never_classifies_a_head_absent_path_as_a_deletion(tmp_path):
+    """P027-T5 census: `percolate-round.py :: _partition_pathspec_for_commit`
+    only ever appends an entry to its `deletions` return leg when that entry
+    resolves inside `head_tracked` (its caller's `_dest_head_tree` read) --
+    so its derivation cannot itself hand `commit_paths` a HEAD-absent
+    `deleted_paths` member. A path absent from both the worktree and
+    `head_tracked` lands in `declined`, never `deletions`."""
+    import importlib.util as _ilu
+
+    round_spec = _ilu.spec_from_file_location(
+        "percolate_round_census_under_test", _BIN_DIR / "percolate-round.py"
+    )
+    assert round_spec is not None and round_spec.loader is not None
+    round_mod = _ilu.module_from_spec(round_spec)
+    sys.modules[round_spec.name] = round_mod
+    round_spec.loader.exec_module(round_mod)
+
+    root = tmp_path / "dest"
+    root.mkdir()
+    (root / "kept.py").write_text("kept\n", encoding="utf-8")
+
+    present, deletions, declined = round_mod._partition_pathspec_for_commit(
+        ["kept.py", "tracked-gone.py", "never-existed.py"],
+        str(root),
+        head_tracked={"tracked-gone.py"},
+    )
+
+    assert present == ["kept.py"]
+    assert deletions == ["tracked-gone.py"]
+    assert [d["path"] for d in declined] == ["never-existed.py"]
+
+
+def test_cli_and_engine_refuse_the_same_phantom_path(tmp_path):
+    """The layer-position AC: `coordinator-safe-commit ::
+    _split_paths_for_commit_v2` and the engine (`commit_paths`) refuse the
+    same fixture path -- the CLI's own refusal is not removed, weakened or
+    duplicated by the engine's."""
+    from coordinator_core.git.commit import PhantomDeletionDeclared, commit_paths
+
+    root = _repo(tmp_path)
+
+    with pytest.raises(SystemExit) as exc:
+        safe_commit._split_paths_for_commit_v2(str(root), ["pkg/never.py"])
+    assert exc.value.code == 1
+
+    with pytest.raises(PhantomDeletionDeclared) as engine_exc:
+        commit_paths(str(root), [], "engine refusal fixture", deleted_paths=["pkg/never.py"])
+    assert "pkg/never.py" in str(engine_exc.value)
+
+
 def test_ls_tree_still_reports_the_files_a_real_deletion_names(tmp_path):
     """`-r` must not cost the ordinary case: a deleted FILE still resolves."""
     root = _repo(tmp_path)

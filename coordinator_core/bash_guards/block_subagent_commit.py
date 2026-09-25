@@ -3459,6 +3459,7 @@ _COMMITTING_OP_NAMES = frozenset(
         # was live on the ceremony path, not theoretical.
         "fleet.archive_completed_plans",     # ops/fleet/archive_plans.py -- archive_and_commit(...)
         "fleet.archive_actioned_memos",      # ops/fleet/archive_actioned_memos.py -- archive_and_commit(...)
+        "fleet.delete_superseded_decisions",  # ops/fleet/delete_superseded_decisions.py -- rm_and_commit(...)
         # C3 (docs/plans/2026-08-27-something-must-commit-ceremony-commit-v2.md):
         # `ceremony.commit_v2` (ops/ceremony/commit_v2.py :: _handler) is the
         # fresh dispatchable identity over `commit.commit_paths`

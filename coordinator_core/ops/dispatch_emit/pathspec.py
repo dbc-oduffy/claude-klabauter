@@ -107,20 +107,33 @@ this module's negative spec: probing the derived candidate for existence,
 never globbing or scanning a directory for anything matching the pattern.
 
 **Derivation is not runnability (AC5b).** This module derives a candidate
-path; it has no way to confirm that path is a command
-``coordinator:test-runner`` can actually run — that agent definition is a
-DoE-claude-owned surface this plan's Anti-scope forbids touching. A
-non-``.py`` target this module derives should be treated as **inert
-config with a documented consumer-runnability gap** until
-``coordinator:test-runner``'s own definition is confirmed to resolve it to
-a real, runnable command — see the decision record ratifying AC8/AC9 for
-the explicit statement of that gap. This module's own docstring previously
-named the repo-supplied test locator as "the real long-term fix... out of
-scope here" (see ``emit.py``'s § "The terminal phase degrades, it never
-vetoes" for that note's own text); that framing is now stale for the
-derivation half described here, even though the runnability half above
-remains an open, explicitly documented gap rather than a silently claimed
-working feature.
+path only; runnability is a separate question this module has no way to
+answer directly, so the answer is read from
+``coordinator:test-runner``'s own agent definition instead (read-only
+citation, not an edit — that file is a DoE-claude-owned surface this
+plan's Anti-scope forbids touching): DoE-claude
+``coordinator/agents/test-runner.md`` § "Runner Resolution" (its
+ecosystem table plus the instruction to "Read the manifest... before
+inventing a command") names scoped invocation shapes for JS/TS
+(``pnpm``/``npm``/``yarn``/``vitest``/``jest``), Go, and Rust, alongside
+Python's ``pytest``. For a ``test_locator_suffixes`` pattern whose source
+suffix matches one of those named ecosystems (e.g. a ``*.test.ts``
+convention under the JS/TS row), the derived candidate **is VERIFIED
+runnable**: ``coordinator:test-runner`` resolves it via the repo's own
+manifest into a real scoped command, not an inert path. That table is a
+closed list of named ecosystems, not a general suffix-to-runner mapping,
+so a ``test_locator_suffixes`` pattern outside those rows (a suffix
+naming no ecosystem the table lists) stays a **documented
+consumer-runnability gap** — this module cannot confirm
+``coordinator:test-runner`` resolves it to a runnable command, and a repo
+configuring such a pattern should treat that candidate as inert config
+until the table gains a row for it. This module's own docstring
+previously named the repo-supplied test locator as "the real long-term
+fix... out of scope here" (see ``emit.py``'s § "The terminal phase
+degrades, it never vetoes" for that note's own text); that framing is now
+stale for the derivation half described here, and, for a named-ecosystem
+suffix, for the runnability half too — see the decision record ratifying
+AC8/AC9 for the record of this same split.
 
 ## The sharp edge AC16 exists for
 

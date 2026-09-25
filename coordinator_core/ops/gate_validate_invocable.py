@@ -9,12 +9,15 @@ Purpose: given a diff / changed-file set, run each of five DoD dimensions
 check reads as ERROR, never as a silent PASS (fail-closed on internal
 exception; see "Fail-closed on exception" below).
 
-**"Advisory" — the operative definition (per C1, DR-233).** This op computes
-and records a verdict. It does not refuse a commit, does not block a merge,
-and does not simulate a non-bypassable authority layer — DR-233 ruled
-engine-native, advisory-only, no GitHub Actions/pre-commit-framework
-authority layer. The verdict is a fact an operator or the strang-01 port
-template (C8) can read and act on; this module never acts on it itself.
+**"Advisory" — the operative definition (per C1, DR-233, superseded by
+DR-375).** This op computes and records a verdict. It does not refuse a
+commit and does not simulate a non-bypassable authority layer at this local
+check — DR-233 ruled engine-native, advisory-only, no GitHub
+Actions/pre-commit-framework authority layer, and DR-375 leaves that local
+posture in place while adding a separate remote-authority layer (a GitHub
+ruleset plus a self-attested local status) at `git push`. The verdict is a
+fact an operator or the strang-01 port template (C8) can read and act on;
+this module never acts on it itself.
 
 Dimension seam, not five inline implementations (C1 requirement, so C5 and
 C7 can each plug in a real dimension without editing this module's dispatch

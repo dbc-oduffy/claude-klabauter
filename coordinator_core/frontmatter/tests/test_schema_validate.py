@@ -1166,6 +1166,39 @@ class TestCostEnum:
 
 
 # ---------------------------------------------------------------------------
+# Cross-field rules — loe band (M-XL)
+# ---------------------------------------------------------------------------
+
+class TestLoeBand:
+    def test_valid_loe_values(self):
+        for loe in ['M', 'L', 'XL']:
+            fm = _valid_handoff(loe=loe)
+            errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+            assert not any(e['field'] == 'loe' for e in errors), f'loe={loe} should be valid'
+
+    def test_invalid_loe_value(self):
+        fm = _valid_handoff(loe='S')
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert any(e['field'] == 'loe' for e in errors)
+
+    def test_absent_loe_ok(self):
+        """loe is optional — absent is valid."""
+        fm = _valid_handoff()
+        assert 'loe' not in fm
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert not any(e['field'] == 'loe' for e in errors)
+
+    def test_cost_and_loe_both_stay_valid(self):
+        """`cost:` stays valid alongside `loe:` — the rename does not
+        retire `_cf_cost_enum` (docs/plans/2026-09-11-roadmap-audits-
+        readiness-views-and-recor.md C3 body: 8 handoff records carry
+        `cost:`, that file's leniency is contract)."""
+        fm = _valid_handoff(cost='T1', loe='M')
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert not any(e['field'] in ('cost', 'loe') for e in errors)
+
+
+# ---------------------------------------------------------------------------
 # Cross-field rules — graph primitives kind-gate (roadmap-baton only)
 # ---------------------------------------------------------------------------
 

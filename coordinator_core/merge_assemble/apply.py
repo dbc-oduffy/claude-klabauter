@@ -376,23 +376,30 @@ def _dispatch_tier_u_grant(args: list[str], repo_root: Path) -> dict[str, Any]:
     resolves the SAME sid this process already has.
 
     Exit-code contract, mapped onto this dispatcher's raise/return split:
-    exit 1 is an infra condition (unresolvable sid) and DEGRADES — the
-    layer-5 guard fails closed, so an unminted grant refuses the Tier-U
-    consumer rather than authorizing it, and aborting the whole ceremony
-    over it would be strictly worse than the prose this replaced. Exit 2 is
-    a wrong argv shape built by `build_directives` in this same repo, i.e. a
-    defect, and RAISES.
+    exit 1 is an infra condition (unresolvable sid) and DEGRADES for
+    `grant`/`revoke` — the layer-5 guard fails closed, so an unminted grant
+    refuses the Tier-U consumer rather than authorizing it, and aborting the
+    whole ceremony over it would be strictly worse than the prose this
+    replaced. A `check` directive's exit 1 is different: the gate the
+    ceremony is about to cross is shut, and degrading it is exactly the
+    silence this cluster exists to close (C2's per-verb disposition), so a
+    non-OK `check` RAISES here too. Exit 2 is a wrong argv shape built by
+    `build_directives` in this same repo, i.e. a defect, and RAISES.
 
     Negative-spec: do not "make this consistent" by routing it through
     `_run_py_script`/`_dispatch_result`. Consistency with the other handlers
     is not worth two cold spawns, and the raise-on-exit-1 that would come
     with it reintroduces "a grant that could not be minted takes the
-    ceremony down with it"."""
-    from coordinator_core.session.grant_directive import EXIT_USAGE, run_grant_directive
+    ceremony down with it" — for `grant`/`revoke` only; `check` already
+    raises on denial by design."""
+    from coordinator_core.session.grant_directive import EXIT_OK, EXIT_USAGE, run_grant_directive
 
-    code, message = run_grant_directive(args)
+    verb = args[0] if args else None
+    code, message = run_grant_directive(args, repo_root=str(repo_root))
     if code == EXIT_USAGE:
         raise RuntimeError(f"tier-u-grant: {message}")
+    if verb == "check" and code != EXIT_OK:
+        raise RuntimeError(f"tier-u-grant check: {message}")
     result: dict[str, Any] = {"cli": "tier-u-grant", "returncode": code, "stdout": ""}
     if code != 0:
         result["degraded_reason"] = (
@@ -437,7 +444,9 @@ def _compensate_grant_write(
     that `declined: True` asserts."""
     from coordinator_core.session.grant_directive import run_grant_directive
 
-    code, message = run_grant_directive(["revoke", "--only-ceremony", _CEREMONY_NAME])
+    code, message = run_grant_directive(
+        ["revoke", "--only-ceremony", _CEREMONY_NAME], repo_root=str(repo_root)
+    )
     if code != 0:
         raise RuntimeError(
             f"grant handback compensation did not complete (exit {code}): {message}"
@@ -626,6 +635,7 @@ def apply(
         judgment_points = decision.get("judgment_points", [])
 
         outcome = "directive_failed"
+        exit_label = None
         try:
             exit_code, report = apply_base.execute_directives(
                 directives,
@@ -636,12 +646,13 @@ def apply(
                 composition_budget=composition_budget,
                 compensators=_COMPENSATORS,
             )
+            exit_label = apply_base.exit_code_label(exit_code, report)
             if exit_code == apply_base.APPLY_EXIT_OK:
                 outcome = "success"
             elif exit_code == apply_base.APPLY_EXIT_PARTIAL_MUTATION:
                 outcome = "partial_mutation"
         finally:
-            flush_composition_record(composition_budget, outcome)
+            flush_composition_record(composition_budget, outcome, exit_code_label=exit_label)
         # branch_state/release_tag_cut moved into the canonical envelope's
         # `artifact` key (Review: code-reviewer — Finding 1) — no longer
         # top-level siblings of directives/judgment_points.

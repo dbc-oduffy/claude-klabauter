@@ -70,9 +70,12 @@ this fact's `value: 0` does not do so on its own.
 
 ANTI-SCOPE (this chunk only, not a standing rule): does not build a second session
 store (`coordinator_core/session/shape.py` already is one; this module reads through
-existing producers, never a store of its own — AC10). Does not converge the 21
-hand-rolled dirty-probe implementations (a sibling roadmap-seed's scope, not this
-one's). Does not edit `quick_wrap_assemble/__init__.py` — DR-323 § (a)'s
+existing producers, never a store of its own — AC10). Converging the 21 hand-rolled
+dirty-probe implementations onto `_dirty_paths` IS in scope as of
+`docs/plans/2026-09-01-the-dirty-tree-fact-is-served-not-re-imp.md` (P014) — that
+plan's C1 promotes `_dirty_paths` itself to the parameterised producer every other
+call site converges onto in its later chunks; it is no longer a sibling seed's scope
+disclaimed here. Does not edit `quick_wrap_assemble/__init__.py` — DR-323 § (a)'s
 coexistence-then-cut discipline makes C7 the only chunk that cuts the interim readers
 over; this module's facts are served ALONGSIDE them until then (C7b's `session_
 governing_plan` included — its sibling reader `_read_governing_plan` stays live in
@@ -88,7 +91,7 @@ from __future__ import annotations
 import re
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
 from coordinator_core.ops.ceremony.branch_resolution import (
@@ -650,7 +653,7 @@ def _session_governing_plan_impl(
                 "evidence": dirty_result["evidence"],
                 "source": _SOURCE_SESSION_GOVERNING_PLAN,
             }
-        collision = plan_path in dirty_result["paths"]
+        collision = plan_path in dirty_result["value"]["paths"]
 
     return {
         "degraded": False,
@@ -958,41 +961,125 @@ def _session_diff_brightline_impl(
 # ---------------------------------------------------------------------------
 
 
-def _dirty_paths(worktree_root: Path) -> dict[str, Any]:
-    """Repo-relative forward-slash paths with uncommitted changes, from one
-    `git status --porcelain` read.
+#: Grep-able backing-source string (DR-319 § (b) convention) for the promoted
+#: `_dirty_paths` producer itself (P014-C1).
+_SOURCE_DIRTY_PATHS = "coordinator_core/session/session_facts.py::_dirty_paths"
 
-    Moved from `quick_wrap_assemble/__init__.py :: _dirty_paths` (fl-core-02 C4) —
-    the parsing logic (porcelain's 3-char status prefix, the `old -> new` rename
-    arrow, forward-slashing a Windows path) is unchanged. The POSTURE changed: the
-    old helper called `_git_out`, which swallows any git failure (nonzero exit,
-    `OSError`, timeout) into `""` — indistinguishable from a genuinely clean
-    worktree. This uses `branch_resolution._git_run` instead (the same seam C3's
-    `_novel_loc_split` uses), returncode-checked, so a `git status` failure reports
-    as degraded rather than as zero dirty paths.
 
-    Returns `{"degraded": False, "paths": set[str]}` on success,
-    `{"degraded": True, "evidence": <str>}` when the underlying `git status` call
-    fails.
+def _dirty_paths(
+    worktree_root: Path,
+    *,
+    pathspecs: Optional[Sequence[str]] = None,
+    untracked_files: str = "all",
+    quotepath_false: bool = False,
+    keep_rename_source: bool = False,
+    unquote: bool = True,
+    forward_slash: bool = True,
+) -> dict[str, Any]:
+    """The dirty-tree fact, promoted to a served, parameterised producer
+    (P014-C1, `docs/plans/2026-09-01-the-dirty-tree-fact-is-served-not-re-imp.md`).
+    Every call site this plan converges (C2, C3) reads through this function
+    instead of hand-rolling its own `git status --porcelain` spawn and parse.
+
+    Moved from `quick_wrap_assemble/__init__.py :: _dirty_paths` (fl-core-02 C4);
+    this chunk (P014-C1) extends it with the ARGV divergences the re-verified
+    census actually records — pathspec scope, untracked-files policy, rename
+    handling, and quotepath — never `--no-optional-locks` (inherited
+    unconditionally from `status_porcelain`, not a parameter — no call site
+    needs a different value) and never `known_scope` (not an argv divergence;
+    P014-C4's own call, see that chunk's body).
+
+    Spawns through `coordinator_core.ops.ceremony.git_native.status_porcelain`
+    (the shared seam that already owns the pre-subcommand `--no-optional-locks`
+    placement and the Windows argv-chunking fallback) and parses through
+    `coordinator_core.ops.dirty_tree_gate.parse_porcelain_paths` (the one
+    porcelain-parsing loop in the repo — this function does not author a
+    second one). Both imported function-local, never at module top: this
+    module is on the commit hot path, and `dirty_tree_gate` must not appear at
+    module top here (P014-C1's checkable rule).
+
+    Default parameters reproduce `_dirty_paths`'s pre-P014-C1 behaviour
+    byte-for-byte for this module's own three existing callers
+    (`session_governing_plan`, `session_terminal_sizings`,
+    `session_fold_sidecars`): whole-tree scope, `--untracked-files=all`, no
+    `core.quotepath` override, rename records collapsed to their destination
+    path only, unquoted, forward-slashed.
+
+    Returns DR-319's return-shape contract (module docstring, "RETURN-SHAPE
+    CONTRACT"):
+      - computed:  {"degraded": False,
+                    "value": {"paths": set[str], "entries": list[tuple]},
+                    "source": <str>, "collision": <bool>}
+      - degraded:  {"degraded": True, "evidence": <str>, "source": <str>}
+
+    `value["paths"]` is the flat repo-relative path set (a rename's kept
+    halves both included when `keep_rename_source=True`) — the shape every
+    existing internal caller already reads. `value["entries"]` is the typed
+    `parse_porcelain_paths` output verbatim (`(xy, path)` pairs by default,
+    `(xy, path, orig_path | None)` when `keep_rename_source=True`) — the shape
+    a converting call site that needs the XY status code (P014-C4) or both
+    rename halves (P014-C2/C3) projects onto its own posture, per this
+    producer's own spec: "the producer parses through it and returns those
+    typed records plus the degraded/collision state — each converted site
+    projects that to the shape and posture it already has."
+
+    COLLISION (R-11, DR-319): declared explicitly, never omitted — the
+    worktree is peer-mutable, so an absent field would conflate "not checked"
+    with "checked, clean" (R-11's own forbidden conflation). `collision` here
+    is `bool(value["paths"])`: this producer's entire value IS a
+    peer-contention detector (every existing caller's OWN use of it —
+    `session_governing_plan`'s `path in dirty_result["paths"]`,
+    `session_terminal_sizings`'s per-record `dirty` OR — already reads
+    "found dirty" as "a peer may be mid-edit right now"), so folding that
+    same signal to the record level costs nothing beyond restating data this
+    read already has, the same choice `session_terminal_sizings` and
+    `session_fold_sidecars` already made for their own OR-over-dirty shape.
+
+    Returns degraded, never a fabricated clean/dirty answer, on any
+    `git status` failure (nonzero exit, launch failure, timeout) — the
+    POSTURE this producer keeps from its `quick_wrap_assemble` predecessor,
+    which already used the returncode-checked seam rather than one that
+    swallows a failure into an indistinguishable `""`.
     """
-    result = _git_run(["status", "--porcelain", "--untracked-files=all"], worktree_root)
-    if result.returncode != 0:
+    from coordinator_core.ops.ceremony.git_native import status_porcelain
+    from coordinator_core.ops.dirty_tree_gate import parse_porcelain_paths
+
+    result = status_porcelain(
+        worktree_root,
+        list(pathspecs) if pathspecs else None,
+        untracked_files=untracked_files,
+        quotepath_false=quotepath_false,
+    )
+    if not result.ok:
         return {
             "degraded": True,
             "evidence": (
-                "git status --porcelain --untracked-files=all failed: returncode="
-                f"{result.returncode!r} stderr={result.stderr.strip()!r}"
+                "git status --porcelain --untracked-files="
+                f"{untracked_files} failed: returncode={result.returncode!r} "
+                f"stderr={result.stderr.strip()!r}"
             ),
+            "source": _SOURCE_DIRTY_PATHS,
         }
-    dirty: set[str] = set()
-    for line in result.stdout.splitlines():
-        if len(line) < 4:
-            continue
-        entry = line[3:].strip()
-        if " -> " in entry:
-            entry = entry.split(" -> ", 1)[1]
-        dirty.add(entry.strip('"').replace("\\", "/"))
-    return {"degraded": False, "paths": dirty}
+
+    entries = parse_porcelain_paths(
+        result.stdout,
+        keep_rename_source=keep_rename_source,
+        unquote=unquote,
+        forward_slash=forward_slash,
+    )
+
+    paths: set[str] = set()
+    for entry in entries:
+        paths.add(entry[1])
+        if keep_rename_source and entry[2] is not None:
+            paths.add(entry[2])
+
+    return {
+        "degraded": False,
+        "value": {"paths": paths, "entries": entries},
+        "source": _SOURCE_DIRTY_PATHS,
+        "collision": bool(paths),
+    }
 
 
 def session_terminal_sizings(
@@ -1101,7 +1188,7 @@ def _session_terminal_sizings_impl(worktree_root: Path) -> dict[str, Any]:
             "evidence": dirty_result["evidence"],
             "source": _SOURCE_SESSION_TERMINAL_SIZINGS,
         }
-    dirty = dirty_result["paths"]
+    dirty = dirty_result["value"]["paths"]
 
     scanned = 0
     non_terminal_count = 0
@@ -1300,7 +1387,7 @@ def _session_fold_sidecars_impl(worktree_root: Path) -> dict[str, Any]:
                 "evidence": dirty_result["evidence"],
                 "source": _SOURCE_SESSION_FOLD_SIDECARS,
             }
-        collision = any(path in dirty_result["paths"] for path in found)
+        collision = any(path in dirty_result["value"]["paths"] for path in found)
 
     return {
         "degraded": False,

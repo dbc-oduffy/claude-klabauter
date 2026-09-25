@@ -1048,7 +1048,7 @@ def _resolved_claude_klabauter_root() -> str | None:
     """
     _bootstrap_engine()
     if _UNSET not in _resolved_claude_klabauter_root_cache:
-        _resolved_claude_klabauter_root_cache[_UNSET] = _claude_klabauter_root()
+        _resolved_claude_klabauter_root_cache[_UNSET] = cli_shared.claude_klabauter_data_home()
     return _resolved_claude_klabauter_root_cache[_UNSET]
 
 

@@ -173,7 +173,7 @@ def test_uncloned_sibling_skips_rather_than_fails(tmp_path, monkeypatch):
 def test_moved_peer_file_fails_loud(tmp_path, monkeypatch):
     """The rot this check exists to catch. Example-retrieval-repo's own header already
     points at `scripts/constraints.txt` while the file lives at
-    `example_retrieval_repo_scripts/constraints.txt` — a present repo with the declared
+    `project_rag_scripts/constraints.txt` — a present repo with the declared
     file missing must stop the world, not degrade to a skip."""
     a, b = tmp_path / "a", tmp_path / "b"
     _write(a, "overrides.txt", "torch>=2.10.0,<3\n")

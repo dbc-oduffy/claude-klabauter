@@ -72,8 +72,8 @@ def _make_claude_home(
 ) -> Path:
     """Minimal machine-local registry fixture (mirrors test_memo_send.py's factory).
 
-    receiver_repos: {registry_key_suffix: repo_path_str} e.g. {"example_retrieval_repo": "/..."}
-    → writes "repos.example_retrieval_repo" = <path> in registry.local.toml.
+    receiver_repos: {registry_key_suffix: repo_path_str} e.g. {"project_rag": "/..."}
+    → writes "repos.project_rag" = <path> in registry.local.toml.
 
     mirror_tables: {mirror_key: {"owner": str, "path": str (optional),
     "aliases": list[str] (optional)}} — writes REAL bracket-table TOML syntax
@@ -210,13 +210,13 @@ class TestSetupErrorEnvelope:
 
 class TestEnumerationMode:
     def test_enumerates_all_registered_receivers(self, tmp_path, monkeypatch):
-        rag_repo = tmp_path / "example-retrieval-repo"
+        rag_repo = tmp_path / "project-rag"
         holo_repo = tmp_path / "example-game-workbench-repo"
         rag_repo.mkdir()
         holo_repo.mkdir()
         claude_home = _make_claude_home(
             tmp_path,
-            {"example_retrieval_repo": str(rag_repo), "example_game_workbench_repo": str(holo_repo)},
+            {"project_rag": str(rag_repo), "example_game_workbench_repo": str(holo_repo)},
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
@@ -231,7 +231,7 @@ class TestEnumerationMode:
 
         receivers = _receivers(result["candidates"])
         ids = {c["repo_key"] for c in receivers}
-        assert ids == {"repos.example_retrieval_repo", "repos.example_game_workbench_repo"}
+        assert ids == {"repos.project_rag", "repos.example_game_workbench_repo"}
         for c in receivers:
             assert c["resolved"] is True
             assert c["target_inbox"].endswith(os.path.join("cross-repo", "inbox"))
@@ -279,11 +279,11 @@ class TestEnumerationPublishMirrors:
     def test_publish_mirrors_land_in_own_section_not_conflated_with_receivers(
         self, tmp_path, monkeypatch
     ):
-        rag_repo = tmp_path / "example-retrieval-repo"
+        rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
         claude_home = _make_claude_home(
             tmp_path,
-            {"example_retrieval_repo": str(rag_repo)},
+            {"project_rag": str(rag_repo)},
             mirror_tables={
                 "deep_research_claude": {
                     "owner": "deep-research-em",
@@ -393,9 +393,9 @@ class TestEnumerationAliasesAndCentral:
         assert doe[0]["is_central"] is True
 
     def test_registry_status_entry_shape(self, tmp_path, monkeypatch):
-        rag_repo = tmp_path / "example-retrieval-repo"
+        rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         result = _run(_memo_list({"dry_run": True}))
@@ -607,13 +607,13 @@ class TestReceiverMirrorPathCollision:
     ):
         """A repos.* entry with no path collision against any mirror is
         entirely unaffected by the new exclusion check."""
-        rag_repo = tmp_path / "example-retrieval-repo"
+        rag_repo = tmp_path / "project-rag"
         mirror_repo = tmp_path / "unrelated-mirror"
         rag_repo.mkdir()
         mirror_repo.mkdir()
         claude_home = _make_claude_home(
             tmp_path,
-            {"example_retrieval_repo": str(rag_repo)},
+            {"project_rag": str(rag_repo)},
             mirror_tables={
                 "deep_research_claude": {
                     "owner": "deep-research-em",
@@ -627,7 +627,7 @@ class TestReceiverMirrorPathCollision:
 
         assert result["exit_code"] == 0
         receivers = _receivers(result["candidates"])
-        assert {c["repo_key"] for c in receivers} == {"repos.example_retrieval_repo"}
+        assert {c["repo_key"] for c in receivers} == {"repos.project_rag"}
 
         mirrors = [c for c in result["candidates"] if c["kind"] == "publish_mirror"]
         assert len(mirrors) == 1
@@ -691,9 +691,9 @@ class TestReceiverMirrorPathCollision:
 
 class TestResolutionMode:
     def test_resolved_to_reports_destination_inbox(self, tmp_path, monkeypatch):
-        rag_repo = tmp_path / "example-retrieval-repo"
+        rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         result = _run(_memo_list({"dry_run": True, "to": "example-retrieval-repo-em"}))
@@ -743,9 +743,9 @@ class TestResolvedFilename:
         """to + topic, to resolves -> resolved_filename equals memo_send's own
         _memo_filename output for the same sender/topic (locks the two
         together — any drift between the two ops fails this test)."""
-        rag_repo = tmp_path / "example-retrieval-repo"
+        rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         import datetime
@@ -771,9 +771,9 @@ class TestResolvedFilename:
         the SAME filename memo.send would actually write for that caller —
         asserted against the shared `resolve_sender_id` + `_memo_filename`
         derivation (not a hardcoded string that could drift from either)."""
-        rag_repo = tmp_path / "example-retrieval-repo"
+        rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         import datetime
@@ -813,9 +813,9 @@ class TestResolvedFilename:
         (`resolve_sender_id(None)`), never a fixed `claude-klabauter-engine` literal
         (DoE e267d18336 withdrew the concurrence that made that literal
         sufficient)."""
-        rag_repo = tmp_path / "example-retrieval-repo"
+        rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         import datetime
@@ -844,14 +844,14 @@ class TestResolvedFilename:
         former. Fails on the unfixed code (which called
         `resolve_sender_id(from_id)` with no `root`, falling through to the
         ambient-cwd fallback)."""
-        rag_repo = tmp_path / "example-retrieval-repo"
+        rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
         caller_repo = tmp_path / "caller-repo"
         caller_repo.mkdir()
         ambient_repo = tmp_path / "ambient-repo"
         ambient_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {
-            "example_retrieval_repo": str(rag_repo),
+            "project_rag": str(rag_repo),
             "caller_repo": str(caller_repo),
             "ambient_repo": str(ambient_repo),
         })
@@ -891,9 +891,9 @@ class TestResolvedFilename:
         exit_code:1 setup-error envelope, NEVER a silent fallback to the
         engine actor id (that fallback is exactly the wrong-but-confident
         shape this whole fix exists to remove)."""
-        rag_repo = tmp_path / "example-retrieval-repo"
+        rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         result = _run(
@@ -912,9 +912,9 @@ class TestResolvedFilename:
     def test_to_only_resolution_has_no_resolved_filename(self, tmp_path, monkeypatch):
         """to supplied without topic -> unchanged from before this addition:
         no resolved_filename key at all."""
-        rag_repo = tmp_path / "example-retrieval-repo"
+        rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         result = _run(_memo_list({"dry_run": True, "to": "example-retrieval-repo-em"}))
@@ -926,9 +926,9 @@ class TestResolvedFilename:
     def test_topic_only_no_to_has_no_effect(self, tmp_path, monkeypatch):
         """topic without to -> enumeration mode unaffected (to gates resolution
         mode entirely; topic alone does nothing)."""
-        rag_repo = tmp_path / "example-retrieval-repo"
+        rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         result = _run(_memo_list({"dry_run": True, "topic": "example-topic"}))
@@ -960,9 +960,9 @@ class TestResolvedFilename:
         no resolved_filename anywhere — and the same input is independently
         confirmed to fail memo.send's own _TOPIC_SLUG_RE (locks the two
         validators together, mirroring the filename-function lock above)."""
-        rag_repo = tmp_path / "example-retrieval-repo"
+        rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         bad_topic = "bad/topic with spaces"
@@ -981,9 +981,9 @@ class TestResolvedFilename:
     def test_empty_string_topic_fails_loud_not_coerced_to_absent(self, tmp_path, monkeypatch):
         """An explicitly-passed empty/whitespace-only topic fails loud via the
         same regex, rather than being silently treated as 'no topic'."""
-        rag_repo = tmp_path / "example-retrieval-repo"
+        rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         result = _run(
@@ -995,9 +995,9 @@ class TestResolvedFilename:
     def test_absent_topic_key_still_behaves_as_before(self, tmp_path, monkeypatch):
         """A genuinely absent topic key (not passed at all) is fine — resolution
         proceeds with no resolved_filename, no validation error."""
-        rag_repo = tmp_path / "example-retrieval-repo"
+        rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         result = _run(_memo_list({"dry_run": True, "to": "example-retrieval-repo-em"}))
@@ -1014,9 +1014,9 @@ class TestResolvedFilename:
 
 class TestNoWriteProof:
     def test_enumeration_leaves_filesystem_unchanged(self, tmp_path, monkeypatch):
-        rag_repo = tmp_path / "example-retrieval-repo"
+        rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         before = _snapshot(tmp_path)
@@ -1029,9 +1029,9 @@ class TestNoWriteProof:
         )
 
     def test_resolution_leaves_filesystem_unchanged_resolved(self, tmp_path, monkeypatch):
-        rag_repo = tmp_path / "example-retrieval-repo"
+        rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         before = _snapshot(tmp_path)
@@ -1100,9 +1100,9 @@ class TestNoMemoIndex:
     def test_handler_calls_do_not_mutate_module_state(self, tmp_path, monkeypatch):
         import coordinator_core.ops.fleet.memo_list as memo_list_mod
 
-        rag_repo = tmp_path / "example-retrieval-repo"
+        rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         def _mutable_module_names():
@@ -1145,7 +1145,7 @@ class TestListAndResolverAgreeOnInboxTarget:
 
         enum_result = _run(_memo_list({"dry_run": True}))
         receivers = {c["repo_key"]: c for c in _receivers(enum_result["candidates"])}
-        list_target = receivers["repos.example_retrieval_repo"]["target_inbox"]
+        list_target = receivers["repos.project_rag"]["target_inbox"]
 
         inbox_dir, _receiver_repo_path, _all_repos = resolve_receiver_inbox(receiver_em_id)
         resolver_target = str(inbox_dir)
@@ -1153,11 +1153,11 @@ class TestListAndResolverAgreeOnInboxTarget:
         return list_target, resolver_target
 
     def test_unmigrated_receiver_list_and_resolver_agree(self, tmp_path, monkeypatch):
-        rag_repo = tmp_path / "example-retrieval-repo"
+        rag_repo = tmp_path / "project-rag"
         rag_repo.mkdir()
         # No state/cross-repo/ and no legacy cross-repo/ on disk — the
         # unmigrated case; receiver_inbox_root falls back to the legacy root.
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         list_target, resolver_target = self._both_targets(
@@ -1170,9 +1170,9 @@ class TestListAndResolverAgreeOnInboxTarget:
         assert list_target == str(rag_repo / "cross-repo" / "inbox")
 
     def test_migrated_receiver_list_and_resolver_agree(self, tmp_path, monkeypatch):
-        rag_repo = tmp_path / "example-retrieval-repo"
+        rag_repo = tmp_path / "project-rag"
         (rag_repo / "state" / "cross-repo").mkdir(parents=True)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         list_target, resolver_target = self._both_targets(

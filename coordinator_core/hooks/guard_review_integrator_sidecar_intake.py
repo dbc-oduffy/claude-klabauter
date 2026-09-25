@@ -125,15 +125,27 @@ from coordinator_core.ipc import register_op
 # diverge across a republish, and provisioning and matching can be served
 # from different vintages inside that window, so both roots are legal until
 # it closes and the matcher cannot tell which it is serving.
+#
+# An absolute citation is probed as written (never re-rooted at the session
+# cwd -- that misses whenever cwd is not the sidecar's repo, the multi-repo
+# cloud container's shape, whose cwd is the parent of every checkout). The
+# leading char-class's own `/`/`\\` admission means the tail pattern alone
+# already matches INSIDE an absolute citation; the optional captured prefix
+# group below exists only to recover the absolute portion for an as-written
+# probe, not to change what matches.
 _SIDECAR_PATH_RE = re.compile(
-    r"(?:^|[\s(\[\"'`/\\])((?:state|\.coordinator-local)[/\\]subagent-share[/\\][^\s()\[\]\"'`,;:]+\.md)"
+    r"(?:^|[\s(\[\"'`/\\])"
+    r"((?:[A-Za-z]:[/\\]|/)[^\s()\[\]\"'`,;]*?[/\\])?"
+    r"((?:state|\.coordinator-local)[/\\]subagent-share[/\\][^\s()\[\]\"'`,;:]+\.md)"
 )
 
 
-def _extract_candidate_paths(prompt: str) -> "list[str]":
+def _extract_candidates(prompt: str) -> "list[tuple[Optional[str], str]]":
+    """Every `(prefix, tail)` match -- `prefix` is the absolute lead-in
+    (`C:\\...\\` or `/...`) when the citation was absolute, else `None`."""
     if not prompt:
         return []
-    return [m.group(1) for m in _SIDECAR_PATH_RE.finditer(prompt)]
+    return [(m.group(1), m.group(2)) for m in _SIDECAR_PATH_RE.finditer(prompt)]
 
 
 def _candidate_spellings(candidate: str) -> "list[str]":
@@ -211,7 +223,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     prompt = tool_input.get("prompt", "")
     prompt = prompt if isinstance(prompt, str) else ""
 
-    candidates = _extract_candidate_paths(prompt)
+    candidates = _extract_candidates(prompt)
     if not candidates:
         reason = render(_compose_no_candidates_message())
         return deny("PreToolUse", reason)
@@ -219,13 +231,22 @@ def _handler(params: dict, repo_root=None) -> dict:
     cwd = params.get("cwd") if isinstance(params.get("cwd"), str) else None
     root = repo_root if isinstance(repo_root, str) and repo_root else (cwd or ".")
 
-    for candidate in candidates:
+    displayed = []
+    for prefix, tail in candidates:
+        # `base` is None for a relative citation (probed against `root`) or
+        # the absolute prefix itself (probed as written, never re-rooted) --
+        # a single loop over both shapes so a future fix can't land on only
+        # one arm.
+        base = prefix if prefix else None
+        candidate = (prefix + tail) if prefix else tail
+        displayed.append(candidate)
         for spelling in _candidate_spellings(candidate):
+            probe = Path(spelling) if base is not None else Path(root) / spelling
             try:
-                if (Path(root) / spelling).is_file():
+                if probe.is_file():
                     return no_advisory()
             except Exception:
                 continue  # unresolvable candidate path; try the next spelling
 
-    reason = render(_compose_stale_candidates_message(candidates))
+    reason = render(_compose_stale_candidates_message(displayed))
     return deny("PreToolUse", reason)

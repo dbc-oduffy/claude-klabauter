@@ -58,12 +58,14 @@ import posixpath
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
+from coordinator_core.git.push_stall import PUSH_STALL_MARKER  # re-exported: auto_push reads it from the leaf
 from coordinator_core.git.content_hash import (
     _attributes_pattern_matches,
     _autocrlf_checkin_normalize,
@@ -404,6 +406,14 @@ class GitResult:
             ok-with-a-commit-sha-t.md, C4). `None` is never an error --
             "no ref is being reported here" -- and is the default on
             every `GitResult` this module builds.
+        stall_killed — True iff `push_streamed` killed the child because its
+            stderr went silent for `STALL_SILENCE_SECS` or more (a genuine hang
+            signal), False otherwise -- including when `push_streamed` killed the
+            child on its `total_timeout` bound instead (that is not evidence of
+            silence, see that function's docstring). Every other constructor in
+            this module leaves this at its default, False
+            (docs/plans/2026-09-10-push-cadence-hang-detection-over-elapsed-
+            timeout.md, C2).
     """
 
     returncode: int
@@ -411,6 +421,7 @@ class GitResult:
     stderr: str
     worktree_excluded: Tuple[str, ...] = ()
     cas_ref_relpath: Optional[str] = None
+    stall_killed: bool = False
 
     @property
     def ok(self) -> bool:
@@ -704,7 +715,11 @@ def _empty_private_index_refusal(
 
 
 def status_porcelain(
-    cwd: Union[str, Path], paths: Optional[Sequence[str]] = None
+    cwd: Union[str, Path],
+    paths: Optional[Sequence[str]] = None,
+    *,
+    untracked_files: Optional[str] = None,
+    quotepath_false: bool = False,
 ) -> GitResult:
     """`git status --porcelain` — dirty-tree gate classification (C3).
 
@@ -717,6 +732,21 @@ def status_porcelain(
     scan every existing caller gets. When given, the answer is scoped to those
     paths: this is the only query on the commit hot path whose cost scales
     with the TREE rather than with what is being committed.
+
+    `untracked_files` (keyword-only, default `None`, P014-C1): when given,
+    appends `--untracked-files=<value>` (e.g. `"all"`, the
+    `session_facts._dirty_paths` divergence the census records). `None`
+    keeps argv byte-identical to HEAD — git's own porcelain default
+    (`normal`) applies, unchanged.
+
+    `quotepath_false` (keyword-only, default `False`, P014-C1): when `True`,
+    prepends `-c core.quotepath=false` — the divergence
+    `ops/session/safe_commit_offer.py:1367` and `ops/dirty_tree_gate.py:400`
+    both already pin directly. `False` (the default) keeps argv
+    byte-identical to HEAD.
+
+    Both keyword-only options default to a no-op specifically so every
+    existing caller's argv is unchanged — pinned in `test_git_native.py`.
 
     The walk is NOT the main cost and this parameter is not where the
     ceremony's latency lives — process creation is (DR-344), and both
@@ -741,6 +771,10 @@ def status_porcelain(
     circuits and is returned as-is, so the caller sees an unsuccessful
     `GitResult` rather than a partial dirty set that looks complete."""
     base = ["--no-optional-locks", "status", "--porcelain"]
+    if quotepath_false:
+        base = ["-c", "core.quotepath=false", *base]
+    if untracked_files is not None:
+        base = [*base, f"--untracked-files={untracked_files}"]
     if paths is None:
         return _git(base, cwd=cwd)
 
@@ -818,38 +852,50 @@ def dirty_relpaths_from_porcelain(
     `pathspecs=()` short-circuits to `set()` without spawning anything — an
     empty candidate set has nothing to ask git about.
 
-    `caller` names the invoking module in the fail-closed warning log line
+    `caller` names the invoking module in the fail-closed warning line
     only (e.g. `"archive_terminal_handoffs"`, `"archive_sizings"`) — purely
     diagnostic, never load-bearing for behavior.
+
+    PROJECTION OF THE `session_facts` PRODUCER (P014-C1,
+    `docs/plans/2026-09-01-the-dirty-tree-fact-is-served-not-re-imp.md`,
+    resolve pass R5): this function's own body no longer spawns or parses —
+    it calls `coordinator_core.session.session_facts._dirty_paths` (imported
+    function-local; `git_native` never imports `session_facts` at module top,
+    since this module is on the commit path) with the caller's `pathspecs`
+    as the producer's pathspec scope, `keep_rename_source=True` (both rename
+    halves matter here — either side being dirty is enough to exclude both),
+    and `unquote=True`. A degraded producer record maps to the same
+    fail-closed set this function already returned on a raw git failure. This
+    function's own signature, its `pathspecs=()` short-circuit, and
+    `REASON_WORKTREE_DIRTY` are all unchanged.
     """
     if not pathspecs:
         return set()
 
     ordered = sorted(set(pathspecs))
-    result = status_porcelain(cwd, ordered)
-    if not result.ok:
+
+    from coordinator_core.session.session_facts import _dirty_paths
+
+    record = _dirty_paths(
+        Path(cwd),
+        pathspecs=ordered,
+        keep_rename_source=True,
+        unquote=True,
+    )
+    if record["degraded"]:
         fail_closed = set(fail_closed_defaults) if fail_closed_defaults is not None else set(ordered)
         _LOG.warning(
-            "%s: git status --porcelain -- %s failed (rc=%s) — degrading to "
+            "%s: git status --porcelain -- %s failed (%s) — degrading to "
             "fail-closed (all %d candidate(s) treated as dirty)",
-            caller, ordered, result.returncode, len(fail_closed),
+            caller, ordered, record["evidence"], len(fail_closed),
         )
         return fail_closed
 
     dirty: Set[str] = set()
-    for line in result.stdout.splitlines():
-        if len(line) < 4:
-            continue
-        # Porcelain v1: 2-char status code, one space, then the path (a
-        # rename record's " -> " new-path half matters too — either side
-        # being dirty is enough to exclude).
-        rel = line[3:].strip()
-        if " -> " in rel:
-            old, _, new = rel.partition(" -> ")
-            dirty.add(old.strip().strip('"'))
-            dirty.add(new.strip().strip('"'))
-        else:
-            dirty.add(rel.strip('"'))
+    for xy, path, orig_path in record["value"]["entries"]:
+        dirty.add(path)
+        if orig_path is not None:
+            dirty.add(orig_path)
     return dirty
 
 
@@ -5807,6 +5853,133 @@ def push(
     if remote_name:
         args.append(remote_name)
     return _git(args, cwd=cwd, timeout=timeout)
+
+
+# STALL_SILENCE_SECS = 2 x S_max, S_max = 7.018s (max inter-line silence across every
+# healthy slow-push run, idle + ambient), measured by
+# docs/research/2026-09-10-git-push-progress-stall-measurement.md (arm B selected —
+# clause 1 of the arm predicate fails on this number, see that document's "Arm-predicate
+# evaluation" section). Never an invented number; re-derive from that document if the
+# measurement is redone.
+STALL_SILENCE_SECS = 14.036
+
+
+
+def push_streamed(
+    cwd: Union[str, Path],
+    *,
+    remote_name: Optional[str] = None,
+    silence_secs: float = STALL_SILENCE_SECS,
+    total_timeout: Optional[float] = None,
+) -> GitResult:
+    """`git push --progress [<remote_name>]`, watched line-by-line for a silence stall.
+
+    Sibling of `push()` above, composed on the streaming shape
+    `ops/emit/enrich.py :: _walk_last_modified_at` already uses (`Popen` + a reader
+    thread), not a new portability helper. One git child, as `push()` spawns today --
+    no extra process.
+
+    `stderr` is read on a `daemon=True` thread that appends each line to an
+    accumulator and stamps the time of the most recently read line. The calling
+    thread polls that stamp and kills the child (`terminate()` then `wait()`, in a
+    `finally`, so teardown runs even if the wait below raises) once either bound
+    fires:
+      - silence exceeds `silence_secs` since the last line (or since spawn, if no
+        line has arrived yet) -- the stall arm;
+      - `total_timeout` (if given) elapses since spawn regardless of whether the
+        child is still emitting lines close together -- AC8: a child that emits a
+        line every `silence_secs - e` forever must still die. `total_timeout` is a
+        parameter, never hardcoded here; C5 names the value each caller passes.
+
+    The reader thread is always `join()`ed with a bounded timeout before this
+    function returns, so no thread outlives the call.
+
+    `GitResult.stall_killed` is True only when the silence bound (not the total
+    bound) is what triggered the kill -- both bounds terminate the child, but only a
+    genuine silence stall is diagnostic of a hang; a total-bound kill on a
+    still-progressing child is reported the same way a plain timeout would be
+    (`returncode=-1`, no `stall_killed`), since it is not evidence of silence.
+    The child's real signal returncode is kept verbatim on a stall kill -- never
+    rewritten to -1, and `returncode`'s two existing -1 meanings (OSError,
+    TimeoutExpired) are untouched.
+
+    Accumulated stderr is carried verbatim, with `PUSH_STALL_MARKER` (formatted with
+    the silence bound used) appended as one more line only on a stall kill.
+    """
+    args = ["git", "push", "--progress"]
+    if remote_name:
+        args.append(remote_name)
+
+    try:
+        proc = subprocess.Popen(
+            args,
+            cwd=str(cwd),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            **no_console_creationflags(),
+        )
+    except OSError as exc:
+        return GitResult(returncode=-1, stdout="", stderr=f"OSError: {exc}")
+
+    lines: List[str] = []
+    last_line_at = time.monotonic()
+    lock = threading.Lock()
+
+    def _read_stderr() -> None:
+        nonlocal last_line_at
+        assert proc.stderr is not None
+        try:
+            for line in proc.stderr:
+                with lock:
+                    lines.append(line)
+                    last_line_at = time.monotonic()
+        except (OSError, ValueError):
+            pass
+
+    reader = threading.Thread(target=_read_stderr, daemon=True)
+    reader.start()
+
+    spawned_at = time.monotonic()
+    stall_killed = False
+    poll_interval = min(0.05, silence_secs / 10 if silence_secs > 0 else 0.05)
+    try:
+        while True:
+            returncode = proc.poll()
+            if returncode is not None:
+                break
+            now = time.monotonic()
+            with lock:
+                silence = now - last_line_at
+            if silence >= silence_secs:
+                stall_killed = True
+                break
+            if total_timeout is not None and (now - spawned_at) >= total_timeout:
+                break
+            time.sleep(poll_interval)
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+        returncode = proc.wait()
+        try:
+            if proc.stderr is not None:
+                proc.stderr.close()
+        except (OSError, ValueError):
+            pass
+        reader.join(timeout=5.0)
+
+    with lock:
+        stderr_text = "".join(lines)
+    if stall_killed:
+        stderr_text += PUSH_STALL_MARKER.format(secs=silence_secs) + "\n"
+
+    return GitResult(
+        returncode=returncode,
+        stdout="",
+        stderr=stderr_text,
+        stall_killed=stall_killed,
+    )
 
 
 def push_refspec(

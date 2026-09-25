@@ -2060,28 +2060,36 @@ class _ArtifactUnreadable(Exception):
 _SCOPE_SIBLING_PREFIX_RE = re.compile(r"^([A-Za-z][A-Za-z0-9_-]+):(?!//)\s*(.+)$")
 
 
-def _porcelain_dirty_paths(repo_root: Path, paths: list[str]) -> list[str]:
+def _porcelain_dirty_paths(repo_root: Path, paths: list[str]) -> dict[str, Any]:
     """`git status --porcelain -- <paths>` scoped to exactly the given
     pathspecs, returning the dirty paths git reports (never the full
     untargeted worktree diff) — pathlib throughout, no manual `/`/`\\`
     splitting, so a Windows sibling repo root and forward-slash-relative
-    scope paths resolve the same way `git` itself would join them."""
+    scope paths resolve the same way `git` itself would join them.
+
+    Converted (P014-C6,
+    `docs/plans/2026-09-01-the-dirty-tree-fact-is-served-not-re-imp.md`) onto
+    the `session_facts._dirty_paths` producer (P014-C1) rather than a
+    hand-rolled `_run_git` spawn/parse. Fixes a live R-10 fail-open: a failed
+    git read used to `return []`, indistinguishable from a genuinely clean
+    scope, which fed `compute_tree_quiescence`'s per-repo `dirty: []` and let
+    a failed read report as quiet. A failed read now comes back as
+    `{"degraded": True, "evidence": <str>}` instead — declared, never
+    swallowed (R-10, R-11).
+
+    `untracked_files="normal"` reproduces this site's pre-conversion argv (no
+    `--untracked-files` flag was ever passed here, so git's own porcelain
+    default applied) rather than the producer's own `"all"` default, which is
+    `session_facts`'s own divergence, not this site's — only the fail-open
+    posture changes here, not the untracked-files scope."""
     if not paths:
-        return []
-    result = _run_git(["status", "--porcelain", "--", *paths], repo_root)
-    if result.returncode != 0:
-        return []
-    dirty: list[str] = []
-    for line in result.stdout.splitlines():
-        if not line:
-            continue
-        entry = line[3:] if len(line) > 3 else line.strip()
-        if " -> " in entry:
-            entry = entry.split(" -> ", 1)[1]
-        entry = entry.strip().strip('"')
-        if entry:
-            dirty.append(entry)
-    return dirty
+        return {"degraded": False, "dirty": []}
+    from coordinator_core.session.session_facts import _dirty_paths
+
+    result = _dirty_paths(repo_root, pathspecs=paths, untracked_files="normal")
+    if result["degraded"]:
+        return {"degraded": True, "dirty": [], "evidence": result["evidence"]}
+    return {"degraded": False, "dirty": sorted(result["value"]["paths"])}
 
 
 def _merge_state_flags(root: Path) -> dict[str, bool]:
@@ -2115,6 +2123,12 @@ def compute_tree_quiescence(root: Path, scope_entries: list[str]) -> dict[str, A
     counted as dirty (the defect this function replaces) and never silently
     dropped.
 
+    `verdict` is `"degraded"` (P014-C6) when any repo's porcelain read
+    failed — declared, and distinct from both `"dirty"` and `"quiet"`, never
+    silently folded into `"quiet"` (the R-10 fail-open this chunk fixes). A
+    degraded repo's own entry carries `"degraded": True` and
+    `"evidence": <str>` alongside its (empty) `dirty` list.
+
     Negative-spec: does NOT run `git fetch` (AC3's read-only guarantee —
     see module docstring) and does NOT report every dirty file in a repo,
     only the intersection with the paths named in `scope:`.
@@ -2141,12 +2155,19 @@ def compute_tree_quiescence(root: Path, scope_entries: list[str]) -> dict[str, A
         sibling_paths.setdefault(repo_id, []).append(rest)
 
     dirty_found = False
-    local_dirty = _porcelain_dirty_paths(root, local_paths)
+    degraded_found = False
+    local_result = _porcelain_dirty_paths(root, local_paths)
+    local_dirty = local_result["dirty"]
     if local_dirty:
         dirty_found = True
-    repos: list[dict[str, Any]] = [
-        {"repo": ".", "dirty": local_dirty, "unparseable_scope_entries": local_unparseable}
-    ]
+    local_repo: dict[str, Any] = {
+        "repo": ".", "dirty": local_dirty, "unparseable_scope_entries": local_unparseable
+    }
+    if local_result["degraded"]:
+        degraded_found = True
+        local_repo["degraded"] = True
+        local_repo["evidence"] = local_result["evidence"]
+    repos: list[dict[str, Any]] = [local_repo]
 
     for repo_id, rel_paths in sibling_paths.items():
         resolved = registry_get(f"repos.{repo_id.replace('-', '_')}")
@@ -2154,13 +2175,28 @@ def compute_tree_quiescence(root: Path, scope_entries: list[str]) -> dict[str, A
             repos[0]["unparseable_scope_entries"].extend(f"{repo_id}: {p}" for p in rel_paths)
             continue
         sibling_root = Path(resolved)
-        sibling_dirty = _porcelain_dirty_paths(sibling_root, rel_paths)
+        sibling_result = _porcelain_dirty_paths(sibling_root, rel_paths)
+        sibling_dirty = sibling_result["dirty"]
         if sibling_dirty:
             dirty_found = True
-        repos.append({"repo": str(sibling_root), "dirty": sibling_dirty, "unparseable_scope_entries": []})
+        sibling_repo: dict[str, Any] = {
+            "repo": str(sibling_root), "dirty": sibling_dirty, "unparseable_scope_entries": []
+        }
+        if sibling_result["degraded"]:
+            degraded_found = True
+            sibling_repo["degraded"] = True
+            sibling_repo["evidence"] = sibling_result["evidence"]
+        repos.append(sibling_repo)
+
+    if degraded_found:
+        verdict = "degraded"
+    elif dirty_found:
+        verdict = "dirty"
+    else:
+        verdict = "quiet"
 
     return {
-        "verdict": "dirty" if dirty_found else "quiet",
+        "verdict": verdict,
         "repos": repos,
         "merge_state": _merge_state_flags(root),
     }
@@ -2686,6 +2722,25 @@ def reply_obligation_at_open(fm: dict[str, Any]) -> Optional[str]:
     )
 
 
+def _report_warm_uncarried_resolve(site: str) -> None:
+    """P026-C4 (docs/plans/2026-09-07-a-claim-is-written-twice-and-nothing-
+    compares-them.md), AC16's report-only half. All four
+    `_session_core.resolve_session_id` sites in this module resolve
+    "is this session me?" for a comparison, never a durable claim write, so
+    none of them refuses -- AC10's release/reap rule applies to all four.
+    This reports a warm-served request with no carried identity falling back
+    to the ambient env ladder; it never changes the resolved id or any
+    caller's control flow.
+    """
+    if _session_core.in_warm_served_request() and not _session_core.carried_session_id():
+        print(
+            f"pickup_assemble.{site}: warm-served request carried no session "
+            f"identity -- resolve_session_id fell back to the ambient env "
+            f"ladder (report-only, not refused)",
+            file=sys.stderr,
+        )
+
+
 def _adopt_into_baton(
     repo_root: Path, artifact_path: str, fm: Optional[dict] = None
 ) -> None:
@@ -2727,8 +2782,13 @@ def _adopt_into_baton(
     The naming derivation shares that posture: a malformed or
     frontmatter-less `fm` must still let the artifact adopt.
     """
+    # AC16 verdict: comparison-side, fail-open by its own documented posture
+    # ("an advisory fan-in edge must never block a pickup") -- KEEPS
+    # `resolve_session_id` permanently; hardening it would contradict that
+    # posture. Reported only (P026-C4).
     try:
         sid = _session_core.resolve_session_id(str(repo_root))
+        _report_warm_uncarried_resolve("_adopt_into_baton")
     except Exception:  # noqa: BLE001 — advisory write must never raise into brief()
         return
     if not sid:
@@ -3315,12 +3375,18 @@ def compute_liveness_signal(
     """
     related_sessions = set(_lineage_related_sessions(repo_root, fm))
 
+    # AC16 verdict: comparison-side, already carried-first with the
+    # ambient-env ladder as fallback only on a genuinely cold invocation --
+    # this is the correct shape already; AC16 changes no behaviour here,
+    # only reports a warm-uncarried fallback if the cold branch is somehow
+    # reached under a warm dispatch (P026-C4).
     self_sid = self_session_id
     if self_sid is None:
         self_sid = _session_core.carried_session_id()
         if not self_sid:
             try:
                 self_sid = _session_core.resolve_session_id(str(repo_root))
+                _report_warm_uncarried_resolve("compute_liveness_signal")
             except (OSError, ValueError):
                 self_sid = ""
     if self_sid:
@@ -3535,10 +3601,15 @@ def _primary_held_disposition(
     # than the session actually being served. Falls back to
     # `resolve_session_id` only when nothing was carried (cold invocation,
     # where the ambient environment IS the caller's own).
+    # AC16 verdict: comparison-side, already carried-first with the
+    # ambient-env ladder as fallback only on a genuinely cold invocation --
+    # this is the correct shape already; AC16 changes no behaviour here,
+    # only reports a warm-uncarried fallback (P026-C4).
     self_sid = _session_core.carried_session_id()
     if not self_sid:
         try:
             self_sid = _session_core.resolve_session_id(str(root))
+            _report_warm_uncarried_resolve("_primary_held_disposition")
         except (OSError, ValueError):
             self_sid = ""
     if self_sid:
@@ -3906,8 +3977,15 @@ def _finish_unification_claims(root: Path, parents: list[str], successor_path: s
     """
     successor_basename = Path(successor_path).name
     if successor_basename:
+        # AC16 verdict: comparison-side (resolves self-identity to ask
+        # `list_claims_by_session` whether it already holds the successor) --
+        # KEEPS `resolve_session_id`, does not refuse, for the same reason
+        # the release sites do not: a wrong sid here yields a wrong
+        # `already_held`, not an unreleasable claim, but refusing would
+        # itself block progress. Reported only (P026-C4).
         try:
             sid = _session_core.resolve_session_id(str(root))
+            _report_warm_uncarried_resolve("_finish_unification_claims")
         except (OSError, ValueError):
             sid = None
         already_held = False

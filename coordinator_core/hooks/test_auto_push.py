@@ -210,6 +210,62 @@ def test_classify_error_ordering_trap_push_protection_before_auth():
     assert auto_push.classify_error(stderr_text) == "gh-push-protection"
 
 
+def test_classify_error_stall_marker_classifies_as_push_stalled():
+    """P052-C6 (docs/plans/2026-09-10-push-cadence-hang-detection-over-
+    elapsed-timeout.md): a blob carrying `git_native.PUSH_STALL_MARKER`
+    classifies as the dedicated stall class."""
+    from coordinator_core.ops.ceremony.git_native import PUSH_STALL_MARKER
+
+    stderr_text = "Writing objects: 10%\n" + PUSH_STALL_MARKER.format(secs=14.036)
+    assert auto_push.classify_error(stderr_text) == "push-stalled"
+
+
+def test_classify_error_stall_marker_ordered_ahead_of_timeout_auth_network():
+    """The stall arm must win even when the blob ALSO carries text that
+    would otherwise match `_PAT_TIMEOUT`, `_PAT_AUTH` or `_PAT_NETWORK` --
+    a partial pack-transfer must not be claimed by a more specific-looking
+    pattern below it."""
+    from coordinator_core.ops.ceremony.git_native import PUSH_STALL_MARKER
+
+    stall_text = PUSH_STALL_MARKER.format(secs=14.036)
+
+    timeout_and_stall = (
+        "Writing objects: 10%\n"
+        "fatal: push exceeded 120s and was killed "
+        "(Could not read from remote repository: timed out)\n" + stall_text
+    )
+    assert auto_push.classify_error(timeout_and_stall) == "push-stalled"
+
+    auth_and_stall = (
+        "git@github.com: Permission denied (publickey).\n"
+        "fatal: Could not read from remote repository.\n" + stall_text
+    )
+    assert auto_push.classify_error(auth_and_stall) == "push-stalled"
+
+    network_and_stall = (
+        "ssh: Could not resolve hostname github.com: Name or service not known\n"
+        "fatal: Could not read from remote repository.\n" + stall_text
+    )
+    assert auto_push.classify_error(network_and_stall) == "push-stalled"
+
+
+def test_classify_error_partial_blob_without_marker_classifies_as_today():
+    """A partial-pack stderr blob that carries NO marker line classifies
+    exactly as it did before this class existed -- the stall arm must never
+    swallow an unrelated blob."""
+    stderr_text = (
+        "! [rejected] work/x -> work/x (non-fast-forward)\n"
+        "error: failed to push some refs to 'origin'\n"
+    )
+    assert auto_push.classify_error(stderr_text) == "non-fast-forward"
+
+
+def test_classify_error_stall_class_not_in_retryable_classes():
+    """A stall is indeterminate, not retry-worthy -- it must never be
+    blind-retried (§ Predicate shape)."""
+    assert "push-stalled" not in auto_push._RETRYABLE_CLASSES
+
+
 def test_classify_error_dead_ref_not_in_retryable_classes():
     # AC2: a dead local branch ref cannot self-heal by resending the same
     # push -- it must never be retried.

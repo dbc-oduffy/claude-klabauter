@@ -793,8 +793,15 @@ def _claude_klabauter_root() -> Optional[str]:
     Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC13
     """
     override = (coordinator_engine_root_env(__name__) or "").strip()
-    if override and op_latency.execution_route() == op_latency.IN_PROCESS:
-        return _refuse_published_mirror(override)
+    # The engine-root variable names where engine CODE runs from, which is the
+    # published mirror on a standard install; that is no data home, so a
+    # mirror-valued override falls through to the registry rungs below.
+    if (
+        override
+        and op_latency.execution_route() == op_latency.IN_PROCESS
+        and not _is_published_engine_mirror(override)
+    ):
+        return override
     # Rung 1.5: the transform-proof key. Under the publish identifier
     # transform the registry key in Rung 2 below is rewritten to name the
     # published mirror, so the published engine resolves "the central repo"

@@ -288,14 +288,41 @@ class SupportedTypesHintTests(unittest.TestCase):
         self.assertEqual(unbound, set())
 
     def test_missing_type_message_carries_the_hint_when_available(self) -> None:
+        # `main()` calls the REAL `cc_invoke.require_dispatch_engine_on_path()`
+        # unconditionally before checking `--type` (see its module-level "LOAD-
+        # BEARING, NOT DEAD" comment) -- against an ambient
+        # COORDINATOR_ENGINE_ROOT override that diverges from this checkout,
+        # that raises ProvenanceDivergenceError before the usage-error path
+        # under test ever runs. Stub `cc_invoke` in sys.modules the same way
+        # `QueryRecordHistoryTests.setUp` does, for the same reason (module
+        # docstring lines 86-93): `main()`'s `import cc_invoke` is
+        # function-local, resolved through sys.modules at call time.
         original = qrh._supported_types_hint
         qrh._supported_types_hint = lambda: "decision, sizing-object"
+        cc_invoke_stub = types.ModuleType("cc_invoke")
+        cc_invoke_stub.require_dispatch_engine_on_path = lambda: None
+        # `main()` also does a REAL `from records_query import _resolve_repo_root`
+        # once past the engine-root check; the real `records_query` module
+        # itself imports `cc_invoke.route_mutation` at call time, which the
+        # stub above does not carry -- so `records_query` is stubbed too,
+        # mirroring `QueryRecordHistoryTests.setUp`'s identical pairing.
+        records_query_stub = types.ModuleType("records_query")
+        records_query_stub._resolve_repo_root = lambda: "/fake/repo/root"
+        stubs = {"cc_invoke": cc_invoke_stub, "records_query": records_query_stub}
+        prev_modules = {name: sys.modules.get(name) for name in stubs}
+        for name, module in stubs.items():
+            sys.modules[name] = module
         try:
             err = io.StringIO()
             with redirect_stderr(err):
                 code = qrh.main([])
         finally:
             qrh._supported_types_hint = original
+            for name, prev in prev_modules.items():
+                if prev is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = prev
         self.assertEqual(code, 2)
         self.assertIn("supported: decision, sizing-object", err.getvalue())
 

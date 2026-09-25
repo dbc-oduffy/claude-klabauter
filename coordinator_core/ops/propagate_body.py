@@ -353,13 +353,20 @@ def _run_git(
 def _target_is_dirty(worktree: Path, rel_path: str) -> bool:
     """AC12 precondition 1 — True if `rel_path` (repo-relative) carries any
     uncommitted change (staged or unstaged) in the holder's tree, checked
-    BEFORE this op writes anything."""
-    result = _run_git(["status", "--porcelain", "--", rel_path], worktree)
-    if result.returncode != 0:
+    BEFORE this op writes anything.
+
+    Converted (P014-C3) onto `session_facts._dirty_paths`, single-path-scoped
+    to `rel_path`. Posture unchanged: fails closed — a degraded read (git
+    error/timeout/nonzero) is treated as dirty (refuse) rather than assumed
+    clean."""
+    from coordinator_core.session.session_facts import _dirty_paths
+
+    result = _dirty_paths(worktree, pathspecs=[rel_path])
+    if result["degraded"]:
         # Fails closed: an unreadable git-status answer is treated as dirty
         # (refuse) rather than assumed clean.
         return True
-    return bool(result.stdout.strip())
+    return result["collision"]
 
 
 def _git_operation_in_progress(worktree: Path) -> Optional[str]:

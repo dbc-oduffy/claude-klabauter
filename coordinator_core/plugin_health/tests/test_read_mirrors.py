@@ -25,14 +25,14 @@ schema = 1
 "plugin.mirrors.example-game-repo.propagation_mode" = "copy_install"
 "plugin.mirrors.example-game-repo.source_path" = "/src/example-game-repo"
 "plugin.mirrors.example-game-repo.live_path" = "/live/example-game-repo"
-"plugin.mirrors.example-retrieval-repo.track_ref" = "origin/dev"
+"plugin.mirrors.project-rag.track_ref" = "origin/dev"
 
 [plugin.mirrors.coordinator-claude]
 propagation_mode = "source_is_live"
 source_path = "/src/coordinator"
 live_path = "/live/coordinator"
 
-[plugin.mirrors.example-retrieval-repo]
+[plugin.mirrors.project-rag]
 propagation_mode = "editable_sibling_venv"
 source_path = "/src/example-retrieval-repo"
 """
@@ -67,8 +67,8 @@ def test_flat_dotted_key_form_only(tmp_path: Path) -> None:
 
 
 def test_nested_wins_over_flat_on_conflicting_field(tmp_path: Path) -> None:
-    # example-retrieval-repo has both a [plugin.mirrors.example-retrieval-repo] table (no track_ref)
-    # AND a flat "plugin.mirrors.example-retrieval-repo.track_ref" key. The nested-table
+    # example-retrieval-repo has both a [plugin.mirrors.project-rag] table (no track_ref)
+    # AND a flat "plugin.mirrors.project-rag.track_ref" key. The nested-table
     # entry doesn't define track_ref, so the flat value fills it in — but
     # live_path is present in neither, so it stays default-empty (nested
     # table wins on any field it DOES define; this fixture has no direct
@@ -76,9 +76,9 @@ def test_nested_wins_over_flat_on_conflicting_field(tmp_path: Path) -> None:
     reg = tmp_path / "registry.local.toml"
     reg.write_text(_NESTED_AND_FLAT_TOML, encoding="utf-8")
     mirrors = read_all_mirrors(reg)
-    assert mirrors["example-retrieval-repo"]["track_ref"] == "origin/dev"
-    assert mirrors["example-retrieval-repo"]["live_path"] == ""
-    assert mirrors["example-retrieval-repo"]["dist_name"] == "example_retrieval_repo"
+    assert mirrors["project-rag"]["track_ref"] == "origin/dev"
+    assert mirrors["project-rag"]["live_path"] == ""
+    assert mirrors["project-rag"]["dist_name"] == "project_rag"
 
 
 def test_missing_registry_file_returns_empty_dict(tmp_path: Path) -> None:

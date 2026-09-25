@@ -103,7 +103,7 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
+from pathlib import Path
 
 from coordinator_core._hook_envelope import payload_of
 from coordinator_core.hooks._payload import field
@@ -113,13 +113,10 @@ from coordinator_core.hooks.subagent_arrival_check import (
 )
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import git_common_dir, main_worktree_root
-from coordinator_core.win_portability import no_console_creationflags
 
 # File-mutating tool names — Bash is deliberately NOT in this set (see the
 # module docstring's false-positive guard #2).
 _MUTATING_TOOL_NAMES = frozenset({"Edit", "Write", "NotebookEdit", "MultiEdit"})
-
-_GIT_STATUS_TIMEOUT_SECONDS = 10
 
 
 def _count_calls_by_name(transcript_path: str) -> dict[str, int] | None:
@@ -169,33 +166,6 @@ def _count_calls_by_name(transcript_path: str) -> dict[str, int] | None:
     return counts
 
 
-def _git_porcelain_for_paths(worktree_root: str, paths: list[str]) -> str | None:
-    """Return `git status --porcelain -- <paths...>` stdout, or None on any failure.
-
-    None (never an exception) on: git not on PATH, non-zero exit, timeout, or
-    any other OSError — callers treat None as "could not verify", which fails
-    the whole check open (see _targets_changed). One `git status` invocation
-    covering every target path (git accepts multiple pathspecs natively)
-    instead of one spawn per path — the probe is a single atomic git call
-    either way, so a probe failure still means "could not verify any of
-    these", the same fail-open meaning the per-path loop produced.
-    """
-    try:
-        result = subprocess.run(
-            ["git", "status", "--porcelain", "--", *paths],
-            cwd=worktree_root,
-            capture_output=True,
-            text=True,
-            timeout=_GIT_STATUS_TIMEOUT_SECONDS,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if result.returncode != 0:
-        return None
-    return result.stdout
-
-
 def _targets_changed(worktree_root: str, target_paths: list[str]) -> bool | None:
     """True iff ANY target path shows dirty/untracked status right now.
 
@@ -204,13 +174,21 @@ def _targets_changed(worktree_root: str, target_paths: list[str]) -> bool | None
     which is the direction that would let this detector fire a false
     fabrication signal. False only when the probe succeeded and came back
     empty for every target.
+
+    Routes through the P014-C1 producer (`session_facts._dirty_paths`),
+    pathspec-scoped to `target_paths` — one `git status` invocation covering
+    every target path, same one-spawn-per-check posture as before
+    (P014-C3: `hooks.subagent_fabrication_check`'s budget stays at 1).
+    Imported function-local: this is a cold-path hook module.
     """
     if not target_paths:
         return None
-    porcelain = _git_porcelain_for_paths(worktree_root, target_paths)
-    if porcelain is None:
+    from coordinator_core.session.session_facts import _dirty_paths
+
+    result = _dirty_paths(Path(worktree_root), pathspecs=target_paths)
+    if result["degraded"]:
         return None
-    return bool(porcelain.strip())
+    return result["collision"]
 
 
 def verify_target_clean(repo_root: str, target_paths: list[str]) -> str:

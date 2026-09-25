@@ -407,14 +407,21 @@ def _sweep_one(repo_root: Union[str, Path]) -> None:
     SWEEP COST BUDGET section, not re-implemented here. Passes the
     cadence's OWN, smaller budget (C5, 2026-08-30) -- never the interactive
     `PUSH_RETRY_BUDGET_SECS` `push_outstanding` defaults to for every other
-    caller.
+    caller. Passes `use_streamed_push=True` (P052-C3, 2026-09-10): the
+    cadence sweep is the one sanctioned consumer of `push_with_retry`'s
+    progress-watched, silence-stall-detecting push leg -- see that
+    parameter's own docstring in `ops.ceremony.push`.
     """
     root = Path(repo_root)
     if not _acquire_sweep_lock(root):
         return
     try:
         try:
-            outcome = push_outstanding(root, budget_secs=CADENCE_PUSH_RETRY_BUDGET_SECS)
+            outcome = push_outstanding(
+                root,
+                budget_secs=CADENCE_PUSH_RETRY_BUDGET_SECS,
+                use_streamed_push=True,
+            )
         except Exception:  # noqa: BLE001 -- a sweep push must never raise
             return
         if outcome.failed or outcome.unconfirmed:
@@ -451,6 +458,22 @@ def sweep_repos(
     `CADENCE_PUSH_RETRY_BUDGET_SECS` -- the same budget `_sweep_one` hands
     `push_outstanding` -- so the admission guard and the actual per-repo
     spend agree without a second number to keep in sync.
+
+    ARM B (P052-C5, docs/plans/2026-09-10-push-cadence-hang-detection-over-
+    elapsed-timeout.md): `docs/research/2026-09-10-git-push-progress-stall-
+    measurement.md` selected layering, not replacement -- the fixed
+    `CADENCE_PUSH_RETRY_BUDGET_SECS` (16.0s) stays the per-repo ladder
+    deadline this admission check reads, unchanged and un-widened by the
+    silence watchdog `git_native.push_streamed` adds. A push that keeps
+    progressing is still bounded by this same 16.0s per-repo budget (arm B
+    layers a *silence* detector under it; it does not raise the ladder's own
+    elapsed ceiling), so this admission check's worst case -- and the
+    guarantee that a repo admitted here always finishes inside
+    `total_ceiling_secs` -- is unchanged by this plan. No repo is left
+    unswept by a widened per-push worst case, because under arm B there is
+    none: only arm A (not selected) would have widened it, which is why
+    AC9/AC10's "read the widened worst case against the sweep-repos
+    admission check" concern does not apply here.
     """
     deadline = clock() + total_ceiling_secs
     seen: List[Path] = []

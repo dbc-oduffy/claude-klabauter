@@ -26,7 +26,7 @@ Exit codes (parity-critical — callers branch on these):
 
 Testability override: if COORDINATOR_CODENAME_REGISTRY_KEYS is set (space- or
 newline-separated list of repos.* keys, e.g.
-"repos.example_cockpit_repo repos.example_retrieval_repo"), those keys are used instead of
+"repos.example_cockpit_repo repos.project_rag"), those keys are used instead of
 calling machine-local. This allows fixture tests to inject a synthetic
 registry without a live machine-local installation.
 
@@ -52,7 +52,7 @@ from coordinator_core.machine_resolver import merged_flat_registry as _merged_fl
 
 # D1 keep-set — prefix-matched against slug (strip repos. prefix first).
 # 'coordinator' matches 'coordinator_claude'; 'deep_research' matches
-# 'deep_research_claude'; 'example_retrieval_repo' matches 'example_retrieval_repo_ue_addon'.
+# 'deep_research_claude'; 'project_rag' matches 'example_retrieval_repo_ue_addon'.
 # 'doe_claude' kept: OSS resolve-coordinator-clone.sh reads repos.doe_claude
 # at runtime (PM-ratified 2026-07-10).
 # 'example_doctrine_repo' kept: a SECOND machine-local registry alias for the
@@ -97,7 +97,7 @@ from coordinator_core.machine_resolver import merged_flat_registry as _merged_fl
 # `example_orchestration_hub_repo` reached a live publish refusal behind
 # that silence. KEEPSET is the narrow, named fix; not a pattern loosen.
 KEEPSET: Sequence[str] = (
-    "example_retrieval_repo",
+    "project_rag",
     "deep_research",
     "game_dev",
     "web_dev",

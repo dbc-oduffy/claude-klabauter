@@ -3,7 +3,7 @@ Bucket B): the ADVISORY_REWRITE-band entries widened from
 ``matchers=("Bash",)`` to ``matchers=COMMAND_TOOL_NAMES`` in this chunk and
 still live -- ``validate-commit``, ``reap-stale-git-lock``,
 ``git-no-optional-locks``, ``block-dev-repo-sentinel-removal-advisory``.
-(``probe-spray`` was a fifth such entry; deleted -- see
+(A fifth such entry was deleted -- see
 docs/plans/2026-08-21-the-advisory-band-gets-smaller-cheaper-and-honest.md
 C5 -- and its own dialect-parity test class along with it.)
 

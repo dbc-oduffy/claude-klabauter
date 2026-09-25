@@ -10,7 +10,7 @@ decision), both fail open to `no_advisory()`:
      tool for that shape, once per (session, agent, shape). The table is the
      extension point: add a row, not a branch.
 
-"Answers for this repo" means a `.example-retrieval-repo/graph.db` found walking up from
+"Answers for this repo" means a `.project-rag/graph.db` found walking up from
 the search root (`tool_input.path`, else `cwd`), via the same walk
 `example_retrieval_repo_detect` uses. An MCP server being
 configured is not enough; a repo without an index adds nothing to the call.

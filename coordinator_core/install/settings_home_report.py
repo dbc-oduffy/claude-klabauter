@@ -80,7 +80,7 @@ from coordinator_core.warm.door import build as door_build
 from coordinator_core.install.engine_root_for_install import resolve_engine_root_for_install
 from coordinator_core.install.substrate import (
     _AGENT_FORWARDER_MARKER,
-    _read_native_forwarder_manifest,
+    _read_native_forwarder_manifest_state,
     _RM_FAMILY_FILES,
     BYTE_COPIED_BIN_SOURCES,
     _derive_agent_helper_target_map,
@@ -245,6 +245,13 @@ class SettingsHomeReport:
     #: Set when the currency question could not be asked at all (no readable
     #: prebuilt). Never collapsed into "no stale images".
     door_image_audit_error: str | None = None
+    #: Names (C5) whose door-owned verification consulted a native-forwarder
+    #: manifest read this run could not trust (unreadable/malformed side
+    #: file) -- "unmeasured", distinct from a validly-read manifest simply
+    #: not naming the slot ("none installed"). A name here that also lands
+    #: in `forwarder_unverified` is reported as unverified BECAUSE the
+    #: measurement failed, not because the forwarder is corrupt.
+    native_forwarder_manifest_unmeasured: list[str] = field(default_factory=list)
 
     @property
     def fixed_missing(self) -> list[SettingsHomeMember]:
@@ -410,6 +417,14 @@ def _is_door_owned_forwarder_slot(installed_name: str, path: Path, bin_dir: Path
     door binary plus its engine-root sidecar at `bin_dir` -- cheap and
     already the load-bearing presence oracle `install_door`/`door_uninstall`
     themselves use, not re-derived here.
+
+    Signature unchanged (C5): this predicate's boolean-only return is a
+    pre-existing, wider contract several callers already rely on (see
+    `test_report_reads_a_cut_over_bin_correctly.py`). Whether the manifest
+    read behind the per-name-image check below was itself measured is
+    exposed separately via `_read_native_forwarder_manifest_state` --
+    `check_settings_home` queries that directly rather than through this
+    function's return value.
     """
     if not is_door_installed(bin_dir):
         return False
@@ -432,7 +447,8 @@ def _is_door_owned_forwarder_slot(installed_name: str, path: Path, bin_dir: Path
     # gate above was written to keep catching (see this module's own
     # `test_door_owned_check_does_not_cover_unrelated_corrupt_forwarders`).
     # Magic alone would exempt any binary someone dropped into `bin/`.
-    return installed_name in _read_native_forwarder_manifest(bin_dir) and is_native_image(path)
+    manifest_state = _read_native_forwarder_manifest_state(bin_dir)
+    return installed_name in manifest_state.names and is_native_image(path)
 
 
 def _venv_is_the_resolved_interpreter(settings_home_path: Path) -> bool:
@@ -575,6 +591,7 @@ def check_settings_home(settings_home_path: Path, claude_klabauter_root: Path) -
     unverified: list[str] = []
     door_owned: list[str] = []
     byte_copied: list[str] = []
+    manifest_unmeasured: list[str] = []
     present_count = 0
     for installed_name, target in sorted(expected.items()):
         # THE IMAGE IS CHECKED BEFORE THE PYTHON BODY, NOT AFTER IT. Under
@@ -597,16 +614,26 @@ def check_settings_home(settings_home_path: Path, claude_klabauter_root: Path) -
         elif _byte_copied_body_matches_source(installed_name, path, claude_klabauter_root):
             byte_copied.append(installed_name)
             present_count += 1
-        elif _is_door_owned_forwarder_slot(installed_name, path, bin_dir):
-            door_owned.append(installed_name)
-            present_count += 1
         else:
-            unverified.append(installed_name)
+            # Only consult manifest measurement when `_is_door_owned_
+            # forwarder_slot` itself would -- its two early-return branches
+            # (no door installed; the bare-forwarder-name exemption) never
+            # read the manifest, so flagging "unmeasured" for them would be
+            # noise about a read that predicate never performs.
+            if is_door_installed(bin_dir) and installed_name != BARE_FORWARDER_NAME:
+                if not _read_native_forwarder_manifest_state(bin_dir).measured:
+                    manifest_unmeasured.append(installed_name)
+            if _is_door_owned_forwarder_slot(installed_name, path, bin_dir):
+                door_owned.append(installed_name)
+                present_count += 1
+            else:
+                unverified.append(installed_name)
     report.forwarder_present = present_count
     report.forwarder_missing = missing
     report.forwarder_unverified = unverified
     report.forwarder_door_owned = door_owned
     report.forwarder_byte_copied = byte_copied
+    report.native_forwarder_manifest_unmeasured = manifest_unmeasured
     return report
 
 
@@ -640,6 +667,11 @@ def format_report_lines(report: SettingsHomeReport) -> list[str]:
             ("body not this root's", report.forwarder_unverified),
             ("door-owned", report.forwarder_door_owned),
             ("byte-copied (bytes match this root's source)", report.forwarder_byte_copied),
+            (
+                "native-forwarder manifest unmeasured (unreadable/malformed, "
+                "NOT 'none installed')",
+                report.native_forwarder_manifest_unmeasured,
+            ),
         ):
             if not names:
                 continue

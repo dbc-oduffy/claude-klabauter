@@ -274,7 +274,13 @@ def test_an_over_budget_handler_finishes_inside_its_callers_identity(monkeypatch
     # constant is 3.12+ only -- absent from asyncio.constants under 3.11,
     # which this suite also runs on -- so raising=False makes the
     # monkeypatch a no-op there instead of an unrelated AttributeError;
-    # nothing below depends on it having taken effect.
+    # nothing below depends on it having taken effect. On 3.11 the
+    # no-op is harmless rather than blind: `shutdown_default_executor`
+    # there has no bounded join at all (the 300s truncation this
+    # constant governs is itself a 3.12+ addition), so the pre-fix
+    # early-return this test guards against cannot occur on 3.11 in
+    # the first place -- the assertion still holds, but only 3.12+
+    # actually exercises the abandon-vs-wait race.
     monkeypatch.setattr(asyncio.constants, "THREAD_JOIN_TIMEOUT", 0.01, raising=False)
 
     seen = []

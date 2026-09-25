@@ -600,6 +600,24 @@ def test_explicit_cwd_still_keys_the_sidecar_on_the_named_target(
     assert not (ambient / ".coordinator-local").exists()
 
 
+def test_non_repo_cwd_miss_names_the_cause(tmp_path: Path) -> None:
+    """A `cwd` naming a real, existing directory that is NOT inside any git
+    repo (a cloud container's non-repo parent-of-checkouts session cwd, per
+    a live doe-claude session observation) must degrade to the ordinary miss
+    path -- never guess a repo (klabauter#47, mirrored by the two
+    `missing_cwd` tests above) -- but the miss body must name WHY, not read
+    identically to an internal engine defect."""
+    non_repo_dir = tmp_path / "not-a-repo-parent"
+    non_repo_dir.mkdir()
+    payload = _payload(ELIGIBLE_TYPE, "session-non-repo-cwd", str(non_repo_dir))
+
+    result = compose_catering(payload, cwd=str(non_repo_dir))
+
+    assert SIDECAR_PATH_MARKER_PREFIX not in result
+    assert SIDECAR_MISS_MARKER in result
+    assert "not inside any git repository" in result
+
+
 def test_missing_policy_file_fails_open(
     git_repo: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

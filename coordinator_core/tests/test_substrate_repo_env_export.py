@@ -13,7 +13,7 @@ from coordinator_core.install.substrate import (
 
 
 def test_repo_key_to_env_var_dots_and_dashes():
-    assert repo_key_to_env_var("repos.example-retrieval-repo") == "REPO_EXAMPLE_RETRIEVAL_REPO"
+    assert repo_key_to_env_var("repos.project-rag") == "REPO_EXAMPLE_RETRIEVAL_REPO"
     assert repo_key_to_env_var("repos.foo.bar") == "REPO_FOO_BAR"
     assert repo_key_to_env_var("repos.plain") == "REPO_PLAIN"
 
@@ -23,7 +23,7 @@ def test_resolve_exports_rc0_resolved():
         return (0, "/Users/alice/X/example-retrieval-repo")
 
     exports, warnings, errors = resolve_repo_env_exports(
-        ["repos.example-retrieval-repo"], getter, preexisting_env={}
+        ["repos.project-rag"], getter, preexisting_env={}
     )
     assert exports == {"REPO_EXAMPLE_RETRIEVAL_REPO": "/Users/alice/X/example-retrieval-repo"}
     assert warnings == []
@@ -64,7 +64,7 @@ def test_resolve_exports_idempotency_gate_honours_preexisting():
         raise AssertionError("getter should not be called when pre-set")
 
     exports, warnings, errors = resolve_repo_env_exports(
-        ["repos.example-retrieval-repo"],
+        ["repos.project-rag"],
         getter,
         preexisting_env={"REPO_EXAMPLE_RETRIEVAL_REPO": "/already/set/override"},
     )

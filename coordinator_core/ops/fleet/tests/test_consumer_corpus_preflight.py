@@ -166,14 +166,14 @@ class TestRunPreflightRepoResolution:
         _handoff(claude_klabauter_root, "archive/handoffs/2026-07/c.md", "spinoff")
 
         # example-retrieval-repo: registered, but the path does not exist on disk on THIS machine.
-        missing_path = tmp_path / "not-cloned-here" / "example-retrieval-repo"
+        missing_path = tmp_path / "not-cloned-here" / "project-rag"
 
         # Every other fleet repo (cockpit, rag-ue-addon, example-game-repo, example-market-data-repo)
         # is deliberately NOT registered at all.
         _make_registry(tmp_path, monkeypatch, {
             "doe_claude": doe_root,
             "claude_klabauter": claude_klabauter_root,
-            "example_retrieval_repo": missing_path,
+            "project_rag": missing_path,
         })
 
         report = preflight.run_preflight()
@@ -192,8 +192,8 @@ class TestRunPreflightRepoResolution:
         assert repos["claude-klabauter"]["total"] == 1
 
         # example-retrieval-repo: registered but path absent — UNRESOLVABLE, never a "zero records" claim.
-        assert repos["example-retrieval-repo"]["resolved"] is False
-        assert "does not exist on disk" in repos["example-retrieval-repo"]["reason"]
+        assert repos["project-rag"]["resolved"] is False
+        assert "does not exist on disk" in repos["project-rag"]["reason"]
 
         # cockpit: key never registered — UNRESOLVABLE, never a "zero records" claim.
         assert repos["cockpit"]["resolved"] is False
@@ -201,13 +201,13 @@ class TestRunPreflightRepoResolution:
 
         unresolvable_names = {entry["repo"] for entry in report["unresolvable"]}
         assert unresolvable_names == {
-            "example-retrieval-repo", "cockpit", "example-retrieval-repo-ue-addon",
+            "project-rag", "cockpit", "example-retrieval-repo-ue-addon",
             "example-game-workbench-repo", "example-market-data-repo",
         }
         # An unresolvable repo must NEVER be silently counted as zero records — it
         # has no "counts_live"/"counts_archived"/"total" key at all, distinct from
         # a resolved repo with a genuinely empty corpus.
-        assert "counts_live" not in repos["example-retrieval-repo"]
+        assert "counts_live" not in repos["project-rag"]
         assert "counts_live" not in repos["cockpit"]
 
     def test_run_preflight_all_resolvable_and_scanned_is_exit_zero(

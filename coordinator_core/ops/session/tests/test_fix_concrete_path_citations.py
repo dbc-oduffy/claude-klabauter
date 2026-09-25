@@ -102,7 +102,7 @@ from coordinator_core.ops.session.fix_concrete_path_citations import (
 
 
 def _fake_machine_local():
-    return ["repos.claude_klabauter", "repos.example_retrieval_repo", "repos.example_retrieval_repo_ue_addon"]
+    return ["repos.claude_klabauter", "repos.project_rag", "repos.project_rag_ue_addon"]
 
 
 def test_discover_families_longest_match_first_and_config_families() -> None:
@@ -1016,7 +1016,7 @@ def test_default_registry_keys_reads_registry_toml(monkeypatch, tmp_path: Path) 
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path))
     keys = _default_registry_keys()
     assert "repos.claude_klabauter" in keys
-    assert "repos.example_retrieval_repo" in keys
+    assert "repos.project_rag" in keys
     assert "publish.mirrors.claude_klabauter.path" in keys
     assert len(keys) == len(set(keys))
 

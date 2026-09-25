@@ -268,146 +268,19 @@ from coordinator_core.bash_guards._command_tokenizer import (
     ResolvedCommand as _ResolvedCommand,
     resolve_command_positions as _resolve_command_positions,
 )
-from coordinator_core.bash_guards.block_subagent_plan_body_bash_write import (
-    check as _check_plan_body_bash_write,
-    MATCHERS as _matchers_plan_body_bash_write,
-)
-from coordinator_core.bash_guards.block_reviewer_bash_outside_allowlist import (
-    check as _check_reviewer_bash_outside_allowlist,
-    MATCHERS as _matchers_reviewer_bash_outside_allowlist,
-)
-from coordinator_core.bash_guards.block_subagent_destructive_action import (
-    check as _check_subagent_destructive_action,
-    MATCHERS as _matchers_subagent_destructive_action,
-)
-from coordinator_core.bash_guards.block_illegal_filename import (
-    check as _check_illegal_filename,
-    MATCHERS as _matchers_illegal_filename,
-)
-from coordinator_core.bash_guards.check_test_suite_invocation import (
-    check as _check_test_suite_invocation,
-    MATCHERS as _matchers_test_suite_invocation,
-)
-from coordinator_core.bash_guards.block_subagent_commit import (
-    check as _check_subagent_commit,
-    MATCHERS as _matchers_subagent_commit,
-)
-from coordinator_core.bash_guards.guard_host_subagent_bash_ban import (
-    check as _check_host_subagent_bash_ban,
-    MATCHERS as _matchers_host_subagent_bash_ban,
-)
-from coordinator_core.bash_guards.guard_host_subagent_bash_spawn_shapes import (
-    check as _check_host_subagent_bash_spawn_shapes,
-    MATCHERS as _matchers_host_subagent_bash_spawn_shapes,
-)
-from coordinator_core.bash_guards.check_raw_pid_liveness import (
-    check as _check_raw_pid_liveness,
-    MATCHERS as _matchers_raw_pid_liveness,
-)
-from coordinator_core.bash_guards.block_worktree_creation import (
-    check as _check_worktree_creation,
-    MATCHERS as _matchers_worktree_creation,
-)
-from coordinator_core.bash_guards.p4_verb_fence import (
-    check as _check_p4_verb_fence,
-    MATCHERS as _matchers_p4_verb_fence,
-)
-from coordinator_core.bash_guards.block_approval_sentinel_creation import (
-    check as _check_approval_sentinel_creation,
-    MATCHERS as _matchers_approval_sentinel_creation,
-)
-from coordinator_core.bash_guards.block_worktree_sentinel_creation import (
-    check as _check_worktree_sentinel_creation,
-    MATCHERS as _matchers_worktree_sentinel_creation,
-)
-from coordinator_core.bash_guards.block_fleet_delegation_creation import (
-    check as _check_fleet_delegation_creation,
-    MATCHERS as _matchers_fleet_delegation_creation,
-)
-# block_dev_repo_sentinel_removal.py DOES declare a module-level MATCHERS,
-# but on the module whose registered leg here is `check_advisory` -- the
-# `check()` leg that pairs with the declaration was RETIRED from guard_chain
-# (see that registration's own comment below). Treat this registration as
-# having no applicable declaration: no MATCHERS import from this module, and
-# its GuardEntry below passes the ("Bash",) default literally, same as any
-# other registration whose backing module declares nothing.
-from coordinator_core.bash_guards.block_dev_repo_sentinel_removal import (
-    check as _check_dev_repo_sentinel_removal,
-    check_advisory as _check_dev_repo_sentinel_removal_advisory,
-)
-from coordinator_core.bash_guards.block_stash_destruction import (
-    check as _check_stash_destruction,
-    check_apply_advisory as _check_stash_apply_advisory,
-    MATCHERS as _matchers_stash_destruction,
-)
-from coordinator_core.bash_guards.block_subagent_stash_creation import (
-    check as _check_subagent_stash_creation,
-    MATCHERS as _matchers_subagent_stash_creation,
-)
-from coordinator_core.bash_guards.block_subagent_grant_acquisition import (
-    check as _check_subagent_grant_acquisition,
-    MATCHERS as _matchers_subagent_grant_acquisition,
-)
-from coordinator_core.bash_guards.block_subagent_guard_grant import (
-    check as _check_subagent_guard_grant,
-    MATCHERS as _matchers_subagent_guard_grant,
-)
-from coordinator_core.bash_guards.guard_repo_setup_claude_home_refusal import (
-    check as _check_repo_setup_claude_home_refusal,
-    MATCHERS as _matchers_repo_setup_claude_home_refusal,
-)
-from coordinator_core.bash_guards.guard_doctrine_surface_bash_write import (
-    check as _check_doctrine_surface_bash_write,
-    MATCHERS as _matchers_doctrine_surface_bash_write,
-)
-from coordinator_core.bash_guards.block_noncanonical_branch_creation import (
-    check as _check_block_noncanonical_branch_creation,
-    MATCHERS as _matchers_noncanonical_branch_creation,
-)
-from coordinator_core.bash_guards.bump_foreign_repo_write import (
-    check_bump_foreign_repo_write as _check_bump_foreign_repo_write,
-)
-from coordinator_core.bash_guards.bump_outside_repo_write import (
-    check_bump_outside_repo_write as _check_bump_outside_repo_write,
-)
-from coordinator_core.bash_guards.write_claim_record import (
-    record_write_claims as _record_write_claims,
-)
-from coordinator_core.bash_guards.guard_inprocess_search import (
-    check as _check_inprocess_search,
-    MATCHERS as _matchers_inprocess_search,
-)
-from coordinator_core.bash_guards.guard_offer_git_c import (
-    check_offer_git_c as _check_offer_git_c,
-)
-from coordinator_core.bash_guards.guard_no_optional_locks import (
-    check_git_no_optional_locks as _check_git_no_optional_locks,
-)
-from coordinator_core.bash_guards.guard_reap_stale_git_lock import (
-    check_reap_stale_git_lock as _check_reap_stale_git_lock,
-)
-from coordinator_core.bash_guards.guard_head_tail_rewrite import (
-    check_head_tail_plumbing_rewrite as _check_head_tail_plumbing_rewrite,
-)
-from coordinator_core.bash_guards.guard_grep_via_bash import (
-    check as _check_grep_via_bash,
-    MATCHERS as _matchers_grep_via_bash,
-)
-from coordinator_core.bash_guards.guard_powershell_via_bash import (
-    check as _check_powershell_via_bash,
-    MATCHERS as _matchers_powershell_via_bash,
-)
-from coordinator_core.bash_guards.guard_multiprobe_banner import (
-    check as _check_multiprobe_banner,
-    MATCHERS as _matchers_multiprobe_banner,
-)
-from coordinator_core.bash_guards.guard_offer_invoke_params_stdin import (
-    check_offer_invoke_params_stdin as _check_offer_invoke_params_stdin,
-)
-from coordinator_core.bash_guards.guard_plumbing_and_loops import (
-    check as _check_plumbing_and_loops,
-    MATCHERS as _matchers_plumbing_and_loops,
-)
+# P070-C3 (eager-import ratchet): the ~34 out-of-line guard-check imports that
+# used to sit here at module top are now deferred into `_build_guard_chain`
+# (lever (a) of docs/plans/2026-09-11-every-bash-call-pays-23k-lines-of-guard.md
+# § "The permitted lever set at C3") -- every one of them is referenced ONLY
+# inside that function's lambdas/GuardEntry construction, never at true
+# module-execution scope, the same shape `block_disarm_marker_sentinel_
+# creation`'s own pre-existing deferred import already established here.
+# `_record_write_claims` (`write_claim_record.record_write_claims`) is
+# deferred identically into `_record_bash_write_claims`, its sole caller.
+# The subset of MATCHERS symbols `_any_declared_matchers` also reads is
+# re-imported there under the same rule -- see that function's own deferred
+# block for why duplicating the import (rather than sharing across functions)
+# is the safe shape given this module's circular-import constraints.
 
 
 class GuardBand(Enum):
@@ -1249,6 +1122,65 @@ def _any_declared_matchers() -> "frozenset[str]":
         from coordinator_core.bash_guards.block_disarm_marker_sentinel_creation import (
             MATCHERS as _matchers_disarm_marker_sentinel_creation,
         )
+        # P070-C3: the same MATCHERS-only deferral, for the same reason, as
+        # the `block_disarm_marker_sentinel_creation` import immediately
+        # above -- these symbols used to be imported at module top and are
+        # used ONLY here and in `_build_guard_chain` (which imports its own
+        # copy independently; see that function's own deferred block).
+        from coordinator_core.bash_guards.block_subagent_plan_body_bash_write import (
+            MATCHERS as _matchers_plan_body_bash_write,
+        )
+        from coordinator_core.bash_guards.block_reviewer_bash_outside_allowlist import (
+            MATCHERS as _matchers_reviewer_bash_outside_allowlist,
+        )
+        from coordinator_core.bash_guards.block_subagent_destructive_action import (
+            MATCHERS as _matchers_subagent_destructive_action,
+        )
+        from coordinator_core.bash_guards.block_illegal_filename import (
+            MATCHERS as _matchers_illegal_filename,
+        )
+        from coordinator_core.bash_guards.check_test_suite_invocation import (
+            MATCHERS as _matchers_test_suite_invocation,
+        )
+        from coordinator_core.bash_guards.block_subagent_commit import (
+            MATCHERS as _matchers_subagent_commit,
+        )
+        from coordinator_core.bash_guards.check_raw_pid_liveness import (
+            MATCHERS as _matchers_raw_pid_liveness,
+        )
+        from coordinator_core.bash_guards.block_worktree_creation import (
+            MATCHERS as _matchers_worktree_creation,
+        )
+        from coordinator_core.bash_guards.block_approval_sentinel_creation import (
+            MATCHERS as _matchers_approval_sentinel_creation,
+        )
+        from coordinator_core.bash_guards.block_worktree_sentinel_creation import (
+            MATCHERS as _matchers_worktree_sentinel_creation,
+        )
+        from coordinator_core.bash_guards.block_stash_destruction import (
+            MATCHERS as _matchers_stash_destruction,
+        )
+        from coordinator_core.bash_guards.block_subagent_stash_creation import (
+            MATCHERS as _matchers_subagent_stash_creation,
+        )
+        from coordinator_core.bash_guards.block_noncanonical_branch_creation import (
+            MATCHERS as _matchers_noncanonical_branch_creation,
+        )
+        from coordinator_core.bash_guards.guard_inprocess_search import (
+            MATCHERS as _matchers_inprocess_search,
+        )
+        from coordinator_core.bash_guards.guard_grep_via_bash import (
+            MATCHERS as _matchers_grep_via_bash,
+        )
+        from coordinator_core.bash_guards.guard_multiprobe_banner import (
+            MATCHERS as _matchers_multiprobe_banner,
+        )
+        from coordinator_core.bash_guards.guard_plumbing_and_loops import (
+            MATCHERS as _matchers_plumbing_and_loops,
+        )
+        from coordinator_core.bash_guards.guard_repo_setup_claude_home_refusal import (
+            MATCHERS as _matchers_repo_setup_claude_home_refusal,
+        )
 
         _ANY_DECLARED_MATCHERS_CACHE = frozenset(("Bash",)).union(
             _matchers_plan_body_bash_write,
@@ -1359,6 +1291,16 @@ def _record_bash_write_claims(
     already decided.
     """
     try:
+        # P070-C3: deferred, same rule as `_build_guard_chain`'s guard-check
+        # imports -- `_record_write_claims` is referenced only in this
+        # function, never at module-execution scope, so it moves here rather
+        # than sitting at module top (lever (a), docs/plans/2026-09-11-
+        # every-bash-call-pays-23k-lines-of-guard.md § "The permitted lever
+        # set at C3").
+        from coordinator_core.bash_guards.write_claim_record import (
+            record_write_claims as _record_write_claims,
+        )
+
         payload = json.loads(raw) if raw else None
         if not isinstance(payload, dict):
             return
@@ -2200,6 +2142,151 @@ def _build_guard_chain(
         MATCHERS as _matchers_disarm_marker_sentinel_creation,
     )
 
+    # P070-C3: every guard-check import below is referenced only inside this
+    # function's lambdas/`GuardEntry` construction (never at module-execution
+    # scope), so each is deferred here rather than sitting at module top --
+    # lever (a), docs/plans/2026-09-11-every-bash-call-pays-23k-lines-of-guard.md
+    # § "The permitted lever set at C3". Safe for the identical reason the
+    # `block_disarm_marker_sentinel_creation` import immediately above already
+    # is: `_build_guard_chain` is only ever CALLED, never imported-from-the-top.
+    from coordinator_core.bash_guards.block_subagent_plan_body_bash_write import (
+        check as _check_plan_body_bash_write,
+        MATCHERS as _matchers_plan_body_bash_write,
+    )
+    from coordinator_core.bash_guards.block_reviewer_bash_outside_allowlist import (
+        check as _check_reviewer_bash_outside_allowlist,
+        MATCHERS as _matchers_reviewer_bash_outside_allowlist,
+    )
+    from coordinator_core.bash_guards.block_subagent_destructive_action import (
+        check as _check_subagent_destructive_action,
+        MATCHERS as _matchers_subagent_destructive_action,
+    )
+    from coordinator_core.bash_guards.block_illegal_filename import (
+        check as _check_illegal_filename,
+        MATCHERS as _matchers_illegal_filename,
+    )
+    from coordinator_core.bash_guards.check_test_suite_invocation import (
+        check as _check_test_suite_invocation,
+        MATCHERS as _matchers_test_suite_invocation,
+    )
+    from coordinator_core.bash_guards.block_subagent_commit import (
+        check as _check_subagent_commit,
+        MATCHERS as _matchers_subagent_commit,
+    )
+    from coordinator_core.bash_guards.guard_host_subagent_bash_ban import (
+        check as _check_host_subagent_bash_ban,
+        MATCHERS as _matchers_host_subagent_bash_ban,
+    )
+    from coordinator_core.bash_guards.guard_host_subagent_bash_spawn_shapes import (
+        check as _check_host_subagent_bash_spawn_shapes,
+        MATCHERS as _matchers_host_subagent_bash_spawn_shapes,
+    )
+    from coordinator_core.bash_guards.check_raw_pid_liveness import (
+        check as _check_raw_pid_liveness,
+        MATCHERS as _matchers_raw_pid_liveness,
+    )
+    from coordinator_core.bash_guards.block_worktree_creation import (
+        check as _check_worktree_creation,
+        MATCHERS as _matchers_worktree_creation,
+    )
+    from coordinator_core.bash_guards.p4_verb_fence import (
+        check as _check_p4_verb_fence,
+        MATCHERS as _matchers_p4_verb_fence,
+    )
+    from coordinator_core.bash_guards.block_approval_sentinel_creation import (
+        check as _check_approval_sentinel_creation,
+        MATCHERS as _matchers_approval_sentinel_creation,
+    )
+    from coordinator_core.bash_guards.block_worktree_sentinel_creation import (
+        check as _check_worktree_sentinel_creation,
+        MATCHERS as _matchers_worktree_sentinel_creation,
+    )
+    from coordinator_core.bash_guards.block_fleet_delegation_creation import (
+        check as _check_fleet_delegation_creation,
+        MATCHERS as _matchers_fleet_delegation_creation,
+    )
+    # block_dev_repo_sentinel_removal.py DOES declare a module-level MATCHERS,
+    # but on the module whose registered leg here is `check_advisory` -- the
+    # `check()` leg that pairs with the declaration was RETIRED from guard_chain
+    # (see that registration's own comment below). Treat this registration as
+    # having no applicable declaration: no MATCHERS import from this module, and
+    # its GuardEntry below passes the ("Bash",) default literally, same as any
+    # other registration whose backing module declares nothing.
+    from coordinator_core.bash_guards.block_dev_repo_sentinel_removal import (
+        check as _check_dev_repo_sentinel_removal,
+        check_advisory as _check_dev_repo_sentinel_removal_advisory,
+    )
+    from coordinator_core.bash_guards.block_stash_destruction import (
+        check as _check_stash_destruction,
+        check_apply_advisory as _check_stash_apply_advisory,
+        MATCHERS as _matchers_stash_destruction,
+    )
+    from coordinator_core.bash_guards.block_subagent_stash_creation import (
+        check as _check_subagent_stash_creation,
+        MATCHERS as _matchers_subagent_stash_creation,
+    )
+    from coordinator_core.bash_guards.block_subagent_grant_acquisition import (
+        check as _check_subagent_grant_acquisition,
+        MATCHERS as _matchers_subagent_grant_acquisition,
+    )
+    from coordinator_core.bash_guards.block_subagent_guard_grant import (
+        check as _check_subagent_guard_grant,
+        MATCHERS as _matchers_subagent_guard_grant,
+    )
+    from coordinator_core.bash_guards.guard_repo_setup_claude_home_refusal import (
+        check as _check_repo_setup_claude_home_refusal,
+        MATCHERS as _matchers_repo_setup_claude_home_refusal,
+    )
+    from coordinator_core.bash_guards.guard_doctrine_surface_bash_write import (
+        check as _check_doctrine_surface_bash_write,
+        MATCHERS as _matchers_doctrine_surface_bash_write,
+    )
+    from coordinator_core.bash_guards.block_noncanonical_branch_creation import (
+        check as _check_block_noncanonical_branch_creation,
+        MATCHERS as _matchers_noncanonical_branch_creation,
+    )
+    from coordinator_core.bash_guards.bump_foreign_repo_write import (
+        check_bump_foreign_repo_write as _check_bump_foreign_repo_write,
+    )
+    from coordinator_core.bash_guards.bump_outside_repo_write import (
+        check_bump_outside_repo_write as _check_bump_outside_repo_write,
+    )
+    from coordinator_core.bash_guards.guard_inprocess_search import (
+        check as _check_inprocess_search,
+        MATCHERS as _matchers_inprocess_search,
+    )
+    from coordinator_core.bash_guards.guard_offer_git_c import (
+        check_offer_git_c as _check_offer_git_c,
+    )
+    from coordinator_core.bash_guards.guard_no_optional_locks import (
+        check_git_no_optional_locks as _check_git_no_optional_locks,
+    )
+    from coordinator_core.bash_guards.guard_reap_stale_git_lock import (
+        check_reap_stale_git_lock as _check_reap_stale_git_lock,
+    )
+    from coordinator_core.bash_guards.guard_head_tail_rewrite import (
+        check_head_tail_plumbing_rewrite as _check_head_tail_plumbing_rewrite,
+    )
+    from coordinator_core.bash_guards.guard_grep_via_bash import (
+        check as _check_grep_via_bash,
+        MATCHERS as _matchers_grep_via_bash,
+    )
+    from coordinator_core.bash_guards.guard_powershell_via_bash import (
+        check as _check_powershell_via_bash,
+        MATCHERS as _matchers_powershell_via_bash,
+    )
+    from coordinator_core.bash_guards.guard_multiprobe_banner import (
+        check as _check_multiprobe_banner,
+        MATCHERS as _matchers_multiprobe_banner,
+    )
+    from coordinator_core.bash_guards.guard_offer_invoke_params_stdin import (
+        check_offer_invoke_params_stdin as _check_offer_invoke_params_stdin,
+    )
+    from coordinator_core.bash_guards.guard_plumbing_and_loops import (
+        check as _check_plumbing_and_loops,
+        MATCHERS as _matchers_plumbing_and_loops,
+    )
+
     # `check_destructive_git_revert`'s hard-deny leg and its advisory sibling
     # (`check_destructive_git_revert_advisory`) both compute from
     # `_dc._check_destructive_git_revert_full` -- the same `git status`/`git
@@ -2766,7 +2853,9 @@ def _build_guard_chain(
         # the git-rewrite guard they're grouped with in the plan, not
         # because of a `cd <foreign-repo> && git commit` reachability gap.
         #
-        # Reordering also moves both bumps ahead of `probe-spray` and
+        # Reordering also moves both bumps ahead of the now-deleted nudge
+        # guard this comment used to name (docs/plans/2026-08-21-the-
+        # advisory-band-gets-smaller-cheaper-and-honest.md C5) and
         # `block-illegal-filename` below (previously the bumps sat at the
         # TAIL of the ADVISORY_REWRITE band, after both) -- a repeated or
         # illegally-named cross-repo/outside-repo bash write now hits the
@@ -2963,8 +3052,9 @@ def _build_guard_chain(
         # hard-deny above (identity/confinement/git-history denies all
         # outrank a search answer), same invariant every rewrite/advisory
         # entry in this chain already honors. (Its former second ordering
-        # constraint -- precede `probe-spray` -- is moot: that guard is
-        # deleted.) `inprocess-search` never denies a command it cannot
+        # constraint -- precede the now-deleted nudge guard this comment
+        # used to name -- is moot: that guard is deleted.)
+        # `inprocess-search` never denies a command it cannot
         # answer, so its position cannot introduce a new bypass of anything
         # below it (same reasoning already applied to its position relative
         # to the rewrite guards further down).

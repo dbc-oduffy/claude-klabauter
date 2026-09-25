@@ -1423,32 +1423,38 @@ class TestUnknownSchema:
 
 
 class TestQueueAppendMachineLocalImplSettingsHomeRepoint:
-    """queue_append._machine_local_impl() prefers <settings-home>/bin/_machine_local.py,
-    falling back to the legacy ~/.claude/bin path only when the settings-home impl is absent.
+    """queue_append resolves machine-local through the shared
+    ``coordinator_core._claude_klabauter_root._machine_local_impl()``, which prefers
+    <settings-home>/bin/_machine_local.py, falling back to the legacy
+    ~/.claude/bin path only when the settings-home impl is absent.
     """
 
     def test_prefers_settings_home_impl_when_present(self, tmp_path, monkeypatch):
+        from coordinator_core import _claude_klabauter_root as _mr_mod
+
         monkeypatch.delenv("MACHINE_LOCAL_IMPL", raising=False)
         settings_home_root = tmp_path / "settings_home"
         (settings_home_root / "bin").mkdir(parents=True)
         expected_impl = settings_home_root / "bin" / "_machine_local.py"
         expected_impl.write_text("# stub\n")
-        monkeypatch.setattr(_qa_mod, "settings_home", lambda: settings_home_root)
+        monkeypatch.setattr(_mr_mod, "settings_home", lambda: settings_home_root)
 
-        result = _qa_mod._machine_local_impl()
+        result = _mr_mod._machine_local_impl()
 
         assert result == str(expected_impl)
 
     def test_falls_back_to_claude_home_when_settings_home_impl_absent(
         self, tmp_path, monkeypatch
     ):
+        from coordinator_core import _claude_klabauter_root as _mr_mod
+
         monkeypatch.delenv("MACHINE_LOCAL_IMPL", raising=False)
         settings_home_root = tmp_path / "settings_home_missing"
-        monkeypatch.setattr(_qa_mod, "settings_home", lambda: settings_home_root)
+        monkeypatch.setattr(_mr_mod, "settings_home", lambda: settings_home_root)
         claude_home_root = tmp_path / "dummy_claude_home"
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home_root))
 
-        result = _qa_mod._machine_local_impl()
+        result = _mr_mod._machine_local_impl()
 
         assert result == str(claude_home_root / "bin" / "_machine_local.py")
 

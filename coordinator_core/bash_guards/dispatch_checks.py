@@ -38,8 +38,11 @@ deleted 2026-07-20, DoE ``e91827a7``):
   block-no-verify.sh, block-destructive-git-orphan.sh, block-destructive-rm.sh,
   block-destructive-git-clean.sh, block-destructive-git-revert.sh,
   block-blanket-git-add.sh, block-runaway-find.sh, offer-git-c-over-cd.sh,
-  nudge-probe-spray.sh, validate-commit.sh
-  (nudge-windows-console-popup.sh retired -- DR-054, 2026-07-15)
+  validate-commit.sh
+  (nudge-windows-console-popup.sh retired -- DR-054, 2026-07-15; the
+  eleventh ported check's own bash predecessor retired with the check
+  itself -- docs/plans/2026-08-21-the-advisory-band-gets-smaller-cheaper-
+  and-honest.md C5)
 Spec backlink: scratch/subagent-sandbox/bash-to-python-migration/W3a-preuse-bash-recipe.md Sec(c)
 
 KNOWN PORTING GAPS (surfaced, not silently patched -- see the W3b dispatch

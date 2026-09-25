@@ -157,6 +157,7 @@ Confirm→act (`dry_run:true`/`dry_run:false`) wire contract; git-mv terminal ar
 | `archive_queue_entry.py` | `fleet.archive_queue_entry` | Single-entry git-mv of one closed `state/improvement-queue/*.yaml` entry into `archive/improvement-queue/YYYY-MM/`, dry_run/act contract |
 | `archive_release_accumulator.py` | `fleet.archive_release_accumulator` | git-mv's the most recent `state/week-changelog/*-pending-release.md` accumulator into `archive/release-notes/` under a tag-suffixed name, if one exists |
 | `archive_terminal_handoffs.py` | `fleet.archive_completed_handoffs` | Cap-bounded sweep of terminal, childless, unclaimed handoffs (subsumes the former deployment-axis-only `archive_shipped_handoffs.py`, deleted C1b) |
+| `delete_superseded_decisions.py` | `fleet.delete_superseded_decisions` | Cap-bounded git-rm of `status:superseded` `docs/decisions/*.md` records, gated by a one-grep live-citation refusal and a max-id floor; delete lands via `_common.rm_and_commit` |
 | `memo_send.py` | `memo.send` | MUTATING UDS op handler for cross-repo memo send |
 | `prune_bugs.py` | `fleet.prune_closed_bugs` | Prunes closed bug-backlog entries |
 | `reap_integrated_findings.py` | `fleet.reap_integrated_findings` | Reaps marker-present (integrated) review-findings sidecars from `state/review-trail/findings/`, no age gate — leg (a) of the DR-218 review-trail cleanup split; custom (non-two-phase) result shape |

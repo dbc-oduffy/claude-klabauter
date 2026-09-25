@@ -25,7 +25,7 @@ the flat OSS publish-repo layout (repo root). Auto-discovers the bundle root.
 Caller identity (P124-C1): with no `--root`, this gate no longer assumes its
 caller HOLDS the coordinator-claude bundle just because a marketplace.json
 happens to sit somewhere under it — example-retrieval-repo's own root marketplace.json
-(name "example-retrieval-repo") is not the subject. `--repo-root <dir>` names the repo
+(name "project-rag") is not the subject. `--repo-root <dir>` names the repo
 being closed (default: the caller's cwd, via git toplevel, same as before);
 every non-`--root` discovery rung is rooted at THAT value only, never cwd
 directly, and accepts a candidate marketplace.json only when its `name` is

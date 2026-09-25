@@ -359,3 +359,44 @@ def test_ok_true_when_all_edges_dependency_monotone():
     assert result["violations"] == []
     assert result["unresolved"] == []
     assert result["cycle"] is None
+
+
+# ---------------------------------------------------------------------------
+# checkDependencyOrder — `blocks:` referential integrity (C1). Parity case
+# for the same widening `coordinator_core.roadmap.audit.check_dependency_order`
+# gets, per this module's Negative-spec (a fresh, independent port, kept
+# parallel deliberately) and the C1 body's "widen BOTH copies" mandate.
+# ---------------------------------------------------------------------------
+
+
+def test_blocks_dangling_edge_produces_unresolved_entry_tagged_blocks():
+    stubs = [{"stub_id": "present-1", "sprint": 1, "wave": 1, "blocks": ["ghost-id"]}]
+    result = check_dependency_order(stubs)
+    assert result["ok"] is False
+    assert len(result["unresolved"]) == 1
+    u = result["unresolved"][0]
+    assert u["from"] == "present-1"
+    assert u["to"] == "ghost-id"
+    assert u["reason"] == "unresolved-edge"
+    assert u["edge"] == "blocks"
+
+
+def test_blocked_by_unresolved_entry_tagged_blocked_by():
+    stubs = [{"stub_id": "present-1", "sprint": 1, "wave": 2, "blocked_by": ["ghost-id"]}]
+    result = check_dependency_order(stubs)
+    assert result["unresolved"][0]["edge"] == "blocked_by"
+
+
+def test_blocks_resolved_edge_is_not_reported_and_not_ordering_checked():
+    # `blocks` resolving to a real stub_id must not surface as unresolved, and
+    # must NOT be fed into number/(sprint, wave) monotonicity -- a stub whose
+    # `blocks:` target has a HIGHER number/later slot (the normal, expected
+    # shape for the inverse edge) must not produce a spurious violation.
+    stubs = [
+        {"stub_id": "a-1", "number": 1, "sprint": 1, "wave": 1, "blocks": ["b-2"]},
+        {"stub_id": "b-2", "number": 2, "sprint": 1, "wave": 2},
+    ]
+    result = check_dependency_order(stubs)
+    assert result["ok"] is True
+    assert result["unresolved"] == []
+    assert result["violations"] == []

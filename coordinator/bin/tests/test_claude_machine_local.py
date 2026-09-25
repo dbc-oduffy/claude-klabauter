@@ -3,15 +3,15 @@
 Spec backlink: docs/plans/2026-05-20-portable-code-substrate.md §5.1 (Chunk 1 tests)
 
 Coverage (per plan AC7):
-  1. repos.example_retrieval_repo (a genuine working repo declared in registry.toml) returns
-     pathlib.Path matching subprocess.run(["machine-local","get","repos.example_retrieval_repo"]).stdout.strip().
+  1. repos.project_rag (a genuine working repo declared in registry.toml) returns
+     pathlib.Path matching subprocess.run(["machine-local","get","repos.project_rag"]).stdout.strip().
   2. repos.this_key_does_not_exist_12345 raises AttributeError whose message contains
      the dotted key AND a remediation phrase ("Fix:" or "registry.local.toml").
   3. repos._foo raises AttributeError without consulting the registry
      (mock subprocess.run; assert it was NOT called).
   4. Re-import idempotency: from claude_machine_local import repos twice yields a repos
      that resolves correctly (Python caches modules; smoke test).
-  5. Memoization: call repos.example_retrieval_repo twice; verify subprocess.run called
+  5. Memoization: call repos.project_rag twice; verify subprocess.run called
      only once (via mock cache-dict inspection).
   6. Empty-value case: monkeypatch reader via MACHINE_LOCAL_REGISTRY_DIR to a tmp
      directory whose registry.local.toml declares "repos.empty_test" = "" (the
@@ -122,20 +122,20 @@ def _cli_get(key: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 def test_repos_example_retrieval_repo_matches_cli():
-    """repos.example_retrieval_repo returns a Path whose str() matches CLI output.
+    """repos.project_rag returns a Path whose str() matches CLI output.
 
-    Uses repos.example_retrieval_repo as the sample working-repo key — a genuine working repo
+    Uses repos.project_rag as the sample working-repo key — a genuine working repo
     declared in registry.toml that survives the publish-vs-working-repo migration
     (docs/plans/2026-06-30-registry-publish-vs-working-targets.md § C10).
     repos.coordinator_claude was previously used here but is a publish-mirror key
     removed from repos.* in that migration, which caused this test to silently skip.
     """
-    cli_val = _cli_get("repos.example_retrieval_repo")
+    cli_val = _cli_get("repos.project_rag")
     if cli_val is None:
-        pytest.skip("repos.example_retrieval_repo not set on this machine")
+        pytest.skip("repos.project_rag not set on this machine")
 
     mod = _fresh_module()
-    result = mod.repos.example_retrieval_repo
+    result = mod.repos.project_rag
     assert isinstance(result, Path), f"Expected Path, got {type(result)}"
     assert str(result) == str(Path(cli_val).expanduser()), (
         f"Wrapper returned {result!r}, CLI returned {cli_val!r}"
@@ -195,13 +195,13 @@ def test_reimport_idempotency():
     mod_b = importlib.import_module(mod_name)
     assert mod_a is mod_b, "Second import returned a different module object"
 
-    cli_val = _cli_get("repos.example_retrieval_repo")
+    cli_val = _cli_get("repos.project_rag")
     if cli_val is None:
-        pytest.skip("repos.example_retrieval_repo not set — skipping resolution smoke")
+        pytest.skip("repos.project_rag not set — skipping resolution smoke")
 
     # Both access through the same cached module resolve correctly.
-    result_a = mod_a.repos.example_retrieval_repo
-    result_b = mod_b.repos.example_retrieval_repo
+    result_a = mod_a.repos.project_rag
+    result_b = mod_b.repos.project_rag
     assert result_a == result_b, (
         f"Same module, different results: {result_a!r} vs {result_b!r}"
     )
@@ -212,10 +212,10 @@ def test_reimport_idempotency():
 # ---------------------------------------------------------------------------
 
 def test_memoization_subprocess_called_once():
-    """Accessing repos.example_retrieval_repo twice calls subprocess.run exactly once."""
-    cli_val = _cli_get("repos.example_retrieval_repo")
+    """Accessing repos.project_rag twice calls subprocess.run exactly once."""
+    cli_val = _cli_get("repos.project_rag")
     if cli_val is None:
-        pytest.skip("repos.example_retrieval_repo not set on this machine")
+        pytest.skip("repos.project_rag not set on this machine")
 
     mod = _fresh_module()
 
@@ -228,8 +228,8 @@ def test_memoization_subprocess_called_once():
         fake_result.stderr = ""
         mock_subprocess_mod.run.return_value = fake_result
 
-        _ = mod.repos.example_retrieval_repo  # first access — subprocess called
-        _ = mod.repos.example_retrieval_repo  # second access — cache hit, no call
+        _ = mod.repos.project_rag  # first access — subprocess called
+        _ = mod.repos.project_rag  # second access — cache hit, no call
 
         assert mock_subprocess_mod.run.call_count == 1, (
             f"Expected subprocess.run called once, got {mock_subprocess_mod.run.call_count}"

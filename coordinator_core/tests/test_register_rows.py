@@ -389,6 +389,42 @@ def test_symbol_row_ignores_a_nested_scope_shadow_of_a_deleted_module_level_name
     assert resolve_row(row, index, tmp_path).absent
 
 
+def test_op_name_row_resolves_on_exact_membership_hit(index: TrackedFileIndex) -> None:
+    row = Row(
+        register=RegisterId("probe.py", "_OPS"),
+        subject="my.op.name",
+        declared_class=SubjectClass.OP_NAME,
+    )
+    resolution = resolve_row(row, index, REPO_ROOT, op_names=frozenset({"my.op.name"}))
+    assert resolution.resolved, resolution
+
+
+def test_op_name_row_is_absent_not_unadjudicable_on_miss(index: TrackedFileIndex) -> None:
+    row = Row(
+        register=RegisterId("probe.py", "_OPS"),
+        subject="never.registered",
+        declared_class=SubjectClass.OP_NAME,
+    )
+    resolution = resolve_row(row, index, REPO_ROOT, op_names=frozenset({"my.op.name"}))
+    assert resolution.absent, resolution
+
+
+def test_op_name_row_raises_loudly_when_oracle_missing(index: TrackedFileIndex) -> None:
+    """A missing oracle is a loud error, never a silent unadjudicable."""
+    row = Row(
+        register=RegisterId("probe.py", "_OPS"),
+        subject="my.op.name",
+        declared_class=SubjectClass.OP_NAME,
+    )
+    with pytest.raises(ValueError):
+        resolve_row(row, index, REPO_ROOT, op_names=None)
+
+
+def test_subject_class_op_name_round_trips_from_declaration_string() -> None:
+    """`__SUBJECT_CLASS = "op-name"` must map back to the enum member."""
+    assert SubjectClass("op-name") is SubjectClass.OP_NAME
+
+
 def test_an_ambiguous_dotted_module_is_unadjudicable_never_resolved() -> None:
     """Two candidates is not an answer -- picking one would attest a subject
     the resolver never actually located. Unadjudicable is the honest verdict:

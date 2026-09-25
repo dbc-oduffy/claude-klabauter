@@ -2,14 +2,17 @@
 axis's residue-level tests, homed OFF the cadence tier on purpose.
 
 Split out of `test_residue.py`, which carries a file-level
-`cadence` + `spawns_process` marker. None of these six spawns anything:
+`cadence` + `spawns_process` marker. None of these six spawns `git`:
 each either leaves `predicates_requested` false or pins `show_toplevel`,
-so the real `git rev-parse` never runs. Left in that module they were
-deselected from the fast tier, which mattered most for the AC5 guard —
-the regression tripwire on this plan's loudest Anti-scope rule (no
-`admitted` boolean, no `*.verdict` field spanning a U/G-typed row). A
-guard that only runs on the cadence tier does not guard the commit that
-breaks it.
+so the real `git rev-parse` never runs. That split originally kept this
+module on the fast tier for the AC5 guard — the regression tripwire on
+this plan's loudest Anti-scope rule (no `admitted` boolean, no
+`*.verdict` field spanning a U/G-typed row) — but P153-C4's shared
+`_claude_klabauter_root._machine_local_get` made the `resolve_content_root`
+registry-fallback rung a statically-detectable real spawn reachable from
+every test here (even though `_patch_content_root` means it never
+actually fires), so this module is cadence-tiered again — see the
+`pytestmark` comment below.
 
 Reported by `coordinator:code-reviewer` against 947c789d9d36, finding 2.
 """
@@ -38,8 +41,17 @@ from coordinator_core.plan_assemble.residue import (
     brief,
 )
 
-# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
-# cadence suite is the separate threshold ruling, not this declaration.
+# `brief()` -> `residue.resolve_content_root` -> (registry-fallback rung)
+# `resolve_coordinator_clone.resolve_content_root`, which now resolves through
+# the shared, memoized `_claude_klabauter_root._machine_local_get` (`sys.executable
+# <impl> get <key>` -- a statically-detectable real spawn, P153-C4). Every
+# test here patches `residue_mod.resolve_content_root` directly
+# (`_patch_content_root`) so this fallback never actually runs, but the
+# ratchet's static call-graph walk cannot see through a function-level
+# monkeypatch (only a `subprocess`/`os`-attribute mock-seam is suppressed) --
+# tiered per Rule 2/4, conservative-by-design, not a runtime spawn regression.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def test_admission_resolves_without_sizing_object_ac1(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

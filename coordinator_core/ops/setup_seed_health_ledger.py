@@ -113,6 +113,11 @@ def _machine_local_get(key: str) -> Optional[str]:
     in-process read of the same registry.local.toml over registry.toml chain
     the `machine-local get <key>` CLI would consult (2026-08-16 conversion).
     None on any failure (unreadable registry, missing/empty key).
+
+    Kept as its own copy rather than moved onto `coordinator_core._claude_klabauter_root`
+    (Kira close-review ab37bb04 finding #2): that shared helper's
+    `_machine_local_get` is subprocess-based, the opposite policy of this
+    zero-spawn conversion.
     """
     from coordinator_core.machine_resolver import registry_get
 

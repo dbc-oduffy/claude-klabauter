@@ -72,12 +72,12 @@ def _registry(settings_home: Path) -> list:
 
 
 def test_register_persists_a_binding(cli, settings_home, tmp_path):
-    sibling_root = tmp_path / "example-retrieval-repo"
+    sibling_root = tmp_path / "project-rag"
     sibling_root.mkdir()
 
-    assert cli.main(["register", "market_intel", "example_retrieval_repo", str(sibling_root)]) == 0
+    assert cli.main(["register", "market_intel", "project_rag", str(sibling_root)]) == 0
     assert _registry(settings_home) == [
-        {"repo": "market_intel", "sibling": "example_retrieval_repo", "path": str(sibling_root)}
+        {"repo": "market_intel", "sibling": "project_rag", "path": str(sibling_root)}
     ]
 
 
@@ -86,10 +86,10 @@ def test_register_succeeds_before_the_environment_exists(cli, settings_home, tmp
     provisioning order, and the reason a consumer may call this unconditionally.
     No environment is provisioned anywhere in this test; the entry still lands,
     and `_replay_sibling_bindings` writes its `.pth` on the next rebuild."""
-    sibling_root = tmp_path / "example-retrieval-repo"
+    sibling_root = tmp_path / "project-rag"
     sibling_root.mkdir()
 
-    assert cli.main(["register", "market_intel", "example_retrieval_repo", str(sibling_root)]) == 0
+    assert cli.main(["register", "market_intel", "project_rag", str(sibling_root)]) == 0
     assert len(_registry(settings_home)) == 1
 
 
@@ -98,7 +98,7 @@ def test_register_refuses_a_relative_path(cli, settings_home):
     caller's repo root, and silently fails to import — example-market-data-repo's
     own documented failure mode, which is why the engine raises rather than
     writes. The CLI must surface that as exit 1, not a traceback."""
-    assert cli.main(["register", "market_intel", "example_retrieval_repo", "../example-retrieval-repo"]) == 1
+    assert cli.main(["register", "market_intel", "project_rag", "../example-retrieval-repo"]) == 1
     assert _registry(settings_home) == []
 
 
@@ -108,8 +108,8 @@ def test_register_replaces_rather_than_duplicates(cli, settings_home, tmp_path):
     first.mkdir()
     second.mkdir()
 
-    assert cli.main(["register", "market_intel", "example_retrieval_repo", str(first)]) == 0
-    assert cli.main(["register", "market_intel", "example_retrieval_repo", str(second)]) == 0
+    assert cli.main(["register", "market_intel", "project_rag", str(first)]) == 0
+    assert cli.main(["register", "market_intel", "project_rag", str(second)]) == 0
 
     bindings = _registry(settings_home)
     assert len(bindings) == 1
@@ -122,17 +122,17 @@ def test_register_replaces_rather_than_duplicates(cli, settings_home, tmp_path):
 
 
 def test_deregister_removes_the_entry(cli, settings_home, tmp_path):
-    sibling_root = tmp_path / "example-retrieval-repo"
+    sibling_root = tmp_path / "project-rag"
     sibling_root.mkdir()
-    assert cli.main(["register", "market_intel", "example_retrieval_repo", str(sibling_root)]) == 0
+    assert cli.main(["register", "market_intel", "project_rag", str(sibling_root)]) == 0
 
-    assert cli.main(["deregister", "market_intel", "example_retrieval_repo"]) == 0
+    assert cli.main(["deregister", "market_intel", "project_rag"]) == 0
     assert _registry(settings_home) == []
 
 
 def test_deregister_is_idempotent(cli, settings_home):
     """An uninstall path must not fail because it already ran."""
-    assert cli.main(["deregister", "market_intel", "example_retrieval_repo"]) == 0
+    assert cli.main(["deregister", "market_intel", "project_rag"]) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -147,9 +147,9 @@ def test_check_reports_unprovisioned_as_3_not_4(cli, settings_home, tmp_path):
     reports every registered binding as `missing_pth`. Returning 4 there would
     fire on every machine mid-rollout and train callers to ignore the code.
     3 means "nothing to check against"; 4 must stay "really broken"."""
-    sibling_root = tmp_path / "example-retrieval-repo"
+    sibling_root = tmp_path / "project-rag"
     sibling_root.mkdir()
-    assert cli.main(["register", "market_intel", "example_retrieval_repo", str(sibling_root)]) == 0
+    assert cli.main(["register", "market_intel", "project_rag", str(sibling_root)]) == 0
 
     assert cli.main(["check"]) == _UNRESOLVABLE
 
@@ -170,7 +170,7 @@ def test_check_flags_a_stale_path_once_the_environment_is_provisioned(
 
     gone = tmp_path / "deleted-sibling"
     gone.mkdir()
-    assert cli.main(["register", "market_intel", "example_retrieval_repo", str(gone)]) == 0
+    assert cli.main(["register", "market_intel", "project_rag", str(gone)]) == 0
     gone.rmdir()
 
     assert cli.main(["check"]) == _FLAGGED
@@ -183,9 +183,9 @@ def test_check_is_clean_when_every_binding_resolves(cli, settings_home, tmp_path
     env_root = resolve_environment_root()
     _site_packages_dir(env_root).mkdir(parents=True, exist_ok=True)
 
-    sibling_root = tmp_path / "example-retrieval-repo"
+    sibling_root = tmp_path / "project-rag"
     sibling_root.mkdir()
-    assert cli.main(["register", "market_intel", "example_retrieval_repo", str(sibling_root)]) == 0
+    assert cli.main(["register", "market_intel", "project_rag", str(sibling_root)]) == 0
 
     assert cli.main(["check"]) == 0
 

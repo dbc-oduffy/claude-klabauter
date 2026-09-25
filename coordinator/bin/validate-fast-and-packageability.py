@@ -141,6 +141,7 @@ from coordinator_core.diff_scoped_tests import (  # noqa: E402
 # a bare ``diag`` import for the whole function and make every call site a
 # ``TypeError: 'str' object is not callable``.
 from coordinator_core.diff_scoped_tests import diag as diff_diag  # noqa: E402
+from coordinator_core.session import gate_budget  # noqa: E402
 from coordinator_core.session.tier_u_gate import enforce_tier_u_gate  # noqa: E402
 from coordinator_core.testing import suite_mutex  # noqa: E402
 from coordinator_core.win_portability import no_console_passthrough_kwargs  # noqa: E402
@@ -447,6 +448,11 @@ def _run_resolved_command(cmd: str) -> int:
     Object (`_assign_windows_job_object`) -- see the module section above
     this function for why (docs/plans/2026-08-13-reap-orphaned-execnet-
     gateways.md, chunk C1).
+
+    Emits the gate_budget process-time budget line (and DR-344 breach line
+    if any) to stderr after the wait -- see coordinator_core/session/
+    gate_budget.py (docs/plans/2026-09-07-fix-the-validate-gate-recursive-
+    tier-invocation.md, B1).
     """
     argv = shlex.split(cmd)
     # env=child_env(): kept for its settings-home propagation (COORDINATOR_
@@ -463,6 +469,7 @@ def _run_resolved_command(cmd: str) -> int:
         **no_console_passthrough_kwargs(),
     )
     _add_process_group_spawn_kwargs(spawn_kwargs)
+    children_before = gate_budget.snapshot_children_times()
     try:
         proc = subprocess.Popen(argv, **spawn_kwargs)
     except OSError as exc:
@@ -479,7 +486,13 @@ def _run_resolved_command(cmd: str) -> int:
         return proc.wait()
     finally:
         restore_signals()
+        suite_ms = gate_budget.suite_process_ms(
+            before=children_before,
+            after=gate_budget.snapshot_children_times(),
+            job_handle=job_handle,
+        )
         _close_windows_job_object(job_handle)
+        gate_budget.emit_budget_lines(gate_budget.self_process_ms(), suite_ms)
 
 
 def run_fast(repo_root: str | None) -> tuple[str, int]:

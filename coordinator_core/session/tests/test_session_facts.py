@@ -48,6 +48,26 @@ def _fake_result(returncode: int, stdout: str = "", stderr: str = "") -> subproc
     return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
 
 
+def _patch_dirty_paths_git(monkeypatch, returncode: int, stdout: str = "", stderr: str = ""):
+    """Patch the seam `_dirty_paths` spawns through as of P014-C1
+    (`docs/plans/2026-09-01-the-dirty-tree-fact-is-served-not-re-imp.md`):
+    `git_native.status_porcelain`, imported function-local inside `_dirty_paths`
+    itself, so patching `session_facts._git_run` no longer reaches it — that seam
+    is still correct for every OTHER sub-read this module makes (`_novel_loc_split`,
+    `session_commit_count_attributed`), which are unaffected by this chunk and keep
+    using `branch_resolution._git_run` directly.
+
+    Used for every test exercising `_dirty_paths` itself, directly or through one
+    of its three callers (`session_governing_plan`, `session_terminal_sizings`,
+    `session_fold_sidecars`)."""
+    from coordinator_core.ops.ceremony import git_native
+
+    def _fake_status_porcelain(cwd, paths=None, *, untracked_files=None, quotepath_false=False):
+        return git_native.GitResult(returncode=returncode, stdout=stdout, stderr=stderr)
+
+    monkeypatch.setattr(git_native, "status_porcelain", _fake_status_porcelain)
+
+
 
 def _fake_commits(count: int) -> list[dict]:
     """`session.commits` primitive rows — only the numstat fields the derived
@@ -653,11 +673,7 @@ def test_terminal_sizings_degrades_when_dirty_paths_git_status_fails(tmp_path: P
     failure must degrade the fact, not silently report every record clean."""
     sizings_dir = tmp_path / "state" / "sizings"
     _write_sizing(sizings_dir, "a.yaml", "shipped")
-    monkeypatch.setattr(
-        session_facts,
-        "_git_run",
-        lambda args, cwd: _fake_result(128, stderr="fatal: not a git repository"),
-    )
+    _patch_dirty_paths_git(monkeypatch, 128, stderr="fatal: not a git repository")
 
     record = session_facts.session_terminal_sizings(tmp_path)
 
@@ -667,14 +683,10 @@ def test_terminal_sizings_degrades_when_dirty_paths_git_status_fails(tmp_path: P
 
 
 def test_dirty_paths_degrades_when_git_status_fails(tmp_path: Path, monkeypatch):
-    """Direct coverage of the private helper's own posture: `branch_resolution._git_run`
-    (never `quick_wrap_assemble._git_out`, which swallows failure into `""`
-    indistinguishable from a genuinely clean tree)."""
-    monkeypatch.setattr(
-        session_facts,
-        "_git_run",
-        lambda args, cwd: _fake_result(1, stderr="boom"),
-    )
+    """Direct coverage of the private helper's own posture: a non-zero
+    `status_porcelain` result (never a swallowed failure indistinguishable from
+    a genuinely clean tree)."""
+    _patch_dirty_paths_git(monkeypatch, 1, stderr="boom")
     result = session_facts._dirty_paths(tmp_path)
     assert result["degraded"] is True
     assert "boom" in result["evidence"]
@@ -682,18 +694,80 @@ def test_dirty_paths_degrades_when_git_status_fails(tmp_path: Path, monkeypatch)
 
 def test_dirty_paths_parses_porcelain_status_and_rename_arrow(tmp_path: Path, monkeypatch):
     """Direct coverage of the parsing logic moved wholesale from
-    `quick_wrap_assemble._dirty_paths` — unchanged behaviour, new posture."""
+    `quick_wrap_assemble._dirty_paths` — unchanged behaviour by default, new
+    posture, now delegated to `parse_porcelain_paths` (P014-C1)."""
     porcelain = ' M state/sizings/a.yaml\nR  old.yaml -> state/sizings/b.yaml\n'
-    monkeypatch.setattr(
-        session_facts,
-        "_git_run",
-        lambda args, cwd: _fake_result(0, stdout=porcelain),
-    )
+    _patch_dirty_paths_git(monkeypatch, 0, stdout=porcelain)
     result = session_facts._dirty_paths(tmp_path)
-    assert result == {
-        "degraded": False,
-        "paths": {"state/sizings/a.yaml", "state/sizings/b.yaml"},
-    }
+    assert result["degraded"] is False
+    assert result["value"]["paths"] == {"state/sizings/a.yaml", "state/sizings/b.yaml"}
+    assert result["collision"] is True
+    assert result["source"] == session_facts._SOURCE_DIRTY_PATHS
+
+
+def test_dirty_paths_degraded_and_computed_shapes_are_exactly_dr319_key_sets(
+    tmp_path: Path, monkeypatch
+):
+    _patch_dirty_paths_git(monkeypatch, 0, stdout="")
+    computed = session_facts._dirty_paths(tmp_path)
+    assert set(computed) == {"degraded", "value", "source", "collision"}
+
+    _patch_dirty_paths_git(monkeypatch, 1, stderr="boom")
+    degraded = session_facts._dirty_paths(tmp_path)
+    assert set(degraded) == {"degraded", "evidence", "source"}
+
+
+def test_dirty_paths_collision_is_false_on_a_clean_read(tmp_path: Path, monkeypatch):
+    _patch_dirty_paths_git(monkeypatch, 0, stdout="")
+    result = session_facts._dirty_paths(tmp_path)
+    assert result["value"]["paths"] == set()
+    assert result["collision"] is False
+
+
+def test_dirty_paths_keep_rename_source_carries_both_halves_in_entries(
+    tmp_path: Path, monkeypatch
+):
+    """Parameter matrix: `keep_rename_source=True` surfaces the source half in
+    `value["entries"]` AND folds it into `value["paths"]`."""
+    _patch_dirty_paths_git(monkeypatch, 0, stdout="R  old.yaml -> new.yaml\n")
+    result = session_facts._dirty_paths(tmp_path, keep_rename_source=True)
+    assert result["value"]["entries"] == [("R ", "new.yaml", "old.yaml")]
+    assert result["value"]["paths"] == {"old.yaml", "new.yaml"}
+
+
+def test_dirty_paths_quoting_and_windows_path_round_trip_on_both_shapes(
+    tmp_path: Path, monkeypatch
+):
+    """AC — 'a path requiring quoting round-trips on both path shapes' (a
+    quoted path and a Windows backslash path), at the producer's default
+    (`unquote=True`, `forward_slash=True`) AND with both turned off."""
+    porcelain = ' M "quoted path.yaml"\n M win\\path.yaml\n'
+    _patch_dirty_paths_git(monkeypatch, 0, stdout=porcelain)
+
+    default_result = session_facts._dirty_paths(tmp_path)
+    assert default_result["value"]["paths"] == {"quoted path.yaml", "win/path.yaml"}
+
+    raw_result = session_facts._dirty_paths(tmp_path, unquote=False, forward_slash=False)
+    assert raw_result["value"]["paths"] == {'"quoted path.yaml"', "win\\path.yaml"}
+
+
+def test_dirty_paths_pathspecs_none_spawns_exactly_one_git_status(
+    tmp_path: Path, monkeypatch
+):
+    """Checkable rule (P014-C1): the producer's own spawn count for one
+    whole-tree read is exactly one `git status`."""
+    from coordinator_core.ops.ceremony import git_native
+
+    calls = []
+
+    def _fake_status_porcelain(cwd, paths=None, *, untracked_files=None, quotepath_false=False):
+        calls.append(paths)
+        return git_native.GitResult(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(git_native, "status_porcelain", _fake_status_porcelain)
+    session_facts._dirty_paths(tmp_path)
+    assert len(calls) == 1
+    assert calls[0] is None
 
 
 def test_terminal_sizings_reports_dirty_and_clean_records_with_per_record_granularity(
@@ -706,13 +780,7 @@ def test_terminal_sizings_reports_dirty_and_clean_records_with_per_record_granul
     _write_sizing(sizings_dir, "clean.yaml", "shipped")
     _write_sizing(sizings_dir, "dirty.yaml", "declined")
     _write_sizing(sizings_dir, "draft.yaml", "sized")
-    monkeypatch.setattr(
-        session_facts,
-        "_git_run",
-        lambda args, cwd: _fake_result(
-            0, stdout=" M state/sizings/dirty.yaml\n"
-        ),
-    )
+    _patch_dirty_paths_git(monkeypatch, 0, stdout=" M state/sizings/dirty.yaml\n")
 
     record = session_facts.session_terminal_sizings(tmp_path)
 
@@ -734,11 +802,7 @@ def test_terminal_sizings_collision_is_false_when_no_terminal_record_is_dirty(
 ):
     sizings_dir = tmp_path / "state" / "sizings"
     _write_sizing(sizings_dir, "clean.yaml", "shipped")
-    monkeypatch.setattr(
-        session_facts,
-        "_git_run",
-        lambda args, cwd: _fake_result(0, stdout=""),
-    )
+    _patch_dirty_paths_git(monkeypatch, 0, stdout="")
 
     record = session_facts.session_terminal_sizings(tmp_path)
 
@@ -751,11 +815,7 @@ def test_terminal_sizings_drops_movable_key(tmp_path: Path, monkeypatch):
     EM disposition key, DR-319's Negative-spec on AC12. Not re-scrutinized here."""
     sizings_dir = tmp_path / "state" / "sizings"
     _write_sizing(sizings_dir, "a.yaml", "shipped")
-    monkeypatch.setattr(
-        session_facts,
-        "_git_run",
-        lambda args, cwd: _fake_result(0, stdout=""),
-    )
+    _patch_dirty_paths_git(monkeypatch, 0, stdout="")
 
     record = session_facts.session_terminal_sizings(tmp_path)
 
@@ -769,11 +829,7 @@ def test_terminal_sizings_computed_shape_is_exactly_the_dr319_key_set(
 ):
     sizings_dir = tmp_path / "state" / "sizings"
     _write_sizing(sizings_dir, "a.yaml", "shipped")
-    monkeypatch.setattr(
-        session_facts,
-        "_git_run",
-        lambda args, cwd: _fake_result(0, stdout=""),
-    )
+    _patch_dirty_paths_git(monkeypatch, 0, stdout="")
 
     record = session_facts.session_terminal_sizings(tmp_path)
     assert set(record) == {"degraded", "value", "source", "collision"}
@@ -785,11 +841,7 @@ def test_terminal_sizings_carries_no_verdict_field_on_either_shape(
     forbidden = {"verdict", "recommendation", "disposition", "action"}
     sizings_dir = tmp_path / "state" / "sizings"
     _write_sizing(sizings_dir, "a.yaml", "shipped")
-    monkeypatch.setattr(
-        session_facts,
-        "_git_run",
-        lambda args, cwd: _fake_result(0, stdout=""),
-    )
+    _patch_dirty_paths_git(monkeypatch, 0, stdout="")
 
     computed = session_facts.session_terminal_sizings(tmp_path)
     assert forbidden.isdisjoint(computed)
@@ -798,11 +850,7 @@ def test_terminal_sizings_carries_no_verdict_field_on_either_shape(
         assert forbidden.isdisjoint(entry)
         assert "movable" not in entry
 
-    monkeypatch.setattr(
-        session_facts,
-        "_git_run",
-        lambda args, cwd: _fake_result(1, stderr="boom"),
-    )
+    _patch_dirty_paths_git(monkeypatch, 1, stderr="boom")
     degraded = session_facts.session_terminal_sizings(tmp_path)
     assert forbidden.isdisjoint(degraded)
 
@@ -845,11 +893,7 @@ def test_fold_sidecars_finds_json_under_either_root(tmp_path: Path, monkeypatch)
     fold_root = tmp_path / "state" / "fold-execution-records"
     _write_sidecar(exec_root, "a.json")
     _write_sidecar(fold_root, "b.json")
-    monkeypatch.setattr(
-        session_facts,
-        "_git_run",
-        lambda args, cwd: _fake_result(0, stdout=""),
-    )
+    _patch_dirty_paths_git(monkeypatch, 0, stdout="")
 
     record = session_facts.session_fold_sidecars(tmp_path)
 
@@ -922,11 +966,7 @@ def test_fold_sidecars_degrades_when_dirty_paths_git_status_fails(tmp_path: Path
     collision determination — its failure must degrade the fact, not silently
     report every sidecar clean."""
     _write_sidecar(tmp_path / "state" / "execution-records", "a.json")
-    monkeypatch.setattr(
-        session_facts,
-        "_git_run",
-        lambda args, cwd: _fake_result(128, stderr="fatal: not a git repository"),
-    )
+    _patch_dirty_paths_git(monkeypatch, 128, stderr="fatal: not a git repository")
 
     record = session_facts.session_fold_sidecars(tmp_path)
 
@@ -941,13 +981,7 @@ def test_fold_sidecars_collision_is_true_when_a_found_sidecar_is_uncommitted(
     """A peer session mid-write shows up as an uncommitted (dirty) sidecar path —
     `collision` folds that in as `True`."""
     _write_sidecar(tmp_path / "state" / "execution-records", "a.json")
-    monkeypatch.setattr(
-        session_facts,
-        "_git_run",
-        lambda args, cwd: _fake_result(
-            0, stdout=" M state/execution-records/a.json\n"
-        ),
-    )
+    _patch_dirty_paths_git(monkeypatch, 0, stdout=" M state/execution-records/a.json\n")
 
     record = session_facts.session_fold_sidecars(tmp_path)
 
@@ -959,11 +993,7 @@ def test_fold_sidecars_collision_is_false_when_no_found_sidecar_is_dirty(
     tmp_path: Path, monkeypatch
 ):
     _write_sidecar(tmp_path / "state" / "execution-records", "a.json")
-    monkeypatch.setattr(
-        session_facts,
-        "_git_run",
-        lambda args, cwd: _fake_result(0, stdout=""),
-    )
+    _patch_dirty_paths_git(monkeypatch, 0, stdout="")
 
     record = session_facts.session_fold_sidecars(tmp_path)
 
@@ -973,11 +1003,7 @@ def test_fold_sidecars_collision_is_false_when_no_found_sidecar_is_dirty(
 def test_fold_sidecars_computed_shape_is_exactly_the_dr319_key_set(
     tmp_path: Path, monkeypatch
 ):
-    monkeypatch.setattr(
-        session_facts,
-        "_git_run",
-        lambda args, cwd: _fake_result(0, stdout=""),
-    )
+    _patch_dirty_paths_git(monkeypatch, 0, stdout="")
     record = session_facts.session_fold_sidecars(tmp_path)
     assert set(record) == {"degraded", "value", "source", "collision"}
 
@@ -985,11 +1011,7 @@ def test_fold_sidecars_computed_shape_is_exactly_the_dr319_key_set(
 def test_fold_sidecars_degraded_shape_is_exactly_the_dr319_key_set(
     tmp_path: Path, monkeypatch
 ):
-    monkeypatch.setattr(
-        session_facts,
-        "_git_run",
-        lambda args, cwd: _fake_result(128, stderr="boom"),
-    )
+    _patch_dirty_paths_git(monkeypatch, 128, stderr="boom")
     _write_sidecar(tmp_path / "state" / "execution-records", "a.json")
 
     record = session_facts.session_fold_sidecars(tmp_path)
@@ -1002,20 +1024,12 @@ def test_fold_sidecars_carries_no_verdict_field_on_either_shape(
     forbidden = {"verdict", "recommendation", "disposition", "action"}
     _write_sidecar(tmp_path / "state" / "execution-records", "a.json")
 
-    monkeypatch.setattr(
-        session_facts,
-        "_git_run",
-        lambda args, cwd: _fake_result(0, stdout=""),
-    )
+    _patch_dirty_paths_git(monkeypatch, 0, stdout="")
     computed = session_facts.session_fold_sidecars(tmp_path)
     assert forbidden.isdisjoint(computed)
     assert forbidden.isdisjoint(computed["value"])
 
-    monkeypatch.setattr(
-        session_facts,
-        "_git_run",
-        lambda args, cwd: _fake_result(128, stderr="boom"),
-    )
+    _patch_dirty_paths_git(monkeypatch, 128, stderr="boom")
     degraded = session_facts.session_fold_sidecars(tmp_path)
     assert forbidden.isdisjoint(degraded)
 
@@ -1141,7 +1155,7 @@ def test_governing_plan_reads_status_and_scope_mode_from_frontmatter(tmp_path: P
     _set_governing_plan_sid(monkeypatch)
     _write_governing_plan_claim(sessions_dir, "2026-08-18-plan-a", _SID_GOVERNING_PLAN)
     _write_plan_file(tmp_path, "2026-08-18-plan-a", "in_flight", "feature")
-    monkeypatch.setattr(session_facts, "_git_run", lambda args, cwd: _fake_result(0, stdout=""))
+    _patch_dirty_paths_git(monkeypatch, 0, stdout="")
 
     record = session_facts.session_governing_plan(tmp_path, tmp_path / ".git", _SID_GOVERNING_PLAN)
 
@@ -1183,7 +1197,7 @@ def test_governing_plan_scope_mode_is_a_verbatim_pass_through(
     _set_governing_plan_sid(monkeypatch)
     _write_governing_plan_claim(sessions_dir, "2026-08-18-plan-b", _SID_GOVERNING_PLAN)
     _write_plan_file(tmp_path, "2026-08-18-plan-b", "in_flight", token)
-    monkeypatch.setattr(session_facts, "_git_run", lambda args, cwd: _fake_result(0, stdout=""))
+    _patch_dirty_paths_git(monkeypatch, 0, stdout="")
 
     record = session_facts.session_governing_plan(tmp_path, tmp_path / ".git", _SID_GOVERNING_PLAN)
 
@@ -1230,11 +1244,7 @@ def test_governing_plan_collision_is_true_when_the_plan_file_is_dirty(
     _set_governing_plan_sid(monkeypatch)
     _write_governing_plan_claim(sessions_dir, "2026-08-18-plan-c", _SID_GOVERNING_PLAN)
     _write_plan_file(tmp_path, "2026-08-18-plan-c", "in_flight", "feature")
-    monkeypatch.setattr(
-        session_facts,
-        "_git_run",
-        lambda args, cwd: _fake_result(0, stdout=" M docs/plans/2026-08-18-plan-c.md\n"),
-    )
+    _patch_dirty_paths_git(monkeypatch, 0, stdout=" M docs/plans/2026-08-18-plan-c.md\n")
 
     record = session_facts.session_governing_plan(tmp_path, tmp_path / ".git", _SID_GOVERNING_PLAN)
 
@@ -1251,11 +1261,7 @@ def test_governing_plan_degrades_when_dirty_paths_git_status_fails(
     _set_governing_plan_sid(monkeypatch)
     _write_governing_plan_claim(sessions_dir, "2026-08-18-plan-d", _SID_GOVERNING_PLAN)
     _write_plan_file(tmp_path, "2026-08-18-plan-d", "in_flight", "feature")
-    monkeypatch.setattr(
-        session_facts,
-        "_git_run",
-        lambda args, cwd: _fake_result(128, stderr="fatal: not a git repository"),
-    )
+    _patch_dirty_paths_git(monkeypatch, 128, stderr="fatal: not a git repository")
 
     record = session_facts.session_governing_plan(tmp_path, tmp_path / ".git", _SID_GOVERNING_PLAN)
 
@@ -1472,7 +1478,7 @@ class TestPerFactRequiredFieldDeclaration:
     def test_session_governing_plan_satisfies_declaration(self, tmp_path: Path, monkeypatch):
         _make_governing_plan_sessions_dir(tmp_path, monkeypatch)
         _set_governing_plan_sid(monkeypatch)
-        monkeypatch.setattr(session_facts, "_git_run", lambda args, cwd: _fake_result(0, stdout=""))
+        _patch_dirty_paths_git(monkeypatch, 0, stdout="")
         computed = session_facts.session_governing_plan(
             tmp_path, tmp_path / ".git", _SID_GOVERNING_PLAN
         )
@@ -1506,25 +1512,21 @@ class TestPerFactRequiredFieldDeclaration:
     def test_session_terminal_sizings_satisfies_declaration(self, tmp_path: Path, monkeypatch):
         sizings_dir = tmp_path / "state" / "sizings"
         _write_sizing(sizings_dir, "a.yaml", "shipped")
-        monkeypatch.setattr(session_facts, "_git_run", lambda args, cwd: _fake_result(0, stdout=""))
+        _patch_dirty_paths_git(monkeypatch, 0, stdout="")
         computed = session_facts.session_terminal_sizings(tmp_path)
         _assert_dr319_computed_record("session_terminal_sizings", computed)
 
-        monkeypatch.setattr(
-            session_facts, "_git_run", lambda args, cwd: _fake_result(128, stderr="boom")
-        )
+        _patch_dirty_paths_git(monkeypatch, 128, stderr="boom")
         degraded = session_facts.session_terminal_sizings(tmp_path)
         _assert_dr319_degraded_record(degraded)
 
     def test_session_fold_sidecars_satisfies_declaration(self, tmp_path: Path, monkeypatch):
         _write_sidecar(tmp_path / "state" / "execution-records", "a.json")
-        monkeypatch.setattr(session_facts, "_git_run", lambda args, cwd: _fake_result(0, stdout=""))
+        _patch_dirty_paths_git(monkeypatch, 0, stdout="")
         computed = session_facts.session_fold_sidecars(tmp_path)
         _assert_dr319_computed_record("session_fold_sidecars", computed)
 
-        monkeypatch.setattr(
-            session_facts, "_git_run", lambda args, cwd: _fake_result(128, stderr="boom")
-        )
+        _patch_dirty_paths_git(monkeypatch, 128, stderr="boom")
         degraded = session_facts.session_fold_sidecars(tmp_path)
         _assert_dr319_degraded_record(degraded)
 

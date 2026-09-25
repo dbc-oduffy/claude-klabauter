@@ -141,7 +141,7 @@ REQUIRES_VALUES = (REQUIRES_LANDED, REQUIRES_COMMIT)
 FLEET_REPOS = (
     "claude-klabauter",
     "claude-klabauter",
-    "example-retrieval-repo",
+    "project-rag",
     "coordinator-claude",
     "example-game-workbench-repo",
     "example-cockpit-repo",

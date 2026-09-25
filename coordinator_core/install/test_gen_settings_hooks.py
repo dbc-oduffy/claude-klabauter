@@ -53,6 +53,13 @@ from coordinator_core.ops.session.guard_foreign_platform_paths import detect_for
 from coordinator_core.ops.session.guard_settings_integrity import HookDeliveryReport
 from coordinator_core.testing.doe_root import resolve_doe_root
 
+# `generate()` reaches `guard_settings_integrity.detect_hook_delivery_duplication`
+# -> `resolve_coordinator_clone.resolve_content_root`'s registry-fallback rung,
+# which now resolves through the shared, memoized `_claude_klabauter_root._machine_local_get`
+# (`sys.executable <impl> get <key>` -- a statically-detectable real spawn,
+# P153-C4). Whole file tiered: every test here exercises `generate()`.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 # Matches a Windows drive-letter absolute path (``C:\`` or ``C:/``) anywhere
 # in a string — the portability regression this whole test module guards
 # against (2026-07-28 incident: `X:/DoE-claude/...` baked into a macOS

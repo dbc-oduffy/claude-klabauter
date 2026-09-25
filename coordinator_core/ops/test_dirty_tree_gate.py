@@ -15,7 +15,12 @@ from unittest import mock
 import pytest
 
 from coordinator_core import claim_state
-from coordinator_core.ops.dirty_tree_gate import _build_known_scope, _resolve_plugin_root, main
+from coordinator_core.ops.dirty_tree_gate import (
+    _build_known_scope,
+    _resolve_plugin_root,
+    main,
+    parse_porcelain_paths,
+)
 from coordinator_core.testing.doe_root import resolve_doe_root
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -417,3 +422,73 @@ def test_known_scope_dead_ledger_holder_no_mirror_drops_scope(tmp_path):
         known_scope = _build_known_scope(handoffs_dir, repo_root=str(repo))
 
     assert "peers/owned-file.txt" not in known_scope
+
+
+# ---------------------------------------------------------------------------
+# parse_porcelain_paths -- P014-C1 backward-compatible extension
+# (docs/plans/2026-09-01-the-dirty-tree-fact-is-served-not-re-imp.md).
+# ---------------------------------------------------------------------------
+
+_FIXTURE_PORCELAIN = (
+    ' M plain.txt\n'
+    'R  old.txt -> new.txt\n'
+    ' M "quoted path.txt"\n'
+    ' M sub\\windows\\path.txt\n'
+)
+
+
+def test_parse_porcelain_paths_defaults_are_byte_identical_to_head():
+    """Every option at its default reproduces the pre-P014-C1 shape exactly:
+    2-tuples, rename collapsed to destination, no unquote, no forward-slash."""
+    result = parse_porcelain_paths(_FIXTURE_PORCELAIN)
+    assert result == [
+        (" M", "plain.txt"),
+        ("R ", "new.txt"),
+        (" M", '"quoted path.txt"'),
+        (" M", "sub\\windows\\path.txt"),
+    ]
+
+
+def test_parse_porcelain_paths_keep_rename_source_adds_a_third_element():
+    result = parse_porcelain_paths(_FIXTURE_PORCELAIN, keep_rename_source=True)
+    by_path = {entry[1]: entry for entry in result}
+    assert by_path["new.txt"] == ("R ", "new.txt", "old.txt")
+    assert by_path["plain.txt"] == (" M", "plain.txt", None)
+
+
+def test_parse_porcelain_paths_unquote_strips_c_quotes():
+    result = parse_porcelain_paths(_FIXTURE_PORCELAIN, unquote=True)
+    paths = {path for _xy, path in result}
+    assert "quoted path.txt" in paths
+    assert '"quoted path.txt"' not in paths
+
+
+def test_parse_porcelain_paths_unquote_applies_to_the_rename_source_too():
+    result = parse_porcelain_paths(
+        'R  "old quoted.txt" -> "new quoted.txt"\n',
+        keep_rename_source=True,
+        unquote=True,
+    )
+    assert result == [("R ", "new quoted.txt", "old quoted.txt")]
+
+
+def test_parse_porcelain_paths_forward_slash_normalizes_windows_paths():
+    result = parse_porcelain_paths(_FIXTURE_PORCELAIN, forward_slash=True)
+    paths = {path for _xy, path in result}
+    assert "sub/windows/path.txt" in paths
+    assert "sub\\windows\\path.txt" not in paths
+
+
+def test_parse_porcelain_paths_still_the_single_parser():
+    """Enforced independently by `test_dirty_tree_gate_single_parser.py` — this
+    is the P014-C1 checkable rule restated directly: no second `def`, checked
+    with a pure-Python walk (portable, no `grep` dependency)."""
+    root = Path(__file__).resolve().parents[1]
+    hits = []
+    for path in root.rglob("*.py"):
+        if "test" in path.name:
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if "def parse_porcelain_paths" in text:
+            hits.append(str(path))
+    assert hits == [str(root / "ops" / "dirty_tree_gate.py")], hits

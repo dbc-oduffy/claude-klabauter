@@ -85,6 +85,7 @@ class TestResolveCli:
 # ---------------------------------------------------------------------------
 
 _OP_DISPATCH_TABLE = {"handoff.stamp_phase": _handler_ok, "handoff.author_fork": _handler_ok}
+_OP_DISPATCH_TABLE__SUBJECT_CLASS = "op-name"
 
 
 class TestAssertDispatchable:
@@ -1011,3 +1012,68 @@ class TestDecisionsShorthandNormalization:
         assert exit_code == apply_base.APPLY_EXIT_TRANSPORT_FAIL
         assert "j1" in report["error"]
         assert report["landed"] == []
+
+
+class TestExitCodeLabel:
+    """AC2: the failure-path oracle for apply_base's own `exit_code_label`.
+    Every ladder constant maps to its own name; rung 2 (`CLAIM_DENIED`) plus
+    a `budget_breach` report key maps to `BUDGET_BREACH`; rung 2 without the
+    key keeps `CLAIM_DENIED`; the post-loop breach on OK/HALTED_AT_JUDGMENT
+    keeps its ladder name; an unrecognized int returns `None`."""
+
+    def test_ok_maps_to_its_own_name(self):
+        assert apply_base.exit_code_label(apply_base.APPLY_EXIT_OK) == "OK"
+
+    def test_halted_at_judgment_maps_to_its_own_name(self):
+        assert (
+            apply_base.exit_code_label(apply_base.APPLY_EXIT_HALTED_AT_JUDGMENT)
+            == "HALTED_AT_JUDGMENT"
+        )
+
+    def test_claim_denied_without_budget_breach_key_keeps_its_ladder_name(self):
+        assert (
+            apply_base.exit_code_label(apply_base.APPLY_EXIT_CLAIM_DENIED, {"error": "denied"})
+            == "CLAIM_DENIED"
+        )
+
+    def test_claim_denied_with_no_report_keeps_its_ladder_name(self):
+        assert apply_base.exit_code_label(apply_base.APPLY_EXIT_CLAIM_DENIED) == "CLAIM_DENIED"
+
+    def test_claim_denied_with_budget_breach_key_labels_budget_breach(self):
+        assert (
+            apply_base.exit_code_label(
+                apply_base.APPLY_EXIT_CLAIM_DENIED, {"budget_breach": "over budget"}
+            )
+            == "BUDGET_BREACH"
+        )
+
+    def test_transport_fail_maps_to_its_own_name(self):
+        assert (
+            apply_base.exit_code_label(apply_base.APPLY_EXIT_TRANSPORT_FAIL) == "TRANSPORT_FAIL"
+        )
+
+    def test_partial_mutation_maps_to_its_own_name(self):
+        assert (
+            apply_base.exit_code_label(apply_base.APPLY_EXIT_PARTIAL_MUTATION)
+            == "PARTIAL_MUTATION"
+        )
+
+    def test_ok_with_budget_breach_key_keeps_ladder_name_not_budget_breach(self):
+        """The post-loop breach (census Q11): OK/HALTED_AT_JUDGMENT with a
+        `budget_breach` key keeps its ladder name -- that run already
+        finished, unlike the pre-mutation rung-2 refusal."""
+        assert (
+            apply_base.exit_code_label(apply_base.APPLY_EXIT_OK, {"budget_breach": "over budget"})
+            == "OK"
+        )
+
+    def test_halted_at_judgment_with_budget_breach_key_keeps_ladder_name(self):
+        assert (
+            apply_base.exit_code_label(
+                apply_base.APPLY_EXIT_HALTED_AT_JUDGMENT, {"budget_breach": "over budget"}
+            )
+            == "HALTED_AT_JUDGMENT"
+        )
+
+    def test_unrecognized_int_returns_none(self):
+        assert apply_base.exit_code_label(99) is None

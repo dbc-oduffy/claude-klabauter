@@ -1783,3 +1783,111 @@ def test_stages_mutates_nothing_and_is_stable_across_calls():
     first["rows"].append("tampered")
     second = sa.stages("plan", "M")
     assert "tampered" not in second["rows"]
+
+
+# ---------------------------------------------------------------------------
+# P087-C2 — DISPOSITION_REGISTRY contract tests: one per shipped entry, plus
+# the no-arm, recompute, express-lane and totality properties. Two entries of
+# disjoint shape (served vs declined) do not share a body worth factoring, so
+# these are named tests, not a harness parameterised over the registry — the
+# "an entry ships without a test" hazard is already carried by the
+# registry-shape assert in C1 (`_assert_disposition_registry_total`), which
+# fails at import.
+# ---------------------------------------------------------------------------
+
+
+def _entry(entry_id):
+    for entry in sa.DISPOSITION_REGISTRY:
+        if entry["id"] == entry_id:
+            return entry
+    raise AssertionError(f"no registry entry named {entry_id!r}")
+
+
+def test_d_lobby_lane_is_served():
+    result = sa.dispositions("plan", "M")
+    served_ids = [e["id"] for e in result["served"]]
+    assert "d-lobby-lane" in served_ids
+    assert "d-lobby-lane" not in [e["id"] for e in result["no_arm"]]
+
+    entry = next(e for e in result["served"] if e["id"] == "d-lobby-lane")
+    arm = entry["arm"]
+    # Not a bare identifier: longer than a single token, contains whitespace.
+    assert len(arm) > 1
+    assert " " in arm.strip()
+    assert entry["basis"].keys() == set(_entry("d-lobby-lane")["inputs"])
+
+
+def test_d_xl_exit_declines():
+    # Call returns normally — a no-arm entry is a first-class ordinary
+    # return, never an exception.
+    result = sa.dispositions("pm-decision", "XL")
+    no_arm_ids = [e["id"] for e in result["no_arm"]]
+    served_ids = [e["id"] for e in result["served"]]
+    assert "d-xl-exit" in no_arm_ids
+    assert "d-xl-exit" not in served_ids
+
+    entry = next(e for e in result["no_arm"] if e["id"] == "d-xl-exit")
+    assert entry["judgment_input"]
+    assert entry["basis"]
+
+
+def test_room_owned_routes_serve_the_single_entry_row():
+    room_owned_routes = ("shape", "roadmap", "goal-setting", "pm-decision")
+    for route_name in room_owned_routes:
+        chain = sa.stages(route_name, "M")
+        result = sa.dispositions(route_name, "M")
+        served_ids = [e["id"] for e in result["served"]]
+        assert "d-lobby-lane" in served_ids, route_name
+        entry = next(e for e in result["served"] if e["id"] == "d-lobby-lane")
+        assert entry["arm"] == chain["rows"][0], route_name
+
+    # A room-owned lane is size-invariant by design: the served arm is
+    # byte-identical across an XS/S band and an M+ band. The recompute test
+    # below varies route and t-shirt together, so it cannot isolate this.
+    for route_name in room_owned_routes:
+        light = sa.dispositions(route_name, "S")
+        heavy = sa.dispositions(route_name, "XL")
+        light_arm = next(e for e in light["served"] if e["id"] == "d-lobby-lane")["arm"]
+        heavy_arm = next(e for e in heavy["served"] if e["id"] == "d-lobby-lane")["arm"]
+        assert light_arm == heavy_arm, route_name
+
+
+def test_dispositions_recompute_with_no_flag_or_reset():
+    first = sa.dispositions("plan", "S")
+    second = sa.dispositions("plan", "XL")
+    first_arm = next(e for e in first["served"] if e["id"] == "d-lobby-lane")["arm"]
+    second_arm = next(e for e in second["served"] if e["id"] == "d-lobby-lane")["arm"]
+    assert first_arm != second_arm
+    assert first_arm == " / ".join(sa.stages("plan", "S")["rows"])
+    assert second_arm == " / ".join(sa.stages("plan", "XL")["rows"])
+
+
+def test_express_lane_return_carries_dispositions():
+    result = sa.route(estimate={"tshirt": "XS"}, express_lane=True)
+    assert "dispositions" in result
+    served_ids = [e["id"] for e in result["dispositions"]["served"]]
+    assert "d-lobby-lane" in served_ids
+
+
+def test_disposition_registry_totality_rejects_neither_and_both():
+    # `_assert_disposition_registry_total` takes no argument and reads the
+    # module global, so monkeypatching a copy would be invisible to it — the
+    # attribute itself must be replaced.
+    neither = {"id": "bad-neither", "decision_point": "x", "inputs": ()}
+    both = {
+        "id": "bad-both",
+        "decision_point": "x",
+        "inputs": (),
+        "render": lambda *_: "x",
+        "judgment_input": "x",
+    }
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(sa, "DISPOSITION_REGISTRY", (neither,))
+        with pytest.raises(AssertionError):
+            sa._assert_disposition_registry_total()
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(sa, "DISPOSITION_REGISTRY", (both,))
+        with pytest.raises(AssertionError):
+            sa._assert_disposition_registry_total()

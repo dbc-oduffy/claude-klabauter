@@ -171,7 +171,13 @@ def _resolve_handoffs_dir(plugin_root: str, repo_root: str) -> str:
     return os.path.join(state_root, "handoffs")
 
 
-def parse_porcelain_paths(status_out: str) -> List[Tuple[str, str]]:
+def parse_porcelain_paths(
+    status_out: str,
+    *,
+    keep_rename_source: bool = False,
+    unquote: bool = False,
+    forward_slash: bool = False,
+) -> List[Tuple[str, str]]:
     """Parse `git status --porcelain` output into `(xy, path)` pairs.
 
     One entry per non-empty line: `xy` is the two-char status prefix (indexed
@@ -182,16 +188,56 @@ def parse_porcelain_paths(status_out: str) -> List[Tuple[str, str]]:
     porcelain-parsing loop exists exactly ONCE, here; a second copy anywhere
     else is a bug, not a shortcut. Enforced by
     `coordinator_core/ops/test_dirty_tree_gate_single_parser.py`.
+
+    Backward-compatible extension (P014-C1,
+    `docs/plans/2026-09-01-the-dirty-tree-fact-is-served-not-re-imp.md`):
+    three keyword-only options, each traceable to a recorded consumer, all
+    OFF by default so every existing caller (this module's own `main()`,
+    `baton_assemble`, `ops/session/safe_commit_offer.py`) gets output
+    byte-identical to HEAD.
+
+    `keep_rename_source` (default `False`): when `True`, a renamed entry
+    yields `(xy, path, orig_path)` — the source half of the rename survives
+    alongside the destination — instead of the default 2-tuple. A
+    non-rename entry's third element is `None`. Needed by
+    `git_native.dirty_relpaths_from_porcelain` and `session/claims.py`, both
+    of which must keep both halves of a rename record.
+
+    `unquote` (default `False`): strips a leading/trailing `"` C-quote git
+    adds around a path containing a space or a >=0x80 byte. Needed by
+    `session_facts`, `session/claims.py`, and
+    `git_native.dirty_relpaths_from_porcelain`.
+
+    `forward_slash` (default `False`): replaces `\\` with `/` in the
+    (already rename-collapsed) path. Needed by `session_facts` only.
+
+    With every option at its default, output is unchanged from the
+    pre-P014-C1 shape — no second `def`, no relocation; this is still the
+    one porcelain-parsing loop in the repo.
     """
+
+    def _xform(text: str) -> str:
+        if unquote:
+            text = text.strip('"')
+        if forward_slash:
+            text = text.replace("\\", "/")
+        return text
+
     pairs: List[Tuple[str, str]] = []
     for line in status_out.splitlines():
         if not line:
             continue
         xy = line[0:2]
         path = line[3:]
+        orig_path: Optional[str] = None
         if " -> " in path:
-            path = path.rsplit(" -> ", 1)[-1]
-        pairs.append((xy, path))
+            old_part, path = path.rsplit(" -> ", 1)
+            orig_path = _xform(old_part)
+        path = _xform(path)
+        if keep_rename_source:
+            pairs.append((xy, path, orig_path))  # type: ignore[arg-type]
+        else:
+            pairs.append((xy, path))
     return pairs
 
 

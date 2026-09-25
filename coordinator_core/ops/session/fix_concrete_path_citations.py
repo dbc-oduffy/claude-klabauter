@@ -378,7 +378,7 @@ def discover_families(
         )
 
     # Longest match_name first. `_locate_family`'s exact-segment match
-    # already keeps "example-retrieval-repo-ue-addon" and "example-retrieval-repo" from ever
+    # already keeps "example-retrieval-repo-ue-addon" and "project-rag" from ever
     # colliding on the SAME segment (a segment can only equal one of the
     # two, exactly), so this sort is a deterministic tie-break rather than
     # the primary defense -- kept anyway so family discovery order never

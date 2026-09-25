@@ -11,7 +11,16 @@ import os
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.ops.sync_plugin_wiki import main
+
+# `main()` -> `resolve_coordinator_clone.resolve_content_root`'s registry-
+# fallback rung, which now resolves through the shared, memoized
+# `_claude_klabauter_root._machine_local_get` (`sys.executable <impl> get <key>` -- a
+# statically-detectable real spawn, P153-C4). Whole file tiered: every test
+# here calls `main()`.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _run_main(argv, env):

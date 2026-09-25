@@ -16,7 +16,7 @@ CLI once it ships here.
 WHY THIS EXISTS. `coordinator/docs/wiki/corpus-artifact-distribution.md` rules the refresh key
 as the `(source_commit_sha, embed_model_id, chunker_id)` triple, but nothing on this machine ever
 evaluates it. This CLI is that evaluation: for each landed
-`<repo_root>/.example-retrieval-repo-corpus-store/<band>/corpus_manifest.json`, it reads the local triple,
+`<repo_root>/.project-rag-corpus-store/<band>/corpus_manifest.json`, it reads the local triple,
 fetches the published artifact's manifest for that band, compares, and writes a sentinel that
 `corpus_currency_banner()` (plan chunk C2, `coordinator/hooks/scripts/project-orientation.py`)
 reads at boot.
@@ -39,7 +39,7 @@ resolved the same way `project-orientation.py`'s `_claude_home()` does — it si
 in `_GENERATED_AT_FORMAT` (`%Y-%m-%dT%H:%M:%SZ`) so the age arithmetic already in
 `project-orientation.py` reads it unchanged.
 
-A repo with no `.example-retrieval-repo-corpus-store/` writes no sentinel at all and exits 0 silently —
+A repo with no `.project-rag-corpus-store/` writes no sentinel at all and exits 0 silently —
 most repos are this case, and silence there is correct, not a missed check.
 """
 from __future__ import annotations
@@ -53,7 +53,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-_STORE_RELATIVE = Path(".example-retrieval-repo-corpus-store")
+_STORE_RELATIVE = Path(".project-rag-corpus-store")
 _MANIFEST_NAME = "corpus_manifest.json"
 _GENERATED_AT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"  # matches project-orientation.py's own constant
 _TRIPLE_FIELDS = ("source_commit_sha", "embed_model_id", "chunker_id")
@@ -183,8 +183,8 @@ def _remount_command(publish_ref: str, band: str, repo_slug: str) -> str:
     it can be pasted.
 
     `--target-dir` is a `<staging>` PLACEHOLDER, deliberately not resolved to a real path, and
-    neither conventioned path is correct for it: `.example-retrieval-repo-corpus-artifacts/` is produce-side,
-    and `.example-retrieval-repo-corpus-store/<band>/` is what the importer WRITES, not what the fetcher
+    neither conventioned path is correct for it: `.project-rag-corpus-artifacts/` is produce-side,
+    and `.project-rag-corpus-store/<band>/` is what the importer WRITES, not what the fetcher
     extracts into. Emitting either would hand the operator a command that corrupts one of the two
     conventioned trees.
 
@@ -195,7 +195,7 @@ def _remount_command(publish_ref: str, band: str, repo_slug: str) -> str:
     """
     staging_dir = f"<staging>/{band}"
     return (
-        f"python example_retrieval_repo_scripts/lib/download_corpus.py "
+        f"python project_rag_scripts/lib/download_corpus.py "
         f"--release-url {publish_ref} "
         f"--target-dir {staging_dir} "
         f"--expected-sha256 <sha256-from-publish> "

@@ -932,7 +932,7 @@ def test_ac7_reverse_edge_write_precedes_plan_write_and_reverts_on_failure(tmp_p
 
 
 # ---------------------------------------------------------------------------
-# C1 (docs/plans/2026-08-14-cascade-ship-evidence-and-write-durability.md):
+# C1 (archive/specs/2026-08/2026-08-14-cascade-ship-evidence-and-write-durability.md at 89e588c7e5^):
 # the plan trigger no longer hands the cascade its own caller's flip commit
 # as ship evidence -- Position 1 (resolve_source_ship_sha) is gated on
 # source_kind, taken only on the handoff trigger.

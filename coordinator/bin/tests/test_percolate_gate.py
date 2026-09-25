@@ -652,7 +652,7 @@ def test_scan_secrets_peer_repo_extension(tmp_path):
         ]
     )
     assert rc == 0
-    assert "example-retrieval-repo" in out.split("MEDIUM")[1]
+    assert "project-rag" in out.split("MEDIUM")[1]
 
 
 # ---------------------------------------------------------------------------

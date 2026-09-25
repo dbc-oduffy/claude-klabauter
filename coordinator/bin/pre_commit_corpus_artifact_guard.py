@@ -9,8 +9,8 @@ already tracked before the rule existed.
 
 TWO INDEPENDENT LEGS, and the path leg is the load-bearing one.
 
-  1. PATH leg — any staged path under ``.example-retrieval-repo-corpus-artifacts/`` or
-     ``.example-retrieval-repo-corpus-store/`` is refused REGARDLESS OF SIZE. A size-only guard
+  1. PATH leg — any staged path under ``.project-rag-corpus-artifacts/`` or
+     ``.project-rag-corpus-store/`` is refused REGARDLESS OF SIZE. A size-only guard
      (the shape the prior art in example-retrieval-repo-ue-addon implements) passes a small or
      partially-written corpus directory, which is still a corpus artifact in a commit
      and still the thing the ruling forbids. Size is a proxy for the real predicate;
@@ -71,8 +71,8 @@ import sys
 _NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 _CORPUS_PREFIXES = (
-    ".example-retrieval-repo-corpus-artifacts/",
-    ".example-retrieval-repo-corpus-store/",
+    ".project-rag-corpus-artifacts/",
+    ".project-rag-corpus-store/",
 )
 
 _DEFAULT_MAX_MB = 95

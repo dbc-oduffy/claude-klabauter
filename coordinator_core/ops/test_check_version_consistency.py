@@ -240,9 +240,9 @@ def test_c1_b_root_marketplace_named_something_else_reaches_na(tmp_path, capsys)
     """A plugin repo whose root marketplace.json is named something other than
     coordinator-claude (e.g. Example-retrieval-repo's own) must never be mistaken for the
     bundle -- reaches a stated N/A, not a fail and not a silent pass."""
-    d = tmp_path / "example-retrieval-repo"
+    d = tmp_path / "project-rag"
     (d / ".claude-plugin").mkdir(parents=True)
-    (d / ".claude-plugin" / "marketplace.json").write_text('{"name": "example-retrieval-repo"}\n')
+    (d / ".claude-plugin" / "marketplace.json").write_text('{"name": "project-rag"}\n')
     rc = main(["--repo-root", str(d), "--quiet"])
     captured = capsys.readouterr()
     assert rc == 0

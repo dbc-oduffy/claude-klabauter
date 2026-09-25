@@ -275,7 +275,7 @@ _SUPERSEDES_DESCRIPTION = (
 _TO_REPO_CROSS_REPO_MEMO_DESCRIPTION = (
     "OPTIONAL machine-local registry key of the receiver repo, in "
     "`repos.<key>` form (e.g. repos.doe_claude, repos.claude_klabauter, "
-    "repos.example_retrieval_repo — the same key family used fleet-wide for "
+    "repos.project_rag — the same key family used fleet-wide for "
     "sibling-repo resolution). `to:` remains the human-readable addressee "
     "and all its existing aliases stay valid; `to_repo` disambiguates "
     "rather than replaces — a memo's `to:` carries a nickname the "
@@ -310,7 +310,7 @@ _SUPERSEDED_BY_ARCHIVED_MEMO_DESCRIPTION = (
 _TO_REPO_ARCHIVED_MEMO_DESCRIPTION = (
     "OPTIONAL machine-local registry key of the receiver repo, in "
     "`repos.<key>` form (e.g. repos.doe_claude, repos.claude_klabauter, "
-    "repos.example_retrieval_repo). Sibling of the cross-repo-memo schema's "
+    "repos.project_rag). Sibling of the cross-repo-memo schema's "
     "`to_repo` field, carried through to archival so a memo bearing it "
     "still validates after `git mv` to cross-repo/archive/. `to:` "
     "remains the human-readable addressee; `to_repo` disambiguates, it "

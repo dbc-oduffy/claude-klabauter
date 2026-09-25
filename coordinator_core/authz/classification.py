@@ -4012,6 +4012,31 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # memo.transition write (DR-273 terminal-committer contract, named in that
     # module's own docstring) — which bounds what it writes, not whether it writes.
     "fleet.archive_actioned_memos": OpClass.MUTATING,
+    # fleet.delete_superseded_decisions — MUTATING: git-rm of a status:superseded
+    # docs/decisions/ record once no live surface still cites it, via
+    # ops/fleet/delete_superseded_decisions.py. Sibling of fleet.reap_integrated_findings
+    # in shape (a delete, landed through _common.rm_and_commit), retargeted at
+    # decision records and gated additionally by a one-grep citation refusal and a
+    # max-id floor (DR-211 D1/D2 mapping restated in that module's own docstring).
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      rm_and_commit(...) performs `git rm` + `git commit` on each
+    #      citation-clear, non-floor candidate.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No —
+    #      only the scan's bounded frontmatter reads and the delete itself.
+    #   4. Mutates shared mutable state outside its own module?                YES —
+    #      docs/decisions/ is coordinator substrate shared across sessions.
+    #   5. Persistent state changes observable across process boundaries?     YES —
+    #      the git commit and the record's absence are observable by any client.
+    # Spec backlink: docs/plans/2026-09-11-delete-superseded-drs-and-put-the-prune-rule-to-the-pm.md (C1)
+    "fleet.delete_superseded_decisions": OpClass.MUTATING,
+    # fleet.prune_closed_bugs — MUTATING: the act leg moves each re-verified
+    #   closed state/bug-backlog/ row into archive/ through the disposition
+    #   seam, a persistent state change on shared coordinator substrate
+    #   observable by every client. The dry_run leg is read-only, but the op is
+    #   classified by its most mutating path.
+    # Spec backlink: docs/plans/2026-09-07-fleet-prune-closed-bugs-v2-rebuild.md (C5)
+    "fleet.prune_closed_bugs": OpClass.MUTATING,
     # fleet.archive_sweep_status — COMPUTE_ONLY despite the "archive" in the name:
     # it reports on the sweeps, it does not run one. `_handler` (ops/fleet/
     # sweep_status.py) reads _sweep_receipt.receipt_path and summarizes the rows;

@@ -250,6 +250,19 @@ CANONICAL_LOG_RELPATH: str = "state/distillation-log.md"
 # handoff files (whichever candidates the disposal manifest names), appends
 # rows to state/distillation-log.md, and rewrites surviving parents'
 # disposed_successors frontmatter under state/handoffs/.
+#
+# `state/distillation-log.md` stays a concrete `MUTATES` path, not a
+# `GENERATES` entry, by design: this module appends rows to it
+# (`_delete_tracked_and_append_log` -> `log_append.append_rows`), it does not
+# emit the file. Its head is a `# Columns:` comment, not a stamp field, so
+# there is no fixed artifact to stamp. `generator_provenance.py ::
+# _build_record` therefore scores this module UNDECLARED
+# (docs/plans/2026-08-26-seven-generators-owe-a-staleness-contrac.md, P012-C5)
+# -- an accepted outcome, not a gap: an append-only ledger has no honest
+# declaration under the checker's current vocabulary. Filed to C6's
+# checker-vocabulary finding. Do not add `GENERATES = []` (the module
+# writes) and do not rewrite this path as a glob to dodge
+# `_mutates_concrete_patterns`.
 MUTATES = ["state/distillation-log.md", "state/handoffs/**/*.md", "docs/wiki/**/*.md"]
 
 #: Wiki-tree path prefix (forward-slash) — the OTHER acceptable containment

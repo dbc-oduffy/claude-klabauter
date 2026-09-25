@@ -377,6 +377,50 @@ def test_p11_main_raising_routes_to_inconclusive_never_silent_green(tmp_path, mo
     assert note.message.startswith("inconclusive(")
 
 
+def test_p11_real_main_stale_twin_publish_sync_reports_amber(tmp_path, monkeypatch):
+    """Real-main coverage (P077-C3): every prior P-11 test stubs `main`, which
+    is why none of them could see the blind spot C2 closed — the CONTRACT_REFUSE
+    leg only fires through the real module. Drive probe_p11 through the actual
+    `verify_templates_setup_sync.main`, in C2's stale-twin state: a template and
+    a live `publish_sync.py`, byte-identical, whose `sync_mirror` lacks
+    `copy_file` (the production regression this plan's oracle now catches)."""
+    _block_subprocess(monkeypatch)
+    monkeypatch.setattr(S, "coordinator_doe_root", lambda: None)
+
+    stale_twin_publish_sync = (
+        "def sync_mirror(renamed_dir_names, sweep_top_level_orphans, renamed_file_names):\n"
+        "    pass\n"
+        "\n"
+        "def sync_flat_mirror(copy_file):\n"
+        "    pass\n"
+        "\n"
+        "def sync_repo_cut(dry_run):\n"
+        "    pass\n"
+        "\n"
+        "def load_ignore(root):\n"
+        "    pass\n"
+    )
+
+    coordinator_root = tmp_path / "doe-clone" / "coordinator"
+    templates_setup = coordinator_root / "templates" / "setup"
+    templates_setup.mkdir(parents=True)
+    (templates_setup / "publish_sync.py").write_text(
+        stale_twin_publish_sync, encoding="utf-8"
+    )
+
+    config_dir = tmp_path / "harness-config"
+    live_setup = config_dir / "setup"
+    live_setup.mkdir(parents=True)
+    (live_setup / "publish_sync.py").write_text(
+        stale_twin_publish_sync, encoding="utf-8"
+    )
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+
+    (note,) = S.probe_p11(tmp_path / "plugins", coordinator_root)
+    assert note.severity == "amber"
+    assert "templates/setup drift" in note.message
+
+
 # --- P-13 / probe_onboarding_currency ---
 
 

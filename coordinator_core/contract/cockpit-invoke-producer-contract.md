@@ -458,7 +458,7 @@ MUST NOT produce a spurious `exit_code:1`. Fail loud ONLY on a genuine
 post-canonicalization mismatch.
 
 **Scope note.** `fleet.*` ops are `common_dir`-scoped (`_OP_KEY_SCOPE`, `ipc.py:209-211`);
-they REQUIRE `_origin_worktree`. The central ops (`artifact.emit`, `backlog.record`,
+they REQUIRE `_origin_worktree`. The central ops (`artifact.emit`,
 `goal.append`) are the ops that may omit `_origin_worktree` — cockpit never calls those.
 
 ### 3.4 `fleet.*` namespace admission precondition (D4 — memo Q4: the guardrail)

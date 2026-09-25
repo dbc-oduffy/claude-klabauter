@@ -113,17 +113,13 @@ from coordinator_core.dag import check_lineage_reachability as _check_lineage_re
 from coordinator_core.data_root import content_root_for
 from coordinator_core.frontmatter.baton_class import canonical_kind as _canonical_kind
 from coordinator_core.frontmatter.schema_validate import (
-    _apply_cross_field_rules,
     _is_parseable_iso_date,
-    _plan_tasks_schema_without_pm_approved_required,
-    _validate_json_schema_node,
     check_plan_tasks_grouping_approval as _check_plan_tasks_grouping_approval,
-    is_governed_plan as _is_governed_plan,
     load_schemas,
     match_schema,
     parse_frontmatter,
     parse_yaml,
-    plan_tasks_spine_integrity as _plan_tasks_spine_integrity,
+    plan_tasks_spine_errors as _plan_tasks_spine_errors_driver,
     validate_frontmatter_obj,
 )
 from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
@@ -931,46 +927,21 @@ def _plan_tasks_spine_errors(
     if not isinstance(plan_tasks_schema, dict):
         return []
 
-    # The three defects a per-ROW loop structurally cannot see (spine not
-    # locatable, block does not parse, depends_on edge onto a row that is not
-    # here). Shared door with the sibling guard, so neither can drift about what
-    # counts as an unreadable spine; ABSENT stays silent there, as it must.
-    # It also hands back the STRICTLY-parsed rows, which is what the row loop
-    # below now validates — this used to run the lenient `parse_yaml` over the same
-    # block, so it both paid a second parse and checked a reconstruction rather
-    # than the document every real spine consumer reads.
-    integrity, parsed = _plan_tasks_spine_integrity(prospective_content)
-    if parsed is None:
-        return integrity
-
-    governed = _is_governed_plan(frontmatter) if isinstance(frontmatter, dict) else False
-    schema = (
-        _plan_tasks_schema_without_pm_approved_required(plan_tasks_schema)
-        if governed
-        else plan_tasks_schema
+    # Routed (P084-C2) through the shared `PLAN_TASKS_SPINE_SEQUENCE` driver:
+    # `legs=("integrity", "ordering", "per_row")` — this guard GAINS the
+    # ordering leg here (the D5 gap the baton names, closed at WARN-only
+    # scope). `legs_out_of_band=("grouping_approval",)` names that this
+    # guard DOES run the grouping-approval leg, just not through this
+    # driver — it runs at `_grouping_approval_fires` below, at its own call
+    # site, unmoved by this routing.
+    errors, _rows = _plan_tasks_spine_errors_driver(
+        prospective_content,
+        frontmatter,
+        plan_tasks_schema=plan_tasks_schema,
+        legs=("integrity", "ordering", "per_row"),
+        legs_out_of_band=("grouping_approval",),
+        row_label_fmt="tasks[{id}].{field}",
     )
-
-    errors: list[dict] = list(integrity)
-    for idx, row in enumerate(parsed):
-        row_label = row.get("id") if isinstance(row, dict) and row.get("id") else f"index {idx}"
-        if not isinstance(row, dict):
-            errors.append({
-                "field": f"tasks[{row_label}]",
-                "error": f"row is not a mapping, got {type(row).__name__}",
-                "hint": "Each task-spine row is a YAML mapping (id/title/change_kind/surface/...)",
-            })
-            continue
-        row_errors = _validate_json_schema_node(row, schema, schema)
-        row_errors.extend(_apply_cross_field_rules(
-            row, "plan-tasks", governed=governed,
-            plan_created=frontmatter.get('created') if isinstance(frontmatter, dict) else None,
-        ))
-        for err in row_errors:
-            errors.append({
-                "field": f"tasks[{row_label}].{err.get('field')}",
-                "error": err.get("error"),
-                "hint": err.get("hint"),
-            })
     return errors
 
 

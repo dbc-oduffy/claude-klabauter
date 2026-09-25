@@ -75,6 +75,7 @@ import subprocess
 import sys
 import tempfile
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import FrozenSet, List, Optional, Tuple, Union
@@ -105,6 +106,11 @@ from coordinator_core.engine_root import (
     coordinator_engine_root_with_class,
     engine_source_root,
 )
+from coordinator_core.install.setup_template_manifest import (
+    SubstrateFatalError,
+    _MANIFEST_ATTRS,
+    _load_setup_template_manifest,
+)
 
 # Generator-provenance declaration (generator_provenance.py). Every write
 # (dst.write_text, _write_bin_manifest, the policy-gate report) targets
@@ -114,10 +120,6 @@ from coordinator_core.engine_root import (
 GENERATES = []
 
 _NO_CONSOLE = no_console_creationflags()
-
-
-class SubstrateFatalError(RuntimeError):
-    """Mirrors a bash `exit 1` FATAL precondition failure."""
 
 
 def _is_windows_shell() -> bool:
@@ -335,61 +337,6 @@ def _orphan_appx_stub(path: str) -> bool:
     except OSError:
         return True
     return False
-
-
-_MANIFEST_ATTRS = ("SETUP_TEMPLATE_FILES", "SETUP_TEMPLATE_EXEC_FILES", "SETUP_TEMPLATE_HOOK_FILES")
-
-
-def _load_setup_template_manifest(claude_klabauter_root: Path):
-    """Load ``<claude_klabauter_root>/coordinator/lib/setup-templates-manifest.py``'s three
-    ``list[str]`` module attributes — single-source-of-truth manifest, deliberately
-    NOT hand-duplicated here (its own header: "Edit this list HERE and nowhere
-    else").
-
-    The manifest lives in claude-klabauter's OWN ``coordinator/lib/`` tree (b644d5a9's
-    executable-surface relocation moved ``lib/`` out of the DoE-claude
-    ``CLAUDE_PLUGIN_ROOT`` entirely), so this resolves off ``coordinator_claude_klabauter_root()``,
-    not ``plugin_root`` — a future reader must NOT "restore" plugin_root
-    resolution here on the theory that lib/ files belong under the plugin root;
-    that theory stopped being true the day of the relocation.
-
-    Formerly a `bash -c 'source ...'`-avoiding hand-rolled bash-array-literal
-    parser (2026-07-21 pure-Python-shop cutover, retired in the same relocation
-    that made the manifest itself a plain Python module) — the file is now
-    itself Python, so a plain ``importlib`` load is the native, sanctioned
-    reading of it (its own header: "Imported (never executed)"). The hyphenated
-    filename precludes a normal ``import`` statement, hence
-    ``importlib.util.spec_from_file_location``."""
-    import importlib.util
-
-    manifest = claude_klabauter_root / "coordinator" / "lib" / "setup-templates-manifest.py"
-    if not manifest.is_file():
-        raise SubstrateFatalError(
-            f"install-substrate: setup-templates-manifest.py not found at {manifest}"
-        )
-    spec = importlib.util.spec_from_file_location("_setup_templates_manifest", manifest)
-    if spec is None or spec.loader is None:
-        raise SubstrateFatalError(
-            f"install-substrate: could not load setup-templates-manifest.py at {manifest}"
-        )
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-    except Exception as exc:
-        sys.modules.pop(spec.name, None)
-        raise SubstrateFatalError(
-            f"install-substrate: setup-templates-manifest.py at {manifest} failed to "
-            f"import ({exc}) — it is corrupt or has a syntax error"
-        ) from exc
-
-    files, exec_files, hook_files = (getattr(module, attr, None) for attr in _MANIFEST_ATTRS)
-    if not files:
-        raise SubstrateFatalError(
-            f"install-substrate: SETUP_TEMPLATE_FILES is empty or missing in {manifest} — "
-            "setup-templates-manifest.py failed to define it or is corrupt"
-        )
-    return files, exec_files or [], hook_files or []
 
 
 def _resolve_bin_templates_manifest_root() -> Path:
@@ -1158,26 +1105,59 @@ def _native_forwarder_manifest_path(dst_dir: Path) -> Path:
     return dst_dir / _NATIVE_FORWARDER_MANIFEST_NAME
 
 
-def _read_native_forwarder_manifest(dst_dir: Path) -> "set[str]":
-    """The set of names this installer has previously written as native-
-    forwarder images, or the empty set when the manifest is absent/
-    unreadable/malformed — best-effort, matching this module's other
-    best-effort side-file reads (`_dispatch_engine_stamp_bytes`). An absent
-    manifest is the normal, pre-C5 state (no native forwarder has ever been
-    written), never an error."""
+@dataclass(frozen=True)
+class NativeForwarderManifestRead:
+    """Tri-state manifest read result (C5): ``measured`` is True for BOTH
+    the normal absent-manifest case ("nothing has ever been recorded here,
+    genuinely none installed") and a validly-parsed manifest (including a
+    validly-parsed empty ``names`` list) -- False only when the manifest
+    file EXISTS but this read could not trust what it says: an OSError on
+    an existing path (permission denial, a directory where a file was
+    expected, ...) or content that fails to parse as the documented shape
+    (malformed JSON, a non-dict top level, a non-list ``names`` field, or a
+    non-string entry inside it). ``measured=False`` must never be read as
+    "empty" by a caller that can distinguish the two -- see
+    `_union_native_forwarder_manifest` and
+    `settings_home_report._is_door_owned_forwarder_slot`."""
+
+    names: "frozenset[str]"
+    measured: bool
+
+
+def _read_native_forwarder_manifest_state(dst_dir: Path) -> NativeForwarderManifestRead:
+    """The tri-state read behind `_read_native_forwarder_manifest`'s plain
+    set -- see `NativeForwarderManifestRead` for what `measured` means and
+    why an absent manifest is `measured=True` (the normal pre-C5 state)
+    while an unreadable-or-malformed ONE is `measured=False` (this read
+    cannot say what is or isn't installed)."""
     path = _native_forwarder_manifest_path(dst_dir)
     try:
         raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return NativeForwarderManifestRead(frozenset(), True)
     except OSError:
-        return set()
+        return NativeForwarderManifestRead(frozenset(), False)
     try:
         data = json.loads(raw)
     except ValueError:
-        return set()
+        return NativeForwarderManifestRead(frozenset(), False)
     names = data.get("names") if isinstance(data, dict) else None
-    if not isinstance(names, list):
-        return set()
-    return {n for n in names if isinstance(n, str)}
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        return NativeForwarderManifestRead(frozenset(), False)
+    return NativeForwarderManifestRead(frozenset(names), True)
+
+
+def _read_native_forwarder_manifest(dst_dir: Path) -> "set[str]":
+    """The set of names this installer has previously written as native-
+    forwarder images. Callers that only ever need the name set — every
+    census-row-1 caller as of C5 — keep using this; it collapses the
+    tri-state read's `measured=False` case to the empty set, matching this
+    module's other best-effort side-file reads
+    (`_dispatch_engine_stamp_bytes`), which is the correct behaviour for
+    those callers but NOT for a read-union-write or a sweep-authorization
+    site — see `_read_native_forwarder_manifest_state` for the distinction
+    those sites must make instead."""
+    return set(_read_native_forwarder_manifest_state(dst_dir).names)
 
 
 def _write_native_forwarder_manifest(dst_dir: Path, names: "set[str]") -> None:
@@ -1232,11 +1212,26 @@ def _union_native_forwarder_manifest(dst_dir: Path, written_names: "set[str]") -
     via the manifest", never a self-heal failure. Caller is expected to
     hold `held_lock` on ``dst_dir`` already (self-heal takes it before
     calling this), so the read-union-write is race-safe against a
-    concurrent full install's overwrite of the same file."""
+    concurrent full install's overwrite of the same file.
+
+    UNMEASURED IS NOT EMPTY HERE (C5). An unreadable/malformed manifest
+    read as the empty set and unioned in would write JUST
+    ``written_names`` — silently dropping every other name this manifest
+    already recorded, i.e. truncating to this run's partial set. This
+    caller is a PARTIAL writer by contract (see the docstring above), so
+    that truncation is real, not hypothetical. On an unmeasured read this
+    function writes nothing at all: `written_names` land on disk as
+    forwarder files regardless (this function only maintains the
+    manifest's index of them), and skipping the write here just means
+    THIS run's names are not YET manifest-protected -- degrading, again,
+    to "the sweep can't see them via the manifest", the same best-effort
+    posture as every other failure mode this function already tolerates."""
     if not written_names:
         return
-    current = _read_native_forwarder_manifest(dst_dir)
-    _write_native_forwarder_manifest(dst_dir, current | written_names)
+    state = _read_native_forwarder_manifest_state(dst_dir)
+    if not state.measured:
+        return
+    _write_native_forwarder_manifest(dst_dir, set(state.names) | written_names)
 
 
 class _StaticFamilyAlreadyServed:
@@ -2467,6 +2462,14 @@ def _sweep_orphaned_agent_helpers(
     # literal `.exe`, so this and the writer cannot drift on the suffix rule;
     # the bare names are kept in the set too, so a manifest that ever recorded
     # filenames still matches and POSIX behaviour is bit-for-bit unchanged.
+    # UNMEASURED STAYS FAIL-SAFE HERE WITHOUT NEEDING THE TRI-STATE (C5):
+    # this call site only ever ADDS names to `native_forwarder_names` via
+    # condition 0 match; collapsing an unmeasured read to the empty set
+    # (as `_read_native_forwarder_manifest` does) means condition 0 simply
+    # identifies nothing this run, and an unidentified name is protected,
+    # never swept, by condition 2 needing condition 0/0b/1 as well. Contrast
+    # `_union_native_forwarder_manifest`, whose read feeds a WRITE and where
+    # the same collapse would truncate the manifest instead.
     native_forwarder_names = _read_native_forwarder_manifest(dst_dir)
     native_forwarder_names = native_forwarder_names | {
         door_install.named_forwarder_path(dst_dir, n).name for n in native_forwarder_names

@@ -83,6 +83,7 @@ from coordinator_core.ceremony_common.apply_halt import (
     budget_check_post_mutation,
     budget_check_pre_mutation,
     build_ceremony_halt_exit_codes,
+    exit_code_label,
 )
 from coordinator_core.ceremony_common.json_payload_flag import (
     detect_conflicting_payload_channels,
@@ -417,13 +418,18 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
     """
     composition_budget = make_fleet_budget("workweek_complete")
     outcome = "directive_failed"
+    exit_label = None
     try:
         brief_exit_code, envelope = brief(decisions=decisions)
         if brief_exit_code != 0:
-            return int(WorkweekApplyExitCode.TRANSPORT_FAIL), {
+            transport_fail_report = {
                 "error": envelope.get("error", "brief() did not resolve an actionable plan"),
                 "landed": [],
             }
+            exit_label = exit_code_label(
+                int(WorkweekApplyExitCode.TRANSPORT_FAIL), transport_fail_report
+            )
+            return int(WorkweekApplyExitCode.TRANSPORT_FAIL), transport_fail_report
 
         directives = envelope.get("directives", [])
         judgment_points = envelope.get("judgment_points", [])
@@ -432,13 +438,14 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
         exit_code, report = _execute_directives(
             directives, judgment_points, effective_decisions, composition_budget=composition_budget
         )
+        exit_label = exit_code_label(exit_code, report)
         if exit_code == int(WorkweekApplyExitCode.SUCCESS):
             outcome = "success"
         elif exit_code == int(WorkweekApplyExitCode.PARTIAL_MUTATION):
             outcome = "partial_mutation"
         return exit_code, report
     finally:
-        flush_composition_record(composition_budget, outcome)
+        flush_composition_record(composition_budget, outcome, exit_code_label=exit_label)
 
 
 def main(argv: list[str]) -> int:

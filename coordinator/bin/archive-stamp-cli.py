@@ -805,7 +805,31 @@ def main(argv: list[str]) -> int:
         # live doc/skill references to it that this change does not own.
         if not rest:
             return _usage(f"archive-stamp-cli {subcmd} <handoff_path>")
-        return mod.cs_claim_handoff(rest[0])
+        handoff_path = rest[0]
+        # AC2 (Track A): exactly one success line on exit 0, naming the
+        # handoff path and the claimant session id. AC2b (Track D, this row):
+        # a run in which a best-effort write failed is distinguishable from a
+        # clean run by stdout alone, naming by field which write did not
+        # land — read off AC13's `writes` map, which is why this call now
+        # asks for `return_result=True` rather than the bare exit code.
+        # `resolve_current_session_id` mirrors `cs_claim_handoff`'s own
+        # resolution chain: it is a pure env-var lookup (no worktree/
+        # filesystem read), so calling it again here after a successful
+        # claim cannot disagree with what the engine already resolved
+        # internally.
+        result = mod.cs_claim_handoff(handoff_path, return_result=True)
+        rc = int(result.get("exit_code", 1))
+        if rc == 0:
+            sid = mod.resolve_current_session_id()
+            print(f"archive-stamp-cli: claimed {handoff_path} (claimed_by {sid})")
+            writes = result.get("writes") or {}
+            failed = [field for field, landed in writes.items() if not landed]
+            if failed:
+                print(
+                    "archive-stamp-cli: WARNING — best-effort write(s) did not land: "
+                    + ", ".join(sorted(failed))
+                )
+        return rc
 
     if subcmd == "claim-memo-stamp":
         if not rest:

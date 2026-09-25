@@ -1439,7 +1439,10 @@ class TestTemplateEmissionEndToEndThroughApply:
         exit_code, report = bga_apply.apply(
             "bug-blitz", session_id="sess-f2-blitz-executor", repo_root=tmp_path
         )
-        assert exit_code == bga_apply.APPLY_EXIT_OK
+        # bug-blitz's Tier-U grant is an unanswered judgment point here, so the
+        # run halts at it; every directive not gated on it still lands.
+        assert exit_code == bga_apply.APPLY_EXIT_HALTED_AT_JUDGMENT
+        assert report["unresolved_judgment_points"] == ["j-bug-blitz-tier-u-grant"]
         results = report.get("results", [])
         matches = [
             r["detail"] for r in results
@@ -1578,7 +1581,10 @@ class TestTemplateEmissionEndToEndThroughApplySpinoffOnly:
             extra_directives=[spinoff_directive],
         )
 
-        assert exit_code == bga_apply.APPLY_EXIT_OK
+        # bug-blitz's Tier-U grant is an unanswered judgment point here, so the
+        # run halts at it; every directive not gated on it still lands.
+        assert exit_code == bga_apply.APPLY_EXIT_HALTED_AT_JUDGMENT
+        assert report["unresolved_judgment_points"] == ["j-bug-blitz-tier-u-grant"]
         results = report.get("results", [])
         matches = [
             r["detail"] for r in results
@@ -1648,7 +1654,10 @@ class TestHaikuVerifierDispatchEndToEndThroughApply:
             extra_directives=[verifier_directive],
         )
 
-        assert exit_code == bga_apply.APPLY_EXIT_OK
+        # bug-blitz's Tier-U grant is an unanswered judgment point here, so the
+        # run halts at it; every directive not gated on it still lands.
+        assert exit_code == bga_apply.APPLY_EXIT_HALTED_AT_JUDGMENT
+        assert report["unresolved_judgment_points"] == ["j-bug-blitz-tier-u-grant"]
         results = report.get("results", [])
         matches = [
             r["detail"] for r in results
@@ -3811,3 +3820,78 @@ class TestSingleDispositionResolvesWiring:
             jps, [{"id": "unrelated", "depends_on": None}]
         )
         assert wired[0]["dispositions"][0]["resolves"] == []
+
+
+# ---------------------------------------------------------------------------
+# _dispatch_tier_u_grant_cli — P071-C3: routed through
+# `grant_directive.run_grant_directive`, the same argv path
+# `merge_assemble` dispatches through, with `check` support and a
+# denied-check raise the pre-C3 handler could not reach at all.
+# ---------------------------------------------------------------------------
+
+class TestDispatchTierUGrantCli:
+    def test_grant_lands_under_passed_repo_root(self, tmp_path, monkeypatch):
+        seen = {}
+
+        def _fake_write(granted_by, note, *, ceremony=None, session_id=None, cwd=None):
+            seen["cwd"] = cwd
+            return True
+
+        monkeypatch.setattr(
+            "coordinator_core.session.grant_directive.write_tier_u_grant", _fake_write
+        )
+        result = bga_apply._dispatch_tier_u_grant_cli(
+            ["grant", "pm", "note text"], tmp_path
+        )
+        assert seen["cwd"] == str(tmp_path)
+        assert result["cli"] == bga_directives._TIER_U_GRANT_CLI
+        assert result["verb"] == "grant"
+        assert result["granted_by"] == "pm"
+
+    def test_check_from_a_different_process_cwd_still_resolves_under_repo_root(
+        self, tmp_path, monkeypatch
+    ):
+        """staff-eng review: `repo_root` must thread as `cwd` into `check`,
+        not `write_tier_u_grant` alone, or a grant written under
+        `repo_root` reads UNGRANTED when checked against the bare process
+        cwd."""
+        seen = {}
+
+        def _fake_check(cwd=None, *, session_id=None):
+            seen["cwd"] = cwd
+            return True, {"granted_by": "pm"}
+
+        monkeypatch.setattr(
+            "coordinator_core.session.grant_directive.check_tier_u_grant", _fake_check
+        )
+        result = bga_apply._dispatch_tier_u_grant_cli(["check"], tmp_path)
+        assert seen["cwd"] == str(tmp_path)
+        assert result["returncode"] if "returncode" in result else True
+        assert result["cli"] == bga_directives._TIER_U_GRANT_CLI
+
+    def test_denied_check_raises(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "coordinator_core.session.grant_directive.check_tier_u_grant",
+            lambda cwd=None, *, session_id=None: (False, {"granted_by": "pm", "session_id": "x"}),
+        )
+        monkeypatch.setattr(
+            "coordinator_core.bash_guards.check_test_suite_invocation._ungranted_record_failing_gate",
+            lambda rec, sid, cwd: "the grant was written for a different session",
+        )
+        with pytest.raises(RuntimeError, match="the grant was written for a different session"):
+            bga_apply._dispatch_tier_u_grant_cli(["check"], tmp_path)
+
+    def test_failed_grant_still_raises(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "coordinator_core.session.grant_directive.write_tier_u_grant",
+            lambda granted_by, note, *, ceremony=None, session_id=None, cwd=None: False,
+        )
+        with pytest.raises(RuntimeError):
+            bga_apply._dispatch_tier_u_grant_cli(["grant", "pm", "note"], tmp_path)
+
+    def test_malformed_argv_raises_unrecognized_directive(self, tmp_path):
+        with pytest.raises(apply_base.UnrecognizedDirective):
+            bga_apply._dispatch_tier_u_grant_cli(["bogus"], tmp_path)
+
+    def test_shares_one_tier_u_grant_cli_constant_with_directives_module(self):
+        assert bga_apply._TIER_U_GRANT_CLI is bga_directives._TIER_U_GRANT_CLI

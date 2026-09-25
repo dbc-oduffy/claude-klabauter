@@ -2688,31 +2688,40 @@ def relocate_touched_path(
 
     Claiming ``dst_rel`` before the move means a crash between the two
     steps leaves a ``T`` claim on a path that was never created — that path
-    then surfaces in ``my_scope`` and is passed as part of the commit
-    pathspec to :func:`coordinator_core.ops.ceremony.commit_pipeline.
-    explicit_stage`. Traced there: a pathspec element that is genuinely
-    absent on disk and IS in ``caller_paths`` (which it is — every caller of
-    ``explicit_stage`` in this pipeline passes ``caller_paths=set(paths)``)
-    is classified ``"missing-caller:<p>"``, added to
-    ``StageOutcome.missing_caller_paths``, and drives ``exit_code == 2`` —
-    a degraded-but-not-failed signal (see ``run_commit_pipeline``'s own
-    docstring: "``exit_code == 2`` does NOT by itself set ``commit_failed``").
-    The commit still lands; the phantom path is simply never staged. So the
-    window is BOUNDED, not closed: it never fails a commit or corrupts one,
-    but the phantom ``T(dst_rel)`` claim is not self-healing either — since
-    ``dst_rel`` was never created, no future commit ever includes it, so
-    :func:`release_committed_claims` never sees it land and never retires
-    it. Left alone, that stale claim re-enters ``my_scope`` and re-triggers
-    the same benign ``missing-caller`` diagnostic on every subsequent commit
-    for this session, until something else (a manual release, a session
-    reap) clears it. That residue — not silent corruption, not a failed
-    commit — is the actual shape of the crash window this ordering leaves
-    behind. Move-then-claim's alternative failure mode (a crash leaves
-    ``dst_rel`` unclaimed despite existing on disk, i.e. an
-    ``orphans``-shaped gap) is still the worse of the two: an unattributed
-    dirty file indistinguishable from any other orphan, versus a self-
-    reporting phantom claim that never silently vanishes. Claim-before-move
-    remains the right call; its failure mode is just bounded, not inert.
+    then surfaces in ``my_scope`` and reaches a commit pathspec through
+    whichever of the two live routes carries it (T3, docs/plans/2026-09-07-
+    a-confirmed-absent-caller-path-refuses-the-commit.md; the route this
+    paragraph previously named here is dead code and no longer runs):
+      - On the CLI route, ``coordinator-safe-commit`` intersects
+        ``my_scope`` with the actually-dirty worktree set before building a
+        pathspec, so a phantom ``T(dst_rel)`` claim (never dirty, since it
+        was never created) is dropped there — same disposition as any other
+        clean-touched path.
+      - On the :func:`coordinator_core.ops.session.safe_commit_offer.
+        _commit_group` route, the claim reaches ``deleted_paths`` (absent
+        from the worktree), is pre-filtered there against HEAD, and — being
+        absent from HEAD too — is SKIPPED and reported rather than
+        committed. It is released only if and when the group it belongs to
+        actually lands a commit (:func:`release_committed_claims` runs
+        after a landed commit over the group's whole path list, phantom
+        member included).
+    So the window is BOUNDED, not closed: it never fails a commit or
+    corrupts one, but the phantom ``T(dst_rel)`` claim is not self-healing
+    either — since ``dst_rel`` was never created, no future commit ever
+    includes it, so :func:`release_committed_claims` never sees it land and
+    never retires it. Left alone, that stale claim re-enters ``my_scope``
+    and re-triggers the same benign SKIPPED disposition on every subsequent
+    commit for this session, until something else (a manual release, a
+    session reap) clears it. That residue is real and NOT closed by this
+    paragraph or by anything else in this module: it is not remedied by
+    calling :func:`release_phantom_claims` (nothing on this path invokes
+    it), and this paragraph does not claim otherwise. Move-then-claim's
+    alternative failure mode (a crash leaves ``dst_rel`` unclaimed despite
+    existing on disk, i.e. an ``orphans``-shaped gap) is still the worse of
+    the two: an unattributed dirty file indistinguishable from any other
+    orphan, versus a self-reporting phantom claim that never silently
+    vanishes. Claim-before-move remains the right call; its failure mode is
+    just bounded, not inert.
 
     Destination normalization uses :func:`normalize_touch_path` ONLY, never
     :func:`classify_touch_entry` — the two are materially different

@@ -1268,7 +1268,7 @@ def test_resolve_capability_pointers_reads_local_md_list(tmp_path):
     (repo / "coordinator.local.md").write_text(
         "---\n"
         "capability_pointers:\n"
-        '  - "example-retrieval-repo: query engine source via mcp__example_retrieval_repo__* tools"\n'
+        '  - "example-retrieval-repo: query engine source via mcp__project-rag__* tools"\n'
         "  - architecture atlas: docs/architecture/systems/\n"
         "---\n",
         encoding="utf-8",
@@ -1277,7 +1277,7 @@ def test_resolve_capability_pointers_reads_local_md_list(tmp_path):
     pointers = mod.resolve_capability_pointers(str(repo))
 
     assert pointers == [
-        "example-retrieval-repo: query engine source via mcp__example_retrieval_repo__* tools",
+        "example-retrieval-repo: query engine source via mcp__project-rag__* tools",
         "architecture atlas: docs/architecture/systems/",
     ]
 

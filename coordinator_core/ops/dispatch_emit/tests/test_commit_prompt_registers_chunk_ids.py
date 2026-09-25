@@ -203,6 +203,18 @@ def test_commit_prompt_tells_the_agent_to_read_no_delta():
     assert "contributed nothing" in call
 
 
+def test_commit_prompt_scopes_no_delta_to_paths_not_deleted_paths():
+    """P027-T5 census: the `no_delta` paragraph must not read as covering
+    `deleted_paths` too. A `deleted_paths` member absent from HEAD refuses
+    the WHOLE call with `PhantomDeletionDeclared` -- it never degrades to a
+    `no_delta` entry the agent merely reports through."""
+    call = _commit_agent_call(
+        ["a.py"], "Commit wave 1", 0, ["C1"], "wave1Results"
+    )
+    assert "PhantomDeletionDeclared" in call
+    assert "deleted_paths" in call
+
+
 def test_no_delta_is_reported_above_the_success_token_not_instead_of_it():
     """A partial commit is legitimate and must still report landed.
 

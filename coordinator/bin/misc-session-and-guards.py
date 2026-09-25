@@ -28,7 +28,7 @@ Subcommands (argv[1] selects):
 
     rag-staleness-survey
         Resolves the example-retrieval-repo MCP server's CLI path and project root
-        from ~/.claude.json (mcpServers.example-retrieval-repo.args — first arg
+        from ~/.claude.json (mcpServers.project-rag.args — first arg
         ending .py/cli is the CLI, the last arg is the project root), then
         invokes `<cli> staleness-survey --project-root <root> --json` and
         prints a one-line freshness nudge when verdict != "current".
@@ -225,7 +225,7 @@ def _resolve_example_retrieval_repo_cli_and_root() -> tuple[str | None, str | No
     try:
         with claude_json.open("r", encoding="utf-8") as fh:
             data = json.load(fh)
-        args = data["mcpServers"]["example-retrieval-repo"]["args"]
+        args = data["mcpServers"]["project-rag"]["args"]
     except (OSError, ValueError, KeyError, TypeError):
         return None, None
 

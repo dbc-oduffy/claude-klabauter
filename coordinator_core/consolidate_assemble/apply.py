@@ -294,6 +294,7 @@ def apply(
         judgment_points = decision.get("judgment_points", [])
 
         outcome = "directive_failed"
+        exit_label = None
         try:
             exit_code, report = apply_base.execute_directives(
                 directives,
@@ -303,12 +304,13 @@ def apply(
                 decisions=effective_decisions,
                 composition_budget=composition_budget,
             )
+            exit_label = apply_base.exit_code_label(exit_code, report)
             if exit_code == apply_base.APPLY_EXIT_OK:
                 outcome = "success"
             elif exit_code == apply_base.APPLY_EXIT_PARTIAL_MUTATION:
                 outcome = "partial_mutation"
         finally:
-            flush_composition_record(composition_budget, outcome)
+            flush_composition_record(composition_budget, outcome, exit_code_label=exit_label)
         return exit_code, report
 
 

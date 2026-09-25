@@ -357,19 +357,19 @@ def test_remove_shim_strips_matching_legacy_block(tmp_path, monkeypatch):
 
 def test_register_hardware_concern_inline_array(tmp_path):
     registry = tmp_path / "registry.toml"
-    registry.write_text('concerns = ["example_retrieval_repo", "unreal"]\n', encoding="utf-8")
+    registry.write_text('concerns = ["project_rag", "unreal"]\n', encoding="utf-8")
     substrate._register_hardware_concern(registry)
     import tomllib
 
     data = tomllib.loads(registry.read_text(encoding="utf-8"))
-    assert set(data["concerns"]) == {"example_retrieval_repo", "unreal", "hardware"}
+    assert set(data["concerns"]) == {"project_rag", "unreal", "hardware"}
 
 
 def test_register_hardware_concern_multiline_array_preserves_existing(tmp_path):
     registry = tmp_path / "registry.toml"
     registry.write_text(
         "concerns = [\n"
-        '  "example_retrieval_repo",\n'
+        '  "project_rag",\n'
         '  "unreal",\n'
         "]\n"
         "\n"
@@ -381,7 +381,7 @@ def test_register_hardware_concern_multiline_array_preserves_existing(tmp_path):
     import tomllib
 
     data = tomllib.loads(registry.read_text(encoding="utf-8"))
-    assert set(data["concerns"]) == {"example_retrieval_repo", "unreal", "hardware"}
+    assert set(data["concerns"]) == {"project_rag", "unreal", "hardware"}
     # Sibling section survived the migration untouched.
     assert data["sibling"]["key"] == ""
 

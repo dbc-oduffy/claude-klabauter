@@ -7,7 +7,7 @@ cross-repo path resolution.
 
 Contract (unchanged from the bash oracle):
   1. `resolve-repo-path.py <shortname>` maps <shortname> to a registry key via
-     s/-/_/g normalization (e.g. Example-retrieval-repo-ue-addon -> repos.example_retrieval_repo_ue_addon)
+     s/-/_/g normalization (e.g. Example-retrieval-repo-ue-addon -> repos.project_rag_ue_addon)
      and emits the resolved on-disk path on stdout.
   2. `--wiki` flag makes it emit '<resolved-path>/docs/wiki' instead of the bare path.
      An optional `--docs-wiki <subpath>` flag overrides the appended subpath: when

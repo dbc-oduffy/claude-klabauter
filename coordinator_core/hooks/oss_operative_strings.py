@@ -35,7 +35,7 @@ Two of the historically-considered four classes are DERIVABLE, not
 curatable, and are computed here rather than hand-listed — see
 `mcp_tool_prefixes()` and `is_identifier_shape_operative()`:
 
-  - MCP tool-name prefixes (`mcp__example_retrieval_repo__*`, `mcp__example_game_repo-control__*`)
+  - MCP tool-name prefixes (`mcp__project-rag__*`, `mcp__example_game_repo-control__*`)
     are derived from `coordinator/mcp-topology.yaml`, which already declares
     every first-party MCP server's `configKey`. Adding a server there makes
     its prefix exempt automatically — no edit here.

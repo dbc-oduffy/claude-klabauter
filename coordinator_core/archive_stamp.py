@@ -487,21 +487,24 @@ def _scope_paths_have_uncommitted_changes(worktree: Path, scope_paths: list[str]
     produced a genuine scope-path-derived candidate) — never for the
     `allow_branch_tip_fallback` branch-tip resolution, whose own semantics
     this fix must not touch (see `stamp_shipped_in`'s Negative-spec / HARD
-    CONSTRAINTS)."""
-    try:
-        proc = _run_git(
-            ["--no-optional-locks", "status", "--porcelain", "--", *scope_paths], cwd=worktree
-        )
-    except (subprocess.TimeoutExpired, OSError) as exc:
+    CONSTRAINTS).
+
+    Converted (P014-C3) onto `session_facts._dirty_paths`, pathspec-scoped to
+    `scope_paths`; `--no-optional-locks` is now inherited unconditionally from
+    the producer's own `status_porcelain` seam rather than pinned here. Posture
+    is unchanged: a degraded read (git error/timeout/nonzero) still returns
+    `True` (fail-closed)."""
+    from coordinator_core.session.session_facts import _dirty_paths
+
+    result = _dirty_paths(worktree, pathspecs=scope_paths)
+    if result["degraded"]:
         print(
             f"_scope_paths_have_uncommitted_changes: git status failed for "
-            f"{scope_paths} in {worktree}: {exc}",
+            f"{scope_paths} in {worktree}: {result['evidence']}",
             file=sys.stderr,
         )
         return True
-    if proc.returncode != 0:
-        return True
-    return bool(proc.stdout.strip())
+    return result["collision"]
 
 
 def _parse_iso_timestamp(value: Optional[str]) -> Optional[datetime]:
@@ -1936,7 +1939,7 @@ def _foreign_live_holder_refusal(handoff_path: str, claimant_sid: str) -> "str |
 
 def _record_claimant_identity_best_effort(
     target_path: str, worktree: Path, anchor_field: str, claimant_sid: str
-) -> None:
+) -> bool:
     """Claim-time stamp of the OPERATING HUMAN and the claiming SESSION's harness
     identity, beside the `claimed_by`/`picked_up_by` UUID, which stays the durable
     identity and is unchanged.
@@ -2019,6 +2022,24 @@ def _record_claimant_identity_best_effort(
     Each field is inserted ONLY when absent and only when its value is non-empty — an
     idempotent re-claim by the same session never re-stamps or overwrites either
     field.
+
+    Returns True when the `locked_rmw` write completed, False on any failure
+    (unresolvable repo root, or an exception from the write itself) — this is
+    AC13's per-write landed/failed signal; `cs_claim_handoff` reads it to build
+    `return_result`'s writes map. The write stays best-effort and non-fatal
+    either way: a False return degrades the caller's report, it never raises.
+
+    AC14 (Track D spike, C8, `docs/research/2026-09-claim-write-atomicity-spike.md`):
+    this function's `locked_rmw` below is the SECOND of the two lock
+    acquisitions over the handoff/memo frontmatter file — the first is inside
+    `handoff_transition._claim`, called earlier in `cs_claim_handoff`. Measured
+    marginal cost of keeping them as two separate acquisitions: 0.0688 ms
+    (200-iteration in-process mean, uncontended). That is three orders of
+    magnitude under the 500 ms brightline and far cheaper than the cross-module
+    coupling a collapse would require (threading a callback through `_claim`'s
+    shared closure, or duplicating its cross-field validation here) — so they
+    stay two. This is the measured reason the spike recorded, not a prose
+    judgment.
     """
     try:
         slug = resolve_operating_person().get("github")
@@ -2069,7 +2090,7 @@ def _record_claimant_identity_best_effort(
     try:
         repo_root = _git_common_dir(worktree)
         if repo_root is None:
-            return
+            return False
 
         def _mutate(old_text: str) -> str:
             split = split_frontmatter(old_text)
@@ -2116,17 +2137,25 @@ def _record_claimant_identity_best_effort(
             return rebuild(split, fm_text)
 
         locked_rmw(Path(target_path), _mutate, repo_root=repo_root)
+        return True
     except Exception as exc:  # noqa: BLE001 — best-effort, must never abort the caller
         print(
             f"_record_claimant_identity_best_effort: WARNING — claimant identity not "
             f"recorded for {target_path} ({exc}); non-fatal",
             file=sys.stderr,
         )
+        return False
 
 
-def _record_pickup_best_effort(handoff_path: str, worktree: Path, sid: str) -> None:
+def _record_pickup_best_effort(handoff_path: str, worktree: Path, sid: str) -> bool:
     """C2 write-moment: best-effort, non-fatal session.record_pickup — mirrors the
-    oracle's foreign-repo-bleed fix (repo-relative handoff path, never absolute)."""
+    oracle's foreign-repo-bleed fix (repo-relative handoff path, never absolute).
+
+    Returns True when `session.record_pickup` completed (`exit_code == 0`),
+    False otherwise (non-zero exit code, or any raised exception) — AC13's
+    per-write landed/failed signal, read by `cs_claim_handoff`. Still
+    best-effort and non-fatal: never raises into the caller.
+    """
     try:
         proc = _run_git(["rev-parse", "--show-prefix"], cwd=worktree)
         prefix = proc.stdout.strip() if proc.returncode == 0 else ""
@@ -2165,12 +2194,15 @@ def _record_pickup_best_effort(handoff_path: str, worktree: Path, sid: str) -> N
                 "pickup not recorded in session-shape (non-fatal)",
                 file=sys.stderr,
             )
+            return False
+        return True
     except Exception as exc:  # noqa: BLE001 — best-effort, must never abort the caller
         print(
             f"cs_claim_handoff: WARNING — session.record_pickup op did not complete "
             f"({exc}); pickup not recorded in session-shape (non-fatal)",
             file=sys.stderr,
         )
+        return False
 
 
 #: Cap on the `goal` value written by `_record_session_goal_best_effort` —
@@ -2179,10 +2211,15 @@ def _record_pickup_best_effort(handoff_path: str, worktree: Path, sid: str) -> N
 _SESSION_GOAL_MAX_CHARS = 200
 
 
-def _record_session_goal_best_effort(handoff_path: str, worktree: Path, sid: str) -> None:
+def _record_session_goal_best_effort(handoff_path: str, worktree: Path, sid: str) -> bool:
     """C2 write-moment sibling of `_record_pickup_best_effort`: best-effort,
     non-fatal write of the claiming session's `goal` (meta.json), sourced
     from the just-claimed handoff's own `title` (falling back to `summary`).
+
+    Returns True when the goal write landed, False on any degrade (no
+    title/summary to write, no session dir, `update_meta_field` returning
+    False, or a raised exception) — AC13's per-write landed/failed signal,
+    read by `cs_claim_handoff`. Still best-effort and non-fatal: never raises.
 
     Writer-seam rationale (state/handoffs/2026-08-13-session-goal-field-has-
     no-writer.md): `holder_evidence.holder_evidence` — the sole consumer of
@@ -2211,7 +2248,9 @@ def _record_session_goal_best_effort(handoff_path: str, worktree: Path, sid: str
         if not value_source:
             # Neither title nor summary is available — write nothing rather
             # than a placeholder (Anti-scope: empty stays empty until real).
-            return
+            # No source to write is a degrade, not a landing — AC13 reads this
+            # as failed so a caller distinguishes it from a real write.
+            return False
 
         value = f"pickup: {value_source}"[:_SESSION_GOAL_MAX_CHARS]
 
@@ -2230,19 +2269,22 @@ def _record_session_goal_best_effort(handoff_path: str, worktree: Path, sid: str
         # that stamp too, not just `goal`.
         sdir = _session_core.ensure_session(sid, str(worktree))
         if not sdir:
-            return
+            return False
         if not _session_core.update_meta_field(sdir, "goal", value):
             print(
                 "cs_claim_handoff: WARNING — session goal write did not complete "
                 "(update_meta_field returned False); goal not recorded (non-fatal)",
                 file=sys.stderr,
             )
+            return False
+        return True
     except Exception as exc:  # noqa: BLE001 — best-effort, must never abort the caller
         print(
             f"cs_claim_handoff: WARNING — session goal write did not complete "
             f"({exc}); goal not recorded (non-fatal)",
             file=sys.stderr,
         )
+        return False
 
 
 def cs_claim_handoff(handoff_path: str, *, return_result: bool = False) -> "int | dict":
@@ -2264,7 +2306,20 @@ def cs_claim_handoff(handoff_path: str, *, return_result: bool = False) -> "int 
     of the bare exit code. Mirrors ``cs_claim_memo_stamp``'s own
     ``return_result`` shape verbatim (same additive kwarg, same unaffected
     default — every existing positional caller keeps its exact int-return
-    contract). Default False."""
+    contract). Default False.
+
+    AC13 (Track D, C9): when the claim transition itself lands (``rc == 0``),
+    the returned dict additionally carries ``"writes"`` — a per-write
+    landed/failed map for all four durable writes this function performs,
+    keyed ``handoff_transition`` (the transition above; always True at this
+    point, since a False would have already returned), ``pickup``,
+    ``session_goal``, ``claimant_identity`` (the three best-effort writes
+    below, each now `bool`-returning rather than discarded `-> None`). No
+    write in the sequence fails silently: every entry is populated from the
+    write's own already-computed outcome, no new instrumentation or spawn
+    (`docs/research/2026-09-claim-write-atomicity-spike.md` Q2). AC2b (Track
+    A's moved failure-naming clause) reads this map to name, on stdout, which
+    field did not land."""
     hpath = Path(handoff_path)
     worktree, repo_root = _resolve_repo_root_for(hpath)
     if worktree is None or repo_root is None:
@@ -2274,10 +2329,16 @@ def cs_claim_handoff(handoff_path: str, *, return_result: bool = False) -> "int 
 
     sid = resolve_current_session_id(worktree_root=worktree)
     if not sid:
+        # AC5 (docs/plans/2026-09-07-a-claim-is-written-twice-and-nothing-
+        # compares-them.md, guard-messaging.md § Register B6): names no
+        # environment variable. The prior text told a warm-served caller to
+        # "set" an env var that a warm process's own resolution ladder does
+        # not consult on this path -- a register violation, not a scope
+        # widening; `cs_claim_memo_stamp` and `claim_artifact` carry the same
+        # text and are knowingly out of this AC's scope.
         print(
-            "cs_claim_handoff: could not resolve a session id (empty claimed_by would "
-            "corrupt the claim gate) — set COORDINATOR_SESSION_ID, CLAUDE_SESSION_ID, "
-            "or CLAUDE_CODE_SESSION_ID in the environment",
+            "cs_claim_handoff: could not resolve a session id (empty claimed_by "
+            "would corrupt the claim gate)",
             file=sys.stderr,
         )
         result = {"exit_code": 1, "applied": False, "error": "could not resolve a session id"}
@@ -2298,9 +2359,15 @@ def cs_claim_handoff(handoff_path: str, *, return_result: bool = False) -> "int 
         print(f"cs_claim_handoff: {result.get('error', 'unknown error')}", file=sys.stderr)
         return result if return_result else rc
 
-    _record_pickup_best_effort(handoff_path, worktree, sid)
-    _record_session_goal_best_effort(handoff_path, worktree, sid)
-    _record_claimant_identity_best_effort(handoff_path, worktree, "claimed_by", sid)
+    pickup_landed = _record_pickup_best_effort(handoff_path, worktree, sid)
+    goal_landed = _record_session_goal_best_effort(handoff_path, worktree, sid)
+    identity_landed = _record_claimant_identity_best_effort(handoff_path, worktree, "claimed_by", sid)
+    result["writes"] = {
+        "handoff_transition": True,
+        "pickup": pickup_landed,
+        "session_goal": goal_landed,
+        "claimant_identity": identity_landed,
+    }
     return result if return_result else 0
 
 
@@ -2415,6 +2482,67 @@ def _parse_disposition_args(args: tuple[str, ...]) -> dict:
         else:
             i += 1
     return params
+
+
+def _print_surface_advisory_line(prefix: str, result: dict, git_root: Optional[Path]) -> None:
+    """AC6 (P080-C3): prints exactly one stderr line for the four actionable
+    ``surface_advisory`` (P080-C1/C2) print conditions — ``out-of-surface``,
+    ``paper-realization``, ``unresolved-sha`` (branching on ``reason``), or
+    ``ok`` with a non-empty ``untouched_declared`` (a partial realization,
+    AC7's instance-3 case). Prints nothing for ``ok`` with an empty
+    ``untouched_declared``, for ``no-declared-surface``, for ``foreign-surface``,
+    or when ``result`` carries no ``surface_advisory`` key at all — that key is
+    ALWAYS read via ``.get()``, never subscripted, so a liveness-guard refuse
+    reply (no ``memo.transition`` call made, no key present) or any reply for a
+    verb that never writes ``realized_by`` degrades to silence, not a KeyError.
+
+    Never changes the caller's return code — call sites decide rc independently
+    of whether this prints.
+
+    Wording (docs/wiki/guard-messaging.md § Register: one fact, once, plus a
+    terse alternative): the three actionable, correctable verdicts state the
+    verdict, the sha, and the declared paths still outstanding
+    (``untouched_declared`` — for ``out-of-surface``/``paper-realization`` this
+    equals the full declared surface; for the ``ok``-partial case it is exactly
+    the subset left untouched), then ``--correct-realization`` as the terse
+    alternative. ``unresolved-sha`` branches on ``reason`` (AC4) into the two
+    wordings § RESOLVED pins verbatim — neither carries a
+    ``--correct-realization`` clause, and the ``advisory-failed`` wording names
+    no cross-repo cause (the stamping agent has nothing to correct on an
+    internal failure)."""
+    advisory = result.get("surface_advisory")
+    if not advisory:
+        return
+    verdict = advisory.get("verdict")
+    if verdict == "unresolved-sha":
+        if advisory.get("reason") == "advisory-failed":
+            print(
+                f"{prefix}: surface advisory failed in {git_root}; realization unjudged",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"{prefix}: not resolvable in {git_root}, expected cause: cross-repo realization",
+                file=sys.stderr,
+            )
+        return
+    if verdict in ("out-of-surface", "paper-realization"):
+        print(
+            f"{prefix}: {verdict} — {advisory.get('sha')} against declared "
+            f"{advisory.get('untouched_declared')} — use --correct-realization to re-stamp",
+            file=sys.stderr,
+        )
+        return
+    if verdict == "ok":
+        untouched = advisory.get("untouched_declared") or []
+        if untouched:
+            print(
+                f"{prefix}: ok, partial realization — {advisory.get('sha')} left declared "
+                f"{untouched} untouched — use --correct-realization to re-stamp",
+                file=sys.stderr,
+            )
+        return
+    # no-declared-surface, foreign-surface: not an actionable print condition.
 
 
 def cs_action_memo(memo_path: str, *disposition_args: str, return_result: bool = False) -> "int | dict":
@@ -2543,6 +2671,7 @@ def cs_action_memo(memo_path: str, *disposition_args: str, return_result: bool =
         return refuse_result if return_result else refuse_result["exit_code"]
 
     result = _call_memo_transition(memo_path, {"verb": "action", **disposition_params})
+    _print_surface_advisory_line("cs_action_memo", result, memo_git_root)
     rc = int(result.get("exit_code", 1))
     if rc != 0:
         print(f"cs_action_memo: {result.get('error', 'unknown error')}", file=sys.stderr)
@@ -2602,6 +2731,7 @@ def cs_resolve_memo(memo_path: str, *disposition_args: str, return_result: bool 
     result = _call_memo_transition(
         memo_path, {"verb": "resolve", "session_id": sid, "at": ts, **disposition_params}
     )
+    _print_surface_advisory_line("cs_resolve_memo", result, worktree)
     rc = int(result.get("exit_code", 1))
     if rc != 0:
         print(f"cs_resolve_memo: {result.get('error', 'unknown error')}", file=sys.stderr)

@@ -58,6 +58,7 @@ def test_prefix_clause_is_byte_identical_regardless_of_degraded():
 
 
 @pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_an_undegraded_emit_drops_the_ignore_rule_leg_and_the_pathspec_is_post_filter(
     tmp_path,
 ):

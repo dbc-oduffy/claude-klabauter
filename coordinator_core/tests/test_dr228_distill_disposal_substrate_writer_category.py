@@ -53,11 +53,13 @@ _DISPOSAL_TIER_OPS = (
     "distill.stamp_disposal",
     "distill.apply_disposal",
 )
+_DISPOSAL_TIER_OPS__SUBJECT_CLASS = "op-name"
 _SCRATCH_TIER_OPS = (
     "distill.scope",
     "distill.curation_status",
     "memo.fate_partition",
 )
+_SCRATCH_TIER_OPS__SUBJECT_CLASS = "op-name"
 _ALL_SIX_OPS = _DISPOSAL_TIER_OPS + _SCRATCH_TIER_OPS
 
 _DR_CITATION_MARKERS = ("DR-228",)

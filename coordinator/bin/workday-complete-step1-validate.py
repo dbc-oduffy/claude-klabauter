@@ -26,7 +26,7 @@ now hardcoded "skipped" for wire-format stability with existing callers.
 Spec backlink: commands/workday-complete.md §Step 1
 
 Stdout (caller eval's this line):
-  RC_UBT='skipped' RC_VALIDATE='<n|skipped|lib-missing|interp-missing|config-malformed|shell-metachar|tier-u-refused>'
+  RC_UBT='skipped' RC_VALIDATE='<n|skipped|interp-missing|config-malformed|shell-metachar|tier-u-refused>'
   Exactly one line, shell-eval-safe (values single-quoted — eval injection defence).
   RC_UBT is now always 'skipped' (Gate 1 retired above); the field is kept
   for wire-format stability with existing callers rather than removed.
@@ -42,7 +42,6 @@ Exit codes:
        shell semantics that this direct-exec caller cannot honor (RC_VALIDATE=
        shell-metachar — see _fail_on_ambiguous_shell_syntax below).
   3 — fast-test test-only failure (fix-quick or flag).
-  4 — resolver lib missing at resolved path (fast-test skipped; RC_VALIDATE=lib-missing).
   5 — resolved fast-test command classifies Tier U (unscoped/full-suite shape) and the
        calling session holds no live Tier-U grant (RC_VALIDATE=tier-u-refused). R3+R4,
        cross-repo/inbox/2026-07-25-doe-claude-em-validate-tier-u-shape-ruling.md — this
@@ -101,6 +100,7 @@ from coordinator_core.ops.test_red_record import (  # noqa: E402
     parse_failing_nodeids,
     write_test_red_record,
 )
+from coordinator_core.session import gate_budget  # noqa: E402
 from coordinator_core.session.tier_u_gate import enforce_tier_u_gate  # noqa: E402
 from coordinator_core.testing import suite_mutex  # noqa: E402
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
@@ -403,6 +403,11 @@ def _run_fast_test_cmd(cmd: str, env: dict) -> tuple[int, str]:
     Object (`_assign_windows_job_object`) -- see the module section above
     those functions for why (docs/plans/2026-08-13-reap-orphaned-execnet-
     gateways.md, chunk C1).
+
+    Emits the gate_budget process-time budget line (and DR-344 breach line
+    if any) to stderr after the wait -- see coordinator_core/session/
+    gate_budget.py (docs/plans/2026-09-07-fix-the-validate-gate-recursive-
+    tier-invocation.md, B1).
     """
     _err(f"[workday-complete-step1] fast-test: running: {cmd}")
     argv = shlex.split(cmd)
@@ -414,6 +419,7 @@ def _run_fast_test_cmd(cmd: str, env: dict) -> tuple[int, str]:
         **no_console_creationflags(),
     )
     _add_process_group_spawn_kwargs(spawn_kwargs)
+    children_before = gate_budget.snapshot_children_times()
     try:
         proc = subprocess.Popen(argv, **spawn_kwargs)
     except OSError as exc:
@@ -435,7 +441,13 @@ def _run_fast_test_cmd(cmd: str, env: dict) -> tuple[int, str]:
         stdout, stderr = proc.communicate()
     finally:
         restore_signals()
+        suite_ms = gate_budget.suite_process_ms(
+            before=children_before,
+            after=gate_budget.snapshot_children_times(),
+            job_handle=job_handle,
+        )
         _close_windows_job_object(job_handle)
+        gate_budget.emit_budget_lines(gate_budget.self_process_ms(), suite_ms)
     ft_content = (stdout or "") + (stderr or "")
     ft_rc = proc.returncode
     if ft_content:
@@ -559,12 +571,6 @@ def main() -> int:
     # -----------------------------------------------------------------------
     # Gate 2 — Fast-test resolver + invocation
     # -----------------------------------------------------------------------
-    _lib_path = _RVC_PATH
-    if not os.path.isfile(_lib_path):
-        _err(f"[workday-complete-step1] WARN: resolver lib not found at {_lib_path} — fast-test gate skipped.")
-        _emit(rc_ubt, "lib-missing")
-        return 4
-
     # Resolve the fast-test command in-process (native port — no bash-lib bridge
     # subprocess spawn). cwd is load-bearing: the resolver reads
     # coordinator.local.md relative to cwd (presence-detection). The resolver

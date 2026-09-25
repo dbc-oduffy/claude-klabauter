@@ -110,7 +110,6 @@ explicit --audit PATH is honoured verbatim (no timestamp inserted).
 from __future__ import annotations
 
 import argparse
-import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
@@ -225,30 +224,18 @@ def _dirty_paths(repo_root: Path) -> set:
     """Return the set of paths (repo-relative, forward-slash) with any
     working-tree dirt (`git status --porcelain`), or a sentinel treated as
     "everything dirty" (fail-closed) on any git-invocation failure.
+
+    Converted (P014-C3) onto `session_facts._dirty_paths`, whole-tree scoped
+    (`pathspecs=None`), `keep_rename_source=True` so a rename's both halves
+    still land in the set. Posture unchanged: a degraded read still returns
+    the `{"*"}` sentinel (fail-closed, "treat every touched path as dirty").
     """
-    try:
-        proc = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            check=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except (OSError, subprocess.CalledProcessError):
+    from coordinator_core.session.session_facts import _dirty_paths as _producer_dirty_paths
+
+    result = _producer_dirty_paths(repo_root, keep_rename_source=True)
+    if result["degraded"]:
         return {"*"}  # fail-closed: treat every touched path as dirty
-    paths = set()
-    for line in proc.stdout.splitlines():
-        if len(line) < 4:
-            continue
-        entry = line[3:]
-        if " -> " in entry:  # rename: "old -> new"
-            old, new = entry.split(" -> ", 1)
-            paths.add(old.strip().strip('"'))
-            paths.add(new.strip().strip('"'))
-        else:
-            paths.add(entry.strip().strip('"'))
-    return paths
+    return result["value"]["paths"]
 
 
 def _touched_path_is_dirty(touched_paths: List[str], dirty: set) -> Optional[str]:

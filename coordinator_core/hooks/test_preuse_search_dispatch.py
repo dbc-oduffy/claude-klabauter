@@ -16,7 +16,7 @@ def _ctx(envelope: dict) -> str:
 @pytest.fixture
 def indexed_repo(tmp_path):
     (tmp_path / ".git").mkdir()
-    rag = tmp_path / ".example-retrieval-repo"
+    rag = tmp_path / ".project-rag"
     rag.mkdir()
     (rag / "graph.db").write_bytes(b"")
     (tmp_path / "pkg").mkdir()
@@ -89,13 +89,13 @@ def test_search_path_resolves_index(indexed_repo, tmp_path_factory):
 
 def test_unindexed_repo_is_silent(tmp_path):
     (tmp_path / ".git").mkdir()
-    (tmp_path / ".example-retrieval-repo").mkdir()  # config-only dir, as ~/.example-retrieval-repo/ is
+    (tmp_path / ".project-rag").mkdir()  # config-only dir, as ~/.project-rag/ is
     assert m._handler(_payload(tmp_path, pattern="_resolve_registry_key")) == m.no_advisory()
 
 
 def test_state_json_without_graph_db_is_silent(indexed_repo):
-    (indexed_repo / ".example-retrieval-repo" / "state.json").write_text("{}")
-    (indexed_repo / ".example-retrieval-repo" / "graph.db").unlink()
+    (indexed_repo / ".project-rag" / "state.json").write_text("{}")
+    (indexed_repo / ".project-rag" / "graph.db").unlink()
     assert m._handler(_payload(indexed_repo)) == m.no_advisory()
 
 

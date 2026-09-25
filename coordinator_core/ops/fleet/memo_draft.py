@@ -318,7 +318,7 @@ def _validate_scoped_to(dry_run: bool, value: Any):
 #: (`<repo>-<nn>` convention) — restricts the digit-suffix match below to
 #: real repo names so an ordinary hyphenated technical term never matches.
 _KNOWN_REPO_PREFIXES = (
-    "example-retrieval-repo", "claude-klabauter", "doe-claude", "coordinator-claude",
+    "project-rag", "claude-klabauter", "doe-claude", "coordinator-claude",
     "claude-klabauter",
 )
 

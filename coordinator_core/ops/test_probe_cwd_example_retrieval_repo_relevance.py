@@ -48,7 +48,7 @@ def _fake_pwd(tmp_path, name="cwd"):
 
 def _write_claude_json(home: Path, with_rag: bool):
     payload = (
-        {"mcpServers": {"example-retrieval-repo": {"command": "python3", "args": ["/fake/cli.py"]}}}
+        {"mcpServers": {"project-rag": {"command": "python3", "args": ["/fake/cli.py"]}}}
         if with_rag
         else {"mcpServers": {"other-server": {}}}
     )
@@ -62,7 +62,7 @@ def _write_registry_with_rag(home: Path, val: str = "/fake/example-retrieval-rep
 
 
 def _write_mcp_sentinel(home: Path, red: bool):
-    payload = {"red_servers": ["example-retrieval-repo"] if red else []}
+    payload = {"red_servers": ["project-rag"] if red else []}
     (
         home
         / ".claude"

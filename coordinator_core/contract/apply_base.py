@@ -220,7 +220,42 @@ APPLY_EXIT_CLAIM_DENIED = 2
 APPLY_EXIT_TRANSPORT_FAIL = 3
 APPLY_EXIT_PARTIAL_MUTATION = 4
 
+#: Reverse-lookup over this lineage's OWN ladder constants above -- never a
+#: composition-name table (docs/plans/2026-09-11-half-the-compositions-do-
+#: not-finish-clea.md § C1, AC5). Built from the constants themselves so a
+#: future renumbering of one cannot silently drift out of sync with this map.
+_APPLY_EXIT_LABELS: dict[int, str] = {
+    APPLY_EXIT_OK: "OK",
+    APPLY_EXIT_HALTED_AT_JUDGMENT: "HALTED_AT_JUDGMENT",
+    APPLY_EXIT_CLAIM_DENIED: "CLAIM_DENIED",
+    APPLY_EXIT_TRANSPORT_FAIL: "TRANSPORT_FAIL",
+    APPLY_EXIT_PARTIAL_MUTATION: "PARTIAL_MUTATION",
+}
+
 GRANTED_VERDICTS = frozenset({"granted", "granted-with-warning"})
+
+
+def exit_code_label(exit_code: int, report: Optional[dict] = None) -> Optional[str]:
+    """Symbolic name of the rung `exit_code` names on THIS lineage's own
+    ladder (`_APPLY_EXIT_LABELS`, inverted from `APPLY_EXIT_*` above) --
+    never the raw int, which collides with the ceremony ladder at 2
+    (`CLAIM_DENIED` here, `DIRECTIVE_FAILED` there; census Q8, docs/plans/
+    2026-09-11-half-the-compositions-do-not-finish-clea.md).
+
+    One refinement (census Q11): `APPLY_EXIT_CLAIM_DENIED` whose `report`
+    carries a `"budget_breach"` key is the pre-mutation composition-budget
+    guard reusing this rung's shape (§ `execute_directives`'s own
+    `APPLY_EXIT_CLAIM_DENIED` return for a budget breach) -- it labels
+    `"BUDGET_BREACH"` rather than `"CLAIM_DENIED"`, so a genuine live-peer
+    claim refusal and a budget guard are distinguishable from the row alone.
+    A `"budget_breach"` key on any OTHER rung (the post-loop breach on
+    `APPLY_EXIT_OK`/`APPLY_EXIT_HALTED_AT_JUDGMENT`) keeps its ladder name --
+    that run already finished. An unrecognized `exit_code` returns `None`
+    rather than a fabricated label.
+    """
+    if exit_code == APPLY_EXIT_CLAIM_DENIED and isinstance(report, dict) and "budget_breach" in report:
+        return "BUDGET_BREACH"
+    return _APPLY_EXIT_LABELS.get(exit_code)
 
 
 class UnrecognizedDirective(Exception):

@@ -242,6 +242,71 @@ def test_review_integrator_sidecar_guard_allows_wrong_tool():
     assert result == {}
 
 
+def _integrator_dispatch(prompt, cwd):
+    return {
+        "tool_name": "Agent",
+        "cwd": str(cwd),
+        "tool_input": {"subagent_type": "coordinator:review-integrator", "prompt": prompt},
+    }
+
+
+def test_review_integrator_sidecar_guard_resolves_absolute_citation_outside_cwd(tmp_path):
+    """A multi-repo container's cwd is the parent of every checkout, so an
+    absolute citation must be probed as written, never re-rooted at cwd."""
+    sidecar = tmp_path / "repo" / ".coordinator-local" / "subagent-share" / "sid" / "f.md"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text("findings\n", encoding="utf-8")
+    elsewhere = tmp_path / "parent-of-checkouts"
+    elsewhere.mkdir()
+    result = guard_review_integrator_sidecar_intake._handler(
+        _integrator_dispatch(f"Apply the findings in {sidecar}.", elsewhere)
+    )
+    assert result == {}
+
+
+def test_review_integrator_sidecar_guard_resolves_windows_drive_backslash_citation(tmp_path):
+    """A Windows-drive-letter, backslash-separated citation resolves against
+    a real POSIX file via the separator-swapped spelling -- the exact axis
+    the module docstring names (C:\\...\\) and the prior test suite left
+    unpinned."""
+    sidecar = tmp_path / "repo" / ".coordinator-local" / "subagent-share" / "sid" / "f.md"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text("findings\n", encoding="utf-8")
+    backslash_citation = "C:\\" + str(sidecar.relative_to(sidecar.anchor)).replace("/", "\\")  # abs-path-ok: synthetic Windows-drive citation, not a real filesystem path
+    result = guard_review_integrator_sidecar_intake._handler(
+        _integrator_dispatch(f"Apply the findings in {backslash_citation}.", tmp_path)
+    )
+    # On a POSIX host a drive-letter absolute citation cannot resolve to a
+    # real file (no drive letters exist), so this pins the deny path and
+    # confirms the prefix+tail extraction/backslash-swap machinery runs
+    # without raising -- the regression this coverage gap was flagged for.
+    assert result != {}
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "C:" in reason
+
+
+def test_review_integrator_sidecar_guard_resolves_relative_backslash_citation(tmp_path):
+    """A relative, backslash-separated citation (no drive letter) resolves
+    against a real on-disk file via the same separator-swap spelling."""
+    sidecar_dir = tmp_path / ".coordinator-local" / "subagent-share" / "sid"
+    sidecar_dir.mkdir(parents=True)
+    sidecar = sidecar_dir / "f.md"
+    sidecar.write_text("findings\n", encoding="utf-8")
+    backslash_citation = ".coordinator-local\\subagent-share\\sid\\f.md"
+    result = guard_review_integrator_sidecar_intake._handler(
+        _integrator_dispatch(f"Apply the findings in {backslash_citation}.", tmp_path)
+    )
+    assert result == {}
+
+
+def test_review_integrator_sidecar_guard_denies_absolute_citation_not_on_disk(tmp_path):
+    missing = tmp_path / "repo" / ".coordinator-local" / "subagent-share" / "sid" / "gone.md"
+    result = guard_review_integrator_sidecar_intake._handler(
+        _integrator_dispatch(f"Apply the findings in {missing}.", tmp_path)
+    )
+    assert result != {}
+
+
 # ---------------------------------------------------------------------------
 # guard_handoff_summary_cap_on_write
 # ---------------------------------------------------------------------------

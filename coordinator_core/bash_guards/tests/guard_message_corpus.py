@@ -4054,7 +4054,7 @@ def _fire_postuse_advisory_dispatch_control() -> Optional[Dict[str, Any]]:
 
 
 # --- (12) example_retrieval_repo_detect -- real firing row: `detect_banner(cwd)` returns
-# the UNINITIALIZED banner string for a scratch dir carrying a `.example-retrieval-repo/
+# the UNINITIALIZED banner string for a scratch dir carrying a `.project-rag/
 # manifest.json` marker with no `graph.db` beside it. The example-game-repo-dedupe
 # probe's OWN upward walk is stubbed out here (real `.example-game-repo`/`Saved/
 # ExampleGameRepoProjectRag` markers on the machine's own home directory, several
@@ -4077,8 +4077,8 @@ def _fire_example_retrieval_repo_detect() -> Optional[Dict[str, Any]]:
 
     with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-prd-", dir=_neutral_scratch_parent()) as scratch:
         scratch_dir = Path(scratch)
-        os.makedirs(scratch_dir / ".example-retrieval-repo")
-        (scratch_dir / ".example-retrieval-repo" / "manifest.json").write_text("{}", encoding="utf-8")
+        os.makedirs(scratch_dir / ".project-rag")
+        (scratch_dir / ".project-rag" / "manifest.json").write_text("{}", encoding="utf-8")
         with unittest.mock.patch.object(
             _hook_example_retrieval_repo_detect, "_find_marker_upward", _stub_find_marker_upward
         ):

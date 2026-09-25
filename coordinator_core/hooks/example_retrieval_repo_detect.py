@@ -68,12 +68,12 @@ _INDEX_MARKERS = ("graph.db", "state.json")
 
 
 def find_example_retrieval_repo_dir(start_dir: str, max_levels: int = _MAX_LEVELS) -> str | None:
-    """Walk up from start_dir for a `.example-retrieval-repo/` dir holding an indexer
-    artifact. Trap: the bare dir name is not a marker — `~/.example-retrieval-repo/` is
+    """Walk up from start_dir for a `.project-rag/` dir holding an indexer
+    artifact. Trap: the bare dir name is not a marker — `~/.project-rag/` is
     the server's global config home and would claim every repo beneath it."""
     d = start_dir
     for _ in range(max_levels):
-        rag_dir = os.path.join(d, ".example-retrieval-repo")
+        rag_dir = os.path.join(d, ".project-rag")
         if any(os.path.isfile(os.path.join(rag_dir, m)) for m in _INDEX_MARKERS):
             return rag_dir
         parent = os.path.dirname(d)

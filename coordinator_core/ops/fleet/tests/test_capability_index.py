@@ -436,7 +436,7 @@ def _candidate_repo_root(env_var: str, registry_resolver) -> Path | None:
 
 
 _DOE_ROOT = _candidate_repo_root("DOE_CLAUDE_ROOT", read_doe_root_pointer)
-_EXAMPLE_RETRIEVAL_REPO_ROOT = _candidate_repo_root("EXAMPLE_RETRIEVAL_REPO_ROOT", lambda: registry_get("repos.example_retrieval_repo"))
+_EXAMPLE_RETRIEVAL_REPO_ROOT = _candidate_repo_root("EXAMPLE_RETRIEVAL_REPO_ROOT", lambda: registry_get("repos.project_rag"))
 
 
 @pytest.mark.skipif(_DOE_ROOT is None, reason="DoE-claude checkout not found — set DOE_CLAUDE_ROOT to pin it")
@@ -499,4 +499,4 @@ class TestProjectRagRealExemplar:
 
         assert skipped == []
         assert len(index["entries"]) == len(manifest["capabilities"])
-        assert all(e["host_repo"] == "example-retrieval-repo" for e in index["entries"])
+        assert all(e["host_repo"] == "project-rag" for e in index["entries"])

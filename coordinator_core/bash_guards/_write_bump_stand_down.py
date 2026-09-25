@@ -25,7 +25,7 @@ exists for exactly that reason. This module is that rule applied to the
 stand-down itself: import and call, never re-derive.
 
 WHICH CAPABILITY, AND WHY NOT THE OBVIOUS ONE. `fleet_present`, not
-`ephemeral_host` and not `peer_ems_reachable`.
+`ephemeral_host`.
 
 These bumps ask one question -- *is this somebody else's tree?* -- and the
 answer turns on whether there is a fleet around this session at all, not on
@@ -35,11 +35,6 @@ directly would both duplicate that probe's composition and bind a boundary
 question to a storage-durability fact. A durable self-hosted runner that
 sets the managed-remote markers is the case that distinguishes them, and
 `environment.py`'s own evidence string names it.
-
-`peer_ems_reachable` answers a different question again -- *will anyone READ
-this* -- which is the memo surface's concern (`memo.send`), not this one.
-The two agree today and are not the same rule; keeping them distinct is what
-stops one venue check masquerading as two.
 
 THE CASE THIS EXISTS FOR, restated because the shape is easy to lose. On a
 managed remote container the session is handed a closed set of repos by
@@ -77,8 +72,7 @@ Negative-spec:
     docstring in C4 records. `stand_down_notice` prints and returns `None`;
     "stand down" means this guard declines to object and every other guard
     still runs.
-  - Does NOT key on `ephemeral_host` or `peer_ems_reachable` -- see "WHICH
-    CAPABILITY" above.
+  - Does NOT key on `ephemeral_host` -- see "WHICH CAPABILITY" above.
   - Does NOT re-derive the overrides-log path. `_override_log_path` owns the
     never-mint-a-phantom-session rule; one copy of it is the point.
 """

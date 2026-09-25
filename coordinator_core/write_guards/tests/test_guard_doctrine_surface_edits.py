@@ -574,7 +574,7 @@ def foreign_third_repo(tmp_path, monkeypatch):
     nor the session's own repo_root -- to isolate the generic
     `_foreign_repo_root_surface` fallback from the DoE-specific anchor.
     """
-    session_repo = tmp_path / "example-retrieval-repo"
+    session_repo = tmp_path / "project-rag"
     third_repo = tmp_path / "example-retrieval-repo-ue-addon"
     _make_repo(session_repo)
     _make_repo(third_repo)

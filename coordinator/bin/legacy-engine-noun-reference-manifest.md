@@ -1524,7 +1524,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/session/legacy_touch_corpus_migrate.py:307` | PROSE-ONLY | `# Eight dirs on claude-klabauter sat that way with 167 stranded claims.` |
 | `coordinator_core/ops/session/safe_commit_offer.py:478` | PROSE-ONLY | `WHY A COUNT WAS NOT ENOUGH (2026-09-01, claude-klabauter-02). `named`/` |
 | `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:27` | PROSE-ONLY | ``claude-klabauter` inside `claude-klabauter-backup-2026`) never matches --` |
-| `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:105` | - | `return ["repos.claude_klabauter", "repos.example_retrieval_repo", "repos.example_retrieval_repo_ue_addon"]` |
+| `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:105` | - | `return ["repos.claude_klabauter", "repos.project_rag", "repos.project_rag_ue_addon"]` |
 | `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:129` | - | `"see /Users/example-operator/X/claude-klabauter/coordinator/foo.py for details\n",  # abs-path-ok: synthetic test fixture` |
 | `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:135` | - | `assert subs[0].replacement == "claude-klabauter:coordinator/foo.py"` |
 | `coordinator_core/ops/session/tests/test_fix_concrete_path_citations.py:136` | - | `assert "claude-klabauter:coordinator/foo.py" in target.read_text(encoding="utf-8")` |
@@ -2201,7 +2201,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/tests/test_machine_local_impl_settings_home_first.py:13` | PROSE-ONLY | ```repos.claude_klabauter`` to ``None`` and degraded — a live, not theoretical,` |
 | `coordinator_core/tests/test_no_hardcoded_paths.py:112` | PROSE-ONLY | ``CLAUDE_KLABAUTER_ROOT = REPO_ROOT.parent / "claude-klabauter"` — believed at the time to` |
 | `coordinator_core/tests/test_no_hardcoded_paths.py:179` | PROSE-ONLY | `# set (DEC-4 names DoE-claude and claude-klabauter; .claude is the third anchor` |
-| `coordinator_core/tests/test_no_hardcoded_paths.py:182` | - | `_SIBLING_REPO_TOKENS = {"DoE-claude", "claude-klabauter", "example-retrieval-repo", ".claude"}` |
+| `coordinator_core/tests/test_no_hardcoded_paths.py:182` | - | `_SIBLING_REPO_TOKENS = {"DoE-claude", "claude-klabauter", "project-rag", ".claude"}` |
 | `coordinator_core/tests/test_no_hardcoded_paths.py:849` | - | `"    return Path(\"/Users/someone/claude-klabauter\")\n",` |
 | `coordinator_core/tests/test_no_hardcoded_paths.py:859` | - | `assert detail == "/Users/someone/claude-klabauter"` |
 | `coordinator_core/tests/test_no_lfs_hook_on_push_path.py:85` | PROSE-ONLY | `# cross-repo consumer (claude-klabauter-59) tests against these exact` |
@@ -6862,7 +6862,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/message_register/_codename_classes.py:261` | - | `"claude-klabauter-live-root": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:265` | - | `"migrate-state-to-claude-klabauter.sh": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:276` | - | `"claude_klabauter": RENAME,` |
-| `coordinator_core/message_register/_codename_classes.py:557` | - | `ids = ("doe_claude", "claude_klabauter", "example_retrieval_repo", "example_game_workbench_repo")` |
+| `coordinator_core/message_register/_codename_classes.py:557` | - | `ids = ("doe_claude", "claude_klabauter", "project_rag", "example_game_workbench_repo")` |
 | `coordinator_core/message_register/tests/test_codename_classes.py:78` | - | `assert "claude-klabauter" not in tokens` |
 | `coordinator_core/message_register/tests/test_codename_classes.py:86` | - | `"""`doe-claude-klabauter` glues a REDACTION half (`doe-claude`) and a RENAME half` |
 | `coordinator_core/message_register/tests/test_codename_classes.py:101` | - | `assert cc.CLASSIFICATION["doe-claude-klabauter"] == cc.REDACTION` |
@@ -7008,7 +7008,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/fleet/tests/test_consumer_corpus_preflight.py:166` | - | `_handoff(claude_klabauter_root, "archive/handoffs/2026-07/c.md", "spinoff")` |
 | `coordinator_core/ops/fleet/tests/test_consumer_corpus_preflight.py:175` | - | `"claude_klabauter": claude_klabauter_root,` |
 | `coordinator_core/ops/fleet/tests/test_memo_check_addressee.py:142` | - | `claude_home = _make_claude_home(tmp_path, {"claude_klabauter": str(self_repo)})` |
-| `coordinator_core/ops/fleet/tests/test_memo_check_addressee.py:174` | - | `{"claude_klabauter": str(self_repo), "example_retrieval_repo": str(other_repo)},` |
+| `coordinator_core/ops/fleet/tests/test_memo_check_addressee.py:174` | - | `{"claude_klabauter": str(self_repo), "project_rag": str(other_repo)},` |
 | `coordinator_core/ops/fleet/tests/test_memo_check_addressee.py:203` | - | `claude_klabauter_repo.mkdir()` |
 | `coordinator_core/ops/fleet/tests/test_memo_check_addressee.py:206` | - | `{"some_self_repo": str(self_repo), "claude_klabauter": str(claude_klabauter_repo)},` |
 | `coordinator_core/ops/fleet/tests/test_memo_check_addressee.py:214` | - | `{"dry_run": True, "to": "claude-klabauter-em"}, repo_root=common_dir` |

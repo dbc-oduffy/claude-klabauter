@@ -175,11 +175,11 @@ PARITY_LOCKSTEP_GROUPS: Tuple[Dict[str, object], ...] = (
         "packages": ("torch", "torchvision"),
         "members": (
             ("example_game_workbench_repo", "scripts/lib/pypi-overrides.txt"),
-            ("example_retrieval_repo", "example_retrieval_repo_scripts/pypi-overrides.txt"),
+            ("project_rag", "project_rag_scripts/pypi-overrides.txt"),
         ),
         "rule": (
             "example-game-workbench-repo scripts/lib/pypi-overrides.txt header: "
-            "'Parity peer: ../example-retrieval-repo/example_retrieval_repo_scripts/pypi-overrides.txt "
+            "'Parity peer: ../example-retrieval-repo/project_rag_scripts/pypi-overrides.txt "
             "— floor values MUST stay in lockstep; bump them together when cu130 "
             "wheel defaults age out.'"
         ),
@@ -188,11 +188,11 @@ PARITY_LOCKSTEP_GROUPS: Tuple[Dict[str, object], ...] = (
         "packages": ("torch",),
         "diverges": ("torchvision",),
         "members": (
-            ("example_retrieval_repo", "example_retrieval_repo_scripts/pypi-overrides.txt"),
-            ("example_retrieval_repo", "example_retrieval_repo_scripts/constraints.txt"),
+            ("project_rag", "project_rag_scripts/pypi-overrides.txt"),
+            ("project_rag", "project_rag_scripts/constraints.txt"),
         ),
         "rule": (
-            "example-retrieval-repo example_retrieval_repo_scripts/pypi-overrides.txt header: "
+            "example-retrieval-repo project_rag_scripts/pypi-overrides.txt header: "
             "'Parity peer (torch only): constraints.txt torch line — torch "
             "floors move together.' torchvision is EXCLUDED deliberately: "
             "constraints.txt narrows it to ~=0.27.0 as a pip-resolver "
@@ -632,7 +632,7 @@ def check_parity_lockstep(
     declared file missing raises instead: a lockstep peer that moved is the
     rot this exists to catch, and it has already happened once — example-retrieval-repo's
     own header names ``scripts/constraints.txt`` while the file lives at
-    ``example_retrieval_repo_scripts/constraints.txt``. The prose contract failed before
+    ``project_rag_scripts/constraints.txt``. The prose contract failed before
     anyone bumped a floor.
 
     Negative spec: deliberately NOT wired into ``generate_lock``. Neither

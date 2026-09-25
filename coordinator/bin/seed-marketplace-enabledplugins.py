@@ -398,7 +398,7 @@ def _read_repos_registry(registry_dir: pathlib.Path) -> dict[str, str]:
     """Read every `repos.*` entry from the settings-home registry.
 
     Returns {slug: path} for each non-empty string-valued repos.* key (e.g.
-    "example_retrieval_repo" -> "/Users/x/X/example-retrieval-repo"), merging `registry.toml`
+    "project_rag" -> "/Users/x/X/example-retrieval-repo"), merging `registry.toml`
     (tracked baseline) with `registry.local.toml` (per-machine override) —
     `.local` wins on collision, and an empty-string declaration in either
     file is treated as NOT FOUND (never inserted, never overwrites a real

@@ -76,6 +76,14 @@ Four things live in this module, not one:
    `state/scratch/bug-blitz/{run-id}/{item-id}.verify.md`). Called AT
    WAVE-VERIFY TIME (Phase 3 step 3), once a DONE summary exists — never
    from `collect()`.
+5. `_tier_u_grant_flow` — bug-blitz's own Tier-U (full-suite) grant ask
+   (`commands/bug-blitz.md:54-55`, Phase 0.6) plus the confirm-green
+   `check` recheck the same lines say the grant already covers with no
+   second ask. Called FROM `collect()`, self-gated on `_CADENCE ==
+   "bug-blitz"` the way every other blitz reader gates — mirrors
+   `readers_sweep.py::_tier_u_grant_flow`'s call-from-`collect()` shape,
+   built entirely from `directives.build_tier_u_grant_flow` /
+   `build_tier_u_grant_check`.
 
 Spec backlink: DoE-claude DoE-claude:pln-b7-backlog-grind-cluster-compu-bebb7c,
 chunk C3a.
@@ -98,11 +106,16 @@ Negative-spec:
       wire to `COMMIT_READINESS_JP_ID` — the review-gate risk constraint
       this module exists to satisfy has no opt-out on this surface until
       its named removal condition (the linked spinoff handoff) lands.
-    - Does NOT gate on the Tier-U full-suite authorization ask
-      (`build_tier_u_grant_flow`) — that ask is common cross-surface
-      infra (bug-blitz Phase 0.6, bug-sweep Track B) already served by
-      the existing `tier-u-grant-cli`; this file's remit is the backlog
-      surface specifically, not the shared suite-authorization flow.
+    - Does NOT re-derive the Tier-U grant/check token shape or CLI-argv
+      shape locally — `directives.build_tier_u_grant_flow` /
+      `build_tier_u_grant_check` are the single owners of that shape
+      (bug-blitz Phase 0.6's grant, and its confirm-green recheck, per
+      `commands/bug-blitz.md:54-55`); this module only self-gates on
+      `_CADENCE == "bug-blitz"` and wires the ids together.
+    - Does NOT attach a second judgment point to the confirm-green
+      `check` directive, and does NOT mark it `already_satisfied` — it
+      consumes the token the grant judgment point already gated
+      (commands/bug-blitz.md:54-55's "no second ask").
     - Does NOT call `build_spinoff_handoff` or `build_verifier_dispatch`
       from `collect()` — both need per-item data (`collect()` is a boot-
       time, cadence-only call with no item in scope) and both are called
@@ -130,6 +143,8 @@ from coordinator_core.backlog_grind_assemble.directives import (
     build_executor_dispatch_prompt_template_emission,
     build_spinoff_handoff_template_emission,
     build_stage_and_commit,
+    build_tier_u_grant_check,
+    build_tier_u_grant_flow,
 )
 from coordinator_core.backlog_grind_assemble.verifier import (
     BUG_BLITZ_VERIFIER_ENUM,
@@ -365,6 +380,51 @@ def _read_executor_dispatch_template() -> ReaderResult:
     )
 
 
+def _tier_u_grant_flow() -> ReaderResult:
+    """Bug-blitz's own Tier-U-gated path (Phase 0.6: the full test-suite
+    invocation `commands/bug-blitz.md:54-55` asks the PM to authorize
+    before running) plus the confirm-green `check` recheck those same
+    lines say the one session-scoped grant already covers, with no second
+    ask. Built via `directives.build_tier_u_grant_flow` /
+    `build_tier_u_grant_check` — the shared C2 builders — never re-derived
+    locally, mirroring `readers_sweep.py::_tier_u_grant_flow`.
+
+    The check directive carries no second judgment point (it consumes the
+    token the grant judgment point already gated) and its `depends_on`
+    points at the grant's own write-directive id, never the judgment-point
+    id, so it cannot dispatch before the token exists.
+    """
+    repo_root_str = _repo_root()
+    if repo_root_str is None:
+        open_count = 0
+    else:
+        records = load_family_records(
+            "bug-backlog", Path(repo_root_str), where="status=open"
+        )
+        open_count = len(records)
+
+    jp, write_directive = build_tier_u_grant_flow(
+        jp_id="j-bug-blitz-tier-u-grant",
+        write_directive_id="d-bug-blitz-tier-u-grant-write",
+        subject="bug-blitz Phase 0.6 (full test suite over this run's fixes)",
+        evidence=(
+            f"state/bug-backlog/ open-entry count={open_count} at collect "
+            "time | reason: Phase 0.6's suite invocation is Tier-U and "
+            "bug-blitz holds no implicit authorization grant "
+            "(commands/bug-blitz.md:54-55)"
+        ),
+        reason="insufficient-evidence",
+        note="bug-blitz Phase 0.6 test-suite authorization",
+    )
+    check_directive = build_tier_u_grant_check(
+        id="d-bug-blitz-tier-u-grant-check",
+        depends_on=write_directive["id"],
+    )
+    return ReaderResult(
+        directives=[write_directive, check_directive], judgment_points=[jp]
+    )
+
+
 def build_commit_per_item(
     *,
     id: str,
@@ -588,7 +648,11 @@ def collect(cadence: str, *, run_id: Optional[str] = None) -> ReaderResult:
     if cadence != _CADENCE:
         return ReaderResult()
 
-    results = [_read_backlog_readiness(), _read_executor_dispatch_template()]
+    results = [
+        _read_backlog_readiness(),
+        _read_executor_dispatch_template(),
+        _tier_u_grant_flow(),
+    ]
 
     directives: list[dict[str, Any]] = []
     judgment_points: list[dict[str, Any]] = []

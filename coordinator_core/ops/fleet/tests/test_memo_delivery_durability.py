@@ -282,7 +282,7 @@ def test_prime_exit_criterion_deliver_destroy_gc_heal_back(
     sender = _make_sender_repo(tmp_path)
     receiver = _make_receiver_repo(tmp_path)
     root_sha = _rev_parse(receiver, "HEAD")
-    settings_home = _make_settings_home(tmp_path, {"example_retrieval_repo": receiver})
+    settings_home = _make_settings_home(tmp_path, {"project_rag": receiver})
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
 
     result_a = _deliver(sender, "memo-a")
@@ -379,7 +379,7 @@ def test_archived_with_no_heal_before_the_gestures_is_restored_not_retired(
     sender = _make_sender_repo(tmp_path)
     receiver = _make_receiver_repo(tmp_path)
     root_sha = _rev_parse(receiver, "HEAD")
-    settings_home = _make_settings_home(tmp_path, {"example_retrieval_repo": receiver})
+    settings_home = _make_settings_home(tmp_path, {"project_rag": receiver})
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
 
     result_b = _deliver(sender, "memo-b")
@@ -414,7 +414,7 @@ def test_reachable_only_from_a_kept_second_branch_is_left_alone(
     sender = _make_sender_repo(tmp_path)
     receiver = _make_receiver_repo(tmp_path)
     root_sha = _rev_parse(receiver, "HEAD")
-    settings_home = _make_settings_home(tmp_path, {"example_retrieval_repo": receiver})
+    settings_home = _make_settings_home(tmp_path, {"project_rag": receiver})
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
 
     result_e = _deliver(sender, "memo-e")

@@ -774,7 +774,8 @@ def _advance_one(
     a named refusal reason instead.
 
     shipped_in evidence priority (2026-08-04, revised 2026-08-14 — see
-    docs/plans/2026-08-14-cascade-ship-evidence-and-write-durability.md § C1): Position 1
+    archive/specs/2026-08/2026-08-14-cascade-ship-evidence-and-write-durability.md
+    at 89e588c7e5^ § C1): Position 1
     (`archive_stamp.resolve_source_ship_sha(source_path, ...)`, kind `"ship-commit"`) is
     trustworthy ONLY on the handoff trigger (`source_kind == "handoff"`), where
     `source_path` is the handoff that itself concluded terminally-positive and "what last
@@ -791,6 +792,14 @@ def _advance_one(
     contract) — it REFUSES this candidate (named: "no commit evidence resolvable for
     shipped_in") rather than flipping a handoff to `shipped` with no `shipped_in` or with
     a proxy commit that never actually shipped it.
+
+    Negative spec — res-1 is retracted, not repaired (see
+    docs/plans/2026-09-07-baton-lifecycle-refusal-drain-authz.md): a resolved-looking
+    walk-back of this contract was proposed and reverted. Do not rebuild it. Position 1
+    stays off the plan trigger — denylisting `plan-status-transition:` does NOT make it
+    safe, because the walk-back lands on plan-authoring and bulk commits (the
+    wave-0-be8f7d72 PIVOT); and the reverted drain's false stamps were `ship-commit`,
+    not `scope-derived` (302c181d0e).
     """
     from coordinator_core.archive_stamp import resolve_source_ship_sha, stamp_shipped_in
 
@@ -997,7 +1006,8 @@ def _commit_mutated_paths(
     """Commit exactly `mutated_paths` via `git_native.commit_scoped` -- the
     substitute committer this op's own negative-spec never named (see module
     docstring "Negative-spec" and
-    docs/plans/2026-08-14-cascade-ship-evidence-and-write-durability.md § C2).
+    archive/specs/2026-08/2026-08-14-cascade-ship-evidence-and-write-durability.md
+    at 89e588c7e5^ § C2).
 
     Never `git add -A`/`.`/`-a` -- `commit_scoped` is the computed-mechanism
     selector every other scoped follow-up commit in this package already

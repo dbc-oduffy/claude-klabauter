@@ -154,14 +154,14 @@ _INSTALLED_VERSIONS: Dict[tuple, str] = {
     # survey line 84 ("transformers 5.9.0 vs 5.3.0"), attributed via
     # line 32 (example-game-repo's transformers 5.3 uses is_offline_mode) and the
     # C7 dispatch brief naming example-retrieval-repo as the 5.9.0 side.
-    ("example_retrieval_repo", "transformers"): "5.9.0",
+    ("project_rag", "transformers"): "5.9.0",
     ("example_game_workbench_repo", "transformers"): "5.3.0",
     # survey line 272: "fifa has transformers 5.10.2 installed".
     ("example_league_data_repo", "transformers"): "5.10.2",
     # survey headline table (§ "Torch — one build, triplicated" /
     # Python-version-spread table): example-retrieval-repo and example-game-repo's main
     # .venv both carry 2.12.0+cu130.
-    ("example_retrieval_repo", "torch"): "2.12.0+cu130",
+    ("project_rag", "torch"): "2.12.0+cu130",
     ("example_game_workbench_repo", "torch"): "2.12.0+cu130",
     # survey line 44 / bug-backlog 2026-08-16-the-fleet-lock-forces-
     # huggingface-hub-pa-0261f109b57b.yaml — already-tracked major
@@ -169,7 +169,7 @@ _INSTALLED_VERSIONS: Dict[tuple, str] = {
     ("example_game_workbench_repo", "huggingface-hub"): "0.36.2",
     # survey § "Declared-vs-installed divergences" — example-retrieval-repo's own
     # stale declaration; already-tracked cap violation.
-    ("example_retrieval_repo", "chromadb"): "1.4.1",
+    ("project_rag", "chromadb"): "1.4.1",
     # survey line 270: "scipy 1.17.1 (fifa, review-exp) vs 1.18.0
     # (market-intel)".
     ("experiments", "scipy"): "1.17.1",
@@ -550,12 +550,12 @@ def test_pin_advance_report_covers_every_contributing_repo():
     entries = build_pin_advance_report()
     repos = {e.repo for e in entries}
     expected_repos = {
-        "example_retrieval_repo",
+        "project_rag",
         "claude_klabauter",
         "example_game_workbench_repo",
         "example_market_data_repo",
         "experiments",
-        "example_retrieval_repo_ue_addon",
+        "project_rag_ue_addon",
     }
     assert expected_repos <= repos
 

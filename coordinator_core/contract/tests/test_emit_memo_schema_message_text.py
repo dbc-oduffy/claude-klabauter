@@ -20,7 +20,7 @@ disposition: this module's emitted JSON is a row in a later chunk's
 rendered-message corpus, gated by register rule B7, which fires on ANY
 REDACTION-class token in rendered text regardless of navigation intent — the
 codenames were removed from every description accordingly (registry keys
-`repos.doe_claude` / `repos.example_retrieval_repo` are functional identifiers, stay).
+`repos.doe_claude` / `repos.project_rag` are functional identifiers, stay).
 This test locks that state in so a future edit re-introducing either
 navigation prose OR a bare REDACTION-class codename mention is caught here
 rather than only at OSS-publish time.
@@ -42,7 +42,7 @@ from coordinator_core.contract.emit_memo_schema import emit_schemas
 # cockpit, example-fleet/machine-b, example-game-repo) — any codename followed closely by a
 # navigation verb ("see"/"read"/"check"/"visit") is the broken shape a
 # publish-scrub turns into a dead pointer.
-_CODENAMES = ("DoE-claude", "example-retrieval-repo", "cockpit", "example-fleet", "example-game-repo")
+_CODENAMES = ("DoE-claude", "project-rag", "cockpit", "example-fleet", "example-game-repo")
 _NAVIGATION_PATTERN = re.compile(
     r"\b(see|read|check|visit)\b[^.]{0,60}(" + "|".join(_CODENAMES) + r")",
     re.IGNORECASE,
@@ -81,10 +81,10 @@ class TestDescriptionsDoNotDirectReadersToUnreachableRepos:
         broken regardless of navigation intent — attribution prose that
         scrubs to a non-navigable placeholder still names nothing an OSS
         reader can resolve. Registry keys (`repos.doe_claude`,
-        `repos.example_retrieval_repo`) are functional identifiers, not prose mentions,
+        `repos.project_rag`) are functional identifiers, not prose mentions,
         and are exempted below via `test_functional_repo_keys_still_present`
         rather than here."""
-        redaction_tokens = ("DoE-claude", "example-retrieval-repo", "cockpit", "example-fleet", "example-game-repo")
+        redaction_tokens = ("DoE-claude", "project-rag", "cockpit", "example-fleet", "example-game-repo")
         emitted = emit_schemas(out_dir=tmp_path)
         for name, schema in emitted.items():
             for description in _iter_descriptions(schema):
@@ -97,7 +97,7 @@ class TestDescriptionsDoNotDirectReadersToUnreachableRepos:
 
     def test_functional_repo_keys_still_present(self, tmp_path: Path) -> None:
         """Guards against over-correction: `repos.doe_claude` /
-        `repos.example_retrieval_repo` registry-key examples inside `to_repo`'s
+        `repos.project_rag` registry-key examples inside `to_repo`'s
         description are functional identifiers, not navigation prose, and
         must stay."""
         emitted = emit_schemas(out_dir=tmp_path)
@@ -105,7 +105,7 @@ class TestDescriptionsDoNotDirectReadersToUnreachableRepos:
             "description"
         ]
         assert "repos.doe_claude" in to_repo_desc
-        assert "repos.example_retrieval_repo" in to_repo_desc
+        assert "repos.project_rag" in to_repo_desc
 
 
 class TestSentByPresentAndOptional:

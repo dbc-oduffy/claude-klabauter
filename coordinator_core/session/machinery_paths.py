@@ -127,14 +127,12 @@ def machinery_path_prefixes() -> tuple:
     legacy roots alike.
 
     Decided NOT to gravestone: the premise "the legacy root is retired"
-    does not hold. `04572a0bbe` alone is not dispositive -- DoE-claude's
-    `coordinator/hooks/scripts/_plan_path_bridge.py` module (P143-T6's own
-    finding) and several reviewer-sidecar writers there still cite and
-    match live `state/subagent-share/<session>/...` paths (measured via
-    `grep -rl "state/subagent-share" --include=*.py coordinator`, both
-    here and against the DoE-claude mirror), so a census keyed on
+    does not hold -- DoE-claude's `coordinator/hooks/scripts/_plan_path_bridge.py`
+    module and several reviewer-sidecar writers there still cite and match
+    live `state/subagent-share/<session>/...` paths, so a census keyed on
     `.coordinator-local` alone would silently miss every legacy-root
-    artifact.
+    artifact. Re-verify against both repos before ever dropping this leg;
+    do not gravestone on the strength of a single grep.
 
     Anchored at a full path segment, never a name token -- same selector
     discipline as `fleet_machinery_sweep.select_machinery_paths` (a

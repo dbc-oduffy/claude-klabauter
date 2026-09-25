@@ -17,6 +17,16 @@ reviewer findings sidecar — never its own run-report, never an arbitrary file 
 and (b) writes the canonical block shape byte-for-byte, so there is no
 hand-authored YAML to get subtly wrong or skip.
 
+The gate accepts every agent type DoE-claude's `report_type_map:` currently
+routes to the `review-findings` or `staff-eng-review` template — the
+code-reviewer family, the non-persona findings-producing checkers
+(`plan-coverage-checker`, `parallel-review-synthesizer`,
+`security-audit-worker`, `dep-cve-auditor`, `test-evidence-parser`,
+`premise-checker`, `falsifier-integrity-reviewer`,
+`subtractive-adjudicator`), the Opus reviewer personas, and the
+template-keyed `blitz-em` — see `_REVIEWER_AGENT_TYPES` for the live
+membership and its re-derivation evidence.
+
 This is deliberately a WRITE-time correctness tool, not a read-time heuristic:
 it does not change `block_em_hand_edit_pending_review_integration`'s own
 coverage logic at all. The guard still only ever checks for the heading's
@@ -32,8 +42,9 @@ Concretely, `append_dispositions` refuses (raises `DispositionsError`) unless:
     tree — in particular never the caller's OWN run-report sidecar, which
     lives in the same directory but carries a different `agent_type`),
   - the target's frontmatter `agent_type:` is one of `_REVIEWER_AGENT_TYPES` —
-    the code-reviewer family plus the six Opus reviewer personas, i.e. every
-    agent whose deliverable IS a finding set — OR one of
+    every agent type DoE-claude's `report_type_map:` currently routes to the
+    `review-findings` or `staff-eng-review` template, i.e. every agent whose
+    deliverable IS a finding set — OR one of
     `_REVIEWER_DOC_TYPE_TOKENS`, the doc-TYPE tokens `coordinator-doc-new`'s
     self-persist fallback stamps into that same field on the (undispatched-
     sidecar) fallback path. `_REVIEWER_AGENT_TYPES` is deliberately WIDER
@@ -215,9 +226,8 @@ _BUCKET_YAML_KEY = {
 }
 
 #: The agent types whose DELIVERABLE is a finding set, and which may therefore
-#: receive an `## Integrator Dispositions` block: the code-reviewer family plus
-#: the eight Opus reviewer personas. Membership mirrors exactly the types
-#: DoE-claude's `report_type_map:` routes to the `review-findings` or
+#: receive an `## Integrator Dispositions` block. Membership mirrors exactly
+#: the rows DoE-claude's `report_type_map:` routes to the `review-findings` or
 #: `staff-eng-review` provisioning templates — that map is the REASON for this
 #: membership, never a runtime input. This module must not read a peer repo's
 #: policy file to decide a gate; the drift risk is carried by
@@ -232,20 +242,65 @@ _BUCKET_YAML_KEY = {
 #: set decides which sidecars can RECEIVE a disposition block. Widening the
 #: guard to match would start blocking EM edits on every persona review, which
 #: nothing asks for. The divergence is intentional; it is not drift.
-# Membership verified 2026-08-29 against DoE-claude's live
-# `coordinator/subagent-sandbox-policy.yaml` `report_type_map:` block — the
-# eight `staff-eng-review`-mapped personas below match that file's rows
-# verbatim. The 2026-08-10 verification recorded six; `overengineering-reviewer`
-# (Kaya) and `apm` (Angelique) were added on the peer side after it, and both
-# arrived here in one re-check rather than one memo each — the drift this
-# comment warns about is cumulative, not single-row.
-# Re-check against that file if either side drifts; this repo has
-# no automated way to catch a mismatch at authorship time, only the pin
-# test below catching FUTURE accidental drift.
+#
+# Re-derived 2026-09-24 (P033-T4) against DoE-claude's live
+# `coordinator/subagent-sandbox-policy.yaml` `report_type_map:` @
+# DoE-claude@d2d1213f98ca21b9bbc4c92a1936282e313e1081, via:
+#   sed -n '/^report_type_map:/,$p' subagent-sandbox-policy.yaml \
+#     | grep -cE "^[[:space:]]+coordinator:[a-z-]+:[[:space:]]*(review-findings|staff-eng-review)[[:space:]]*$"
+# Result: 19 members (the prior set below recorded 10; the 2026-08-29 check
+# had gone stale by nine rows). The 19:
+#   coordinator:code-reviewer, coordinator:code-reviewer-weekly,
+#   coordinator:plan-coverage-checker, coordinator:parallel-review-synthesizer,
+#   coordinator:security-audit-worker, coordinator:dep-cve-auditor,
+#   coordinator:test-evidence-parser, coordinator:staff-eng,
+#   coordinator:staff-data-sci, coordinator:senior-front-end,
+#   coordinator:staff-ux, coordinator:vp-product, coordinator:eng-director,
+#   coordinator:overengineering-reviewer, coordinator:apm,
+#   coordinator:premise-checker, coordinator:falsifier-integrity-reviewer,
+#   coordinator:subtractive-adjudicator, coordinator:blitz-em.
+#
+# (a) Two names the requesting memo asked for are REFUSED, not admitted:
+#     `coordinator:doc-link-checker` and `coordinator:prior-art-checker` route
+#     to `assessment` in DoE's own `report_type_map:` — a shape
+#     `_detect_findings_shape` refuses by design — so widening this set to
+#     cover them would accept a target this module cannot extract findings
+#     from. See the reply memo, `state/memo-outbox/
+#     reviewer-agent-types-two-names-refused-reply.md` (T4m).
+# (b) Pre-existing absences this re-derivation also closes (present in
+#     `report_type_map:` under the 2026-08-29 check's own terms but never
+#     added then): `coordinator:plan-coverage-checker`,
+#     `coordinator:parallel-review-synthesizer`,
+#     `coordinator:security-audit-worker`, `coordinator:dep-cve-auditor`,
+#     `coordinator:test-evidence-parser`, `coordinator:premise-checker`,
+#     `coordinator:falsifier-integrity-reviewer`,
+#     `coordinator:subtractive-adjudicator`.
+# (c) Evidence: command, count and member list are as pasted above; SHA is
+#     DoE-claude@d2d1213f98ca21b9bbc4c92a1936282e313e1081 (re-run 2026-09-24,
+#     working-tree read, no ref pinned beyond that commit).
+# (d) `coordinator:blitz-em` is admitted though an EM, not a reviewer role —
+#     it is template-keyed, not role-keyed: DoE's `report_type_map:` routes it
+#     to `staff-eng-review` regardless of its EM identity, and this module's
+#     own invariant is "which template the row names", never "is this a
+#     reviewer by role". It stays governed by the same invariant as every
+#     other member; it is not an exception carved out of it.
+# (e) The exact-equality pin (`test_reviewer_agent_types_pinned`, T4t) IS the
+#     drift detector for this set. No report-only surface is owed beside it —
+#     see this module's own AC 6a — because a set this small, changed this
+#     rarely, and already gated by a failing-test-on-widen discipline gets
+#     nothing from a second, read-only mechanism reporting the same fact.
+# Re-check against DoE-claude's live policy file if either side drifts; this
+# repo has no automated way to catch a mismatch at authorship time, only the
+# pin test catching FUTURE accidental drift.
 _REVIEWER_AGENT_TYPES = frozenset(
     {
         "coordinator:code-reviewer",
         "coordinator:code-reviewer-weekly",
+        "coordinator:plan-coverage-checker",
+        "coordinator:parallel-review-synthesizer",
+        "coordinator:security-audit-worker",
+        "coordinator:dep-cve-auditor",
+        "coordinator:test-evidence-parser",
         "coordinator:staff-eng",
         "coordinator:staff-data-sci",
         "coordinator:senior-front-end",
@@ -254,6 +309,10 @@ _REVIEWER_AGENT_TYPES = frozenset(
         "coordinator:eng-director",
         "coordinator:overengineering-reviewer",
         "coordinator:apm",
+        "coordinator:premise-checker",
+        "coordinator:falsifier-integrity-reviewer",
+        "coordinator:subtractive-adjudicator",
+        "coordinator:blitz-em",
     }
 )
 

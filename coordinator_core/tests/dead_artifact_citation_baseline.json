@@ -24,10 +24,6 @@
   "sweep-terminal-plans.py"
  ],
  [
-  "coordinator/bin/coordinator-initiative.py",
-  "emit-cockpit-snapshot.py"
- ],
- [
   "coordinator/bin/day-coverage-sweep.py",
   "reconcile-completion-commits.py"
  ],

@@ -179,7 +179,7 @@ _SCAN_ROOT = _REPO_ROOT / "coordinator_core"
 # set (DEC-4 names DoE-claude and claude-klabauter; .claude is the third anchor
 # CLAUDE.md § Runtime conventions and trusted_root_guard.py both treat as a
 # trust/resolution boundary).
-_SIBLING_REPO_TOKENS = {"DoE-claude", "claude-klabauter", "example-retrieval-repo", ".claude"}
+_SIBLING_REPO_TOKENS = {"DoE-claude", "claude-klabauter", "project-rag", ".claude"}
 
 _DRIVE_LETTER_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
@@ -775,7 +775,7 @@ def test_gate_detects_a_planted_dirname_join_sibling_shellout(tmp_path):
     relpath, lineno, tooth, detail = matches[0]
     assert relpath.endswith("fixture_dirname_join.py")
     assert lineno == 5
-    assert detail == "example-retrieval-repo"
+    assert detail == "project-rag"
 
 
 def test_gate_detects_a_planted_single_expression_dirname_join_str_segments(tmp_path):

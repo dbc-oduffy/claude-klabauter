@@ -632,9 +632,12 @@ def _warn_dead_holder_residue(
     workflow over the same twelve chunks. Detection was never missing; it was
     pointed at a corpse and said nothing about what the corpse was holding.
 
-    Fail-OPEN at every step (an unresolvable record dir, an unreadable record, a
-    failed ``git status``): the takeover proceeds silently, exactly as before.
-    This is a message, and a message that raises would be worse than no message.
+    Fail-OPEN at every step (an unresolvable record dir, an unreadable
+    record): the takeover proceeds silently, exactly as before. This is a
+    message, and a message that raises would be worse than no message. The
+    git step is no longer silent (P014-C3): a degraded read prints a
+    degraded-evidence line instead of silently reading as clean; the
+    record-dir and record-read steps still fail open.
 
     ONE git spawn, on the takeover path only -- which is rare by construction
     (it requires a dead holder) and already the slow path. Nothing here runs on
@@ -648,15 +651,37 @@ def _warn_dead_holder_residue(
         claimed, _ok = _read_holder_claims(sink)
         if not claimed:
             return
-        dirty = _dirty_paths(cwd)
-        residue = sorted(claimed & dirty)
-        if not residue:
-            return
         # One check, not a redundant pair: the parent-basename test is a strict
         # subset of this one for every path `_dead_holder_record_dir` can build,
         # and a defensive-looking `or` that can never fire independently reads as
         # covering a case that does not exist (reviewer P-nit).
         archived = (os.sep + ".archive" + os.sep) in record_dir
+        archived_suffix = (
+            f" — holder record found in .archive/, not the live tree" if archived else ""
+        )
+
+        from coordinator_core.session.session_facts import _dirty_paths as _producer_dirty_paths
+
+        worktree_root = Path(cwd) if cwd else Path.cwd()
+        result = _producer_dirty_paths(worktree_root, keep_rename_source=True)
+        if result["degraded"]:
+            claimed_sorted = sorted(claimed)
+            shown = ", ".join(repr(p) for p in claimed_sorted[:5])
+            more = f" (+{len(claimed_sorted) - 5} more)" if len(claimed_sorted) > 5 else ""
+            evidence = result["evidence"].splitlines()[0]
+            print(
+                f"cs_claim_{class_}: {basename}'s dead holder (session "
+                f"{held_sid or '?'}) claimed {len(claimed_sorted)} path(s): "
+                f"{shown}{more}. git status failed ({evidence}), so whether "
+                f"they are uncommitted is unknown. Read those paths before "
+                f"writing them" + archived_suffix + ".",
+                file=sys.stderr,
+            )
+            return
+        dirty = result["value"]["paths"]
+        residue = sorted(claimed & dirty)
+        if not residue:
+            return
         shown = ", ".join(repr(p) for p in residue[:5])
         more = f" (+{len(residue) - 5} more)" if len(residue) > 5 else ""
         print(
@@ -665,7 +690,7 @@ def _warn_dead_holder_residue(
             f"tree: {shown}{more}. The claim is stale and is being taken over; "
             f"the WORK is not necessarily free. Read those paths before writing "
             f"them, and check for a successor session that picked this up"
-            + (f" — holder record found in .archive/, not the live tree" if archived else "")
+            + archived_suffix
             + ".",
             file=sys.stderr,
         )
@@ -687,39 +712,6 @@ def _read_holder_claims(sink_path: str) -> Tuple[set, bool]:
         {p for p, event in claims.items() if event.verb == touch_record.VERB_TOUCH},
         not degraded,
     )
-
-
-def _dirty_paths(cwd: Optional[str] = None) -> set:
-    """Repo-relative paths git reports as dirty. Empty set on any failure.
-
-    Imported function-local, not at module scope: this module is on the Bash
-    guard import path and the only caller is the rare dead-holder takeover, so
-    the import cost is paid there rather than on every guard fire.
-    """
-    from coordinator_core.git.run import run_git
-
-    result = run_git(["--no-optional-locks", "status", "--porcelain"], cwd=cwd or None)
-    if result.timed_out or result.returncode == 127:
-        return set()
-    out = result.stdout
-    dirty = set()
-    for line in out.splitlines():
-        if len(line) <= 3:
-            continue
-        entry = line[3:].strip()
-        # A rename renders as `R  old -> new`, so the naive `line[3:]` yields the
-        # literal "old -> new" and matches no real path -- silently dropping a
-        # renamed path from the intersection (reviewer P2). Rename-in-progress is
-        # exactly the mid-edit shape this warning exists to surface, so both
-        # sides are recorded: the old path is what the dead holder's touch record
-        # still names, and the new one is where the work actually sits now.
-        if line[0] in ("R", "C") and " -> " in entry:
-            old, _, new = entry.partition(" -> ")
-            dirty.add(old.strip().strip('"'))
-            dirty.add(new.strip().strip('"'))
-            continue
-        dirty.add(entry.strip('"'))
-    return dirty
 
 
 BRIEF_CLAIM_LEASE_MINUTES = int(
@@ -919,6 +911,30 @@ def _report_claim_neighbours(class_: str, basename: str, cwd: Optional[str]) -> 
         return
 
 
+def _report_warm_uncarried_resolve(site: str) -> None:
+    """P026-C4 (docs/plans/2026-09-07-a-claim-is-written-twice-and-nothing-
+    compares-them.md), AC10's report-only half. ``core.resolve_session_id``
+    degrades to the ambient env ladder under a warm-served request that
+    carried nothing, which inside a resident server names whoever SPAWNED
+    the process rather than the session being served
+    (``core.carried_session_id``'s own docstring) -- a plausible, silently
+    wrong holder. This reports that condition at the call site; it never
+    refuses and never changes ``sid``. Non-gating by construction: nothing
+    here is checked by a caller. C5 converts the five acquire-side sites in
+    ``session/claims.py`` to refuse via ``core.attributable_session_id``;
+    the three release/reap sites here and the four comparison sites in
+    ``pickup_assemble/__init__.py`` (AC16) keep ``resolve_session_id``
+    permanently -- see AC10's release/reap rule.
+    """
+    if core.in_warm_served_request() and not core.carried_session_id():
+        print(
+            f"claims.{site}: warm-served request carried no session identity "
+            f"-- resolve_session_id fell back to the ambient env ladder "
+            f"(report-only, not refused)",
+            file=sys.stderr,
+        )
+
+
 def claim_artifact(
     class_: str,
     basename: str,
@@ -1024,7 +1040,11 @@ def claim_artifact(
 
     # Canonical 4-tier resolution; sid is a property of the running (cwd)
     # session — only the lock LOCATION follows the baton. Empty -> FAIL LOUD.
+    # AC10 verdict: acquire-side (writes a durable claim record) -- kept for
+    # now and reported (P026-C4, report-only); P026-C5 hardens this call to
+    # `core.attributable_session_id`, which refuses instead of reporting.
     sid = core.resolve_session_id(cwd)
+    _report_warm_uncarried_resolve("claim_artifact")
     if not sid:
         print(
             f"cs_claim_{class_}: session id unresolvable under concurrency — "
@@ -1205,7 +1225,11 @@ def touch_brief_claim(
     if not basename:
         raise ValueError("basename required")
 
+    # AC10 verdict: acquire-side (refreshes a lease on a durable claim record)
+    # -- kept for now and reported (P026-C4, report-only); P026-C5 hardens
+    # this call to `core.attributable_session_id`.
     sid = core.resolve_session_id(cwd)
+    _report_warm_uncarried_resolve("touch_brief_claim")
     if not sid:
         return False
     base = _claim_base(class_, baton_repo_root, cwd)
@@ -1257,7 +1281,11 @@ def promote_claim_stage(
     if not basename:
         raise ValueError("basename required")
 
+    # AC10 verdict: acquire-side (promotes a claim to the durable apply
+    # stage) -- kept for now and reported (P026-C4, report-only); P026-C5
+    # hardens this call to `core.attributable_session_id`.
     sid = core.resolve_session_id(cwd)
+    _report_warm_uncarried_resolve("promote_claim_stage")
     if not sid:
         return False
     base = _claim_base(class_, baton_repo_root, cwd)
@@ -1330,7 +1358,11 @@ def demote_claim_stage_to_brief(
     if not basename:
         raise ValueError("basename required")
 
+    # AC10 verdict: acquire-side (demotes a claim, still a durable claim
+    # record mutation) -- kept for now and reported (P026-C4, report-only);
+    # P026-C5 hardens this call to `core.attributable_session_id`.
     sid = core.resolve_session_id(cwd)
+    _report_warm_uncarried_resolve("demote_claim_stage_to_brief")
     if not sid:
         return False
     base = _claim_base(class_, baton_repo_root, cwd)
@@ -1810,7 +1842,11 @@ def claim_plan(slug: str, cwd: Optional[str] = None, *, for_execution: bool = Fa
         _stamp_plan_owner_back_edge(Path(root))
 
     # C3 — best-effort session-shape instrumentation (non-fatal).
+    # AC10 verdict: acquire-side (the read feeds `claim_plan`'s own claim
+    # record) -- kept for now and reported (P026-C4, report-only); P026-C5
+    # hardens this call to `core.attributable_session_id`.
     sid = core.resolve_session_id(cwd)
+    _report_warm_uncarried_resolve("claim_plan")
     if sid:
         rel = f"docs/plans/{slug}.md"
         scope = ""
@@ -2081,12 +2117,43 @@ def _release_path_claim_artifact(
     successes, not errors" contract): a bad baton root, unresolvable
     session id, or absent sessions dir is an idempotent no-op, same as the
     classed forms.
+
+    VERIFIED, NOT DESIGNED (P088-C4, docs/plans/2026-09-11-session-identity-
+    residue-memo-send-sent.md): a 2026-09-11 inbox report claimed a
+    dispatched agent's touch-claim row is unreachable here because it is
+    filed under the agent's own directory uuid rather than under this
+    session's sid, so the ``{my_sid}``-scoped fan-out below would miss it.
+    REFUTED against HEAD --
+    ``coordinator_core.session.claim_index._enumerate_claim_sinks`` already
+    resolves an agent-plane sink's ``claimant_sid`` through the agent dir's
+    ``em-session-id.txt`` back-pointer (``_agent_owner_sid``), never through
+    the agent's own directory name, so a claim row filed under an agent's
+    uuid is already keyed on the EM's sid by the time it reaches
+    ``_release_path_claim_everywhere``'s ``sids`` filter -- see
+    ``coordinator_core/session/tests/
+    test_release_path_claim_reaches_agent_rows.py`` for the pin. No widening
+    of the ``sids`` set was needed or made.
+
+    A SEPARATE, NOT-HERE concern: this function's own ``my_sid`` SEED
+    (``core.resolve_session_id(cwd)``) is the blended tiers-0-3 resolver a
+    warm-served request with no carried identity resolves to the server's
+    spawner, not the caller -- were that the case, no widening of the
+    fan-out above would help, because the seed itself would name a
+    stranger. That is the identity-seam docs/plans/2026-08-30-the-c-door-
+    sends-the-callers-session-identity.md owns; this row does not
+    reproduce or fix it, only names it so it is not re-discovered as new.
     """
     base, ok = _resolve_path_claim_base(baton_repo_root, cwd)
     if not ok or not base:
         return True
 
+    # AC10 verdict: release-side -- KEEPS `resolve_session_id` permanently
+    # (never hardened to refuse). Hardening a release path would make a
+    # mis-attributed claim unreleasable: the session that cannot prove
+    # identity also cannot let go, a worse steady state than the bug this
+    # plan fixes. Reported only (P026-C4).
     my_sid = core.resolve_session_id(cwd)
+    _report_warm_uncarried_resolve("_release_path_claim_artifact")
     if not my_sid:
         return True
 
@@ -2175,7 +2242,11 @@ def _clear_path_claim_if_dead(
     def _claimants(result) -> List[str]:
         return result.get(path, [])
 
+    # AC10 verdict: release/reap-side (this is the reaper's own identity
+    # check) -- KEEPS `resolve_session_id` permanently, same reason as
+    # `_release_path_claim_artifact`. Reported only (P026-C4).
     my_sid = core.resolve_session_id(cwd)
+    _report_warm_uncarried_resolve("_clear_path_claim_if_dead")
 
     def _live_ones(sids: List[str]) -> List[str]:
         return [
@@ -2377,7 +2448,13 @@ def release_artifact(
         return True  # already absent — no-op
 
     # Resolve my id ONCE; pass it to both TOCTOU reads (F1).
-    my_sid = my_sid if my_sid is not None else core.resolve_session_id(cwd)
+    # AC10 verdict: release-side -- KEEPS `resolve_session_id` permanently,
+    # same reason as `_release_path_claim_artifact`. Reported only (P026-C4),
+    # and only on the fallback branch actually taken here (an explicitly
+    # passed `my_sid` never reaches `resolve_session_id`).
+    if my_sid is None:
+        my_sid = core.resolve_session_id(cwd)
+        _report_warm_uncarried_resolve("release_artifact")
     if not liveness.claim_held_by_me(str(claim_dir), my_sid, cwd):
         return True  # not the holder — no-op
     # TOCTOU re-read before rm (the second call IS the two-read discipline).

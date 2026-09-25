@@ -95,7 +95,7 @@ Functions:
         in either branch.
   - `convention_repo_key(receiver_em_id: str) -> str`
         Pure convention mapping: strip trailing `-em`, dashes→underscores, prefix
-        `repos.`. Example: `'example-retrieval-repo-em' -> 'repos.example_retrieval_repo'`. Never raises.
+        `repos.`. Example: `'example-retrieval-repo-em' -> 'repos.project_rag'`. Never raises.
   - `receiver_em_to_repo_key(receiver_em_id: str) -> str`
         Manifest-alias lookup, else `convention_repo_key()` fallback. NON-central
         resolution path only (see `resolve_receiver_inbox` for central fan-in).
@@ -876,7 +876,7 @@ def read_publish_mirrors() -> dict[str, dict]:
 def convention_repo_key(receiver_em_id: str) -> str:
     """Pure convention mapping: strip trailing '-em', dashes→underscores, prefix 'repos.'.
 
-    Example: 'example-retrieval-repo-em' → 'repos.example_retrieval_repo'.
+    Example: 'example-retrieval-repo-em' → 'repos.project_rag'.
 
     Shared by receiver_em_to_repo_key's convention-fallback branch and the
     central-receiver resolution path in resolve_receiver_inbox — factored out
@@ -893,7 +893,7 @@ def receiver_em_to_repo_key(receiver_em_id: str) -> str:
     1. Manifest alias lookup: identity.repoAliases in coordinator-registry.manifest.json
        maps shortname → registryKey (e.g. Example-game-repo → example_game_workbench_repo).
     2. Convention fallback: strip trailing '-em', dashes→underscores, prefix 'repos.'.
-       Example: 'example-retrieval-repo-em' → 'repos.example_retrieval_repo'.
+       Example: 'example-retrieval-repo-em' → 'repos.project_rag'.
 
     Central receiver IDs (identity.centralReceiverIds in the manifest, e.g. 'central-em',
     'doe-claude-em') are NOT resolved through this function's convention path — they

@@ -167,12 +167,18 @@ from coordinator_core.ceremony_common.json_payload_flag import (
 )
 from coordinator_core.contract import apply_base
 from coordinator_core.git_lock_retry import run_with_lock_retry
+from coordinator_core.resolve_validation_cmd import cs_resolve_full_test_cmd
 from coordinator_core.telemetry.composition_record import (
     flush_composition_record,
     make_fleet_budget,
 )
 from coordinator_core.session.claimed_write import append_claimed_line
-from coordinator_core.session.grant import write_tier_u_grant
+from coordinator_core.session.grant_directive import (
+    EXIT_OK,
+    EXIT_USAGE,
+    parse_grant_args,
+    run_grant_directive,
+)
 
 # ---------------------------------------------------------------------------
 # Exit-code contract — composed from apply_base, shared by every apply/
@@ -570,48 +576,53 @@ def _dispatch_commit_per_wave(args: list[str], repo_root: Path) -> dict[str, Any
 # ---------------------------------------------------------------------------
 # tier-u-grant-cli — the ONE cli in this table whose handler reaches
 # outside `coordinator_core.backlog_grind_assemble` (into the EXISTING,
-# already-live `coordinator_core.session.grant.write_tier_u_grant`,
-# verified live on disk at chunk authoring time). Consumed by direct
-# in-process import — same "call the existing primitive, never shell out
-# to a bin trampoline for something with a real Python entrypoint"
-# convention `pickup_assemble.apply`'s `_dispatch_archive_stamp_cli`
-# already sets.
+# already-live `coordinator_core.session.grant_directive.run_grant_directive`
+# — the same argv path `merge_assemble`'s `_dispatch_tier_u_grant` dispatches
+# through (C3): one parser for `grant`/`revoke`/`check`, never a second one
+# re-built here). Consumed by direct in-process import — same "call the
+# existing primitive, never shell out to a bin trampoline for something
+# with a real Python entrypoint" convention `pickup_assemble.apply`'s
+# `_dispatch_archive_stamp_cli` already sets.
 # ---------------------------------------------------------------------------
 
-_TIER_U_GRANT_CLI = "tier-u-grant-cli"
+_TIER_U_GRANT_CLI = bga_directives._TIER_U_GRANT_CLI
 
 
 def _dispatch_tier_u_grant_cli(args: list[str], repo_root: Path) -> dict[str, Any]:
     """`args` == `["grant", <granted_by>, <note>, "--ceremony", <name>]`
-    (the last two optional) — the exact shape
-    `directives.build_tier_u_grant_flow` already writes, unpacked
-    directly (`resolve_operator_config`; no JSON repacking needed, unlike
-    the commit verbs — every value this handler needs is already a bare
-    string in `args`)."""
-    if not args or args[0] != "grant":
-        raise UnrecognizedDirective(f"tier-u-grant-cli: unrecognized verb {args[:1]!r}")
-    if len(args) < 3:
-        raise UnrecognizedDirective(
-            "tier-u-grant-cli grant: expected <granted_by> <note> [--ceremony <name>]"
-        )
-    granted_by, note = args[1], args[2]
-    ceremony: Optional[str] = None
-    if len(args) > 3:
-        if args[3] == "--ceremony" and len(args) > 4:
-            ceremony = args[4]
-        else:
-            raise UnrecognizedDirective(
-                f"tier-u-grant-cli grant: unrecognized trailing args {args[3:]!r}"
-            )
-    ok = write_tier_u_grant(granted_by, note, ceremony=ceremony, cwd=str(repo_root))
-    if not ok:
-        raise RuntimeError(f"tier-u-grant-cli grant {granted_by}: write_tier_u_grant failed")
-    return {
-        "cli": _TIER_U_GRANT_CLI,
-        "verb": "grant",
-        "granted_by": granted_by,
-        "ceremony": ceremony,
-    }
+    (the last two optional), `["check"]`, or `["revoke", ...]` — routed
+    through `run_grant_directive`, the ONE argv parser both grant handlers
+    now share (C3). Before C3 this handler re-parsed argv itself and only
+    accepted `grant`, so a `check` directive (C4/C5) raised
+    `UnrecognizedDirective`.
+
+    `repo_root` threads through as `run_grant_directive`'s `cwd` for every
+    verb, not `grant` alone — `check`/`revoke` must resolve the SAME
+    session directory the `grant` verb wrote into.
+
+    Failure disposition, preserving each verb's PRE-EXISTING policy
+    (anti-scope: this is not a semantics consolidation):
+      - EXIT_USAGE (malformed argv) -> `UnrecognizedDirective`, matching
+        this handler's own pre-C3 convention for a bad shape.
+      - `grant`/`revoke` EXIT_FALSE -> `RuntimeError`, exactly as the old
+        `write_tier_u_grant`-direct call raised on a failed write.
+      - `check` EXIT_FALSE -> `RuntimeError` naming the gate (C2's
+        message) — the new per-verb rule: a denied check must not degrade
+        silently."""
+    verb = args[0] if args else None
+    code, message = run_grant_directive(args, repo_root=str(repo_root))
+    if code == EXIT_USAGE:
+        raise UnrecognizedDirective(f"tier-u-grant-cli: {message}")
+    if code != EXIT_OK:
+        raise RuntimeError(f"tier-u-grant-cli {verb}: {message}")
+    result: dict[str, Any] = {"cli": _TIER_U_GRANT_CLI, "verb": verb}
+    if verb == "grant":
+        parsed = parse_grant_args(args[1:])
+        if isinstance(parsed, tuple):
+            granted_by, _note, ceremony = parsed
+            result["granted_by"] = granted_by
+            result["ceremony"] = ceremony
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -714,20 +725,81 @@ def _dispatch_unify_batons(args: list[str], repo_root: Path) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# coordinator-resolve-validation-cmd (P071-C7) — resolves bug-blitz's
+# `commands/bug-blitz.md:60` FULL test-command citation IN-PROCESS, never
+# via subprocess: `coordinator_core.resolve_validation_cmd` is already the
+# NATIVE-FIRST path `bash_guards/check_test_suite_invocation.py` resolves
+# through before falling back to the bin trampoline by path, and spawning
+# an interpreter here to read a frontmatter key would not meet the
+# brightline's per-use process justification.
+# ---------------------------------------------------------------------------
+
+_RESOLVE_VALIDATION_CMD_CLI = bga_directives._RESOLVE_VALIDATION_CMD_CLI
+
+
+def _dispatch_resolve_validation_cmd(args: list[str], repo_root: Path) -> dict[str, Any]:
+    """Calls `cs_resolve_full_test_cmd(repo_root)` in-process and reports
+    its four semantic exit codes verbatim rather than flattening them to
+    ok/fail (the plan's own explicit ask):
+      - rc 0   — a full suite command resolved; report it as given.
+      - rc 3   — resolved by fast-tier FALLBACK; report the resolved
+        (fast) command AND surface that bug-blitz asked for the full
+        suite and got the fast one — never a silent downgrade.
+      - rc 2   — nothing configured at either tier; report as skipped,
+        not failed.
+      - rc 127 — a hard environment failure; raises, so the ceremony
+        reports it as failed rather than reading "resolution failed"
+        when the true answer was "nothing configured" (the same silence
+        defect wearing a different hat)."""
+    resolved = cs_resolve_full_test_cmd(str(repo_root))
+    if resolved.exit_code == 0:
+        return {
+            "cli": _RESOLVE_VALIDATION_CMD_CLI,
+            "exit_code": 0,
+            "status": "resolved",
+            "coverage": "full",
+            "resolved_cmd": resolved.cmd,
+        }
+    if resolved.exit_code == 3:
+        return {
+            "cli": _RESOLVE_VALIDATION_CMD_CLI,
+            "exit_code": 3,
+            "status": "resolved",
+            "coverage": "fast-tier-only",
+            "resolved_cmd": resolved.cmd,
+            "fallback": True,
+        }
+    if resolved.exit_code == 2:
+        return {
+            "cli": _RESOLVE_VALIDATION_CMD_CLI,
+            "exit_code": 2,
+            "status": "skipped",
+            "coverage": None,
+            "resolved_cmd": None,
+        }
+    raise RuntimeError(
+        f"coordinator-resolve-validation-cmd: hard environment failure "
+        f"resolving the full test command (rc={resolved.exit_code})"
+    )
+
+
 #: C6 discriminator decision (docs/plans/2026-08-19-directives-name-an-op-not-
 #: a-cli.md § C6 / § The discriminator for the mixed end state) — measured
 #: live against `coordinator_core.authz.registration_quad._live_registry()`
-#: this chunk: NONE of this table's eight verbs (`commit-per-item`,
+#: this chunk: NONE of this table's nine verbs (`commit-per-item`,
 #: `commit-per-wave`, `checkout-and-backlog-note`, `tier-u-grant-cli`,
 #: `spinoff-handoff-template`, `executor-dispatch-prompt-template`,
-#: `dispatch-haiku-verifier`, `unify-batons`) resolve to a registered op, so
-#: ALL EIGHT stay `cli`-named — none migrate to `op`. No new op is minted
+#: `dispatch-haiku-verifier`, `unify-batons`,
+#: `coordinator-resolve-validation-cmd`) resolve to a registered op, so
+#: ALL NINE stay `cli`-named — none migrate to `op`. No new op is minted
 #: to force a migration (out of scope by name). Every one is either raw
 #: `git` plumbing, an in-process call into an existing non-op Python
-#: primitive (`write_tier_u_grant`, `unify_run_batons`), or a pass-through
-#: report builder (`dispatch-haiku-verifier` never executes anything
-#: itself) — never `bash`/`sh`, so `docs/reference/shell-out-carve-outs.md`
-#: (scoped to interpreter/shell spawns) does not apply, and none is a
+#: primitive (`write_tier_u_grant`, `unify_run_batons`,
+#: `cs_resolve_full_test_cmd`), or a pass-through report builder
+#: (`dispatch-haiku-verifier` never executes anything itself) — never
+#: `bash`/`sh`, so `docs/reference/shell-out-carve-outs.md` (scoped to
+#: interpreter/shell spawns) does not apply, and none is a
 #: `CONSUMES_MANIFEST`-driven script module in the completion-family sense,
 #: so no `CONSUMES_MANIFEST` entry applies either. Consequently
 #: `ASSEMBLER_DISPATCHABLE` (coordinator_core/authz/dispatchable.py) gains
@@ -748,6 +820,7 @@ _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
     _EXECUTOR_DISPATCH_PROMPT_TEMPLATE_CLI: _dispatch_executor_dispatch_prompt_template,
     HAIKU_VERIFIER_CLI: _dispatch_haiku_verifier,
     _UNIFY_BATONS_CLI: _dispatch_unify_batons,
+    _RESOLVE_VALIDATION_CMD_CLI: _dispatch_resolve_validation_cmd,
 }
 
 
@@ -898,6 +971,7 @@ def apply(
         prepared = _prepare_directives_for_dispatch(directives)
 
         outcome = "directive_failed"
+        exit_label = None
         try:
             exit_code, report = apply_base.execute_directives(
                 prepared,
@@ -907,12 +981,13 @@ def apply(
                 decisions=effective_decisions,
                 composition_budget=composition_budget,
             )
+            exit_label = apply_base.exit_code_label(exit_code, report)
             if exit_code == apply_base.APPLY_EXIT_OK:
                 outcome = "success"
             elif exit_code == apply_base.APPLY_EXIT_PARTIAL_MUTATION:
                 outcome = "partial_mutation"
         finally:
-            flush_composition_record(composition_budget, outcome)
+            flush_composition_record(composition_budget, outcome, exit_code_label=exit_label)
         return exit_code, report
 
 

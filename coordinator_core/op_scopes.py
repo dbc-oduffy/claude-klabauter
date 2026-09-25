@@ -1236,6 +1236,16 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # worktrees sweep the same rows concurrently.
     "fleet.archive_actioned_memos":          "common_dir",
     "fleet.archive_completed_plans":          "common_dir",
+    # fleet.delete_superseded_decisions — common_dir: git-rm's a superseded
+    # docs/decisions/ record within the CALLER's own repo tree, same
+    # archival-writer verdict as every fleet.* sweep above and for the same
+    # reason: main_worktree_root(common_dir) must resolve to the caller's
+    # worktree, not claude-klabauter's clone.
+    "fleet.delete_superseded_decisions":     "common_dir",
+    # fleet.prune_closed_bugs — common_dir: archives closed bug-backlog rows
+    # within the CALLER's own repo tree, the same archival-writer verdict as the
+    # fleet.* sweeps above.
+    "fleet.prune_closed_bugs":               "common_dir",
     # fleet.archive_sweep_status — the receipt READER for the three sweeps above.
     # common_dir, not "none": it reads the append-only receipt under the CALLER's own
     # coordinator-sessions/ tree, so it must resolve main_worktree_root(common_dir) or

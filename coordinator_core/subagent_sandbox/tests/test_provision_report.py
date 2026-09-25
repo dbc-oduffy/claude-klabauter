@@ -790,6 +790,136 @@ def test_lead_session_id_stamped_and_distinct_from_agent_id(
     assert f"lead_session_id: {BARE_HEX_AGENT_ID}" not in text
 
 
+def test_target_plan_renders_payload_plan_path_and_null_when_absent(
+    git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """SUBSUME: `target_plan` frontmatter field carries the payload's
+    `plan_path` verbatim when supplied, and renders the literal `null`
+    when absent -- docs/plans/2026-09-11-emit-target-plan-in-the-
+    provision-report-frontmatter.md (C3)."""
+    plan_path = "docs/plans/2026-01-01-x.md"
+    payload_with_plan = _payload(
+        agent_id=BARE_HEX_AGENT_ID,
+        agent_type=REPORT_SIDECAR_TYPE,
+        session_id="sess-target-plan-present",
+        plan_path=plan_path,
+    )
+    exit_code, out = _run(payload_with_plan, policy_path, git_repo, monkeypatch, capsys)
+    assert exit_code == 0
+    envelope = json.loads(out.splitlines()[0])
+    text = (git_repo / envelope["report_sidecar"]).read_text(encoding="utf-8")
+    assert f"target_plan: {plan_path}" in text
+
+    payload_without_plan = _payload(
+        agent_id="fedcba9876543210",
+        agent_type=REPORT_SIDECAR_TYPE,
+        session_id="sess-target-plan-absent",
+    )
+    exit_code, out = _run(payload_without_plan, policy_path, git_repo, monkeypatch, capsys)
+    assert exit_code == 0
+    envelope = json.loads(out.splitlines()[0])
+    text = (git_repo / envelope["report_sidecar"]).read_text(encoding="utf-8")
+    assert "target_plan: null" in text
+
+
+@pytest.mark.parametrize(
+    "raw_plan_path",
+    [
+        "docs\\plans\\x.md",
+        "docs/plans/x.md",
+    ],
+    ids=["windows-separator", "posix-separator"],
+)
+def test_target_plan_renders_raw_no_separator_normalization(raw_plan_path: str) -> None:
+    """C3 step 3: the value is rendered RAW -- no `Path`, no separator
+    rewrite, no stem reduction -- proven on both a Windows-shaped and a
+    POSIX-shaped input, each byte-identical to what was supplied."""
+    text = _frontmatter("coordinator:code-reviewer", "2026-01-01T00:00:00Z", target_plan=raw_plan_path)
+    assert f"target_plan: {raw_plan_path}" in text
+
+
+def test_target_plan_field_order_between_lead_session_id_and_divergence() -> None:
+    """C3 step 4: on a non-legacy type (`review-findings`), `target_plan`
+    sits between `lead_session_id` and `divergence`, so a future reorder
+    is caught on a template the two frozen legacy constants do not cover."""
+    text = _build_review_findings_doc_text(
+        "coordinator:code-reviewer",
+        "2026-01-01T00:00:00Z",
+        lead_session_id="sess-order",
+        target_plan="docs/plans/2026-01-01-x.md",
+    )
+    lines = text.splitlines()
+    lead_idx = next(i for i, line in enumerate(lines) if line.startswith("lead_session_id:"))
+    target_idx = next(i for i, line in enumerate(lines) if line.startswith("target_plan:"))
+    divergence_idx = next(i for i, line in enumerate(lines) if line.startswith("divergence:"))
+    assert lead_idx < target_idx < divergence_idx
+
+
+@pytest.mark.parametrize(
+    "doc_type",
+    [*_TEMPLATE_REGISTRY.keys(), None],
+    ids=[*_TEMPLATE_REGISTRY.keys(), "no-type-key"],
+)
+def test_target_plan_renders_across_every_template_type(doc_type: Optional[str]) -> None:
+    """C3 step 5 (F2 falsifier): a builder left unthreaded for `target_plan`
+    would satisfy AC2's grep-count proxy while silently failing to render
+    the value -- parametrized over every registry entry plus the
+    no-`type`-key legacy leg to catch it."""
+    plan_path = "docs/plans/2026-01-01-x.md"
+    extra = {"plan_path": plan_path} if doc_type == "plan-coverage-check" else {}
+
+    text_with_plan = _build_doc_text(
+        "coordinator:code-reviewer",
+        "2026-01-01T00:00:00Z",
+        doc_type,
+        "sess-across-types",
+        target_plan=plan_path,
+        **extra,
+    )
+    assert f"target_plan: {plan_path}" in text_with_plan
+
+    text_without_plan = _build_doc_text(
+        "coordinator:code-reviewer",
+        "2026-01-01T00:00:00Z",
+        doc_type,
+        "sess-across-types",
+        target_plan=None,
+        **extra,
+    )
+    assert "target_plan: null" in text_without_plan
+
+
+def test_contract_starter_doc_block_lists_the_emitted_frontmatter_keys() -> None:
+    """C4: CONTRACT.md's `Starter-doc scaffold` fenced YAML block is the
+    documented contract for the wire shape `_frontmatter` emits -- census
+    row 5 established no test bound the two together. Keys only, in
+    order -- the block's values are deliberately human-facing placeholders
+    and asserting them would pin prose."""
+    contract_path = Path(__file__).parent.parent / "CONTRACT.md"
+    contract_text = contract_path.read_text(encoding="utf-8")
+    fence_match = re.search(
+        r"Starter-doc scaffold.*?```yaml\n(.*?)\n```", contract_text, re.DOTALL
+    )
+    assert fence_match is not None, "Starter-doc scaffold fenced yaml block not found"
+    block_lines = fence_match.group(1).splitlines()
+    documented_keys = [
+        line.split(":", 1)[0]
+        for line in block_lines
+        if line and not line.startswith((" ", "-", "#", "---"))
+    ]
+
+    emitted_text = _frontmatter("t", "2026-01-01T00:00:00Z")
+    emitted_frontmatter = emitted_text.split("---\n")[1]
+    emitted_lines = emitted_frontmatter.splitlines()
+    emitted_keys = [
+        line.split(":", 1)[0]
+        for line in emitted_lines
+        if line and not line.startswith((" ", "-", "#"))
+    ]
+
+    assert documented_keys == emitted_keys
+
+
 def test_build_doc_text_divergence_is_object_not_array() -> None:
     text = _build_doc_text(agent_type=REPORT_SIDECAR_TYPE, spawned_at="2026-07-13T00:00:00Z")
     frontmatter = text.split("---\n")[1]
@@ -968,6 +1098,7 @@ _LEGACY_RUN_REPORT_TEMPLATE = (
     "agent_type: {agent_type}\n"
     "spawned_at: {spawned_at}\n"
     "lead_session_id: {lead_session_id}\n"
+    "target_plan: {target_plan}\n"
     "divergence:\n"
     "  diverged: false\n"
     "commits: []\n"
@@ -1001,7 +1132,7 @@ def test_build_doc_text_no_doc_type_matches_frozen_legacy_shape_byte_for_byte() 
     text = _build_doc_text(agent_type, spawned_at)
 
     assert text == _LEGACY_RUN_REPORT_TEMPLATE.format(
-        agent_type=agent_type, spawned_at=spawned_at, lead_session_id="null"
+        agent_type=agent_type, spawned_at=spawned_at, lead_session_id="null", target_plan="null"
     )
     assert "## Divergence from plan" not in text
     assert "## Completion" not in text
@@ -1023,6 +1154,7 @@ _LEGACY_RUN_REPORT_TEMPLATE_WITH_REVIEW_RECEIPT = (
     "agent_type: {agent_type}\n"
     "spawned_at: {spawned_at}\n"
     "lead_session_id: {lead_session_id}\n"
+    "target_plan: {target_plan}\n"
     "divergence:\n"
     "  diverged: false\n"
     "commits: []\n"
@@ -1088,6 +1220,7 @@ def test_provision_direct_call_no_type_key_in_payload_matches_legacy_shape(
         agent_type=REPORT_SIDECAR_TYPE,
         spawned_at=spawned_at,
         lead_session_id=session_id,
+        target_plan="null",
         agent_id=BARE_HEX_AGENT_ID,
     )
     assert "## Divergence from plan" not in text

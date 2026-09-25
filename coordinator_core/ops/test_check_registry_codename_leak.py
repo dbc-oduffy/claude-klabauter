@@ -366,7 +366,7 @@ def test_no_exempt_slug_not_in_keepset_raises_and_names_keepset(tmp_path, capsys
     assert "not in KEEPSET" in captured.err
     assert "doe-claude" in captured.err
     # error message names the valid KEEPSET members
-    assert "example_retrieval_repo" in captured.err
+    assert "project_rag" in captured.err
     assert "doe_claude" in captured.err
     assert "coordinator" in captured.err
 

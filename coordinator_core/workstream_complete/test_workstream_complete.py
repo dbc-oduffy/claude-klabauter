@@ -3146,6 +3146,27 @@ def _commit_with_session_trailer(root: Path, name: str, sid: str) -> None:
     )
 
 
+def test_git_status_porcelain_degraded_read_raises_never_returns_empty(tmp_path, monkeypatch):
+    """P014-C6: `_git_status_porcelain`'s old `return []` on a failed git
+    read was a live R-10 fail-open -- indistinguishable from a genuinely
+    clean tree, letting `classify_session_authored_files` proceed believing
+    nothing was dirty. Converted onto the `session_facts._dirty_paths`
+    producer (P014-C1); a degraded read now raises `RuntimeError` carrying
+    the producer's evidence, distinguishable from the clean-tree `[]` case
+    pinned by the tests below."""
+    from coordinator_core.workstream_complete import directives_memo_lifecycle
+
+    def fake_dirty_paths(worktree_root, **kwargs):
+        return {"degraded": True, "evidence": "git status --porcelain failed: returncode=128", "source": "fake"}
+
+    import coordinator_core.session.session_facts as session_facts_mod
+
+    monkeypatch.setattr(session_facts_mod, "_dirty_paths", fake_dirty_paths)
+
+    with pytest.raises(RuntimeError, match="returncode=128"):
+        directives_memo_lifecycle._git_status_porcelain(tmp_path)
+
+
 def test_classify_session_authored_files_excludes_known_concurrent_paths(tmp_path):
     from datetime import datetime, timedelta, timezone
 

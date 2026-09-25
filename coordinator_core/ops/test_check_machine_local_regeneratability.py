@@ -49,8 +49,8 @@ schema = 1
 "plugin.mirrors"           = ""
 "publish.targets"          = []
 "repos.example-sim-repo"           = ""
-"repos.example_retrieval_repo"        = ""
-"repos.example_retrieval_repo_ue_addon" = ""
+"repos.project_rag"        = ""
+"repos.project_rag_ue_addon" = ""
 "repos.example_game_workbench_repo" = ""
 "repos.example_repo"         = ""
 "repos.example_stats_repo"         = ""
@@ -64,8 +64,8 @@ schema = 1
 "plugin.mirrors"                = "idempotent-regeneratable"
 "publish.targets"               = "idempotent-regeneratable"
 "repos.example-sim-repo"                = "session-accumulated-must-survive-crash"
-"repos.example_retrieval_repo"             = "session-accumulated-must-survive-crash"
-"repos.example_retrieval_repo_ue_addon"    = "session-accumulated-must-survive-crash"
+"repos.project_rag"             = "session-accumulated-must-survive-crash"
+"repos.project_rag_ue_addon"    = "session-accumulated-must-survive-crash"
 "repos.example_game_workbench_repo"  = "session-accumulated-must-survive-crash"
 "repos.example_repo"              = "session-accumulated-must-survive-crash"
 "repos.example_stats_repo"              = "session-accumulated-must-survive-crash"
@@ -76,7 +76,7 @@ schema = 1
 """
     )
     (ml_dir / "registry.local.toml").write_text(
-        'schema = 1\n"repos.example_retrieval_repo" = "/home/user/example-retrieval-repo"\n'
+        'schema = 1\n"repos.project_rag" = "/home/user/example-retrieval-repo"\n'
     )
 
     rc, out, err = _run(claude_dir, capsys, monkeypatch=monkeypatch, ml_dir=ml_dir)
@@ -99,7 +99,7 @@ schema = 1
 "plugin.mirrors"           = ""
 "publish.targets"          = []
 "repos.example-sim-repo"           = ""
-"repos.example_retrieval_repo_ue_addon" = ""
+"repos.project_rag_ue_addon" = ""
 "repos.example_game_workbench_repo" = ""
 "repos.example_repo"         = ""
 "repos.example_stats_repo"         = ""
@@ -113,8 +113,8 @@ schema = 1
 "plugin.mirrors"                = "idempotent-regeneratable"
 "publish.targets"               = "idempotent-regeneratable"
 "repos.example-sim-repo"                = "session-accumulated-must-survive-crash"
-"repos.example_retrieval_repo"             = "session-accumulated-must-survive-crash"
-"repos.example_retrieval_repo_ue_addon"    = "session-accumulated-must-survive-crash"
+"repos.project_rag"             = "session-accumulated-must-survive-crash"
+"repos.project_rag_ue_addon"    = "session-accumulated-must-survive-crash"
 "repos.example_game_workbench_repo"  = "session-accumulated-must-survive-crash"
 "repos.example_repo"              = "session-accumulated-must-survive-crash"
 "repos.example_stats_repo"              = "session-accumulated-must-survive-crash"
@@ -125,14 +125,14 @@ schema = 1
 """
     )
     (ml_dir / "registry.local.toml").write_text(
-        'schema = 1\n"repos.example_retrieval_repo" = "/home/user/example-retrieval-repo"\n'
+        'schema = 1\n"repos.project_rag" = "/home/user/example-retrieval-repo"\n'
     )
 
     rc, out, err = _run(claude_dir, capsys, monkeypatch=monkeypatch, ml_dir=ml_dir)
 
     assert rc == 0
     assert "install-surface-completeness defect" in err
-    assert "repos.example_retrieval_repo" in err
+    assert "repos.project_rag" in err
     assert "Offer:" in err
     # repos.example-sim-repo IS declared in the tracked registry.toml — must not be flagged
     assert "'repos.example-sim-repo'" not in err
@@ -152,8 +152,8 @@ schema = 1
 "plugin.mirrors"                = "idempotent-regeneratable"
 "publish.targets"               = "idempotent-regeneratable"
 "repos.example-sim-repo"                = "idempotent-regeneratable"
-"repos.example_retrieval_repo"             = "idempotent-regeneratable"
-"repos.example_retrieval_repo_ue_addon"    = "idempotent-regeneratable"
+"repos.project_rag"             = "idempotent-regeneratable"
+"repos.project_rag_ue_addon"    = "idempotent-regeneratable"
 "repos.example_game_workbench_repo"  = "idempotent-regeneratable"
 "repos.example_repo"              = "idempotent-regeneratable"
 "repos.example_stats_repo"              = "idempotent-regeneratable"
@@ -184,8 +184,8 @@ schema = 1
 "plugin.mirrors"           = ""
 "publish.targets"          = []
 "repos.example-sim-repo"           = ""
-"repos.example_retrieval_repo"        = ""
-"repos.example_retrieval_repo_ue_addon" = ""
+"repos.project_rag"        = ""
+"repos.project_rag_ue_addon" = ""
 "repos.example_game_workbench_repo" = ""
 "repos.example_repo"         = ""
 "repos.example_stats_repo"         = ""
@@ -198,8 +198,8 @@ schema = 1
 # coordinator.python intentionally omitted
 "publish.targets"               = "idempotent-regeneratable"
 "repos.example-sim-repo"                = "idempotent-regeneratable"
-"repos.example_retrieval_repo"             = "idempotent-regeneratable"
-"repos.example_retrieval_repo_ue_addon"    = "idempotent-regeneratable"
+"repos.project_rag"             = "idempotent-regeneratable"
+"repos.project_rag_ue_addon"    = "idempotent-regeneratable"
 "repos.example_game_workbench_repo"  = "idempotent-regeneratable"
 "repos.example_repo"              = "idempotent-regeneratable"
 "repos.example_stats_repo"              = "idempotent-regeneratable"
@@ -232,8 +232,8 @@ schema = 1
 "plugin.mirrors.coordinator-claude" = "idempotent-regeneratable"
 "publish.targets"               = "idempotent-regeneratable"
 "repos.example-sim-repo"                = "idempotent-regeneratable"
-"repos.example_retrieval_repo"             = "idempotent-regeneratable"
-"repos.example_retrieval_repo_ue_addon"    = "idempotent-regeneratable"
+"repos.project_rag"             = "idempotent-regeneratable"
+"repos.project_rag_ue_addon"    = "idempotent-regeneratable"
 "repos.example_game_workbench_repo"  = "idempotent-regeneratable"
 "repos.example_repo"              = "idempotent-regeneratable"
 "repos.example_stats_repo"              = "idempotent-regeneratable"
@@ -393,8 +393,8 @@ schema = 1
 "plugin.mirrors"                = "idempotent-regeneratable"
 "publish.targets"               = "idempotent-regeneratable"
 "repos.example-sim-repo"                = "idempotent-regeneratable"
-"repos.example_retrieval_repo"             = "idempotent-regeneratable"
-"repos.example_retrieval_repo_ue_addon"    = "idempotent-regeneratable"
+"repos.project_rag"             = "idempotent-regeneratable"
+"repos.project_rag_ue_addon"    = "idempotent-regeneratable"
 "repos.example_game_workbench_repo"  = "idempotent-regeneratable"
 "repos.example_repo"              = "idempotent-regeneratable"
 "repos.example_stats_repo"              = "idempotent-regeneratable"
@@ -440,8 +440,8 @@ schema = 1
 "plugin.mirrors"                = "idempotent-regeneratable"
 "publish.targets"               = "idempotent-regeneratable"
 "repos.example-sim-repo"                = "idempotent-regeneratable"
-"repos.example_retrieval_repo"             = "idempotent-regeneratable"
-"repos.example_retrieval_repo_ue_addon"    = "idempotent-regeneratable"
+"repos.project_rag"             = "idempotent-regeneratable"
+"repos.project_rag_ue_addon"    = "idempotent-regeneratable"
 "repos.example_game_workbench_repo"  = "idempotent-regeneratable"
 "repos.example_repo"              = "idempotent-regeneratable"
 "repos.example_stats_repo"              = "idempotent-regeneratable"
@@ -469,8 +469,8 @@ schema = 1
 "plugin.mirrors"           = ""
 "publish.targets"          = []
 "repos.example-sim-repo"           = ""
-"repos.example_retrieval_repo"        = ""
-"repos.example_retrieval_repo_ue_addon" = ""
+"repos.project_rag"        = ""
+"repos.project_rag_ue_addon" = ""
 "repos.example_game_workbench_repo" = ""
 "repos.example_repo"         = ""
 "repos.example_stats_repo"         = ""
@@ -485,8 +485,8 @@ schema = 1
 "plugin.mirrors"                = "idempotent-regeneratable"
 "publish.targets"               = "idempotent-regeneratable"
 "repos.example-sim-repo"                = "idempotent-regeneratable"
-"repos.example_retrieval_repo"             = "idempotent-regeneratable"
-"repos.example_retrieval_repo_ue_addon"    = "idempotent-regeneratable"
+"repos.project_rag"             = "idempotent-regeneratable"
+"repos.project_rag_ue_addon"    = "idempotent-regeneratable"
 "repos.example_game_workbench_repo"  = "idempotent-regeneratable"
 "repos.example_repo"              = "idempotent-regeneratable"
 "repos.example_stats_repo"              = "idempotent-regeneratable"

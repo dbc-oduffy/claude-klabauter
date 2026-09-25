@@ -1320,6 +1320,10 @@ def _close(
     open/in_flight/ready_to_fire/awaiting_gate, which is exactly why the
     executor above had no correct verb to reach for.
 
+    Also refuses (exit_code=1, no write) reason:displaced when the record's
+    continued_into is non-empty — a lineage edge means the record is
+    continued, not closed (handoff-legal-state-table.md § Q3).
+
     Idempotency: no-op (exit_code=0) ONLY when deployment_state==closed AND
     closed_reason already equals the requested reason. A re-close with a
     DIFFERENT reason overwrites closed_reason — a human correcting their own
@@ -1383,6 +1387,17 @@ def _close(
             raise MutateAbort(
                 f'close refuses to overwrite deployment_state:"{deployment}" '
                 f"(already a different completed terminal) — {handoff_path}"
+            )
+
+        # Q3 refusal (handoff-legal-state-table.md § Q3): a record with a
+        # non-empty continued_into is continued, not closed — displaced must
+        # never be stamped over a live lineage edge.
+        if reason == "displaced" and read_fm_field(split.fm_text, "continued_into"):
+            raise MutateAbort(
+                f"close: refuses reason:displaced on {handoff_path} — "
+                "continued_into is non-empty (a lineage edge exists, so this "
+                "record is continued, not closed; see supersede) — "
+                "handoff-legal-state-table.md § Q3"
             )
 
         fm = split.fm_text

@@ -3027,6 +3027,224 @@ class TestResolveMemo:
 
 
 # ---------------------------------------------------------------------------
+# AC6 (P080-C3): cs_action_memo / cs_resolve_memo print exactly one stderr
+# line for the four actionable surface_advisory (P080-C1/C2) print
+# conditions -- out-of-surface, paper-realization, unresolved-sha (branching
+# on reason), and ok with a non-empty untouched_declared -- and nothing for
+# ok-with-empty-untouched, no-declared-surface, or an absent surface_advisory
+# key. Return code is unchanged in every case.
+# ---------------------------------------------------------------------------
+
+def _commit_file(repo: Path, rel: str, content: str, message: str) -> str:
+    """Writes+commits `rel` in `repo`'s working tree, returns the new HEAD sha."""
+    path = repo / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    _git(repo, "add", "--", rel)
+    _git(repo, "commit", "-q", "-m", message)
+    return _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+
+class TestSurfaceAdvisoryStderrLine:
+    def _run_action(self, tmp_path, monkeypatch, extra: str, realized_by: str, capsys):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        mp = _seed_memo(repo, "m.md", "in_progress", extra=extra)
+        monkeypatch.setenv("CLAUDE_SESSION_ID", _DEFAULT_TEST_SESSION_ID)
+        rc = arstamp.cs_action_memo(
+            str(mp), "--decision", "accepted", "--realized-by", realized_by,
+        )
+        return repo, mp, rc, capsys.readouterr()
+
+    def test_no_declared_surface_prints_nothing(self, tmp_path, monkeypatch, capsys):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        sha = _commit_file(repo, "other.py", "z", "realize")
+        _, _, rc, captured = self._run_action(
+            tmp_path, monkeypatch, extra="", realized_by=sha, capsys=capsys
+        )
+        assert rc == 0
+        assert captured.err == ""
+
+    def test_out_of_surface_prints_one_line(self, tmp_path, monkeypatch, capsys):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _commit_file(repo, "declared_thing.py", "x", "declared")
+        sha = _commit_file(repo, "other.py", "z", "realize")
+        extra = "scoped_to:\n  artifact: declared_thing.py\n"
+        _, _, rc, captured = self._run_action(
+            tmp_path, monkeypatch, extra=extra, realized_by=sha, capsys=capsys
+        )
+        assert rc == 0
+        lines = [l for l in captured.err.splitlines() if l]
+        assert len(lines) == 1
+        assert "out-of-surface" in lines[0]
+        assert "--correct-realization" in lines[0]
+        assert "declared_thing.py" in lines[0]
+
+    def test_paper_realization_prints_one_line(self, tmp_path, monkeypatch, capsys):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _commit_file(repo, "real_file.py", "x", "declared")
+        sha = _commit_file(repo, "docs/plans/x.md", "y", "planning")
+        extra = "scoped_to:\n  artifact: real_file.py\n"
+        _, _, rc, captured = self._run_action(
+            tmp_path, monkeypatch, extra=extra, realized_by=sha, capsys=capsys
+        )
+        assert rc == 0
+        lines = [l for l in captured.err.splitlines() if l]
+        assert len(lines) == 1
+        assert "paper-realization" in lines[0]
+        assert "--correct-realization" in lines[0]
+
+    def test_unresolved_sha_not_a_commit_here_prints_one_line_no_correction_clause(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        extra = "scoped_to:\n  artifact: real_file.py\n"
+        _, _, rc, captured = self._run_action(
+            tmp_path, monkeypatch, extra=extra, realized_by="abcdef01234",
+            capsys=capsys,
+        )
+        assert rc == 0
+        lines = [l for l in captured.err.splitlines() if l]
+        assert len(lines) == 1
+        assert "not resolvable in" in lines[0]
+        assert "cross-repo realization" in lines[0]
+        assert "--correct-realization" not in lines[0]
+
+    def test_unresolved_sha_advisory_failed_prints_different_line_no_cross_repo_cause(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """reason=advisory-failed (a git timeout/parse failure/C1 bug, AC4) is a
+        DISTINCT wording from not-a-commit-here -- names no cause, no
+        --correct-realization clause (nothing for the agent to correct on an
+        internal failure)."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        sha = _commit_file(repo, "real_file.py", "x", "c")
+        extra = "scoped_to:\n  artifact: real_file.py\n"
+        mp = _seed_memo(repo, "m.md", "in_progress", extra=extra)
+        monkeypatch.setenv("CLAUDE_SESSION_ID", _DEFAULT_TEST_SESSION_ID)
+
+        import coordinator_core.ops.memo.surface_advisory as surface_advisory_mod
+
+        real_run = surface_advisory_mod.subprocess.run
+
+        def _boom(cmd, *args, **kwargs):
+            if cmd[:2] == ["git", "log"]:
+                raise OSError("boom")
+            return real_run(cmd, *args, **kwargs)
+
+        monkeypatch.setattr(surface_advisory_mod.subprocess, "run", _boom)
+        rc = arstamp.cs_action_memo(
+            str(mp), "--decision", "accepted", "--realized-by", sha,
+        )
+        captured = capsys.readouterr()
+        assert rc == 0
+        lines = [l for l in captured.err.splitlines() if l]
+        assert len(lines) == 1
+        assert "surface advisory failed in" in lines[0]
+        assert "realization unjudged" in lines[0]
+        assert "cross-repo" not in lines[0]
+        assert "--correct-realization" not in lines[0]
+
+    def test_ok_with_nonempty_untouched_declared_prints_one_line(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """AC7 (wrapper level): the plan's instance-3 fixture -- two declared
+        paths, only one touched -- yields ok with a non-empty
+        untouched_declared, and exactly one stderr line naming the untouched
+        path (coordinator/bin/session-claim-cli)."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        (repo / "coordinator" / "bin").mkdir(parents=True, exist_ok=True)
+        (repo / "coordinator" / "bin" / "session-claim-cli").write_text("x", encoding="utf-8")
+        _git(repo, "add", "--", "coordinator/bin/session-claim-cli")
+        _git(repo, "commit", "-q", "-m", "declared-file")
+        (repo / "coordinator_core" / "ops" / "ceremony").mkdir(parents=True, exist_ok=True)
+        (repo / "coordinator_core" / "ops" / "ceremony" / "scoped_git_commit.py").write_text(
+            "x", encoding="utf-8"
+        )
+        (repo / "claims.py").write_text("y", encoding="utf-8")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-q", "-m", "realize")
+        sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+        extra = (
+            "scoped_to:\n"
+            "  artifact:\n"
+            "    - coordinator/bin/session-claim-cli\n"
+            "    - coordinator_core/ops/ceremony/scoped_git_commit.py\n"
+        )
+        _, mp, rc, captured = self._run_action(
+            tmp_path, monkeypatch, extra=extra, realized_by=sha, capsys=capsys
+        )
+        assert rc == 0
+        assert "status: actioned" in mp.read_text(encoding="utf-8")
+        lines = [l for l in captured.err.splitlines() if l]
+        assert len(lines) == 1
+        assert "coordinator/bin/session-claim-cli" in lines[0]
+        assert "--correct-realization" in lines[0]
+
+    def test_ok_with_empty_untouched_declared_prints_nothing(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _commit_file(repo, "real_file.py", "x", "declared")
+        sha = _commit_file(repo, "real_file.py", "y", "realize")
+        extra = "scoped_to:\n  artifact: real_file.py\n"
+        _, _, rc, captured = self._run_action(
+            tmp_path, monkeypatch, extra=extra, realized_by=sha, capsys=capsys
+        )
+        assert rc == 0
+        assert captured.err == ""
+
+    def test_liveness_guard_refuse_path_has_no_key_and_prints_nothing(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """No memo.transition call is made on this path (no surface_advisory
+        key can exist), and the wrapper never reads the key unguarded -- it
+        must not crash, and it prints nothing beyond its own refusal line."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        mp = _seed_memo(repo, "held.md", "in_progress")
+        claim_dir = repo / ".git" / "coordinator-sessions" / "memo-claims" / "held.md"
+        claim_dir.mkdir(parents=True)
+        (claim_dir / "session_id").write_text("sess-owner", encoding="utf-8")
+        monkeypatch.setattr(arstamp, "cs_claim_holder_live", lambda claim_path: True)
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-caller")
+        monkeypatch.chdir(repo)  # Guard 4 requires cwd_git_root == memo_git_root
+        rc = arstamp.cs_action_memo(str(mp), "--actioned-note", "done")
+        assert rc == 1
+        captured = capsys.readouterr()
+        # Own refusal line prints; nothing surface_advisory-shaped is appended.
+        assert "REFUSING" in captured.err
+        for token in ("out-of-surface", "paper-realization", "not resolvable in", "advisory failed"):
+            assert token not in captured.err
+
+    def test_resolve_memo_out_of_surface_prints_one_line(self, tmp_path, monkeypatch, capsys):
+        """Same AC6 contract on cs_resolve_memo's own wrapper."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _commit_file(repo, "declared_thing.py", "x", "declared")
+        sha = _commit_file(repo, "other.py", "z", "realize")
+        extra = "scoped_to:\n  artifact: declared_thing.py\n"
+        mp = _seed_memo(repo, "r.md", "open", extra=extra)
+        monkeypatch.setenv("CLAUDE_SESSION_ID", _DEFAULT_TEST_SESSION_ID)
+        rc = arstamp.cs_resolve_memo(
+            str(mp), "--decision", "accepted", "--realized-by", sha,
+        )
+        assert rc == 0
+        captured = capsys.readouterr()
+        lines = [l for l in captured.err.splitlines() if l]
+        assert len(lines) == 1
+        assert "out-of-surface" in lines[0]
+        assert "--correct-realization" in lines[0]
+
+
+# ---------------------------------------------------------------------------
 # cs_stamp_plan_implemented — native in-process delegate to
 # coordinator_core.ops.plan_status_transition.main; these tests assert the
 # wrapper's exit-code propagation against the real contract (that module's

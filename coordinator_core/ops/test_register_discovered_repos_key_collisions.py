@@ -81,7 +81,7 @@ def test_two_distinct_dirs_with_one_derived_key_keep_the_first(
     rc = main(["--non-interactive"], self_dir=lib_dir)
 
     assert rc == 0
-    assert _read_registry(bin_dir)["repos.example_retrieval_repo_plugin"] == first
+    assert _read_registry(bin_dir)["repos.project_rag_plugin"] == first
     err = capsys.readouterr().err
     assert "two different directories" in err
     assert second in err, "the ignored path must be named, or the operator cannot act on it"
@@ -99,14 +99,14 @@ def test_platform_install_path_beats_a_discovered_bystander(
     # The plugin's declared NAME is `example-retrieval-repo`; its clone is named
     # `example-retrieval-repo-plugin`. That mismatch is the reporting box's shape, and
     # matching on the name rather than the clone basename would miss it.
-    _write_installed_plugins(isolated_claude_home, "example-retrieval-repo", live)
+    _write_installed_plugins(isolated_claude_home, "project-rag", live)
     _stub_discover(monkeypatch, [discovered])
     lib_dir, bin_dir = env
 
     rc = main(["--non-interactive"], self_dir=lib_dir)
 
     assert rc == 0
-    assert _read_registry(bin_dir)["repos.example_retrieval_repo_plugin"] == live
+    assert _read_registry(bin_dir)["repos.project_rag_plugin"] == live
     assert "the platform loads this plugin from" in capsys.readouterr().err
 
 
@@ -117,14 +117,14 @@ def test_no_correction_when_discovery_already_agrees(
     trains operators to ignore the one that matters."""
     live = str(tmp_path / "example-retrieval-repo-plugin")
     os.makedirs(live)
-    _write_installed_plugins(isolated_claude_home, "example-retrieval-repo", live)
+    _write_installed_plugins(isolated_claude_home, "project-rag", live)
     _stub_discover(monkeypatch, [live])
     lib_dir, bin_dir = env
 
     rc = main(["--non-interactive"], self_dir=lib_dir)
 
     assert rc == 0
-    assert _read_registry(bin_dir)["repos.example_retrieval_repo_plugin"] == live
+    assert _read_registry(bin_dir)["repos.project_rag_plugin"] == live
     assert "the platform loads this plugin from" not in capsys.readouterr().err
 
 

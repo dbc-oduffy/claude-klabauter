@@ -69,8 +69,8 @@ USAGE = """Usage: probe-cwd-example-retrieval-repo-relevance.sh
 
 Reads:
   - PWD (or git rev-parse --show-toplevel if inside git)
-  - $HOME/.claude.json (mcpServers — look for "example-retrieval-repo" key)
-  - <settings-home>/machine-local/registry.local.toml (repos.example_retrieval_repo for bound-source check; per-machine values)
+  - $HOME/.claude.json (mcpServers — look for "project-rag" key)
+  - <settings-home>/machine-local/registry.local.toml (repos.project_rag for bound-source check; per-machine values)
   - <settings-home>/machine-local/registry.toml (fallback if registry.local.toml absent)
     (settings-home defaults to ~/.coordinator-claude-settings; override via COORDINATOR_SETTINGS_HOME)
   - whoami output (project_kind probe, when example-retrieval-repo tools registered)
@@ -164,14 +164,14 @@ def _claude_json_has_example_retrieval_repo(claude_json_path: str) -> bool:
         with open(claude_json_path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
         servers = data.get("mcpServers", {}) or {}
-        return "example-retrieval-repo" in servers
+        return "project-rag" in servers
     except Exception:
         print(f"skip: _claude_json_has_example_retrieval_repo: with open(claude_json_path, \"r\", encoding=\"utf-8\") as fh: failed: {sys.exc_info()[1]}", file=sys.stderr)
         return False
 
 
 def _parse_registry_toml(content: str) -> str:
-    """Extract repos.example_retrieval_repo from TOML content. Mirrors the bash oracle's
+    """Extract repos.project_rag from TOML content. Mirrors the bash oracle's
     embedded Python: tries tomllib first, falls back to a manual line-scan
     parse (Python < 3.11 path — kept for parity even though this process is
     always >= 3.11 in practice, since the bash oracle's fallback path is part
@@ -180,7 +180,7 @@ def _parse_registry_toml(content: str) -> str:
         import tomllib
 
         d = tomllib.loads(content)
-        val = d.get("repos", {}).get("example_retrieval_repo", "")
+        val = d.get("repos", {}).get("project_rag", "")
         return val.strip() if val else ""
     except (ImportError, AttributeError):
         print(f"skip: _parse_registry_toml: import tomllib failed: {sys.exc_info()[1]}", file=sys.stderr)
@@ -196,7 +196,7 @@ def _parse_registry_toml(content: str) -> str:
             in_repos = True
         elif stripped.startswith("[") and stripped != "[repos]":
             in_repos = False
-        elif in_repos and stripped.split("=", 1)[0].strip() == "example_retrieval_repo":
+        elif in_repos and stripped.split("=", 1)[0].strip() == "project_rag":
             parts = stripped.split("=", 1)
             if len(parts) == 2:
                 return parts[1].strip().strip('"').strip("'")
@@ -314,7 +314,7 @@ def _mcp_healthy(mcp_sentinel_path: str) -> bool:
         with open(mcp_sentinel_path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
         red = data.get("red_servers", []) or []
-        return "example-retrieval-repo" not in red
+        return "project-rag" not in red
     except Exception:
         print(f"skip: _mcp_healthy: with open(mcp_sentinel_path, \"r\", encoding=\"utf-8\") as fh: failed: {sys.exc_info()[1]}", file=sys.stderr)
         return True

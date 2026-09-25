@@ -133,6 +133,19 @@ class FastSubcommandTest(unittest.TestCase):
         self.assertIn("Validation: 0", proc.stdout)
         self.assertEqual(proc.returncode, 0)
 
+    def test_t17_budget_line_emitted_on_stderr(self) -> None:
+        """B1 (docs/plans/2026-09-07-fix-the-validate-gate-recursive-tier-
+        invocation.md, AC11): the resolved-command run emits the gate_budget
+        line on stderr, carrying both figures, and does not perturb stdout
+        or the exit code -- same stub command, same repo, as T4."""
+        env = {"COORDINATOR_FAST_TEST_CMD": "true"}
+        proc = _run(["fast", "--repo-root", "/tmp"], env=env)
+        self.assertIn("Validation: 0", proc.stdout)
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("[validate-gate] self_process_ms=", proc.stderr)
+        self.assertIn("suite_process_ms=", proc.stderr)
+        self.assertIn("(process time, not wall clock)", proc.stderr)
+
     def test_t5_resolved_command_fails(self) -> None:
         # `exit 3` is two tokens, so (unlike the single-token `true` in T4)
         # it clears `_configured_test_cmds`' well-formedness filter and gets

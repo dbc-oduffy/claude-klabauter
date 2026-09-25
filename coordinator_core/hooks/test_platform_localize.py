@@ -42,7 +42,7 @@ def test_read_registry_local_toml_parses_key_value_rows_only(tmp_path):
             [
                 "# a comment",
                 "[repos]",
-                'repos.example_retrieval_repo = "/Users/x/example-retrieval-repo"',
+                'repos.project_rag = "/Users/x/example-retrieval-repo"',
                 "schema = 1",
                 'repos.empty_repo = ""',
                 "",
@@ -53,7 +53,7 @@ def test_read_registry_local_toml_parses_key_value_rows_only(tmp_path):
     # Oracle regex only understands `key = "value"` -- bare int values and
     # table headers are silently skipped, per the oracle's own comment.
     assert registry == {
-        "repos.example_retrieval_repo": "/Users/x/example-retrieval-repo",
+        "repos.project_rag": "/Users/x/example-retrieval-repo",
         "repos.empty_repo": "",
     }
     assert "schema" not in registry

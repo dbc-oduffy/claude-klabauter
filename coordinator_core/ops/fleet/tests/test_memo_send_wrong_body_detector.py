@@ -41,7 +41,7 @@ def _stage_two_drafts(tmp_path, monkeypatch, *, first_body: str, second_body: st
     """
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
-    claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+    claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     _write_draft(sender_repo, "earlier-topic", body=first_body)
     _write_draft(sender_repo, "later-topic", body=second_body)
@@ -113,7 +113,7 @@ class TestCorruptSiblingDraftIsSkipped:
         """
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         # The send's own draft — an unrelated body.

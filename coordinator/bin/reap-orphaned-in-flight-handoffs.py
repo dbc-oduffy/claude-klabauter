@@ -1,7 +1,10 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """
 reap-orphaned-in-flight-handoffs.py — thin CLI shell over
-coordinator_core.ops.reap_in_flight_claims's survey()/apply_dispositions().
+coordinator_core.ops.reap_in_flight_claims's survey()/apply_dispositions(),
+plus (2026-09-11, plan chunk C6) coordinator_core.ops.reap_in_progress_memos's
+survey()/apply_dispositions() for cross-repo memos stranded at
+`status: in_progress`.
 
 Purpose, per `docs/plans/2026-08-26-two-callers-want-two-numbers-not-a-1301-line-cli.md`
 chunk C3: the fused read-side implementation this file used to carry measured
@@ -50,6 +53,7 @@ Negative-spec:
       propagates.
 
 Spec backlink: docs/plans/2026-08-26-two-callers-want-two-numbers-n-6127ee.md § C3
+Spec backlink (memo survey): docs/plans/2026-09-11-handoff-lifecycle-one-legal-state-table.md § C6
 """
 from __future__ import annotations
 
@@ -64,6 +68,8 @@ _BOOTSTRAP_NAMES = (
     "resolve_checked_repo_root",
     "survey",
     "apply_dispositions",
+    "memo_survey",
+    "memo_apply_dispositions",
     "recording_declared_writes",
     "declare_write",
 )
@@ -125,6 +131,10 @@ def _bootstrap_imports() -> None:
         apply_dispositions as _apply_dispositions,
         survey as _survey,
     )
+    from coordinator_core.ops.reap_in_progress_memos import (
+        apply_dispositions as _memo_apply_dispositions,
+        survey as _memo_survey,
+    )
     from coordinator_core.cli_entry import recording_declared_writes
     from coordinator_core.session.declared_writes import declare_write
 
@@ -132,6 +142,8 @@ def _bootstrap_imports() -> None:
         ("resolve_checked_repo_root", _rccr),
         ("survey", _survey),
         ("apply_dispositions", _apply_dispositions),
+        ("memo_survey", _memo_survey),
+        ("memo_apply_dispositions", _memo_apply_dispositions),
         ("recording_declared_writes", recording_declared_writes),
         ("declare_write", declare_write),
     ):
@@ -139,13 +151,15 @@ def _bootstrap_imports() -> None:
 
 HELP_TEXT = """\
 reap-orphaned-in-flight-handoffs — release crash-orphaned in_flight handoff
-claims, and name the ones it cannot dispose of.
+claims and in_progress cross-repo memo claims, and name the ones it cannot
+dispose of.
 
 Usage:
   reap-orphaned-in-flight-handoffs [--dry-run] [--repo-root PATH]
 
 Options:
-  --dry-run       Survey and print dispositions; mutate nothing.
+  --dry-run       Survey and print dispositions; mutate nothing. Covers both
+                  the handoff survey and the memo survey.
   --repo-root P   Explicit repo root (default: resolved from cwd).
   -h, --help      Show this help and exit.
 
@@ -209,6 +223,14 @@ def _print_report(result, *, dry_run: bool) -> None:
         print("[dry-run] no changes made")
 
 
+def _print_memo_report(result, *, dry_run: bool) -> None:
+    for d in result.dispositions:
+        print(f"[memo:{d.verdict}] {d.path} (holder={d.holder}): {d.detail}")
+    print(f"memo_would_release={result.would_release}")
+    if dry_run:
+        print("[dry-run] no changes made")
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     _bootstrap_imports()
     args = list(sys.argv[1:] if argv is None else argv)
@@ -227,6 +249,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     result = survey(Path(repo_root))
     _print_report(result, dry_run=cfg["dry_run"])
 
+    memo_result = memo_survey(Path(repo_root))
+    _print_memo_report(memo_result, dry_run=cfg["dry_run"])
+
     if cfg["dry_run"]:
         return 0
 
@@ -239,12 +264,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     # list rather than a callee-side declaration. A reclaim-shipped row the
     # live-children guard retained comes back in `_retained`, not `_applied` —
     # nothing was written there, so it must not be declared as a touch.
+    #
+    # 2026-09-11 (plan C6): the memo survey's `apply_dispositions` is applied
+    # inside the SAME `recording_declared_writes` block — one scope-touch
+    # window covering both the handoff releases and the memo releases, never
+    # a second nested window.
     with recording_declared_writes(cwd=repo_root):
         _applied, _retained, failed = apply_dispositions(result.dispositions)
         for _path in _applied:
             declare_write(_path)
-    if failed:
+        _memo_applied, memo_failed = memo_apply_dispositions(memo_result.dispositions)
+        for _path in _memo_applied:
+            declare_write(_path)
+    if failed or memo_failed:
         for detail in failed:
+            sys.stderr.write(f"{SELF_NAME}: {detail}\n")
+        for detail in memo_failed:
             sys.stderr.write(f"{SELF_NAME}: {detail}\n")
         return 1
     return 0

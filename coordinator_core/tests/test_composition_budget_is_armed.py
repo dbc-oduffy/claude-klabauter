@@ -1,10 +1,14 @@
 """AST regression pin (chunk C2, docs/plans/2026-08-18-arm-the-composition-
 budget.md; row added for `execute_plan_assemble/apply.py` per
-docs/plans/2026-09-11-the-execute-plan-pre-execution-chain-emi.md, chunk C2):
+docs/plans/2026-09-11-the-execute-plan-pre-execution-chain-emi.md, chunk C2;
+widened per docs/plans/2026-09-11-half-the-compositions-do-not-finish-clea.md
+chunk C2 to also require `exit_code_label=`):
 every `apply_base.execute_directives` caller this file names
 must construct and thread a real `composition_budget`, and must flush
-its record in a `finally` covering the same call -- never silently regress
-to `execute_directives`'s own `composition_budget=None` default.
+its record in a `finally` covering the same call, WITH an `exit_code_label=`
+keyword on that same flush call -- never silently regress to
+`execute_directives`'s own `composition_budget=None` default, and never
+flush a record with no exit label.
 
 WHY AST, NOT GREP (same rationale as `test_no_unbatched_per_item_git_spawn.py`,
 read first per the chunk brief): a grep for the substring `composition_budget=`
@@ -16,7 +20,7 @@ so the check inspects the `apply()` function's own `ast.Try` structure: the
 call to `execute_directives`/`_execute_directives` must appear in the `try`
 body with a `composition_budget` keyword whose value is not a literal
 `None`, and a call to `flush_composition_record` must appear in that SAME
-`Try` node's `finalbody`.
+`Try` node's `finalbody`, carrying its own `exit_code_label=` keyword.
 
 Source only -- this module never imports any of the named apply modules or
 `coordinator_core.telemetry.composition_record`, so it passes whether or not
@@ -35,14 +39,20 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 #: file -> the top-level `def apply(...)` in it that must arm the budget.
 #: `baton_assemble`/`pickup_assemble` dispatch through their own
 #: `_execute_directives` wrapper (see each module's own wrapper docstring);
-#: the other three call `apply_base.execute_directives` directly.
+#: the other three call `apply_base.execute_directives` directly. These are
+#: the five `apply_base` lineage sites threading `exit_code_label` (chunk C2,
+#: docs/plans/2026-09-11-half-the-compositions-do-not-finish-clea.md); the
+#: three `ceremony_common.apply_halt` lineage sites
+#: (workday_complete/workstream_complete/workweek_complete) are pinned
+#: separately by `ceremony_common/test_apply_halt.py`.
+#: `execute_plan_assemble/apply.py` is out of THIS chunk's write set (a
+#: different plan's chunk) and is intentionally not named here.
 _SITES: tuple[tuple[str, str], ...] = (
     ("coordinator_core/backlog_grind_assemble/apply.py", "execute_directives"),
     ("coordinator_core/consolidate_assemble/apply.py", "execute_directives"),
     ("coordinator_core/merge_assemble/apply.py", "execute_directives"),
     ("coordinator_core/baton_assemble/apply.py", "_execute_directives"),
     ("coordinator_core/pickup_assemble/apply.py", "_execute_directives"),
-    ("coordinator_core/execute_plan_assemble/apply.py", "execute_directives"),
 )
 
 
@@ -79,10 +89,15 @@ def _is_literal_none(node: ast.expr) -> bool:
     return isinstance(node, ast.Constant) and node.value is None
 
 
+def _has_kw(call: ast.Call, name: str) -> bool:
+    return any(kw.arg == name for kw in call.keywords)
+
+
 def _try_arms_budget(try_node: ast.Try, execute_call_name: str) -> bool:
     """`True` iff `try_node.body` calls `execute_call_name` with a non-`None`
     `composition_budget=` keyword, AND `try_node.finalbody` calls
-    `flush_composition_record` -- both required, in the SAME `Try`."""
+    `flush_composition_record` with its own `exit_code_label=` keyword --
+    all required, in the SAME `Try`."""
     execute_call = None
     for call in _calls_in(try_node.body):
         if _call_name(call.func) == execute_call_name:
@@ -95,10 +110,12 @@ def _try_arms_budget(try_node: ast.Try, execute_call_name: str) -> bool:
     if budget_kw is None or _is_literal_none(budget_kw.value):
         return False
 
-    flush_called = any(
-        _call_name(call.func) == "flush_composition_record" for call in _calls_in(try_node.finalbody)
-    )
-    return flush_called
+    for call in _calls_in(try_node.finalbody):
+        if _call_name(call.func) == "flush_composition_record" and _has_kw(
+            call, "exit_code_label"
+        ):
+            return True
+    return False
 
 
 def _apply_arms_composition_budget(source: str, execute_call_name: str) -> bool:
@@ -131,11 +148,13 @@ _ARMED_FIXTURE = """
 def apply():
     budget = make_fleet_budget("x")
     outcome = "directive_failed"
+    exit_label = None
     try:
         exit_code, report = execute_directives(a, b, c, composition_budget=budget)
+        exit_label = exit_code_label(exit_code, report)
         outcome = "success"
     finally:
-        flush_composition_record(budget, outcome)
+        flush_composition_record(budget, outcome, exit_code_label=exit_label)
     return exit_code, report
 """
 
@@ -144,7 +163,7 @@ def apply():
     try:
         exit_code, report = execute_directives(a, b, c, composition_budget=None)
     finally:
-        flush_composition_record(None, "directive_failed")
+        flush_composition_record(None, "directive_failed", exit_code_label=None)
     return exit_code, report
 """
 
@@ -153,7 +172,7 @@ def apply():
     try:
         exit_code, report = execute_directives(a, b, c)
     finally:
-        flush_composition_record(budget, "directive_failed")
+        flush_composition_record(budget, "directive_failed", exit_code_label=None)
     return exit_code, report
 """
 
@@ -171,7 +190,19 @@ def apply():
         exit_code, report = execute_directives(a, b, c, composition_budget=budget)
     except Exception:
         raise
-    flush_composition_record(budget, "success")
+    flush_composition_record(budget, "success", exit_code_label=None)
+    return exit_code, report
+"""
+
+_MISSING_EXIT_LABEL_KWARG_FIXTURE = """
+def apply():
+    budget = make_fleet_budget("x")
+    outcome = "directive_failed"
+    try:
+        exit_code, report = execute_directives(a, b, c, composition_budget=budget)
+        outcome = "success"
+    finally:
+        flush_composition_record(budget, outcome)
     return exit_code, report
 """
 
@@ -187,12 +218,14 @@ def test_detector_accepts_armed_shape() -> None:
         _MISSING_BUDGET_KWARG_FIXTURE,
         _NO_FLUSH_FIXTURE,
         _FLUSH_OUTSIDE_FINALLY_FIXTURE,
+        _MISSING_EXIT_LABEL_KWARG_FIXTURE,
     ],
     ids=[
         "explicit-none-budget",
         "missing-budget-kwarg",
         "no-flush-at-all",
         "flush-outside-finally",
+        "missing-exit-label-kwarg",
     ],
 )
 def test_detector_rejects_regressed_shapes(fixture: str) -> None:

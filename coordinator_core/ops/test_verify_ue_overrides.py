@@ -119,7 +119,7 @@ def test_missing_directory_fails_loud(monkeypatch, tmp_path, capsys):
         tmp_path,
         **{
             "repos.example_game_workbench_repo": str(tmp_path / "does-not-exist"),
-            "repos.example_retrieval_repo": str(tmp_path / "also-missing"),
+            "repos.project_rag": str(tmp_path / "also-missing"),
         },
     )
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
@@ -137,7 +137,7 @@ def test_missing_settings_json(monkeypatch, tmp_path, capsys):
         d.mkdir(parents=True, exist_ok=True)
     _seed_registry(
         tmp_path,
-        **{"repos.example_game_workbench_repo": str(example_game_repo_dir), "repos.example_retrieval_repo": str(example_retrieval_repo)},
+        **{"repos.example_game_workbench_repo": str(example_game_repo_dir), "repos.project_rag": str(example_retrieval_repo)},
     )
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))  # home_dir() is USERPROFILE-aware on Windows; HOME alone is ignored there
@@ -162,7 +162,7 @@ def test_wrong_key_value(monkeypatch, tmp_path, capsys):
     )
     _seed_registry(
         tmp_path,
-        **{"repos.example_game_workbench_repo": str(example_game_repo_dir), "repos.example_retrieval_repo": str(example_retrieval_repo)},
+        **{"repos.example_game_workbench_repo": str(example_game_repo_dir), "repos.project_rag": str(example_retrieval_repo)},
     )
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))  # home_dir() is USERPROFILE-aware on Windows; HOME alone is ignored there
@@ -181,7 +181,7 @@ def test_no_game_dev_vendor_enabled(monkeypatch, tmp_path, capsys):
     )
     _seed_registry(
         tmp_path,
-        **{"repos.example_game_workbench_repo": str(example_game_repo_dir), "repos.example_retrieval_repo": str(example_retrieval_repo)},
+        **{"repos.example_game_workbench_repo": str(example_game_repo_dir), "repos.project_rag": str(example_retrieval_repo)},
     )
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))  # home_dir() is USERPROFILE-aware on Windows; HOME alone is ignored there
@@ -195,7 +195,7 @@ def test_example_sim_repo_optional_when_unset(monkeypatch, tmp_path, capsys):
     example_game_repo_dir, example_retrieval_repo, home = _setup_success_tree(tmp_path)
     _seed_registry(
         tmp_path,
-        **{"repos.example_game_workbench_repo": str(example_game_repo_dir), "repos.example_retrieval_repo": str(example_retrieval_repo)},
+        **{"repos.example_game_workbench_repo": str(example_game_repo_dir), "repos.project_rag": str(example_retrieval_repo)},
     )
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))  # home_dir() is USERPROFILE-aware on Windows; HOME alone is ignored there
@@ -214,7 +214,7 @@ def test_success_all_expected(monkeypatch, tmp_path, capsys):
         tmp_path,
         **{
             "repos.example_game_workbench_repo": str(example_game_repo_dir),
-            "repos.example_retrieval_repo": str(example_retrieval_repo),
+            "repos.project_rag": str(example_retrieval_repo),
             "repos.example-sim-repo": str(example_sim_repo_dir),
         },
     )
@@ -239,7 +239,7 @@ def test_a_ue_enabled_global_settings_file_is_the_drift(monkeypatch, tmp_path, c
         tmp_path,
         **{
             "repos.example_game_workbench_repo": str(example_game_repo_dir),
-            "repos.example_retrieval_repo": str(example_retrieval_repo),
+            "repos.project_rag": str(example_retrieval_repo),
         },
     )
     monkeypatch.setenv("HOME", str(home))
@@ -260,7 +260,7 @@ def test_a_global_settings_file_with_no_ue_keys_passes(monkeypatch, tmp_path, ca
         tmp_path,
         **{
             "repos.example_game_workbench_repo": str(example_game_repo_dir),
-            "repos.example_retrieval_repo": str(example_retrieval_repo),
+            "repos.project_rag": str(example_retrieval_repo),
         },
     )
     monkeypatch.setenv("HOME", str(home))

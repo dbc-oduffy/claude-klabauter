@@ -152,6 +152,31 @@ def test_cold_row_omits_op_and_pid_when_unknown(tmp_path):
     assert set(row) == {"ts"}
 
 
+def test_cold_row_carries_reason_tag_when_supplied(tmp_path):
+    """AC3: the reason tag is additive to the existing row shape -- no field
+    removed or renamed -- and travels alongside `op`/`pid` unchanged."""
+    telemetry.record_client_cold_fallback(
+        engine_root=tmp_path,
+        op="memo.check_addressee",
+        pid=4321,
+        reason="spawn-triggering-miss",
+    )
+
+    row = json.loads(telemetry.client_cold_path(tmp_path).read_text(encoding="utf-8").strip())
+    assert row["reason"] == "spawn-triggering-miss"
+    assert row["op"] == "memo.check_addressee"
+    assert row["pid"] == 4321
+
+
+def test_cold_row_omits_reason_when_unknown(tmp_path):
+    """Matching `op`/`pid`'s own omit-don't-invent contract: a caller that
+    cannot classify the miss must not be made to fabricate a bucket."""
+    telemetry.record_client_cold_fallback(engine_root=tmp_path)
+
+    row = json.loads(telemetry.client_cold_path(tmp_path).read_text(encoding="utf-8").strip())
+    assert "reason" not in row
+
+
 def test_exit_detail_is_absent_unless_recorded():
     """Seven days of rows predate this field. An absent key keeps them and
     every reader of them working unchanged, so the field costs nothing to
@@ -330,6 +355,12 @@ def test_try_warm_dispatch_records_cold_fallback(tmp_path, monkeypatch):
 
     assert result is None
     assert telemetry.client_cold_count(tmp_path) == 1
+    rows = [
+        json.loads(line)
+        for line in telemetry.client_cold_path(tmp_path).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert rows[0]["reason"] == client.COLD_BUCKET_SPAWN_TRIGGERING_MISS
 
 
 def test_try_warm_dispatch_does_not_record_on_a_served_response(tmp_path, monkeypatch):

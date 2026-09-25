@@ -389,7 +389,7 @@ def registry_set(key: str, value: str) -> None:
     # every key after a header into that table, so a key appended to the end
     # of a file that ends in a table silently becomes `<table>.<key>` and
     # never resolves at root (2026-09-12: six `p4.*` workspace keys landed
-    # under `[plugin.mirrors.example-retrieval-repo]` and every p4 edit was denied).
+    # under `[plugin.mirrors.project-rag]` and every p4 edit was denied).
     header = _TOML_TABLE_HEADER_RE.search(content)
     root_end = header.start() if header else len(content)
     root, tables = content[:root_end], content[root_end:]

@@ -423,6 +423,57 @@ def write_path_excl(out_path: str, content: str, *, caller_name: str) -> str:
             fh.write(content)
         return candidate
 
+#: Repo-relative parts to the engine build stamp, mirroring
+#: `coordinator_core.ipc._ENGINE_STAMP_RELATIVE_PARTS` /
+#: `coordinator/bin/tests/engine_stamp_probe.py::_STAMP_PARTS`. Restated
+#: rather than imported: this module is the State-1 fallback CLI plumbing
+#: (see module docstring) that must keep working when `coordinator_core` is
+#: not importable, so it cannot depend on the package to ask whether a root
+#: IS that package's published build.
+_ENGINE_STAMP_RELATIVE_PARTS = ("coordinator_core", "_engine_stamp")
+
+
+def _is_stamped_published_root(root: str) -> bool:
+    """True if `root` carries the engine build stamp — the mark of a
+    PUBLISHED engine mirror (e.g. Claude-klabauter), never a source
+    authoring checkout. A stamped root's `state/` is gitignored there
+    (percolate excludes it from the publish payload), so a data write
+    routed there is silently lost.
+    """
+    try:
+        return os.path.getsize(os.path.join(root, *_ENGINE_STAMP_RELATIVE_PARTS)) > 0
+    except OSError:
+        return False
+
+
+def claude_klabauter_data_home() -> str | None:
+    """Resolve the claude-klabauter STATE/DATA home -- where `state/` writes belong --
+    as distinct from `claude_klabauter_root()`, the engine CODE root.
+
+    The engine-root env override names where engine code runs from, which is
+    the published mirror on a standard install; that mirror's `state/` is
+    gitignored, so a data write there is accepted and lost. Precedence matches
+    the native write seam (`coordinator_core.ops.queue_append._claude_klabauter_root`)
+    so a dedup scan and the write it dedups always resolve the same root:
+
+      1. COORDINATOR_ENGINE_ROOT / CLAUDE_KLABAUTER_ROOT, unless it carries the engine
+         build stamp (a published mirror).
+      2. `machine-local get repos.claude_klabauter`, likewise never a mirror.
+      3. None -- callers degrade gracefully (WARN + skip).
+
+    Never raises; no subprocess spawn beyond `machine_local_get`'s own.
+    """
+    override = os.environ.get(COORDINATOR_ENGINE_ROOT_ENV, "").strip()
+    if not override:
+        override = os.environ.get(CLAUDE_KLABAUTER_ROOT_ENV, "").strip()
+    if override and not _is_stamped_published_root(override):
+        return override
+    val = machine_local_get("repos.claude_klabauter")
+    if val and not _is_stamped_published_root(val):
+        return val
+    return None
+
+
 # Dual-read window for the engine-root rename (docs/plans/2026-08-20-an-engine-
 # root-is-not-named-for-the-repo.md), same class as cc_invoke's alias and found
 # by the same mechanism. The PUBLISHED engine and its CLIs are transformed on the

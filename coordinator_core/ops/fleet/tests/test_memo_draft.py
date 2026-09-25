@@ -381,7 +381,7 @@ class TestActWritesDraft:
         # a real machine where the sending repo is also a registered
         # receiver (it can otherwise never be replied to).
         claude_home = _make_claude_home(
-            tmp_path, {"sender_repo": sender, "example_retrieval_repo": tmp_path / "example-retrieval-repo"}
+            tmp_path, {"sender_repo": sender, "project_rag": tmp_path / "project-rag"}
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
@@ -709,7 +709,7 @@ class TestClassifyReceiver:
         receiver_repo = tmp_path / "example-retrieval-repo-repo"
         receiver_repo.mkdir()
         claude_home = _make_claude_home(
-            tmp_path, receiver_repos={"example_retrieval_repo": receiver_repo},
+            tmp_path, receiver_repos={"project_rag": receiver_repo},
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
@@ -731,7 +731,7 @@ class TestClassifyReceiver:
         receiver_repo = tmp_path / "example-retrieval-repo-repo"
         receiver_repo.mkdir()
         claude_home = _make_claude_home(
-            tmp_path, receiver_repos={"example_retrieval_repo": receiver_repo},
+            tmp_path, receiver_repos={"project_rag": receiver_repo},
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 

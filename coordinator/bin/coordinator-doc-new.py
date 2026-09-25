@@ -3118,7 +3118,7 @@ def _scaffold_roadmap_baton(
     cleared. `sprint`/`wave` are topo-sort outputs owned by
     `bin/roadmap-number-stubs`, not lineage.
 
-    Graph field placeholders (sprint, wave, cost, blocked_by, scope) are
+    Graph field placeholders (sprint, wave, loe, blocked_by, scope) are
     best-effort stubs — the author fills them via Edit after the topo sort via
     bin/roadmap-number-stubs (skills/roadmap-planning/SKILL.md § Step 2.1.5).
     gate_dependency is the deprecated single-string gate field (C2); when not
@@ -3183,7 +3183,7 @@ def _scaffold_roadmap_baton(
         "workstream: PLACEHOLDER  # replace with roadmap short prefix slug",
         "sprint: 1  # fill from roadmap-number-stubs topo output (Step 2.1.5)",
         "wave: 1    # fill from roadmap-number-stubs topo output (Step 2.1.5)",
-        "cost: T1   # T0 trivial | T1 small (<1h) | T2 medium (1-4h) | T3 multi-day",
+        "loe: M",
         "deployment_state: awaiting_gate",
     ]
     _blocks = [b.strip() for b in (blocks or []) if isinstance(b, str) and b.strip()]

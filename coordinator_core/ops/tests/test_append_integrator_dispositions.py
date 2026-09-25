@@ -511,10 +511,19 @@ class TestReviewerAgentTypeSet:
     """
 
     def test_membership_is_pinned(self):
+        # Re-cut (P033-T4t) to exactly the set T4 re-derives at execution
+        # time — never loosened to a subset/superset check and never
+        # re-hardcoded to the authorship-time count. See
+        # `_REVIEWER_AGENT_TYPES`'s own comment for the derivation evidence.
         assert mod._REVIEWER_AGENT_TYPES == frozenset(
             {
                 "coordinator:code-reviewer",
                 "coordinator:code-reviewer-weekly",
+                "coordinator:plan-coverage-checker",
+                "coordinator:parallel-review-synthesizer",
+                "coordinator:security-audit-worker",
+                "coordinator:dep-cve-auditor",
+                "coordinator:test-evidence-parser",
                 "coordinator:staff-eng",
                 "coordinator:staff-data-sci",
                 "coordinator:senior-front-end",
@@ -523,6 +532,10 @@ class TestReviewerAgentTypeSet:
                 "coordinator:eng-director",
                 "coordinator:overengineering-reviewer",
                 "coordinator:apm",
+                "coordinator:premise-checker",
+                "coordinator:falsifier-integrity-reviewer",
+                "coordinator:subtractive-adjudicator",
+                "coordinator:blitz-em",
             }
         )
 
@@ -567,6 +580,21 @@ class TestReviewerAgentTypeSet:
             agent_type=agent_type, body=_FINDINGS_BODY,
         )
         with pytest.raises(mod.DispositionsError, match="agent_type"):
+            mod.append_dispositions(sidecar, {"applied": ["F1"]}, git_root=tmp_path)
+
+    def test_assessment_shaped_sidecar_is_still_refused(self, tmp_path):
+        """The two names refused from `_REVIEWER_AGENT_TYPES` (T4m) route to
+        an `assessment`-shaped sidecar in DoE's own `report_type_map:` — a
+        shape `_detect_findings_shape` refuses by design (neither a `##
+        Findings` section nor a fenced JSON `findings` array). Widening the
+        set alone would not admit them anyway; this pins the actual reason.
+        """
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "assessment-shaped.md",
+            agent_type="coordinator:doc-link-checker",
+            body="## Assessment\n\nNo `## Findings` heading here at all.\n",
+        )
+        with pytest.raises(mod.DispositionsError):
             mod.append_dispositions(sidecar, {"applied": ["F1"]}, git_root=tmp_path)
 
     def test_refusal_message_names_the_accepted_set_not_one_value(self, tmp_path):

@@ -174,7 +174,7 @@ from coordinator_core.archive_stamp import (
     cs_release_memo_revert,
     cs_unclaim_handoff,
 )
-from coordinator_core.claim_state import handoff_claim_dir
+from coordinator_core.claim_state import compare_claim_state, handoff_claim_dir
 from coordinator_core.contract import apply_base
 from coordinator_core.contract.decision_object.envelope import (
     judgment_points_by_id as _persisted_judgment_points_by_id,
@@ -232,6 +232,58 @@ APPLY_EXIT_HALTED_AT_JUDGMENT = apply_base.APPLY_EXIT_HALTED_AT_JUDGMENT
 APPLY_EXIT_CLAIM_DENIED = apply_base.APPLY_EXIT_CLAIM_DENIED
 APPLY_EXIT_TRANSPORT_FAIL = apply_base.APPLY_EXIT_TRANSPORT_FAIL
 APPLY_EXIT_PARTIAL_MUTATION = apply_base.APPLY_EXIT_PARTIAL_MUTATION
+
+#: The four claim-banking apply exits the comparator report gates on (AC8) —
+#: every exit `_execute_directives` can hand back to `apply()`'s single
+#: post-directive `return exit_code, report`. Deliberately NOT the two
+#: pre-claim early returns (no claim exists yet) or `drop()`'s
+#: `APPLY_EXIT_PARTIAL_MUTATION` (a different function, the release path).
+_COMPARATOR_REPORT_EXIT_CODES = (
+    APPLY_EXIT_OK,
+    APPLY_EXIT_HALTED_AT_JUDGMENT,
+    APPLY_EXIT_PARTIAL_MUTATION,
+    APPLY_EXIT_TRANSPORT_FAIL,
+)
+
+#: `ledger_resolver_source` prefix AC6/AC8 treat as hardened — the
+#: `core.attributable_session_id`-sourced resolution P026-C5 lands per site.
+#: Anything else (including `_LEDGER_RESOLVER_SOURCE_NOT_RECORDED`, and the
+#: unhardened `resolve_session_id`-sourced resolution) is unqualified.
+_HARDENED_LEDGER_RESOLVER_PREFIX = "attributable_session_id"
+
+
+def _report_claim_comparison(root: Path, artifact_path_value: str) -> None:
+    """AC8 — call the comparator (Track B, C6) at `apply()`'s single
+    post-directive return, on every claim-banking exit. Read-only: nothing
+    here can feed back into `exit_code`/`report` (AC8's "changes no gate
+    outcome" guarantee), so any comparator failure is swallowed rather than
+    surfaced through apply()'s own contract.
+
+    A non-agreeing verdict prints unconditionally, naming both holders. An
+    `agree` verdict ALSO prints — one line, not silence — whenever
+    `ledger_resolver_source` is not-recorded or names an unhardened
+    resolution (AC6): a qualification that only prints on the paths that
+    already print has qualified nothing."""
+    try:
+        comparison = compare_claim_state(root / artifact_path_value, repo_root=root)
+    except Exception:  # noqa: BLE001 - read-only report path, never gates
+        return
+    qualified = comparison.ledger_resolver_source.startswith(
+        _HARDENED_LEDGER_RESOLVER_PREFIX
+    )
+    if comparison.verdict != "agree" or not qualified:
+        print(
+            "claim-state comparator: "
+            f"verdict={comparison.verdict} "
+            f"ledger_holder={comparison.ledger_holder!r} "
+            f"mirror_holder={comparison.mirror_holder!r} "
+            f"age={comparison.age!r} "
+            f"ledger_resolver_source={comparison.ledger_resolver_source!r} "
+            f"bound_seconds={comparison.bound_seconds!r} "
+            f"bound_exceeded={comparison.bound_exceeded!r}",
+            file=sys.stderr,
+        )
+
 
 # Env vars an explicit `--session-id` propagates into (AC9(a), the Director of Engineering F3): the
 # composed primitives this module calls resolve identity through TWO
@@ -1155,6 +1207,7 @@ def apply(
         promote_claim_stage(class_, basename, cwd=str(root))
 
         outcome = "directive_failed"
+        exit_label = None
         try:
             exit_code, report = _execute_directives(
                 directives,
@@ -1164,12 +1217,13 @@ def apply(
                 resolve_claim_grant=_resolve_claim_grant,
                 composition_budget=composition_budget,
             )
+            exit_label = apply_base.exit_code_label(exit_code, report)
             if exit_code == APPLY_EXIT_OK:
                 outcome = "success"
             elif exit_code == APPLY_EXIT_PARTIAL_MUTATION:
                 outcome = "partial_mutation"
         finally:
-            flush_composition_record(composition_budget, outcome)
+            flush_composition_record(composition_budget, outcome, exit_code_label=exit_label)
 
         # AMENDMENT 2026-07-24 (chunk C7 Part B(c), the Director of Engineering v2 finding 3, EM
         # ruling (a) BANK-THE-GRAB) — the "only APPLY_EXIT_OK commits"
@@ -1267,6 +1321,9 @@ def apply(
                 handoff_claim_dir(_common_dir, Path(basename))
             ):
                 demote_claim_stage_to_brief(class_, basename, cwd=str(root))
+
+        if exit_code in _COMPARATOR_REPORT_EXIT_CODES:
+            _report_claim_comparison(root, artifact_path_value)
 
         return exit_code, report
 

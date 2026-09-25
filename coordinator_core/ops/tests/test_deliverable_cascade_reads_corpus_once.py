@@ -614,6 +614,82 @@ def test_fail_closed_candidate_escapes_allowed_roots_through_metas_path(tmp_path
 
 
 # ---------------------------------------------------------------------------
+# 4a. INDETERMINATE (children_exit != 1, e.g. 2 or an unexpected non-0/non-1
+#     value) — `_predicate_refusal` leg (b) must fail closed with the
+#     "live-successor check indeterminate" reason, on BOTH the baseline
+#     (`corpus_metas=None`, `_handoff_has_live_children`) and the collapsed
+#     (`corpus_metas={}`, `has_live_children_from_metas`) branch. This is the
+#     `children_exit != 1` arm specifically (P029-T2) -- distinct from the
+#     `children_exit == 0` (live successor found) and `children_exit == 1`
+#     (clear) arms already covered elsewhere in this file.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("exit_code", [2, 3, -1, 99])
+def test_predicate_refusal_leg_b_indeterminate_baseline_branch(tmp_path, monkeypatch, exit_code):
+    """Baseline branch (`corpus_metas=None`, `_handoff_has_live_children`
+    stubbed): any `children_exit` other than 0 or 1 must yield the
+    'live-successor check indeterminate' fail-closed refusal, never a silent
+    pass."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    candidate = _seed_handoff(repo, "20260101-candidate.md", deliverable_id="dlv-legb-baseline-indet")
+
+    async def _stub_handoff_has_live_children(_params, _repo_root):
+        return {"exit_code": exit_code, "error": "corpus scan aborted"}
+
+    monkeypatch.setattr(
+        hc_mod, "_handoff_has_live_children", _stub_handoff_has_live_children
+    )
+
+    reason = asyncio.run(
+        cascade_mod._predicate_refusal(
+            candidate, cascade_mod._HANDOFF_KIND.reader(str(candidate)), repo / ".git",
+            kind=cascade_mod._HANDOFF_KIND,
+        )
+    )
+
+    assert reason is not None
+    assert "live-successor check indeterminate" in reason
+    assert "corpus scan aborted" in reason
+
+
+@pytest.mark.parametrize("exit_code", [2, 3, -1, 99])
+def test_predicate_refusal_leg_b_indeterminate_metas_branch(tmp_path, monkeypatch, exit_code):
+    """Collapsed branch (`corpus_metas={}`, `has_live_children_from_metas`
+    stubbed): any `children_exit` other than 0 or 1 must yield the same
+    'live-successor check indeterminate' fail-closed refusal as the baseline
+    branch."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    candidate = _seed_handoff(repo, "20260101-candidate.md", deliverable_id="dlv-legb-metas-indet")
+
+    async def _stub_has_live_children_from_metas(_candidate, _repo_root, *, edge_kinds=None, exclude=None, metas=None):
+        return {"exit_code": exit_code, "error": "index build aborted"}
+
+    monkeypatch.setattr(
+        hc_mod, "has_live_children_from_metas", _stub_has_live_children_from_metas
+    )
+
+    corpus_metas: dict = {}
+    matches, _scan_incomplete, _unreadable = cascade_mod._collect_live_candidates_for_kind(
+        repo, "dlv-legb-metas-indet", kind=cascade_mod._HANDOFF_KIND, metas_out=corpus_metas
+    )
+    assert len(matches) == 1
+
+    reason = asyncio.run(
+        cascade_mod._predicate_refusal(
+            matches[0]["path"], matches[0]["fm"], repo / ".git",
+            kind=cascade_mod._HANDOFF_KIND, corpus_metas=corpus_metas,
+        )
+    )
+
+    assert reason is not None
+    assert "live-successor check indeterminate" in reason
+    assert "index build aborted" in reason
+
+
+# ---------------------------------------------------------------------------
 # 5. PROCESS TIME — under 200ms at one advanced candidate against a >=275-file
 #    corpus, marked cadence so it does not run in the fast tier
 # ---------------------------------------------------------------------------

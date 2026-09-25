@@ -122,6 +122,43 @@ CEREMONY_HALT_EXIT_CODES: dict[str, int] = {
 }
 
 
+#: Reverse-lookup over `CEREMONY_HALT_EXIT_CODES` PLUS the fixed `SUCCESS = 0`
+#: anchor every `build_ceremony_halt_exit_codes` enum also carries (via
+#: `extend_exit_codes`) -- `CEREMONY_HALT_EXIT_CODES` itself holds only rungs
+#: 1-4, so a bare inversion of it would label every successful ceremony
+#: `None` (docs/plans/2026-09-11-half-the-compositions-do-not-finish-clea.md
+#: § C1).
+_CEREMONY_EXIT_LABELS: dict[int, str] = {0: "SUCCESS"}
+_CEREMONY_EXIT_LABELS.update({v: k for k, v in CEREMONY_HALT_EXIT_CODES.items()})
+
+
+def exit_code_label(exit_code: int, report: Optional[dict[str, Any]] = None) -> Optional[str]:
+    """Symbolic name of the rung `exit_code` names on THIS (ceremony) lineage's
+    own ladder (`_CEREMONY_EXIT_LABELS`) -- never the raw int, which collides
+    with the apply_base ladder at 2 (`DIRECTIVE_FAILED` here, `CLAIM_DENIED`
+    there; census Q8, docs/plans/2026-09-11-half-the-compositions-do-not-
+    finish-clea.md).
+
+    One refinement (census Q11): `DIRECTIVE_FAILED` whose `report` carries a
+    `"budget_breach"` key is `budget_check_pre_mutation`'s own reuse of this
+    rung (its docstring: "reuses DIRECTIVE_FAILED ... rather than minting a
+    new ladder member") -- it labels `"BUDGET_BREACH"` rather than
+    `"DIRECTIVE_FAILED"`, so the pre-mutation budget guard is distinguishable
+    from a genuine directive failure. A `"budget_breach"` key on any OTHER
+    rung (the post-loop breach, which keeps the caller's own exit code on
+    `SUCCESS`/`HALTED_AT_JUDGMENT`) keeps its ladder name -- that run already
+    finished. An unrecognized `exit_code` returns `None` rather than a
+    fabricated label.
+    """
+    if (
+        exit_code == CEREMONY_HALT_EXIT_CODES["DIRECTIVE_FAILED"]
+        and isinstance(report, dict)
+        and "budget_breach" in report
+    ):
+        return "BUDGET_BREACH"
+    return _CEREMONY_EXIT_LABELS.get(exit_code)
+
+
 def build_ceremony_halt_exit_codes(name: str) -> Type[enum.IntEnum]:
     """Build a ceremony-close assembler's apply-side exit-code `IntEnum`.
 

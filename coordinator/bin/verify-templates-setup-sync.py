@@ -3,9 +3,10 @@
 verify-templates-setup-sync.py — CLI trampoline over claude-klabauter
 coordinator_core.ops.verify_templates_setup_sync.
 
-Byte-identity check between live ~/.claude/setup helpers and their
-coordinator/templates/setup/ mirrors. Inspect-only: reports drift per
-tracked pair, exits non-zero on any mismatch/missing pair. There is no
+Drift oracle over the setup/ tracked set: template<->live byte parity,
+template<->repo-root byte parity, and (for publish_sync.py) the claude-klabauter
+dispatch contract. Inspect-only: reports drift per tracked relpath, exits
+non-zero on any leg's failure. There is no
 --fix flag — recovery is manual and template-as-authoritative (`cp
 coordinator/templates/setup/<file> ~/.claude/setup/<file>`); a prior
 live->template --fix path was removed because it directly contradicted

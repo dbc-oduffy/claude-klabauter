@@ -682,20 +682,29 @@ def memo_paths_dirty(repo_root: Path) -> bool:
 
 
 def _git_status_porcelain(repo_root: Path) -> list[tuple[str, str]]:
-    proc = _run_git(repo_root, ["status", "--porcelain"])
-    if proc is None or proc.returncode != 0:
-        return []
-    rows: list[tuple[str, str]] = []
-    for line in proc.stdout.splitlines():
-        if not line:
-            continue
-        status_code, _, rel_path = line[:2], line[2:], line[3:]
-        # Rename entries ("R  old -> new") carry the arrow in rel_path; the
-        # new path is what matters for a session-authored disposition.
-        if " -> " in rel_path:
-            rel_path = rel_path.split(" -> ", 1)[1]
-        rows.append((rel_path.strip(), status_code))
-    return rows
+    """Converted (P014-C6,
+    `docs/plans/2026-09-01-the-dirty-tree-fact-is-served-not-re-imp.md`) onto
+    the `session_facts._dirty_paths` producer (P014-C1) rather than a
+    hand-rolled `_run_git` spawn/parse. Fixes a live R-10 fail-open: this
+    used to `return []` on a failed git read, indistinguishable from a
+    genuinely clean tree, which let `classify_session_authored_files` (this
+    function's sole caller) proceed on false quiet -- treating a failed read
+    as "nothing dirty, nothing session-authored" instead of surfacing the
+    failure. A failed read now RAISES `RuntimeError` with the evidence,
+    never returns an empty list, so the memo lifecycle cannot silently carry
+    on believing the tree is clean.
+
+    `unquote=False, forward_slash=False` reproduce this site's
+    pre-conversion raw-porcelain shape (it never stripped C-quoting or
+    normalized path separators -- see this module's own quoting-convention
+    docstring on `classify_session_authored_files`); only the fail-open ->
+    raise posture changes here."""
+    from coordinator_core.session.session_facts import _dirty_paths
+
+    result = _dirty_paths(repo_root, untracked_files="normal", unquote=False, forward_slash=False)
+    if result["degraded"]:
+        raise RuntimeError(f"git status --porcelain failed for {repo_root}: {result['evidence']}")
+    return [(path, xy) for xy, path in result["value"]["entries"]]
 
 
 def _created_this_session(repo_root: Path, rel_path: str, session_start_time: datetime) -> bool:

@@ -253,6 +253,7 @@ from coordinator_core.ceremony_common.apply_halt import (
     budget_check_post_mutation,
     budget_check_pre_mutation,
     build_ceremony_halt_exit_codes,
+    exit_code_label,
 )
 from coordinator_core.ceremony_common.json_payload_flag import (
     detect_conflicting_payload_channels,
@@ -1601,14 +1602,19 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
     """
     composition_budget = make_fleet_budget("workstream_complete")
     outcome = "directive_failed"
+    exit_label = None
     try:
         try:
             envelope = brief(decisions=decisions)
         except TransportFailure as exc:
-            return int(WorkstreamApplyExitCode.TRANSPORT_FAIL), {
+            brief_transport_fail_report = {
                 "error": str(exc),
                 "landed": [],
             }
+            exit_label = exit_code_label(
+                int(WorkstreamApplyExitCode.TRANSPORT_FAIL), brief_transport_fail_report
+            )
+            return int(WorkstreamApplyExitCode.TRANSPORT_FAIL), brief_transport_fail_report
 
         directives = envelope.get("directives", [])
         judgment_points = envelope.get("judgment_points", [])
@@ -1627,7 +1633,7 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
         if artifact_path:
             pending_jp = _no_commit_row_judgment(effective_decisions, Path(artifact_path))
             if pending_jp is not None:
-                return int(WorkstreamApplyExitCode.HALTED_AT_JUDGMENT), {
+                no_commit_row_report = {
                     "error": (
                         "task-spine row(s) with no covering commit require an explicit "
                         "disposition (shipped/spun-off/backlogged/wont-do/carried-forward) "
@@ -1641,6 +1647,10 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
                     "failed": [],
                     "results": [],
                 }
+                exit_label = exit_code_label(
+                    int(WorkstreamApplyExitCode.HALTED_AT_JUDGMENT), no_commit_row_report
+                )
+                return int(WorkstreamApplyExitCode.HALTED_AT_JUDGMENT), no_commit_row_report
 
         sid = envelope.get("preflight", {}).get("session_shape", {}).get("sid")
         try:
@@ -1671,10 +1681,14 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
                 directives_commit_tail._release_governing_plan_claim(  # noqa: SLF001 - AC5 companion release, same seam
                     worktree_root, effective_decisions.get("governing_plan_slug")
                 )
-            return int(WorkstreamApplyExitCode.TRANSPORT_FAIL), {
+            execute_transport_fail_report = {
                 "error": str(exc),
                 "landed": [],
             }
+            exit_label = exit_code_label(
+                int(WorkstreamApplyExitCode.TRANSPORT_FAIL), execute_transport_fail_report
+            )
+            return int(WorkstreamApplyExitCode.TRANSPORT_FAIL), execute_transport_fail_report
         # DR-358, C13 (docs/plans/2026-08-25-the-close-ceremony-rebuilt-from-
         # the-requirement.md): the rebuilt `d-run-wsc-tail` close-commit step
         # -- an in-process call, never a re-added `directives[]` entry -- at
@@ -1747,13 +1761,14 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
             # it takes its own code -- never `PARTIAL_MUTATION`, whose meaning
             # this block was borrowing and corrupting.
 
+        exit_label = exit_code_label(exit_code, report)
         if exit_code == int(WorkstreamApplyExitCode.SUCCESS):
             outcome = "success"
         elif exit_code == int(WorkstreamApplyExitCode.PARTIAL_MUTATION):
             outcome = "partial_mutation"
         return exit_code, report
     finally:
-        flush_composition_record(composition_budget, outcome)
+        flush_composition_record(composition_budget, outcome, exit_code_label=exit_label)
 
 
 def main(argv: list[str]) -> int:

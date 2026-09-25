@@ -124,7 +124,7 @@ class TestMemoSendDeclaresTouches:
     def test_act_run_declares_sent_copy_and_ledger(self, tmp_path, monkeypatch):
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "declare-topic")
 
@@ -146,7 +146,7 @@ class TestMemoSendDeclaresTouches:
     def test_dry_run_declares_nothing(self, tmp_path, monkeypatch):
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "dry-declare-topic")
 

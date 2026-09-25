@@ -43,7 +43,7 @@ repo's own pytest `python_files` config declares to be a test is exempted
 from the unresolved-write basis only, never from a resolved tracked write,
 because a test module's writes are fixture writes, not repo artifacts.
 
-Nine mechanical narrowing rules cut WRITE_TARGET_UNRESOLVED false positives,
+Ten mechanical narrowing rules cut WRITE_TARGET_UNRESOLVED false positives,
 none of them by deleting a write site — a tmp/derivative rule always
 SUBSTITUTES the real destination or leaves the site counted exactly as
 before; nothing here removes a genuine write from the swept population:
@@ -98,6 +98,17 @@ before; nothing here removes a genuine write from the swept population:
     load-bearing, not tidiness — see `_ScopeBindings`.
   - R9 (`os.devnull`): the kernel's bit bucket is not a path in any tree.
     Same standing as R1's stdio sinks.
+  - R10 (module-level constant, `__file__`-rooted base only): a write target
+    that is still a bare Name after R4/R8 and is bound exactly once at
+    MODULE scope resolves through that binding, transitively within a
+    bounded hop cap (a cycle must terminate, not recurse). A `/`-chain of
+    string literals built on that binding (`_REPO_ROOT / "setup" /
+    "targets.portable"`) flattens to a relative path ONLY when the chain's
+    base itself resolves, through the same bounded chase, to a
+    `__file__`-rooted expression (`Path(__file__)...`) — without that gate
+    the rule would resolve an arbitrary `some_dir / "pyproject.toml"` to
+    this repo's own `pyproject.toml` and invent a false UNDECLARED. The
+    existing tracked-path check stays the second safety net.
 
 AC6 — discovery reads source text only, via `ast.parse`; it never imports a
 swept module. This is also what keeps
@@ -815,6 +826,12 @@ class _ScopeBindings:
 
     def __init__(self, tree: ast.AST) -> None:
         self._scopes: list[tuple[int, int, dict[str, ast.AST]]] = []
+        #: R10's module-scope single-assignment binds, exposed separately
+        #: from `_scopes` because R10 chases a module-level constant from
+        #: ANY write site regardless of which function it sits in --
+        #: `.at()`'s smallest-containing-scope answer is deliberately
+        #: function-local (R8) and would never surface this.
+        self.module_binds: dict[str, ast.AST] = {}
         self._index_scope(tree, is_module=True)
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -865,6 +882,8 @@ class _ScopeBindings:
             for name, value in values.items()
             if counts[name] == 1 and name not in params
         }
+        if is_module:
+            self.module_binds = binds
         if not binds:
             return
         start = 0 if is_module else getattr(scope, "lineno", 0)
@@ -1035,14 +1054,68 @@ def _is_fdopen_of_scratch_fd(call: ast.Call, scratch_fds: frozenset[str]) -> boo
     return isinstance(fd_arg, ast.Name) and fd_arg.id in scratch_fds
 
 
+def _resolves_file_rooted(node: ast.AST, module_binds: dict[str, ast.AST]) -> bool:
+    """R10's gate: True when *node*, after chasing module-level Name bindings
+    (bounded by `_SUBSTITUTION_HOPS`, via `_substitute_local_names`), is an
+    expression built on `Path(__file__)`. `.resolve()`, any number of
+    `.parent`, and `.parents[n]` all stay file-rooted -- the check is "does
+    `__file__` appear anywhere in the fully-chased expression", which is
+    true for all three because none of those operations discards the base.
+
+    This is the whole safety of R10 (module docstring, Anti-scope): without
+    it, `some_dir / "pyproject.toml"` in an unrelated module would flatten
+    to this repo's own tracked `pyproject.toml` and invent a false
+    UNDECLARED.
+    """
+    substituted = _substitute_local_names(node, module_binds)
+    return any(
+        isinstance(sub, ast.Name) and sub.id == "__file__"
+        for sub in ast.walk(substituted)
+    )
+
+
+def _flatten_file_rooted_chain(
+    node: ast.AST, module_binds: dict[str, ast.AST]
+) -> str | None:
+    """R10: flatten a `/`-chain of string literals to a repo-relative path,
+    but only when the chain resolves (directly, or through one module-level
+    Name substitution) to a `/`-chain, AND its ultimate base passes
+    `_resolves_file_rooted`. Returns `None` for anything else, including a
+    chain with no `__file__`-rooted base -- that case stays unresolved
+    rather than guessed at.
+    """
+    if isinstance(node, ast.Name):
+        bound = module_binds.get(node.id)
+        if bound is None:
+            return None
+        node = bound
+
+    segments: list[str] = []
+    current = node
+    while isinstance(current, ast.BinOp) and isinstance(current.op, ast.Div):
+        literal = _str_const(current.right)
+        if literal is None:
+            return None
+        segments.append(literal)
+        current = current.left
+
+    if not segments:
+        return None
+    if not _resolves_file_rooted(current, module_binds):
+        return None
+    return "/".join(reversed(segments))
+
+
 def _resolve_target_expr(
     expr: ast.AST,
     tmp_bases: dict[str, ast.AST],
     local_binds: dict[str, ast.AST] | None = None,
+    module_binds: dict[str, ast.AST] | None = None,
 ) -> tuple[str, str | None]:
     """Classify a raw target expression, applying R4's substitution first,
-    then R8's single-assignment name substitution when the expression is
-    still neither excluded nor literal.
+    then R10's module-level-constant flattening, then R8's single-assignment
+    local-name substitution, in that order, when the expression is still
+    neither excluded nor literal.
 
     Returns `("excluded", None)`, `("literal", <string>)`, or
     `("unresolved", None)`.
@@ -1061,6 +1134,15 @@ def _resolve_target_expr(
     literal = _str_const(resolved)
     if literal is not None:
         return "literal", literal
+
+    if module_binds:
+        # R10 runs before R8: a bare module-level constant Name (or a
+        # `/`-chain built on one) flattens to a repo-relative literal ONLY
+        # when its ultimate base is `__file__`-rooted -- see
+        # `_resolves_file_rooted`.
+        flattened = _flatten_file_rooted_chain(resolved, module_binds)
+        if flattened is not None:
+            return "literal", flattened
 
     if local_binds:
         # R8 runs LAST: R4's `.tmp`-sibling substitution and R5's inline
@@ -1117,7 +1199,7 @@ def _scan_file_writes(tree: ast.AST) -> FileWrites:
 
     Everything returned is a pure function of the module's parsed source:
     no `tracked` set, no `is_test_module` verdict, both of which are
-    per-run inputs consumed only by `_resolve` below. The R1-R9 rules (see
+    per-run inputs consumed only by `_resolve` below. The R1-R10 rules (see
     module docstring) that decide whether a call site is excluded,
     unresolved, or a literal candidate all run here, in AST-walk order,
     exactly as they did before this split — `_resolve` replays that same
@@ -1167,7 +1249,7 @@ def _scan_file_writes(tree: ast.AST) -> FileWrites:
             continue
 
         kind, literal = _resolve_target_expr(
-            expr, tmp_bases, scope_binds.at(node.lineno)
+            expr, tmp_bases, scope_binds.at(node.lineno), scope_binds.module_binds
         )
         if kind == "excluded":  # R5 (widened by R8)
             continue
@@ -1182,7 +1264,9 @@ def _scan_file_writes(tree: ast.AST) -> FileWrites:
 
     if tmp_var_names:
         for dest_expr in _replace_destination_exprs(tree, tmp_var_names):  # R3
-            kind, literal = _resolve_target_expr(dest_expr, tmp_bases)
+            kind, literal = _resolve_target_expr(
+                dest_expr, tmp_bases, module_binds=scope_binds.module_binds
+            )
             if kind != "literal" or literal is None:
                 continue
             if _looks_like_tmp(literal):
@@ -1221,7 +1305,7 @@ def _resolve(
         exempted from this basis — its writes are fixture writes (typically
         through a `tmp_path`-derived variable), not repo artifacts.
 
-    `writes.write_sites` already carries R1-R9's exclusions (excluded sites
+    `writes.write_sites` already carries R1-R10's exclusions (excluded sites
     are never appended at all) and the R3/R4 temp-handle-to-destination
     upgrade, in the same order they were found; this only replays that
     order against the two per-run inputs `_scan_file_writes` could not see

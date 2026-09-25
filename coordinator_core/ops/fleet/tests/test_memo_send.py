@@ -296,7 +296,7 @@ class TestDryRun:
     def test_dry_run_previews_without_writing(self, tmp_path, monkeypatch):
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "dry-run-topic")
 
@@ -328,7 +328,7 @@ class TestEndToEndDelivery:
     def test_happy_path_three_writes(self, tmp_path, monkeypatch):
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "happy-topic")
 
@@ -411,7 +411,7 @@ class TestEndToEndDelivery:
     def test_happy_path_finds_sends_and_moves_a_new_root_draft(self, tmp_path, monkeypatch):
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_new_root_draft(sender_repo, "new-root-topic")
 
@@ -449,7 +449,7 @@ class TestEndToEndDelivery:
         """
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         outbox = sender_repo / "state" / "memo-outbox"
         outbox.mkdir(parents=True)
@@ -531,7 +531,7 @@ class TestEndToEndDelivery:
             monkeypatch.delenv(var, raising=False)
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "unattributed-topic", sent_by="")
 
@@ -547,7 +547,7 @@ class TestEndToEndDelivery:
         monkeypatch.setenv("COORDINATOR_SESSION_ID", "6f1e0c9a-1111-4222-8333-444455556666")
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "attributed-topic", sent_by="")
 
@@ -606,7 +606,7 @@ class TestNoReceiverHooksFire:
         """
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "receipt-fails", track=False)
 
@@ -658,7 +658,7 @@ class TestNoReceiverHooksFire:
         """
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "untracked-topic", track=False)
 
@@ -689,11 +689,46 @@ class TestNoReceiverHooksFire:
         _git(sender_repo, "cat-file", "-e", "HEAD:.coordinator-local/memo-outbox/sent-ledger.jsonl")
         assert not (sender_repo / "state" / "memo-outbox" / "untracked-topic.md").exists()
 
+    def test_sender_deleted_is_never_a_head_absent_member(self, tmp_path, monkeypatch):
+        """P027-T5 census: `sender_deleted`'s derivation
+        (`memo_send.py`'s `[outbox_relpath] if draft_removed and
+        git_native._head_entry_for(...) is not None else []`) can only ever
+        name the outbox path when HEAD already carries it -- so it cannot
+        itself hand `commit_paths` a HEAD-absent `deleted_paths` member.
+        Proven by spying on the sender-side `commit_paths` call for an
+        UNTRACKED draft (never committed, so `_head_entry_for` answers
+        None): `deleted_paths` must come back empty, never naming the
+        outbox path."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_draft(sender_repo, "census-topic", track=False)
+
+        seen: dict = {}
+        real_commit_paths = memo_send_module.commit_paths
+
+        def _spy(root, paths, message, *, deleted_paths=(), **kwargs):
+            if any(str(p).endswith("census-topic.md") for p in (paths or ())):
+                seen["deleted_paths"] = list(deleted_paths)
+            return real_commit_paths(
+                root, paths, message, deleted_paths=deleted_paths, **kwargs
+            )
+
+        monkeypatch.setattr(memo_send_module, "commit_paths", _spy)
+
+        result = _memo_send(
+            {"dry_run": False, "topic": "census-topic"}, repo_root=sender_repo
+        )
+
+        assert result["exit_code"] == 0, result
+        assert seen.get("deleted_paths") == []
+
     def test_receiver_side_hooks_never_fire(self, tmp_path, monkeypatch):
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         witness = _install_hook_canary(receiver_repo)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "no-hooks-topic")
 
@@ -712,7 +747,7 @@ class TestReceiverCommitDeclineFailsLoud:
     def test_declined_commit_fails_loud_no_sender_receipt(self, tmp_path, monkeypatch):
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "declined-topic")
 
@@ -762,7 +797,7 @@ class TestReceiverCommitDeclineFailsLoud:
         """
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "retry-topic")
 
@@ -801,7 +836,7 @@ class TestUnverifiedDeliveryCommitFailsLoud:
     def test_unverified_commit_sha_leaves_nothing_half_done(self, tmp_path, monkeypatch):
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "unverifiable-topic")
 
@@ -854,7 +889,7 @@ class TestCollisionRefused:
     def test_precheck_refuses_existing_file(self, tmp_path, monkeypatch):
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "collision-topic")
 
@@ -877,7 +912,7 @@ class TestCollisionRefused:
     def test_o_excl_refuses_a_race_the_precheck_misses(self, tmp_path, monkeypatch):
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "race-topic")
 
@@ -918,7 +953,7 @@ class TestDeliveryIsAnchored:
     ):
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "anchor-happy-topic")
 
@@ -951,7 +986,7 @@ class TestDeliveryIsAnchored:
     def test_ledger_row_carries_anchor_ref(self, tmp_path, monkeypatch):
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "anchor-ledger-topic")
 
@@ -983,7 +1018,7 @@ class TestDeliveryIsAnchored:
         """
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "anchor-lost-topic")
 
@@ -1033,7 +1068,7 @@ class TestDeliveryIsAnchored:
         """
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "anchor-race-topic")
 
@@ -1071,7 +1106,7 @@ class TestDeliveryIsAnchored:
     def test_declined_commit_writes_no_anchor(self, tmp_path, monkeypatch):
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "anchor-declined-topic")
 
@@ -1093,7 +1128,7 @@ class TestDeliveryIsAnchored:
     def test_unverified_commit_sha_writes_no_anchor(self, tmp_path, monkeypatch):
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "anchor-unverified-topic")
 
@@ -1124,7 +1159,7 @@ class TestDeliveryIsAnchored:
         """
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "anchor-no-spawn-topic")
 
@@ -1216,7 +1251,7 @@ class TestSharedLedgerCommitsTheWorktreeUnion:
         """
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "ledger-union", track=False)
 
@@ -1290,7 +1325,7 @@ class TestLedgerIsABoundedRing:
     def _send_with_ledger(self, tmp_path, monkeypatch, existing_rows: int):
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "ring-topic")
 
@@ -1349,7 +1384,7 @@ class TestLedgerIsABoundedRing:
         next append must not land on the same line and corrupt both rows."""
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "no-newline-topic")
 
@@ -1390,7 +1425,7 @@ class TestLedgerIsBoundedInTimeToo:
     def _send_over(self, tmp_path, monkeypatch, rows):
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "age-topic")
 
@@ -1484,7 +1519,7 @@ class TestIndexLockOnReceiptIsNotAFailedSend:
 
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "peer-holds-index", track=False)
 
@@ -1521,7 +1556,7 @@ class TestIndexLockOnReceiptIsNotAFailedSend:
 
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "peer-holds-index-2", track=False)
 
@@ -1598,7 +1633,7 @@ class TestCheckDeliveriesSweep:
         — the sweep must classify each independently, never collapsing them."""
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         real_sha = _receiver_head_sha(receiver_repo)
@@ -1671,7 +1706,7 @@ class TestCheckDeliveriesSweep:
         branch mismatch — its verdict rests solely on object existence."""
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         real_sha = _receiver_head_sha(receiver_repo)
@@ -1717,7 +1752,7 @@ class TestCheckDeliveriesPresenceAndAnchor:
         memo itself is sitting right there in inbox/."""
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         filename = "2026-09-11-someone-present-in-inbox.md"
@@ -1744,7 +1779,7 @@ class TestCheckDeliveriesPresenceAndAnchor:
         filed away is still delivered, not lost."""
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         filename = "2026-09-11-someone-present-in-archive.md"
@@ -1771,7 +1806,7 @@ class TestCheckDeliveriesPresenceAndAnchor:
         restores it, so this is restorable, not gone."""
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         filename = "2026-09-11-someone-restorable.md"
@@ -1803,7 +1838,7 @@ class TestCheckDeliveriesPresenceAndAnchor:
         reads as disposed of on purpose, not lost."""
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         filename = "2026-09-11-someone-disposed-of.md"
@@ -1833,7 +1868,7 @@ class TestCheckDeliveriesPresenceAndAnchor:
         same outcome the old rule gave, now for the recorded reason."""
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         real_sha = _receiver_head_sha(receiver_repo)
@@ -1859,7 +1894,7 @@ class TestCheckDeliveriesPresenceAndAnchor:
         -- nothing left to call this delivered."""
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         gone_sha = "3" * 40

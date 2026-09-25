@@ -138,6 +138,13 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.work_state", 'registers "fleet.work_state"'),
     ("coordinator_core.ops.fleet.record_history", 'registers "fleet.record_history"'),
     ("coordinator_core.ops.fleet.archive_terminal_handoffs", 'registers "fleet.archive_completed_handoffs"'),
+    (
+        "coordinator_core.ops.fleet.prune_bugs",
+        'registers "fleet.prune_closed_bugs" (P045-C5, v2 rebuild — '
+        "docs/plans/2026-09-07-fleet-prune-closed-bugs-v2-rebuild.md — the "
+        "module contains no reference to prune before this row; C1's "
+        "SUSPENDED_OPS row removal is what makes dispatch reachable)",
+    ),
     # "fleet.archive_completed_plans" is KILLED, not suspended (op_budget_suspension:
     # p50 996ms against the 200ms bar; compute retained as a library, resolved
     # in-process by ceremony/commit_pipeline.py and tail_ops.py). The annotation must
@@ -153,6 +160,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.capability_index", 'registers "fleet.aggregate_capability_index"'),
     ("coordinator_core.ops.fleet.sweep_status", 'registers "fleet.archive_sweep_status"'),
     ("coordinator_core.ops.fleet.archive_actioned_memos", 'registers "fleet.archive_actioned_memos"'),
+    ("coordinator_core.ops.fleet.delete_superseded_decisions", 'registers "fleet.delete_superseded_decisions"'),
     ("coordinator_core.ops.fleet.memo_heal", 'registers "memo.heal_inbox"'),
     ("coordinator_core.ops.fleet.mode_control", 'registers "fleet.mode_set", "fleet.mode_show"'),
     ("coordinator_core.ops.commit_anchors", 'registers "commit.anchors"'),

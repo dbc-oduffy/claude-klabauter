@@ -42,7 +42,7 @@ def _posix_settings():
             ]
         },
         "extraKnownMarketplaces": {
-            "example-retrieval-repo": {"source": {"source": "directory", "path": "/Users/alice/X/example-retrieval-repo"}}
+            "project-rag": {"source": {"source": "directory", "path": "/Users/alice/X/example-retrieval-repo"}}
         },
     }
 

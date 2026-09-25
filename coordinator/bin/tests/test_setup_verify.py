@@ -394,12 +394,12 @@ def test_plugin_registered_pass_when_in_both(tmp_path: Path, capsys) -> None:
     installed = tmp_path / "installed_plugins.json"
     known = tmp_path / "known_marketplaces.json"
     _write_installed_plugins(installed, ["example-retrieval-repo@example-retrieval-repo"])
-    _write_known_marketplaces(known, ["example-retrieval-repo"])
+    _write_known_marketplaces(known, ["project-rag"])
 
     ns = _mod.build_parser().parse_args([
         "check-plugin-registered",
-        "--plugin", "example-retrieval-repo",
-        "--marketplace", "example-retrieval-repo",
+        "--plugin", "project-rag",
+        "--marketplace", "project-rag",
         "--installed-plugins", str(installed),
         "--known-marketplaces", str(known),
     ])
@@ -413,12 +413,12 @@ def test_plugin_registered_fails_when_missing_from_installed_plugins(tmp_path: P
     installed = tmp_path / "installed_plugins.json"
     known = tmp_path / "known_marketplaces.json"
     _write_installed_plugins(installed, ["some-other@example-retrieval-repo"])
-    _write_known_marketplaces(known, ["example-retrieval-repo"])
+    _write_known_marketplaces(known, ["project-rag"])
 
     ns = _mod.build_parser().parse_args([
         "check-plugin-registered",
-        "--plugin", "example-retrieval-repo",
-        "--marketplace", "example-retrieval-repo",
+        "--plugin", "project-rag",
+        "--marketplace", "project-rag",
         "--installed-plugins", str(installed),
         "--known-marketplaces", str(known),
     ])
@@ -438,8 +438,8 @@ def test_plugin_registered_fails_when_missing_from_known_marketplaces(tmp_path: 
 
     ns = _mod.build_parser().parse_args([
         "check-plugin-registered",
-        "--plugin", "example-retrieval-repo",
-        "--marketplace", "example-retrieval-repo",
+        "--plugin", "project-rag",
+        "--marketplace", "project-rag",
         "--installed-plugins", str(installed),
         "--known-marketplaces", str(known),
     ])
@@ -460,7 +460,7 @@ def test_plugin_registered_fails_when_directory_exists_but_not_registered(tmp_pa
     _write_known_marketplaces(known, [])
 
     fake_home = tmp_path / "home"
-    plugin_dir = fake_home / ".claude" / "plugins" / "example-retrieval-repo"
+    plugin_dir = fake_home / ".claude" / "plugins" / "project-rag"
     plugin_dir.mkdir(parents=True)
     (plugin_dir / "mcp-session-state").mkdir()
 
@@ -469,8 +469,8 @@ def test_plugin_registered_fails_when_directory_exists_but_not_registered(tmp_pa
         os.environ["HOME"] = str(fake_home)
         ns = _mod.build_parser().parse_args([
             "check-plugin-registered",
-            "--plugin", "example-retrieval-repo",
-            "--marketplace", "example-retrieval-repo",
+            "--plugin", "project-rag",
+            "--marketplace", "project-rag",
             "--installed-plugins", str(installed),
             "--known-marketplaces", str(known),
         ])
@@ -490,12 +490,12 @@ def test_plugin_registered_fails_when_directory_exists_but_not_registered(tmp_pa
 def test_plugin_registered_missing_installed_plugins_file_fails(tmp_path: Path, capsys) -> None:
     installed = tmp_path / "does-not-exist.json"
     known = tmp_path / "known_marketplaces.json"
-    _write_known_marketplaces(known, ["example-retrieval-repo"])
+    _write_known_marketplaces(known, ["project-rag"])
 
     ns = _mod.build_parser().parse_args([
         "check-plugin-registered",
-        "--plugin", "example-retrieval-repo",
-        "--marketplace", "example-retrieval-repo",
+        "--plugin", "project-rag",
+        "--marketplace", "project-rag",
         "--installed-plugins", str(installed),
         "--known-marketplaces", str(known),
     ])
@@ -513,8 +513,8 @@ def test_plugin_registered_missing_known_marketplaces_file_fails(tmp_path: Path,
 
     ns = _mod.build_parser().parse_args([
         "check-plugin-registered",
-        "--plugin", "example-retrieval-repo",
-        "--marketplace", "example-retrieval-repo",
+        "--plugin", "project-rag",
+        "--marketplace", "project-rag",
         "--installed-plugins", str(installed),
         "--known-marketplaces", str(known),
     ])
@@ -529,12 +529,12 @@ def test_plugin_registered_malformed_installed_plugins_fails(tmp_path: Path, cap
     installed = tmp_path / "installed_plugins.json"
     installed.write_text("{not valid json")
     known = tmp_path / "known_marketplaces.json"
-    _write_known_marketplaces(known, ["example-retrieval-repo"])
+    _write_known_marketplaces(known, ["project-rag"])
 
     ns = _mod.build_parser().parse_args([
         "check-plugin-registered",
-        "--plugin", "example-retrieval-repo",
-        "--marketplace", "example-retrieval-repo",
+        "--plugin", "project-rag",
+        "--marketplace", "project-rag",
         "--installed-plugins", str(installed),
         "--known-marketplaces", str(known),
     ])
@@ -549,14 +549,14 @@ def test_plugin_registered_weaker_enabledplugins_signal_reported(tmp_path: Path,
     installed = tmp_path / "installed_plugins.json"
     known = tmp_path / "known_marketplaces.json"
     _write_installed_plugins(installed, ["example-retrieval-repo@example-retrieval-repo"])
-    _write_known_marketplaces(known, ["example-retrieval-repo"])
+    _write_known_marketplaces(known, ["project-rag"])
     settings = tmp_path / "settings.json"
     settings.write_text(json.dumps({"enabledPlugins": {"example-retrieval-repo@example-retrieval-repo": True}}))
 
     ns = _mod.build_parser().parse_args([
         "check-plugin-registered",
-        "--plugin", "example-retrieval-repo",
-        "--marketplace", "example-retrieval-repo",
+        "--plugin", "project-rag",
+        "--marketplace", "project-rag",
         "--installed-plugins", str(installed),
         "--known-marketplaces", str(known),
         "--settings", str(settings),

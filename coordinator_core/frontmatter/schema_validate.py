@@ -1448,6 +1448,24 @@ def _cf_cost_enum(fm: dict) -> ErrorDict | None:
     return None
 
 
+def _cf_loe_band(fm: dict) -> ErrorDict | None:
+    """Mirrors `_cf_cost_enum` one-for-one: present-only, M-XL band. `cost:`
+    stays valid and validated separately (`_cf_cost_enum`) — 8 handoff
+    records carry `cost:` (docs/plans/2026-09-11-roadmap-audits-readiness-
+    views-and-recor.md census row 6) and that file's leniency is contract."""
+    loe = fm.get('loe')
+    if loe is None:
+        return None
+    allowed = ['M', 'L', 'XL']
+    if str(loe) not in allowed:
+        return {
+            'field': 'loe',
+            'error': f'invalid loe value "{loe}"',
+            'hint': f'Allowed values: {", ".join(allowed)}.',
+        }
+    return None
+
+
 def _cf_category_required_post_cutoff(fm: dict) -> ErrorDict | None:
     created = fm.get('created')
     if created and str(created) < '2026-05-29':
@@ -3362,11 +3380,16 @@ def _cf_plan_tasks_unratified_deferral_governed(
 # call `check_plan_tasks_ordering` directly against a plan's full source
 # text.
 #
-# WIRED CALLER (2026-07-29): `coordinator_core.ops.plan_tasks_mutate._resolve`,
-# which runs this against the spine's CURRENT on-disk text before writing a
-# new disposition — a precondition on the existing order, so resolve cannot
-# compound an already-invalid spine. Until that wiring this function had zero
-# production callers and had never rejected anything.
+# WIRED CALLERS: `coordinator_core.ops.plan_tasks_mutate._resolve`
+# (2026-07-29), which runs this against the spine's CURRENT on-disk text
+# before writing a new disposition — a precondition on the existing order,
+# so resolve cannot compound an already-invalid spine. GAINED (P084-C2) the
+# advisory write guard (`validate_frontmatter_schema_advisory.py`), which
+# declares this leg through the shared `PLAN_TASKS_SPINE_SEQUENCE` driver
+# and WARNs on a violation at write time; the deny guard deliberately does
+# NOT declare it (see that guard's own leg-set comment for why). Before the
+# 2026-07-29 wiring this function had zero production callers and had never
+# rejected anything.
 #
 # The banner previously also named "C6's plan-coverage-checker" as an
 # intended caller. That was never implementable and the expectation is
@@ -4034,6 +4057,157 @@ def plan_tasks_spine_integrity(source: str) -> tuple[list[ErrorDict], list | Non
     return errors, rows
 
 
+# ---------------------------------------------------------------------------
+# PLAN_TASKS_SPINE_SEQUENCE — the ONE statement of which plan-tasks spine
+# checks run and in what order (P084-C1,
+# docs/plans/2026-09-11-route-all-three-plan-tasks-spine-validat.md).
+#
+# Each entry is `(name, kind)`. `kind` is `"whole_source"` for a leg that is
+# a plain `(source) -> ErrorDict | None` (or, for `integrity`,
+# `(source) -> (list[ErrorDict], list | None)`) callable sharable byte-for-byte
+# across sites, and `"per_row"` for the one leg that cannot be shared as a
+# bare callable because it needs the calling site's OWN schema object and
+# resolved `governed` flag. There is exactly one `"per_row"` leg by
+# construction — the tuple names its position in the sequence, not a family
+# of interchangeable per-row legs.
+#
+# A name absent from this tuple is not a leg this repo knows how to run —
+# `plan_tasks_spine_errors` below raises `ValueError` immediately on such a
+# name rather than silently no-op'ing it, so a typo in a site's declared
+# `legs`/`legs_out_of_band` fails loud at the call, not by quietly running
+# one fewer check.
+# ---------------------------------------------------------------------------
+
+PLAN_TASKS_SPINE_SEQUENCE: tuple[tuple[str, str], ...] = (
+    ("integrity", "whole_source"),
+    ("ordering", "whole_source"),
+    ("grouping_approval", "whole_source"),
+    ("per_row", "per_row"),
+)
+
+_PLAN_TASKS_SPINE_LEG_NAMES = frozenset(name for name, _ in PLAN_TASKS_SPINE_SEQUENCE)
+
+
+def _plan_tasks_spine_row_label(row_label_fmt: str | None, row_id: Any, field: str) -> str:
+    """Bare `field` when `row_label_fmt` is None; otherwise `row_label_fmt`
+    filled with this row's id/index and the bare field name.
+
+    `row_label_fmt=None` reproduces `check_plan_tasks_source`'s historical
+    bare-field labelling byte-for-byte (its callers, e.g.
+    `ops/dispatch_emit/spine_read.py`, consume a single `ErrorDict` with no
+    `tasks[...]` prefix); the write guards pass
+    `row_label_fmt="tasks[{id}].{field}"` for their all-rows accumulation.
+    """
+    if row_label_fmt is None:
+        return field
+    return row_label_fmt.format(id=row_id, field=field)
+
+
+def plan_tasks_spine_errors(
+    source: str,
+    frontmatter: dict | None,
+    *,
+    plan_tasks_schema: dict,
+    legs: tuple[str, ...],
+    legs_out_of_band: tuple[str, ...] = (),
+    row_label_fmt: str | None = None,
+) -> tuple[list[ErrorDict], list | None]:
+    """The accumulating driver every plan-tasks spine validation site runs
+    through. `legs` is the subset of `PLAN_TASKS_SPINE_SEQUENCE` names this
+    call actually RUNS here; `legs_out_of_band` is the second half of the
+    site's declaration — legs it runs, but at its own call site rather than
+    through this driver (e.g. `grouping_approval` at both write guards'
+    `_evaluate_grouping_approval` / `_grouping_approval_fires`). Both halves
+    are validated against `PLAN_TASKS_SPINE_SEQUENCE`; a name in either that
+    is not in the sequence is a `ValueError`, not a silent no-op.
+
+    Runs the legs in `PLAN_TASKS_SPINE_SEQUENCE` order, never `legs`'
+    param order — so declaring `legs=("per_row", "ordering")` still runs
+    ordering before per_row.
+
+    `integrity` NOT declared reproduces `check_plan_tasks_source`'s
+    historical fallback: rows are read via the lenient-on-shape
+    `_plan_tasks_spine_rows` (silent `None` on a malformed fence or an
+    unparseable block, never a finding) rather than
+    `plan_tasks_spine_integrity`'s louder MALFORMED/UNPARSEABLE findings.
+
+    `per_row` resolves `governed` from `frontmatter` via `is_governed_plan`
+    and, when governed, strips the `pm_approved`-required branches from
+    `plan_tasks_schema` via `_plan_tasks_schema_without_pm_approved_required`
+    — the same governed-schema derivation `check_plan_tasks_source` always
+    used, so a caller passing the ungoverned base schema gets byte-identical
+    behaviour to that door's own `_PLAN_TASKS_SCHEMA_GOVERNED_DICT` branch.
+    Per row, shape errors and cross-field errors are BOTH computed (never
+    short-circuited) and both accumulated, matching the write guards'
+    all-rows contract; a caller that wants only the first error (
+    `check_plan_tasks_source`) takes `errors[0]`.
+
+    Returns `(errors, rows)` — `rows` is `None` exactly when there is
+    nothing for a caller's own row loop to iterate (ABSENT, unlocatable, or
+    unparseable, or the `_plan_tasks_spine_rows` fallback's own `None`), so
+    a caller's `if rows is None: return errors` keeps working unchanged.
+    """
+    declared = (*legs, *legs_out_of_band)
+    unknown = [name for name in declared if name not in _PLAN_TASKS_SPINE_LEG_NAMES]
+    if unknown:
+        raise ValueError(
+            f"unknown plan-tasks spine leg(s) {unknown!r} — not in "
+            f"PLAN_TASKS_SPINE_SEQUENCE {sorted(_PLAN_TASKS_SPINE_LEG_NAMES)!r}"
+        )
+
+    errors: list[ErrorDict] = []
+
+    if "integrity" in legs:
+        integrity_errors, rows = plan_tasks_spine_integrity(source)
+        errors.extend(integrity_errors)
+        if rows is None:
+            return errors, None
+    else:
+        rows = _plan_tasks_spine_rows(source)
+        if rows is None:
+            return errors, None
+
+    if "ordering" in legs:
+        error = check_plan_tasks_ordering(source)
+        if error is not None:
+            errors.append(error)
+
+    if "grouping_approval" in legs:
+        error = check_plan_tasks_grouping_approval(source)
+        if error is not None:
+            errors.append(error)
+
+    if "per_row" in legs:
+        fm = frontmatter if isinstance(frontmatter, dict) else None
+        governed = is_governed_plan(fm) if fm is not None else False
+        schema = (
+            _plan_tasks_schema_without_pm_approved_required(plan_tasks_schema)
+            if governed
+            else plan_tasks_schema
+        )
+        for idx, row in enumerate(rows):
+            row_id = row.get('id') if isinstance(row, dict) and row.get('id') else f'index {idx}'
+            if not isinstance(row, dict):
+                errors.append({
+                    'field': _plan_tasks_spine_row_label(row_label_fmt, row_id, '(row)'),
+                    'error': f'row is not a mapping, got {type(row).__name__}',
+                    'hint': 'Each task-spine row is a YAML mapping (id/title/change_kind/surface/...)',
+                })
+                continue
+            row_errors = list(_validate_json_schema_node(row, schema, schema))
+            row_errors.extend(_apply_cross_field_rules(
+                row, 'plan-tasks', governed=governed,
+                plan_created=fm.get('created') if fm is not None else None,
+            ))
+            for err in row_errors:
+                errors.append({
+                    **err,
+                    'field': _plan_tasks_spine_row_label(row_label_fmt, row_id, err.get('field')),
+                })
+
+    return errors, rows
+
+
 def check_plan_tasks_source(source: str) -> ErrorDict | None:
     """Every plan-tasks check that needs the plan's full SOURCE, in one door.
 
@@ -4063,26 +4237,31 @@ def check_plan_tasks_source(source: str) -> ErrorDict | None:
     the cross-field rule's ungoverned default — even though
     `check_plan_tasks_grouping_approval` had already cleared the row.
 
-    NOT YET TRUE, correction as of code review 2026-07-29: neither write
-    guard actually calls this door. `validate_frontmatter_schema_deny.py`'s
-    `_plan_tasks_spine_errors` and the advisory sibling's mirror of the same
-    name each independently reimplement this function's row-loop body —
-    filtering the schema and calling `_apply_cross_field_rules(...,
-    governed=governed)` themselves — rather than calling
-    `check_plan_tasks_source`. What IS true: both guards import and share
-    the low-level primitives this door composes
-    (`_plan_tasks_schema_without_pm_approved_required`, `is_governed_plan`,
-    `_apply_cross_field_rules`), so the *meaning of "governed" for a row*
-    cannot drift between them. What is NOT true: the
-    ordering-then-grouping-then-per-row *sequence* this door encodes is
-    hand-duplicated in three places (here, and in each guard's
-    `_plan_tasks_spine_errors`), and nothing enforces the three stay in
-    lockstep — the same class of split this door exists to prevent, one
-    level up. Rewiring both guards to call this door directly is the open
-    follow-up; it was not done in the 2026-07-29 slice because the guards'
-    return shape (`list[dict]` with per-row `tasks[id].field` labelling) does
-    not fit this door's single-`ErrorDict`-or-`None` contract, and reshaping
-    that contract was judged out of scope for that change.
+    REWIRED (P084-C1) onto `PLAN_TASKS_SPINE_SEQUENCE` /
+    `plan_tasks_spine_errors`: this door now declares
+    `legs=("ordering", "grouping_approval", "per_row")` — WITHOUT
+    `"integrity"`, which it did not run before this change either. This is
+    a deliberate non-widening, not an oversight: today this door reaches
+    rows through `_plan_tasks_spine_rows`, which returns `None` (silent
+    pass) on a malformed fence or an unparseable block, and the driver
+    reproduces that exact fallback when `"integrity"` is not declared.
+    Adding the leg would make this door newly return an error on sources it
+    passes today, and `spine_read.read_spine` consults it as a preflight
+    whose single-error contract is already order-sensitive — changing which
+    error comes first there is a behavioural change to a live emitter path,
+    not a consolidation. If the widening is wanted it is its own sized
+    change with its own corpus measurement. Behavioural budget: this door
+    returns the byte-identical `ErrorDict` (or `None`) it returned before
+    this rewiring, for every source — that is the acceptance test.
+
+    Both write guards (`validate_frontmatter_schema_deny.py` and
+    `..._advisory.py`) still independently reimplement this function's
+    row-loop body rather than calling `check_plan_tasks_source` — their
+    return shape (`list[dict]` with per-row `tasks[id].field` labelling)
+    does not fit this door's single-`ErrorDict`-or-`None` contract. Both now
+    import `plan_tasks_spine_errors`/`PLAN_TASKS_SPINE_SEQUENCE` for the
+    LEG SET, so the *sequence* cannot drift between the three sites even
+    though the three return contracts remain distinct by design.
 
     Negative-spec: does NOT replace `validate_frontmatter` for schemas OTHER
     than plan-tasks, and does not change `validate_frontmatter`'s own
@@ -4090,34 +4269,17 @@ def check_plan_tasks_source(source: str) -> ErrorDict | None:
     function is the door for SOURCE-scoped plan callers (the write guards,
     the mutate op) specifically.
     """
-    error = check_plan_tasks_ordering(source)
-    if error is not None:
-        return error
-
-    error = check_plan_tasks_grouping_approval(source)
-    if error is not None:
-        return error
-
     parsed = parse_frontmatter(source)
     fm = parsed.get('frontmatter')
-    governed = is_governed_plan(fm) if isinstance(fm, dict) else False
+    fm = fm if isinstance(fm, dict) else None
 
-    rows = _plan_tasks_spine_rows(source)
-    if rows is None:
-        return None
-
-    schema = _PLAN_TASKS_SCHEMA_GOVERNED_DICT if governed else _PLAN_TASKS_SCHEMA_DICT
-    for row in rows:
-        shape_errors = _validate_json_schema_node(row, schema, schema)
-        if shape_errors:
-            return shape_errors[0]
-        cf_errors = _apply_cross_field_rules(
-            row, 'plan-tasks', governed=governed,
-            plan_created=fm.get('created') if isinstance(fm, dict) else None,
-        )
-        if cf_errors:
-            return cf_errors[0]
-    return None
+    errors, _rows = plan_tasks_spine_errors(
+        source,
+        fm,
+        plan_tasks_schema=_PLAN_TASKS_SCHEMA_DICT,
+        legs=("ordering", "grouping_approval", "per_row"),
+    )
+    return errors[0] if errors else None
 
 
 _PLAN_TASKS_CROSS_FIELD_RULES = [
@@ -4138,6 +4300,7 @@ _HANDOFF_CROSS_FIELD_RULES = [
     _cf_handoff_phase_kind_gate,
     _cf_spinoff_roadmap_requires_graph,
     _cf_cost_enum,
+    _cf_loe_band,
     _cf_category_required_post_cutoff,
     _cf_summary_required_post_cutoff,
     _cf_summary_length_cap,

@@ -1371,3 +1371,94 @@ def test_evict_on_skew_drain_ordering_is_untouched_by_this_path():
     reorder or weaken C16's respond -> close_listener -> drain sequence."""
     body = inspect.getsource(skew.evict_on_skew)
     assert body.index("respond(") < body.index("close_listener()") < body.index("drain()")
+
+
+def test_record_accept_ready_is_a_noop_without_a_stamped_spawn(tmp_path):
+    """AC4: `spawn_epoch=None` (the shape every pre-existing construction
+    gets, including every `_ServerContext(...)` above) must never write a
+    row -- matching `_record_own_boot`'s own guard."""
+    ctx = server._ServerContext(
+        name="pipe-accept-ready-noop",
+        sid="sid-accept-ready-noop",
+        version_state=_FakeVersionState(),
+        engine_root=tmp_path,
+    )
+    assert ctx.spawn_epoch is None
+    ctx._record_accept_ready()
+    assert telemetry.server_boot_samples(tmp_path) == []
+
+
+def test_record_accept_ready_writes_a_second_row_distinct_from_the_first(tmp_path):
+    """AC4: a stamped spawn writes a SECOND `server-boot.jsonl` row via the
+    existing `record_server_boot` two-field signature (this row's footprint
+    never touches `warm/telemetry.py`) -- `listener_secs` carried unchanged,
+    `ready_secs` re-measured at accept-ready time, distinct from whatever
+    `_record_own_boot`'s own row already wrote for the same pid."""
+    spawn_epoch = time.time() - 5.0
+    listener_at = spawn_epoch + 1.0
+
+    ctx = server._ServerContext(
+        name="pipe-accept-ready",
+        sid="sid-accept-ready",
+        version_state=_FakeVersionState(),
+        engine_root=tmp_path,
+        spawn_epoch=spawn_epoch,
+        listener_at=listener_at,
+    )
+
+    # The module-level, pre-accept-loop row `_record_own_boot` would have
+    # already written from `_run_guarded` -- constructed directly here so
+    # this test does not depend on booting a real server.
+    telemetry.record_server_boot(
+        listener_secs=listener_at - spawn_epoch,
+        ready_secs=2.0,
+        pid=os.getpid(),
+        engine_root=tmp_path,
+    )
+
+    ctx._record_accept_ready()
+
+    rows = telemetry.server_boot_samples(tmp_path)
+    assert len(rows) == 2
+    first, second = rows
+    assert first["listener_secs"] == second["listener_secs"] == round(
+        listener_at - spawn_epoch, 3
+    )
+    # The first row's ready_secs is the pre-accept-loop measurement (2.0s);
+    # the second is re-measured at accept-ready time and must be a distinct,
+    # larger value (this test's own spawn_epoch is 5s in the past).
+    assert second["ready_secs"] != first["ready_secs"]
+    assert second["ready_secs"] > 4.0
+
+
+def test_record_accept_ready_never_raises_on_a_telemetry_failure(tmp_path, monkeypatch):
+    """Best-effort, matching `_record_own_boot`: an instrument must never be
+    why a server fails to boot."""
+    ctx = server._ServerContext(
+        name="pipe-accept-ready-boom",
+        sid="sid-accept-ready-boom",
+        version_state=_FakeVersionState(),
+        engine_root=tmp_path,
+        spawn_epoch=time.time(),
+        listener_at=time.time(),
+    )
+
+    def _boom(**_kwargs):
+        raise OSError("disk is gone")
+
+    monkeypatch.setattr(telemetry, "record_server_boot", _boom)
+    ctx._record_accept_ready()  # must not raise
+
+
+def test_serve_forever_variants_call_record_accept_ready_before_blocking():
+    """Source pin: both accept-loop entry points must call
+    `_record_accept_ready` after starting their accept layer and idle
+    watchdog, and before the blocking `_stopped.wait()` tail -- the
+    ordering `_record_accept_ready`'s own docstring depends on."""
+    for method in (server._ServerContext.serve_forever, server._ServerContext.serve_forever_unix):
+        body = inspect.getsource(method)
+        assert (
+            body.index("_idle_watchdog_loop")
+            < body.index("_record_accept_ready()")
+            < body.index("_stopped.wait()")
+        )

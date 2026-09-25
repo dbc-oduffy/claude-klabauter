@@ -57,6 +57,12 @@ _DEFAULT_MECHANICAL_DENYLIST: tuple = (
     "change_kind:",
     "migrate_handoff_vocabulary",
     "migrate handoff corpus",
+    # `chore(handoffs):` (2026-09-11, docs/plans/2026-09-07-baton-lifecycle-refusal-drain-authz.md
+    # P029-T1): the walk-back resolvers observed `chore(handoffs): apply shipped/consumed`
+    # outside this repo, and it was a miss on HEAD. PREFIX only, not a
+    # `_SUBSTRING_FAMILY_TOKENS` member — a real feature subject that merely contains this
+    # token mid-subject must not be denylisted.
+    "chore(handoffs):",
 )
 
 #: Denylist tokens matched as a SUBSTRING (family marker) rather than a prefix — catches a whole

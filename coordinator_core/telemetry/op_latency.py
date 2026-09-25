@@ -861,6 +861,7 @@ def record_composition_span(
     t_start: float,
     repo_root: Optional[Path] = None,
     sid: Optional[str] = None,
+    exit_code_label: Optional[str] = None,
 ) -> None:
     """Append one JSON line recording a whole COMPOSITION's span -- one row per
     composition, written at flush time (not per directive/invocation).
@@ -869,7 +870,18 @@ def record_composition_span(
         {"composition_id": str, "name": str, "invocation_count": int,
          "elapsed_secs": float, "outcome": str, "t_start": float epoch,
          "pid": int, "sid": str|null, "repo_key": str|null,
-         "kind": "composition"}
+         "kind": "composition", "exit_code_label": str|null}
+
+    ``exit_code_label`` (docs/plans/2026-09-11-half-the-compositions-do-not-
+    finish-clea.md § C1) is the symbolic name of the lineage's own exit-code
+    ladder rung this run stopped on -- resolved by the caller via
+    `contract.apply_base.exit_code_label` or `ceremony_common.apply_halt.
+    exit_code_label` -- never the raw int (the two lineages' ladders collide
+    at 2: `CLAIM_DENIED` on apply_base, `DIRECTIVE_FAILED` on the ceremony
+    ladder). Additive and optional, defaulting to `None`; ALWAYS written as
+    an explicit key on the entry (present-as-null, never omitted), so a
+    census can tell "this run did not name its exit" from "this row predates
+    the field".
 
     Deliberately NOT ``record_op_latency``: that function hardcodes
     ``kind: "complete"`` plus an ``op`` field, and this module's own
@@ -915,6 +927,7 @@ def record_composition_span(
         "sid": sid,
         "repo_key": None,
         "kind": "composition",
+        "exit_code_label": exit_code_label,
     }
     _write_entry(entry, repo_root)
 

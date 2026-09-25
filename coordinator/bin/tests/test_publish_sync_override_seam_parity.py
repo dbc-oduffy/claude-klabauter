@@ -35,7 +35,6 @@ Run: python -m pytest coordinator/bin/tests/test_publish_sync_override_seam_pari
 
 from __future__ import annotations
 
-import ast
 import importlib.util
 import sys
 from pathlib import Path
@@ -47,7 +46,10 @@ _COORDINATOR_LIB = _BIN_DIR.parent / "lib"
 if str(_COORDINATOR_LIB) not in sys.path:
     sys.path.insert(0, str(_COORDINATOR_LIB))
 
-from percolate.publish_modes import PUBLISH_MODES  # noqa: E402
+from percolate.publish_sync_contract import (  # noqa: E402
+    accepted_keywords as _accepted_keywords,
+    would_refuse as _would_refuse,
+)
 
 
 def _load_publish_module():
@@ -95,69 +97,6 @@ def _resolvable_overrides() -> "list[Path]":
         for relative in _OVERRIDE_RELATIVE_PATHS
         if (root / relative).is_file()
     ]
-
-
-def _accepted_keywords(source: str, symbol: str) -> "tuple[bool, set[str], bool]":
-    """`(defined, accepted_keyword_names, is_bare_var_wrapper)` for `symbol`.
-
-    A `**kwargs` catch-all reports as a bare wrapper only when it is the
-    function's ONLY parameter shape, matching `check_publish_sync_contract`'s
-    own rule: a bare `(*args, **kwargs)` passes a superficial check and still
-    fails at runtime, so it must not read as acceptance here either.
-    """
-    tree = ast.parse(source)
-    for node in tree.body:
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        if node.name != symbol:
-            continue
-        args = node.args
-        named = {a.arg for a in args.args} | {a.arg for a in args.kwonlyargs}
-        named |= {a.arg for a in args.posonlyargs}
-        has_var_kw = args.kwarg is not None
-        is_bare = not named and (has_var_kw or args.vararg is not None)
-        if has_var_kw and not is_bare:
-            # A real signature that also carries `**kwargs` absorbs anything;
-            # the round-time guard's `bind_partial` accepts that too.
-            return True, named | {"**"}, False
-        return True, named, is_bare
-    return False, set(), False
-
-
-def _would_refuse(override_path: Path) -> "list[str]":
-    """The reasons a round would refuse this override, empty when it would
-    not. Mirrors `check_publish_sync_contract`'s obligations in the order that
-    guard checks them, minus the run-scoping — a template or a root is checked
-    against EVERY entry point, because we cannot know which modes a future
-    round's rows will dispatch."""
-    reasons: "list[str]" = []
-    source = override_path.read_text(encoding="utf-8", errors="replace")
-    for descriptor in PUBLISH_MODES:
-        if descriptor.entry_point is None:
-            continue
-        defined, accepted, is_bare = _accepted_keywords(source, descriptor.entry_point)
-        if not defined:
-            reasons.append(f"does not define {descriptor.entry_point!r}")
-            continue
-        if is_bare:
-            reasons.append(
-                f"{descriptor.entry_point!r} is a bare (*args/**kwargs) wrapper"
-            )
-            continue
-        if "**" in accepted:
-            continue
-        missing = sorted(set(descriptor.bind_kwargs) - accepted)
-        if missing:
-            reasons.append(
-                f"{descriptor.entry_point!r} does not accept {missing} "
-                f"(mode {descriptor.wire_name!r})"
-            )
-    defined, accepted, is_bare = _accepted_keywords(source, "load_ignore")
-    if not defined:
-        reasons.append("does not define 'load_ignore'")
-    elif is_bare:
-        reasons.append("'load_ignore' is a bare (*args/**kwargs) wrapper")
-    return reasons
 
 
 def test_no_resolvable_override_would_refuse_a_round():

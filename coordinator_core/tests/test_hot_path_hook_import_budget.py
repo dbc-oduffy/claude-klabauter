@@ -320,8 +320,16 @@ _TARGETS: Sequence[_Target] = (
     _Target(
         name="bash_guards_dispatch",
         import_path="coordinator_core.bash_guards.dispatch",
-        # Measured 149 modules on this machine/Python version at authorship.
-        # ~11% / 16-module margin.
+        # P070-C3 re-baseline (2026-09-24, Linux-6.18.44-fc-v37-x86_64-with-
+        # glibc2.39, CPython 3.11.15): measured 140 modules after deferring
+        # dispatch.py's ~34 out-of-line guard-check imports (plus
+        # `write_claim_record.record_write_claims`) from module top into
+        # `_build_guard_chain`/`_any_declared_matchers`/
+        # `_record_bash_write_claims`, the sole functions that reference them
+        # -- lever (a), docs/plans/2026-09-11-every-bash-call-pays-23k-lines-
+        # of-guard.md § "The permitted lever set at C3". Was 149 at
+        # authorship, drifted to 174 then 208 (C1's HEAD re-check) before
+        # this shed; the ceiling itself is unchanged and unraised.
         module_count_ceiling=165,
         # Measured 0 `sys.path` growth on this machine at authorship (this
         # target never touches `sys.path` itself). Small fixed margin, not a

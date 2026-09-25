@@ -68,6 +68,7 @@ Negative-spec:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Union
 
@@ -371,3 +372,199 @@ def resolve_historical_claim(
     if resolved_common_dir is None:
         return None
     return _read_ledger_claim(handoff_claim_dir(resolved_common_dir, handoff_path))
+
+
+# ---------------------------------------------------------------------------
+# The comparator — Track B (AC6, AC7, AC9). Composed over `resolve_claim_state`,
+# not a second read of either side. Read-only.
+# ---------------------------------------------------------------------------
+
+#: Reported when the ledger record carries no resolver-source stamp — every
+#: row filed before the forward instrumentation (this plan's own C10/AC12)
+#: lands, and every row filed by an engine that has not. The comparator does
+#: not resolve identity itself and gains no new read here: absent field this
+#: literal degrade, never a second resolution.
+_LEDGER_RESOLVER_SOURCE_NOT_RECORDED = "not-recorded"
+
+#: The AC12 forward-instrumentation field name inside a claim-lock dir,
+#: sibling to `session_id`/`claimed_at`. Not written by anything yet (C10
+#: lands after this row) — reading it here is forward-compatible, not a
+#: dependency on C10.
+_LEDGER_RESOLVER_SOURCE_FILENAME = "resolver_source"
+
+#: Reported in place of a numeric age whenever no onset is measurable —
+#: `mirror-only` (nothing records when the ledger side went away) and any
+#: absent-or-unparseable `claimed_at`. Never raised, never a wrong-typed age.
+AGE_NOT_MEASURABLE = "not measurable"
+
+#: AC9's named bound, in seconds, with the bound value in the constant's own
+#: name. A stated, not measured, choice: this comparator has no persistent
+#: state across calls, so "the bound" is read as wall-clock elapsed time
+#: since the ledger side's recorded onset, not a call-count ("until the next
+#: apply") — the only bound shape a single stateless read can evaluate.
+DISAGREEMENT_AGE_BOUND_SECONDS_300: float = 300.0
+
+
+@dataclass(frozen=True)
+class ClaimComparisonReport:
+    """One handoff's ledger-vs-mirror comparison. Read-only, AC6's contract.
+
+    Attributes:
+        verdict: One of "agree" / "ledger-only" / "mirror-only" /
+            "holder-mismatch" / "neither". `neither` (both sides absent)
+            is a distinct, non-comparable state — no claim exists to
+            compare — not a disagreement.
+        ledger_holder: The raw ledger-side holder (gated on
+            `cs_claim_holder_live`, the same read `resolve_claim_state`
+            uses), or None.
+        mirror_holder: The raw mirror-side holder, or None.
+        age: The measured age (seconds, float) of a non-agreeing state
+            where one is measurable — `ledger-only`/`holder-mismatch` age
+            off the ledger side's `claimed_at` (the onset proxy this
+            comparator states, not measures). `AGE_NOT_MEASURABLE` for
+            `mirror-only` and any absent-or-unparseable timestamp. None
+            for `agree`/`neither` (nothing to age).
+        ledger_resolver_source: The resolver source observed at claim time
+            (AC12's forward instrumentation), or
+            `_LEDGER_RESOLVER_SOURCE_NOT_RECORDED` when the field is absent.
+            This is what qualifies the verdict — an `agree` sourced from
+            `resolve_session_id`-under-warm, or `not-recorded`, is agreement
+            between two reads of a resolver that can manufacture a
+            plausible wrong holder.
+        bound_seconds: AC9's named bound (`DISAGREEMENT_AGE_BOUND_SECONDS_300`),
+            echoed on every report regardless of verdict.
+        bound_exceeded: True when `age` is numeric and exceeds
+            `bound_seconds`. An unmeasurable age never counts as a breach.
+            Changes no gate outcome (AC9, AC8) — a report field only.
+    """
+
+    verdict: str
+    ledger_holder: Optional[str]
+    mirror_holder: Optional[str]
+    age: Union[float, str, None]
+    ledger_resolver_source: str
+    bound_seconds: float
+    bound_exceeded: bool
+
+
+def _read_ledger_resolver_source(claim_dir: Path) -> str:
+    """Read the AC12 forward-instrumentation resolver-source field off a
+    claim-lock dir, or `_LEDGER_RESOLVER_SOURCE_NOT_RECORDED` on any
+    missing/unreadable/empty record. Never raises — mirrors
+    `_read_ledger_claim`'s own degrade discipline."""
+    try:
+        value = (claim_dir / _LEDGER_RESOLVER_SOURCE_FILENAME).read_text(
+            encoding="utf-8"
+        ).strip()
+    except (OSError, ValueError):
+        return _LEDGER_RESOLVER_SOURCE_NOT_RECORDED
+    return value or _LEDGER_RESOLVER_SOURCE_NOT_RECORDED
+
+
+def _compute_age(claimed_at: Optional[str], *, now: Optional[float] = None) -> Union[float, str]:
+    """Seconds elapsed since `claimed_at` (raw, as stored), or
+    `AGE_NOT_MEASURABLE` on any absent-or-unparseable timestamp — never
+    raises, never reports a wrong type as an age. `now` (unix timestamp) is
+    an injectable clock for tests; defaults to the current UTC time."""
+    if not claimed_at:
+        return AGE_NOT_MEASURABLE
+    text = claimed_at.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        onset = datetime.fromisoformat(text)
+    except ValueError:
+        return AGE_NOT_MEASURABLE
+    if onset.tzinfo is None:
+        onset = onset.replace(tzinfo=timezone.utc)
+    current = (
+        datetime.fromtimestamp(now, tz=timezone.utc)
+        if now is not None
+        else datetime.now(timezone.utc)
+    )
+    return (current - onset).total_seconds()
+
+
+def compare_claim_state(
+    handoff_path: Union[Path, str],
+    *,
+    common_dir: Optional[Path] = None,
+    repo_root: Optional[Union[Path, str]] = None,
+    now: Optional[float] = None,
+) -> ClaimComparisonReport:
+    """The comparator (AC6, AC7, AC9). Composed over `resolve_claim_state` —
+    not a second read of either side. READ-ONLY, changes no gate outcome.
+
+    Args:
+        handoff_path, common_dir, repo_root: Same contract as
+            `resolve_claim_state`.
+        now: Injectable clock (unix timestamp) for `_compute_age`; tests
+            only, defaults to the current UTC time.
+
+    Returns:
+        A `ClaimComparisonReport`. AC7: this function does not read, use, or
+        alter `resolve_claim_state`'s `disagreement` field — that flag keeps
+        its exact current (narrower) semantics, unmodified, as a distinct
+        axis beside this comparator's verdict.
+    """
+    handoff_path = Path(handoff_path)
+    state = resolve_claim_state(handoff_path, common_dir=common_dir, repo_root=repo_root)
+
+    ledger_holder = state.ledger_holder
+    mirror_holder = state.mirror_holder
+
+    if ledger_holder is not None and mirror_holder is not None:
+        verdict = "agree" if ledger_holder == mirror_holder else "holder-mismatch"
+    elif ledger_holder is not None:
+        verdict = "ledger-only"
+    elif mirror_holder is not None:
+        verdict = "mirror-only"
+    else:
+        verdict = "neither"
+
+    if verdict in ("ledger-only", "holder-mismatch"):
+        # Onset proxy is the ledger side's claimed_at in both cases — for
+        # holder-mismatch onset is ambiguous between the two timestamps;
+        # the ledger side is chosen for consistency with ledger-only, a
+        # stated, not measured, choice (AC6). `state.claimed_at` is the
+        # ledger side's value here: `resolve_claim_state` returns
+        # `source="ledger"` whenever `ledger_holder` is not None.
+        age: Union[float, str, None] = _compute_age(state.claimed_at, now=now)
+    elif verdict == "mirror-only":
+        # Nothing in the tree records when the ledger side went away (reap,
+        # or a dead holder degrading through cs_claim_holder_live) — no
+        # onset is measurable.
+        age = AGE_NOT_MEASURABLE
+    else:
+        # agree / neither: nothing to age.
+        age = None
+
+    # Re-derive the claim dir the same way resolve_claim_state does, to read
+    # the AC12 field without a second resolution of the claim itself — no
+    # new read of who holds the claim, only the sibling resolver-source file
+    # beside session_id/claimed_at.
+    if common_dir is None:
+        root = Path(repo_root) if repo_root is not None else handoff_path.parent
+        try:
+            resolved_common_dir: Optional[Path] = git_common_dir(root)
+        except Exception:
+            resolved_common_dir = None
+    else:
+        resolved_common_dir = Path(common_dir)
+
+    ledger_resolver_source = _LEDGER_RESOLVER_SOURCE_NOT_RECORDED
+    if resolved_common_dir is not None:
+        claim_dir = handoff_claim_dir(resolved_common_dir, handoff_path)
+        ledger_resolver_source = _read_ledger_resolver_source(claim_dir)
+
+    bound_exceeded = isinstance(age, (int, float)) and age > DISAGREEMENT_AGE_BOUND_SECONDS_300
+
+    return ClaimComparisonReport(
+        verdict=verdict,
+        ledger_holder=ledger_holder,
+        mirror_holder=mirror_holder,
+        age=age,
+        ledger_resolver_source=ledger_resolver_source,
+        bound_seconds=DISAGREEMENT_AGE_BOUND_SECONDS_300,
+        bound_exceeded=bound_exceeded,
+    )

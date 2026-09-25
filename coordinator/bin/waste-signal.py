@@ -108,7 +108,7 @@ taxonomy alone).
 port `127.0.0.1:8767/mcp` (`initialize` -> `notifications/initialized` -> `tools/call`), a
 transport shape proven by execution this session and mirrored from example-retrieval-repo's own
 `tasks/dogfood-runs/2026-05-17-bank-refresh/check_embed_client.py` (resolve example-retrieval-repo's root via
-`machine-local get repos.example_retrieval_repo`, never a hardcoded drive path). Per anti-scope:
+`machine-local get repos.project_rag`, never a hardcoded drive path). Per anti-scope:
 this endpoint is a stopgap example-retrieval-repo's PM has explicitly declined to make a supported interface
 -- the URL lives in exactly one module constant (`EXAMPLE_RETRIEVAL_REPO_MCP_URL`), there is no retry/backoff
 layer, no response-schema mirroring beyond the fields this module actually reads, and no cache.

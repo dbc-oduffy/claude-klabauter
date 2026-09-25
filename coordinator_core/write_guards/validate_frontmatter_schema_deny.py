@@ -172,16 +172,12 @@ from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.write_guards._case_fold_path import casefold_path
 from coordinator_core.frontmatter.schema_validate import (
-    _apply_cross_field_rules,
-    _plan_tasks_schema_without_pm_approved_required,
-    _validate_json_schema_node,
     check_plan_tasks_grouping_approval as _check_plan_tasks_grouping_approval,
-    is_governed_plan as _is_governed_plan,
     load_schemas as _load_schemas,
     match_schema as _match_schema,
     parse_frontmatter as _parse_frontmatter,
     parse_yaml as _parse_yaml,
-    plan_tasks_spine_integrity as _plan_tasks_spine_integrity,
+    plan_tasks_spine_errors as _plan_tasks_spine_errors_driver,
     validate_frontmatter_obj as _validate_frontmatter_obj,
     _is_parseable_iso_date as _is_parseable_iso_date,
 )
@@ -1090,11 +1086,14 @@ def _plan_tasks_spine_errors(
         covered by nothing. Enforcement was inverted: one row with a bad enum
         was reported, a spine no consumer could read at all was not.
 
-    Mirrors the advisory sibling's helper of the same name exactly — both
-    must stay in lockstep so the STRICT-mode warn shape (rendered by THIS
-    module, per the 2026-08-06 warn-not-block ruling) and the default warn
-    shape (rendered by the advisory sibling) report the identical finding
-    for the identical row.
+    Shares a driver with the advisory sibling's helper of the same name
+    (P084-C2) rather than being a copy of it: both call
+    `plan_tasks_spine_errors` against `PLAN_TASKS_SPINE_SEQUENCE`, but each
+    declares its OWN leg subset — this guard omits "ordering" (see the
+    driver-call comment below), the advisory guard includes it. The two no
+    longer report the identical finding for every spine; they report the
+    identical finding for the legs both sides declare, which is what
+    `test_siblings_report_the_identical_finding` proves post-C2.
 
     `plan_created` is now forwarded to `_apply_cross_field_rules` from this
     document's own frontmatter (`fm.get('created')`, mirroring
@@ -1132,46 +1131,22 @@ def _plan_tasks_spine_errors(
     if not isinstance(plan_tasks_schema, dict):
         return []
 
-    # The three defects a per-ROW loop structurally cannot see (spine not
-    # locatable, block does not parse, depends_on edge onto a row that is not
-    # here). Shared door with the sibling guard, so neither can drift about what
-    # counts as an unreadable spine; ABSENT stays silent there, as it must.
-    # It also hands back the STRICTLY-parsed rows, which is what the row loop
-    # below now validates — this used to run the lenient `_parse_yaml` over the same
-    # block, so it both paid a second parse and checked a reconstruction rather
-    # than the document every real spine consumer reads.
-    integrity, parsed = _plan_tasks_spine_integrity(prospective_content)
-    if parsed is None:
-        return integrity
-
-    governed = _is_governed_plan(frontmatter) if isinstance(frontmatter, dict) else False
-    schema = (
-        _plan_tasks_schema_without_pm_approved_required(plan_tasks_schema)
-        if governed
-        else plan_tasks_schema
+    # Routed (P084-C2) through the shared `PLAN_TASKS_SPINE_SEQUENCE` driver:
+    # `legs=("integrity", "per_row")` — deliberately WITHOUT "ordering", per
+    # the plan's Anti-scope row 1 (14 in-corpus plans fail the ordering lint
+    # today; a deny-side leg makes those unwritable on next edit — a PM-gated
+    # follow-up, not this change). `legs_out_of_band=("grouping_approval",)`
+    # names that this guard DOES run the grouping-approval leg, just not
+    # through this driver — it runs at `_evaluate_grouping_approval` below,
+    # at its own call site, unmoved by this routing.
+    errors, _rows = _plan_tasks_spine_errors_driver(
+        prospective_content,
+        frontmatter,
+        plan_tasks_schema=plan_tasks_schema,
+        legs=("integrity", "per_row"),
+        legs_out_of_band=("grouping_approval",),
+        row_label_fmt="tasks[{id}].{field}",
     )
-
-    errors: "list[dict]" = list(integrity)
-    for idx, row in enumerate(parsed):
-        row_label = row.get("id") if isinstance(row, dict) and row.get("id") else f"index {idx}"
-        if not isinstance(row, dict):
-            errors.append({
-                "field": f"tasks[{row_label}]",
-                "error": f"row is not a mapping, got {type(row).__name__}",
-                "hint": "Each task-spine row is a YAML mapping (id/title/change_kind/surface/...)",
-            })
-            continue
-        row_errors = _validate_json_schema_node(row, schema, schema)
-        row_errors.extend(_apply_cross_field_rules(
-            row, "plan-tasks", governed=governed,
-            plan_created=frontmatter.get('created') if isinstance(frontmatter, dict) else None,
-        ))
-        for err in row_errors:
-            errors.append({
-                "field": f"tasks[{row_label}].{err.get('field')}",
-                "error": err.get("error"),
-                "hint": err.get("hint"),
-            })
     return errors
 
 

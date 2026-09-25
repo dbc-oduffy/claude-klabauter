@@ -638,7 +638,14 @@ def test_pinned_flush_shape_leaves_no_field_null(tmp_path, monkeypatch):
 
     rows = _composition_rows(tmp_path)
     assert len(rows) == 1
-    nulls = sorted(k for k, v in rows[0].items() if v is None)
+    # exit_code_label (docs/plans/2026-09-11-half-the-compositions-do-not-
+    # finish-clea.md § C1) is DELIBERATELY null under this two-argument
+    # pinned shape -- C1 only adds the keyword and writes it present-as-null
+    # when omitted (AC1); C2 threads the real label through all 8 apply.py
+    # call sites. Exempted here, not silently dropped from the pin.
+    nulls = sorted(
+        k for k, v in rows[0].items() if v is None and k != "exit_code_label"
+    )
     assert not nulls, (
         f"composition row fields are null under the pinned call shape: {nulls}. "
         "Every field must be resolvable from flush_composition_record(budget, outcome) "
@@ -646,6 +653,71 @@ def test_pinned_flush_shape_leaves_no_field_null(tmp_path, monkeypatch):
         "default inside _flush_or_raise (see repo_root and sid) rather than adding a "
         "parameter no production caller passes."
     )
+
+
+def test_record_composition_span_carries_exit_code_label(tmp_path):
+    """AC1: a row written WITH `exit_code_label` carries the given value."""
+    (tmp_path / ".git").mkdir()
+    record_composition_span(
+        composition_id="cid-2",
+        name="some_assemble",
+        invocation_count=1,
+        elapsed_secs=0.5,
+        outcome="directive_failed",
+        t_start=time.time(),
+        repo_root=tmp_path,
+        sid="sid-3",
+        exit_code_label="BUDGET_BREACH",
+    )
+    rows = _composition_rows(tmp_path)
+    assert len(rows) == 1
+    assert rows[0]["exit_code_label"] == "BUDGET_BREACH"
+
+
+def test_record_composition_span_omitted_exit_code_label_is_null_not_missing(tmp_path):
+    """AC1: a row written WITHOUT the keyword carries the key as `null` rather
+    than omitting it -- an absent key and a null key read differently to a
+    census, and the writer must not make a reader guess."""
+    (tmp_path / ".git").mkdir()
+    record_composition_span(
+        composition_id="cid-3",
+        name="some_assemble",
+        invocation_count=1,
+        elapsed_secs=0.5,
+        outcome="success",
+        t_start=time.time(),
+        repo_root=tmp_path,
+        sid="sid-4",
+    )
+    rows = _composition_rows(tmp_path)
+    assert len(rows) == 1
+    assert "exit_code_label" in rows[0]
+    assert rows[0]["exit_code_label"] is None
+
+
+def test_flush_composition_record_threads_exit_code_label(tmp_path):
+    """`flush_composition_record` passes `exit_code_label` straight through
+    to `record_composition_span`."""
+    from coordinator_core.telemetry.composition_record import (
+        flush_composition_record,
+        make_fleet_budget,
+    )
+
+    (tmp_path / ".git").mkdir()
+    budget = make_fleet_budget("some_ceremony")
+    flush_composition_record(
+        budget, "directive_failed", repo_root=tmp_path, sid="sid-5",
+        exit_code_label="DIRECTIVE_FAILED",
+    )
+    assert _composition_rows(tmp_path)[0]["exit_code_label"] == "DIRECTIVE_FAILED"
+
+
+def test_composition_record_valid_outcomes_unchanged_by_exit_code_label():
+    """AC8 / negative-spec: adding `exit_code_label` does not widen
+    `VALID_OUTCOMES` -- three outcomes stay three."""
+    from coordinator_core.telemetry.composition_record import VALID_OUTCOMES
+
+    assert VALID_OUTCOMES == frozenset({"success", "partial_mutation", "directive_failed"})
 
 
 def test_flush_composition_record_explicit_sid_still_wins(tmp_path, monkeypatch):

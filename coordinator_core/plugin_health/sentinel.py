@@ -152,7 +152,7 @@ ProbeNote = namedtuple("ProbeNote", ["id", "severity", "message"])
 _USAGE = f"Usage: {_PROG} [--triage|--full|--cluster NAME|--probe ID|--symptom TEXT]"
 
 _MCP_SERVING_PLUGINS = {
-    "example-retrieval-repo": "example-retrieval-repo",
+    "project-rag": "project-rag",
     "example-game-repo-control": "example-game-repo-control",
     "example-game-repo": "example-game-repo-control",
     "notebooklm": "notebooklm",
@@ -876,12 +876,21 @@ def probe_p11(plugins_root: Path, coordinator_root: Optional[Path] = None) -> Li
                 "P-11",
                 "amber",
                 "templates/setup drift detected — run verify-templates-setup-sync.py (no "
-                "flags, inspect-only) to see which files. Read NOT_PRESENT rows as benign "
-                "(neither side exists yet); only MISMATCH rows are drift. Since the "
-                "runtime-root resolver prefers a resolved DoE clone over the shared "
-                "~/.claude/setup/ copy (see coordinator_percolate_runtime_root()), a "
-                "MISMATCH does not reach the resolved truth on a machine with a DoE clone "
-                "— real, but not urgent. RE-RUNNING THE INSTALLER WILL NOT CLEAR THIS, and "
+                "flags, inspect-only) to see which rows fired. NOT_PRESENT is benign "
+                "(neither side exists yet). MISMATCH, LIVE_MISSING and TMPL_MISSING are the "
+                "template<->live leg: since the runtime-root resolver prefers a resolved DoE "
+                "clone over the shared ~/.claude/setup/ copy (see "
+                "coordinator_percolate_runtime_root()), a MISMATCH there does not reach the "
+                "resolved truth on a machine with a DoE clone — real, but not urgent. "
+                "LIVE_MISSING on that leg can also just mean a pre-manifest install: this "
+                "tracked set adds files an older install never wrote "
+                "(percolate-store.yaml, publish-native-allowlist.txt, two .gitkeep files), "
+                "and re-running /coordinator:install clears LIVE_MISSING there — it does not "
+                "clear a MISMATCH. SOURCE_MISMATCH and CONTRACT_REFUSE are a different class: "
+                "source-leg or claude-klabauter's own dispatch-contract drift is what broke a publish "
+                "before, so treat those as urgent — the 'not urgent' framing above is for the "
+                "template<->live leg only, never for these. "
+                "RE-RUNNING THE INSTALLER WILL NOT CLEAR THIS MISMATCH, and "
                 "that is by design, not a bug: substrate.py's percolation step classifies a "
                 "drifted destination as operator-customized and PRESERVES it, logging "
                 "`[machine-local] operator-customized <file> preserved; template at <path> "

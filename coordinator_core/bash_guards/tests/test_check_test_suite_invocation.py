@@ -2625,12 +2625,12 @@ class TestDynamicPrefilterLeg:
         """example-retrieval-repo's shape, with the hand-added ``run_tier_tests`` static
         token removed -- the dynamic leg alone must reach the same deny."""
         assert not guard._RUNNER_PREFILTER_RE.search(
-            "python example_retrieval_repo_scripts/run_tier_tests.py --tier sufficient"
+            "python project_rag_scripts/run_tier_tests.py --tier sufficient"
         )
         (tmp_path / ".git").mkdir()
         (tmp_path / "coordinator.local.md").write_text(
             "---\n"
-            'fast_test_cmd: "python example_retrieval_repo_scripts/run_tier_tests.py --tier sufficient"\n'
+            'fast_test_cmd: "python project_rag_scripts/run_tier_tests.py --tier sufficient"\n'
             'full_test_cmd: "python -m pytest --timeout=300"\n'
             "---\n",
             encoding="utf-8",
@@ -2640,7 +2640,7 @@ class TestDynamicPrefilterLeg:
         monkeypatch.delenv("COORDINATOR_FAST_TEST_CMD", raising=False)
         monkeypatch.delenv("COORDINATOR_FULL_TEST_CMD", raising=False)
         reason = _reason(guard.check(_payload(
-            "python example_retrieval_repo_scripts/run_tier_tests.py --tier sufficient",
+            "python project_rag_scripts/run_tier_tests.py --tier sufficient",
             tmp_path, agent_id=_AGENT_ID,
         )))
         assert "configured" in reason

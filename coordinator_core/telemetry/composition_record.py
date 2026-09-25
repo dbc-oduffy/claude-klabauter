@@ -141,8 +141,14 @@ def flush_composition_record(
     *,
     repo_root: Optional[Path] = None,
     sid: Optional[str] = None,
+    exit_code_label: Optional[str] = None,
 ) -> None:
     """Never-raising public flush -- the one all 8 `apply.py` call sites use.
+
+    ``exit_code_label`` (additive, optional, default `None`) is threaded
+    straight through to `op_latency.record_composition_span` -- see that
+    function's own docstring. A caller that omits it behaves byte-identically
+    to before this parameter existed.
 
     NEVER RAISES, and that is load-bearing rather than defensive habit. The
     pinned call shape puts this call in a `finally`, so an exception escaping
@@ -160,7 +166,9 @@ def flush_composition_record(
     the run. Tests target `_flush_or_raise` for the validation contract.
     """
     try:
-        _flush_or_raise(budget, outcome, repo_root=repo_root, sid=sid)
+        _flush_or_raise(
+            budget, outcome, repo_root=repo_root, sid=sid, exit_code_label=exit_code_label
+        )
     except Exception as exc:  # noqa: BLE001 -- see docstring; containment is the point
         print(f"composition-record: flush skipped ({exc})", file=sys.stderr)
 
@@ -171,6 +179,7 @@ def _flush_or_raise(
     *,
     repo_root: Optional[Path] = None,
     sid: Optional[str] = None,
+    exit_code_label: Optional[str] = None,
 ) -> None:
     """Write ONE `kind="composition"` row for this composition, via
     `op_latency.record_composition_span`. Call once, from a `finally`, per
@@ -260,4 +269,5 @@ def _flush_or_raise(
         t_start=float(t_start),
         repo_root=repo_root if repo_root is not None else Path(os.getcwd()),
         sid=resolve_explicit_session_id(sid),
+        exit_code_label=exit_code_label,
     )

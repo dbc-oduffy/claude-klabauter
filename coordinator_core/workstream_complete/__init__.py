@@ -224,6 +224,32 @@ Negative-spec:
       does NOT fabricate synthetic decision values to force these dead
       under the sweep; that would be modeling a fact this engine cannot
       verify from real disk/caller state.
+    - FINDING, not a change (P024-C5, docs/plans/2026-09-06-three-assembler-
+      briefs-under-the-brightline.md; C3 disposition for this brief: holds):
+      no call site in this module, `directives_commit_tail.py`,
+      `directives_memo_lifecycle.py`, `session_identity.py`, or
+      `baton_assemble/__init__.py`/`apply.py` was routed onto
+      `pickup_assemble._dispatch_git_readmodel` (AST-counted: 7 non-test
+      sites across this package, 6 in `baton_assemble`). The read-model's
+      `log`/`cat-file`/`rev-parse`/`show` dispatch only serves narrow pinned
+      shapes (`_dispatch_log`'s `--oneline`, `-1 --format=%ct [...]`, `-1
+      --follow -S<needle> --`; `cat-file -e`; bare-token `rev-parse`; `show
+      <rev>:<path>`) — not the shapes these modules actually spawn:
+      `cat-file --batch-check=...`, `log --since=/--no-merges/--no-walk
+      --format=...trailers...`, `rev-parse <sha>~1`, and the dominant real
+      cost, `show --raw --numstat --format=... <shas>` (peer/session
+      attribution, `directives_commit_tail.chunked_show_numstat_blocks`).
+      Sizing at the brief() gate path (`test_gate_path_spawn_budget.py`,
+      budget 4) lands on `show --numstat` and the two sanctioned residual
+      spawns (`status`, `merge-base`) — verbs the dispatch table excludes
+      from the read-model by design (`_RUN_GIT_SPAWN_VERBS`). Routing any of
+      these onto the read-model as-is would silently degrade every call to
+      the uniform read-model-miss fallback (`_GitReadModelError` ->
+      `returncode=1`), not save a spawn. Extending the read-model to cover
+      them is a new shared git-facts abstraction this row's own body rules
+      out; importing `pickup_assemble`'s private dispatch across the package
+      boundary as-is is the same shape it also rules out. No spawn-reducing
+      edit is made.
 """
 from __future__ import annotations
 

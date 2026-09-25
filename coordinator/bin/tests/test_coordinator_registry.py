@@ -200,7 +200,7 @@ def test_central_canonical_id():
 
 
 def test_repo_key_to_em_id_example_retrieval_repo():
-    assert reg.repo_key_to_em_id("repos.example_retrieval_repo") == "example-retrieval-repo-em"
+    assert reg.repo_key_to_em_id("repos.project_rag") == "example-retrieval-repo-em"
 
 
 def test_repo_key_to_em_id_example_game_repo_alias():

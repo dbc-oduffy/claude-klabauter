@@ -176,6 +176,15 @@ Negative-spec:
     - Do NOT assert that `handoff.author_fork` is superseded by this module --
       C0's claude-klabauter-em seam decision is still open; the spinoff directive merely
       names the op as its dispatch target.
+    - FINDING, not a change (P024-C5, docs/plans/2026-09-06-three-assembler-
+      briefs-under-the-brightline.md): this module's and `apply.py`'s git
+      call sites (2 + 4, AST-counted) were checked against
+      `pickup_assemble._dispatch_git_readmodel` and left unrouted -- see
+      `workstream_complete/__init__.py`'s own C5 finding for the full
+      argument (same read-model, same narrow-shape mismatch: the dispatch
+      table's `log`/`cat-file`/`rev-parse`/`show` handlers do not cover the
+      `--batch-check`/trailer-format/`~1`-suffix/`--numstat` shapes these
+      call sites actually use). No spawn-reducing edit is made here either.
 """
 from __future__ import annotations
 

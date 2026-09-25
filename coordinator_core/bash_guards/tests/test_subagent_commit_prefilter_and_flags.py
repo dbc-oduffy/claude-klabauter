@@ -320,6 +320,7 @@ _NEWLY_ADDED_COMMITTING_OPS = (
     # record.
     "handoff.ship_and_archive",
 )
+_NEWLY_ADDED_COMMITTING_OPS__SUBJECT_CLASS = "op-name"
 
 
 def test_newly_added_committing_ops_all_deny(monkeypatch):

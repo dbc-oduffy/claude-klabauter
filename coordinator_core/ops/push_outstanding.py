@@ -533,6 +533,7 @@ def push_outstanding(
     budget_secs: float = PUSH_RETRY_BUDGET_SECS,
     decide_only: bool = False,
     session_id: Optional[str] = None,
+    use_streamed_push: bool = False,
 ) -> PushOutcome:
     """Push `worktree_root`'s current branch iff it is ahead of its own
     upstream tracking ref -- decided at zero git spawns (see module
@@ -621,6 +622,14 @@ def push_outstanding(
     sha, prior shelve state). A `decide_only` call never reaches the p4
     leg either -- same "instrument, not an invocation" rule as above, since
     the leg's `reconcile`/`revert`/`shelve` sequence mutates p4 state.
+
+    `use_streamed_push` (P052-C3, 2026-09-10) -- keyword-only, default
+    `False`, forwarded UNCHANGED to `push_with_retry` -- see that
+    parameter's own docstring for what it does and does not affect. This
+    module makes no decision of its own about it; the outstanding-work
+    decision and `budget_secs` handling above are untouched by its value.
+    The cadence sweep (`warm.push_cadence._sweep_one`) is the one caller
+    that passes `True`.
     """
     root = Path(worktree_root)
     arm_t_start = time.time()
@@ -650,12 +659,21 @@ def push_outstanding(
         return PushOutcome(exit_code=0, skipped=["push:decide-only", *lfs_note])
 
     publish_deadline = time.monotonic() + budget_secs
-    outcome = push_with_retry(
-        root,
+    # `use_streamed_push` is omitted from the call entirely when it is the
+    # default `False`, not passed as an explicit `False` -- keeps the
+    # delegation kwargs byte-identical to every caller that has not opted
+    # in (`push_with_retry`'s own default is `False`), matching this
+    # module's "forward unchanged, keyword absent" contract rather than
+    # widening the pinned kwargs shape every existing caller already
+    # asserts against.
+    retry_kwargs = dict(
         allow_protected_branch=allow_protected_branch,
         protected_branch_override_reason=protected_branch_override_reason,
         budget_secs=budget_secs,
     )
+    if use_streamed_push:
+        retry_kwargs["use_streamed_push"] = use_streamed_push
+    outcome = push_with_retry(root, **retry_kwargs)
     if lfs_note:
         outcome.skipped.extend(lfs_note)
 

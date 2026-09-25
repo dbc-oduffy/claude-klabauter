@@ -328,6 +328,43 @@ _LIVE_TREE_COLD_MESSAGE = (
 #: population, and retrying it forever is what the operator actually did.
 _cold_reason: "str | None" = None
 
+#: AC3's two shared reason-tag buckets for `client-cold.jsonl` rows, per
+#: `_try_warm_dispatch_inner`'s own None-return sites -- never a distinct
+#: reason per site. `COLD_BUCKET_SPAWN_TRIGGERING_MISS`: no connection was
+#: ever made (warmth disabled, no pipe, busy, someone else's pipe -- an
+#: ENGINE_SKEW response counts here too, since the server answered from a
+#: DIFFERENT generation's pipe). `COLD_BUCKET_DRAIN_WINDOW_ZERO_BYTE_CLOSE`:
+#: a connection was made and then the drain window closed on it (broken
+#: pipe after re-open, malformed frame, read-deadline expiry, the final
+#: catch-all `return None`).
+COLD_BUCKET_SPAWN_TRIGGERING_MISS = "spawn-triggering-miss"
+COLD_BUCKET_DRAIN_WINDOW_ZERO_BYTE_CLOSE = "drain-window-zero-byte-close"
+
+#: The bucket classification of THIS call's own `return None` inside
+#: `_try_warm_dispatch_inner`, read back by `_cold_bucket_for_row()`
+#: immediately after that call returns. Reset to `None` at the top of every
+#: `_try_warm_dispatch_inner` call -- unlike `_cold_reason`, this is a
+#: per-call classification, never a permanent, first-wins one.
+_last_cold_bucket: "str | None" = None
+
+
+def _cold_bucket_for_row() -> "str | None":
+    """The reason tag AC3's `record_client_cold_fallback` attaches to the
+    row about to be written for THIS `try_warm_dispatch` call.
+
+    Uses -- never replaces -- `_cold_reason`'s existing never-overwrite/
+    first-reason-wins mechanism: when a permanent preamble failure is
+    already on record (`last_cold_reason()` is not None), that failure
+    happened strictly before any pipe was ever opened, so it folds into
+    `COLD_BUCKET_SPAWN_TRIGGERING_MISS` -- the same bucket an ordinary
+    no-pipe/busy miss gets -- rather than a new, unclassified value.
+    Otherwise reports the per-call site classification `_last_cold_bucket`
+    already recorded.
+    """
+    if _cold_reason is not None:
+        return COLD_BUCKET_SPAWN_TRIGGERING_MISS
+    return _last_cold_bucket
+
 
 def last_cold_reason() -> "str | None":
     """Why this process can never reach a warm server, or None if the last
@@ -1040,7 +1077,12 @@ def _record_cold_fallback(op: "str | None" = None) -> None:
 
         from coordinator_core.warm.telemetry import record_client_cold_fallback
 
-        record_client_cold_fallback(engine_root=_engine_clone_root(), op=op, pid=os.getpid())
+        record_client_cold_fallback(
+            engine_root=_engine_clone_root(),
+            op=op,
+            pid=os.getpid(),
+            reason=_cold_bucket_for_row(),
+        )
     except Exception:  # noqa: BLE001 -- Backstop 2, see docstring
         return
 
@@ -1048,7 +1090,16 @@ def _record_cold_fallback(op: "str | None" = None) -> None:
 def _try_warm_dispatch_inner(
     msg: dict, read_deadline_secs: Optional[float] = None
 ) -> Optional[dict]:
+    global _last_cold_bucket
+
+    # AC3: a per-call classification, reset every call -- never a permanent,
+    # first-wins value like `_cold_reason`. Left `None` if this call raises
+    # before reaching any of the return sites below (`_cold_bucket_for_row()`
+    # falls back to `_cold_reason` in that case).
+    _last_cold_bucket = None
+
     if not is_warm_enabled():
+        _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
         return None
 
     # Test traffic -- pytest itself or a CLI subprocess it spawned -- must neither
@@ -1058,6 +1109,7 @@ def _try_warm_dispatch_inner(
     if os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get(
         "COORDINATOR_WARM_RUNTIME_BASE"
     ):
+        _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
         return None
 
     # P2 (docs/plans/2026-08-19-the-fired-path-reaches-the-engine.md § C3):
@@ -1162,8 +1214,10 @@ def _try_warm_dispatch_inner(
             # socket. Spawning is the correct and sufficient response, and
             # `should_spawn` still rate-limits it.
             _spawn_once()
+            _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
             return None
         except PermissionError:
+            _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
             return None
         except TimeoutError:
             # `CONNECT_DEADLINE_SECS` expired -- the POSIX counterpart of
@@ -1172,9 +1226,11 @@ def _try_warm_dispatch_inner(
             # never spawn (spawning here is the storm the table forbids).
             # Raised by `settimeout`, which sets NO errno, so it cannot be
             # classified by the `exc.errno` tests below.
+            _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
             return None
         except OSError as exc:
             if getattr(exc, "winerror", None) == ERROR_PIPE_BUSY:
+                _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
                 return None
             if exc.errno in _CONTENDED_ERRNOS:
                 # The same contended-server outcome reached without the
@@ -1183,6 +1239,7 @@ def _try_warm_dispatch_inner(
                 # and then dropped for backlog pressure (ECONNABORTED,
                 # ECONNRESET). Cold, never spawn -- same row as the two
                 # branches above.
+                _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
                 return None
             if exc.errno == errno.EINVAL:
                 # A second, distinct contended-pipe outcome -- see the
@@ -1193,6 +1250,7 @@ def _try_warm_dispatch_inner(
                 # "server up, contended" as ERROR_PIPE_BUSY is -- go cold,
                 # never spawn, and never fall through to Backstop 2's
                 # generic stderr write for a classified outcome.
+                _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
                 return None
             raise
 
@@ -1229,6 +1287,7 @@ def _try_warm_dispatch_inner(
                 # it is WORKING. Keep waiting on the SAME read (never a second
                 # request) up to the mutation's own deadline.
                 if not _op_may_mutate(msg.get("method")):
+                    _last_cold_bucket = COLD_BUCKET_DRAIN_WINDOW_ZERO_BYTE_CLOSE
                     return None
                 mutation_deadline = _mutation_deadline_for(msg.get("method"))
                 line = pending.wait(max(0.0, mutation_deadline - liveness_secs))
@@ -1247,6 +1306,7 @@ def _try_warm_dispatch_inner(
                 return _indeterminate_envelope(msg, "pipe broke after delivery", dispatch_key)
             if attempt == 0:
                 continue  # the table's one re-open
+            _last_cold_bucket = COLD_BUCKET_DRAIN_WINDOW_ZERO_BYTE_CLOSE
             return None
         finally:
             try:
@@ -1261,8 +1321,10 @@ def _try_warm_dispatch_inner(
         # The zero-byte case is deliberately NOT one of them; see its own
         # branch below for the evidence that separates them.
         def _cold_or_indeterminate(detail: str):
+            global _last_cold_bucket
             if _op_may_mutate(msg.get("method")):
                 return _indeterminate_envelope(msg, detail, dispatch_key)
+            _last_cold_bucket = COLD_BUCKET_DRAIN_WINDOW_ZERO_BYTE_CLOSE
             return None
 
         if not line or not line.strip():
@@ -1291,6 +1353,7 @@ def _try_warm_dispatch_inner(
             # hole this change opens. The defect this change exists to close
             # (a WORKING server outrunning a 2s liveness probe) lands on the
             # deadline branch above, which stays strict.
+            _last_cold_bucket = COLD_BUCKET_DRAIN_WINDOW_ZERO_BYTE_CLOSE
             return None
 
         try:
@@ -1317,9 +1380,11 @@ def _try_warm_dispatch_inner(
             # returns BEFORE it calls `dispatch(msg)`. A skewed server has
             # provably not executed the op, so re-running it cold cannot
             # duplicate anything.
+            _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
             return None
         return response
 
+    _last_cold_bucket = COLD_BUCKET_DRAIN_WINDOW_ZERO_BYTE_CLOSE
     return None
 
 

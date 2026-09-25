@@ -991,8 +991,9 @@ def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) ->
             f"an unreplaced PLACEHOLDER title/summary, so it cannot be the "
             f"record of anything: refusing to stamp {predecessor_path!r} "
             "continued_into it. The predecessor was left exactly as it was; "
-            "replace the successor's title/summary and re-run if this "
-            "unification is genuine.",
+            "replace the successor's title/summary, then re-run via "
+            "`handoff.transition` verb=supersede (the predecessor must be "
+            "claimed first) if this unification is genuine.",
             file=sys.stderr,
         )
         return {
@@ -1128,9 +1129,11 @@ def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) ->
             "baton-assemble apply: handoff.supersede_predecessor degraded -- "
             f"handoff.housekeeping is off ({exc}). The successor was "
             "minted and every other directive in this run proceeded normally; "
-            f"{predecessor_path!r} was left exactly as it was. Stamp it "
-            f"deployment_state: continued with continued_into: {continued_into!r} "
-            "and archive it by hand.",
+            f"{predecessor_path!r} was left exactly as it was. Re-run via "
+            "`handoff.transition` verb=supersede directly (bypasses "
+            "housekeeping.cycle; the predecessor must be claimed first) to "
+            f"stamp deployment_state: continued with continued_into: "
+            f"{continued_into!r} and archive it.",
             file=sys.stderr,
         )
         return {
@@ -2903,6 +2906,7 @@ def apply(
         # directive in this same run failed -- see `_compensate_d1_scaffold`'s
         # own docstring; no separate call site is needed here.
         outcome = "directive_failed"
+        exit_label = None
         try:
             exit_code, report = _execute_directives(
                 directives,
@@ -2911,12 +2915,13 @@ def apply(
                 decisions=decisions or {},
                 composition_budget=composition_budget,
             )
+            exit_label = apply_base.exit_code_label(exit_code, report)
             if exit_code == APPLY_EXIT_OK:
                 outcome = "success"
             elif exit_code == apply_base.APPLY_EXIT_PARTIAL_MUTATION:
                 outcome = "partial_mutation"
         finally:
-            flush_composition_record(composition_budget, outcome)
+            flush_composition_record(composition_budget, outcome, exit_code_label=exit_label)
 
         # Present unconditionally, including as [] -- same reasoning as
         # `commits` below.

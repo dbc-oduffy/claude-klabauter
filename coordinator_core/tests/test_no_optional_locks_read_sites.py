@@ -18,8 +18,11 @@ Sites covered (see the handoff's site list, priority order):
     `git diff --name-only` (its sibling `git diff --staged --name-only` is
     `--cached`-equivalent and deliberately untouched -- never took the lock).
   - `baton_assemble`'s whole-tree `git status --porcelain --untracked-files=all`.
-  - `archive_stamp._scope_paths_have_uncommitted_changes`'s status probe.
   - `consolidate_assemble.worktree_is_dirty`'s status probe.
+
+`archive_stamp._scope_paths_have_uncommitted_changes` converted onto the P014-C1
+producer (P014-C3); its per-site pin here is deleted, superseded by the
+producer-level `--no-optional-locks` placement pin in `test_session_facts.py`.
 
 Each test mocks `subprocess.run` and inspects the constructed argv only --
 no real git process is spawned, matching this repo's shared-worktree
@@ -213,29 +216,6 @@ def test_baton_assemble_dirty_tree_status_probe_precedes_subcommand(tmp_path: Pa
         assert argv[0] == "git"
         _assert_precedes_subcommand(argv, "status")
 
-
-# ---------------------------------------------------------------------------
-# archive_stamp
-# ---------------------------------------------------------------------------
-
-
-def test_archive_stamp_scope_status_probe_precedes_subcommand(tmp_path: Path):
-    from coordinator_core import archive_stamp
-
-    calls = []
-
-    def _fake_run(argv, **kwargs):
-        calls.append(list(argv))
-        return _make_completed(0, "")
-
-    with patch.object(archive_stamp.subprocess, "run", side_effect=_fake_run):
-        archive_stamp._scope_paths_have_uncommitted_changes(tmp_path, ["state/x.md"])
-
-    status_calls = [c for c in calls if "status" in c]
-    assert status_calls, "expected the scope-paths status probe to fire"
-    for argv in status_calls:
-        assert argv[0] == "git"
-        _assert_precedes_subcommand(argv, "status")
 
 
 # ---------------------------------------------------------------------------

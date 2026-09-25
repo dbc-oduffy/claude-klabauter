@@ -155,9 +155,9 @@ def test_resolve_manifest_path_reads_env_repo_root(tmp_path, monkeypatch):
 
 def _sample_dep(**overrides):
     dep = {
-        "id": "example-retrieval-repo",
+        "id": "project-rag",
         "severity": "hard",
-        "sibling_dir_name": "example-retrieval-repo",
+        "sibling_dir_name": "project-rag",
         "upstream_url": "git@example.com:org/example-retrieval-repo.git",
         "functional_probe": {
             "kind": "path_exists",
@@ -176,9 +176,9 @@ def test_manifest_read_ndjson_accepts_all_known_versions(tmp_path, version):
     assert len(lines) == 1
     record = json.loads(lines[0])
     assert record == {
-        "id": "example-retrieval-repo",
+        "id": "project-rag",
         "severity": "hard",
-        "sibling_dir_name": "example-retrieval-repo",
+        "sibling_dir_name": "project-rag",
         "upstream_url": "git@example.com:org/example-retrieval-repo.git",
         "functional_probe_kind": "path_exists",
         "functional_probe_args": {"path": "some/path"},

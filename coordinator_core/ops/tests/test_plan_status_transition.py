@@ -986,7 +986,7 @@ def test_no_head_plan_flips_on_disk_and_skips_commit(tmp_path, capsys):
 
 
 # ---------------------------------------------------------------------------
-# C1 (docs/plans/2026-08-14-cascade-ship-evidence-and-write-durability.md):
+# C1 (archive/specs/2026-08/2026-08-14-cascade-ship-evidence-and-write-durability.md at 89e588c7e5^):
 # the plan trigger stops handing the cascade its own caller's flip commit as
 # ship evidence -- end-to-end through the real production caller
 # (`main(["stamp-implemented", ...])`), which is the only place the incident

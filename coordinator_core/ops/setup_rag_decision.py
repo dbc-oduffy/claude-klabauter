@@ -247,7 +247,7 @@ def _daemon_present() -> bool:
             print(f"skip: _daemon_present: result = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
             return False
 
-    example_retrieval_repo = shutil.which("example-retrieval-repo")
+    example_retrieval_repo = shutil.which("project-rag")
     if not example_retrieval_repo:
         return False
     try:

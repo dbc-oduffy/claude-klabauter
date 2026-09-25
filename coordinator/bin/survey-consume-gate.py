@@ -189,12 +189,12 @@ def _rag_predicate(repo_root: str) -> dict[str, Any]:
     """
     try:
         root = Path(repo_root)
-        manifest = root / ".example-retrieval-repo" / "manifest.json"
+        manifest = root / ".project-rag" / "manifest.json"
         if not manifest.exists():
             return {
                 "rag_present": False,
                 "checked_path": str(manifest),
-                "reason": "no .example-retrieval-repo/manifest.json marker",
+                "reason": "no .project-rag/manifest.json marker",
             }
 
         designated = "graph.db"
@@ -209,7 +209,7 @@ def _rag_predicate(repo_root: str) -> dict[str, Any]:
         except Exception:
             pass  # a malformed manifest falls back to the graph.db default
 
-        artifact = root / ".example-retrieval-repo" / designated
+        artifact = root / ".project-rag" / designated
         if not artifact.exists():
             return {
                 "rag_present": False,

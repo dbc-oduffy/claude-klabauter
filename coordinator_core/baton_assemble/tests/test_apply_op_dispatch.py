@@ -45,6 +45,7 @@ _BATON_CLI_VERBS = (
     "baton-stamp-carried-ids",
 )
 _MIGRATED_VERBS = ("handoff.stamp_phase", "handoff.author_fork")
+_MIGRATED_VERBS__SUBJECT_CLASS = "op-name"
 _NON_MIGRATED_VERBS = tuple(v for v in _BATON_CLI_VERBS if v not in _MIGRATED_VERBS)
 
 

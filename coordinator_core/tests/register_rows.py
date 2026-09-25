@@ -25,6 +25,12 @@ earlier AST-only draft of this module):
   - `opaque` rows are unadjudicable by construction -- the row declares a
     subject this helper has no reliable way to check, so resolution reports
     `unadjudicable` rather than guessing.
+  - `op-name` rows resolve by exact membership in an INJECTED
+    `frozenset[str]` of op names, never derived here: an op name is a
+    string key in a dispatch registry, not a Python definition AST can
+    find. A hit is `resolved`, a miss is `absent` -- it has an oracle, so
+    unlike `opaque` it never reports `unadjudicable`. A missing oracle
+    (`op_names=None`) raises rather than degrading to `unadjudicable`.
 
 WHY NOT AST FOR PATH ROWS. A path row's declared subject already spells out
 a filesystem location; asking "is it in the tracked-file set" is the exact
@@ -118,6 +124,7 @@ class SubjectClass(enum.Enum):
     MODULE = "module"
     SYMBOL = "symbol"
     OPAQUE = "opaque"
+    OP_NAME = "op-name"
 
 
 DOTTED_CLASSES = frozenset({SubjectClass.MODULE, SubjectClass.SYMBOL})
@@ -316,18 +323,52 @@ def _resolve_symbol(subject: str, index: TrackedFileIndex, repo_root: Path) -> R
     return Resolution(ResolutionKind.ABSENT, detail=f"not found in {relpath}")
 
 
-def resolve_row(row: Row, index: TrackedFileIndex, repo_root: Path) -> Resolution:
+def _resolve_op_name(subject: str, op_names: frozenset[str]) -> Resolution:
+    """Resolve an `op-name` row: exact membership in an injected op-name population.
+
+    An op name is a string key in a dispatch registry, not a Python
+    definition anywhere -- AST cannot reach it, so unlike `module`/`symbol`
+    this class has no file to parse. It DOES have an oracle (the injected
+    `op_names` set), unlike `opaque`, so a hit is RESOLVED and a miss is
+    ABSENT -- never UNADJUDICABLE.
+    """
+    if subject in op_names:
+        return Resolution(ResolutionKind.RESOLVED)
+    return Resolution(ResolutionKind.ABSENT, detail=f"op name not registered: {subject}")
+
+
+def resolve_row(
+    row: Row,
+    index: TrackedFileIndex,
+    repo_root: Path,
+    op_names: frozenset[str] | None = None,
+) -> Resolution:
     """Answer, for one register row, whether the subject it names still exists.
 
     Branches on `row.declared_class`: path classes resolve against `index`
     as a set/dict lookup (no per-row spawn, no per-row parse); dotted
     classes resolve by AST against the file the index locates (no per-row
-    import). `OPAQUE` rows always report unadjudicable.
+    import); `op-name` classes resolve by exact membership against the
+    INJECTED `op_names` population (no derivation here -- see
+    `coordinator_core/tests/test_op_name_registers_resolve_or_declare.py`).
+    `OPAQUE` rows always report unadjudicable.
+
+    Passing `op_names=None` while resolving an `OP_NAME` row is a loud
+    error (`ValueError`), never a silent `UNADJUDICABLE` -- degrading to
+    "cannot say" when the oracle is missing is the absence-reads-as-closure
+    bug this module exists to refuse.
     """
     declared = row.declared_class
 
     if declared is SubjectClass.OPAQUE:
         return Resolution(ResolutionKind.UNADJUDICABLE, detail="declared opaque")
+
+    if declared is SubjectClass.OP_NAME:
+        if op_names is None:
+            raise ValueError(
+                f"resolve_row: OP_NAME row {row.register!r} needs op_names, got None"
+            )
+        return _resolve_op_name(row.subject, op_names)
 
     if declared is SubjectClass.REPO_PATH:
         relpath = row.subject.replace("\\", "/")

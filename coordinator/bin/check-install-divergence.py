@@ -5,7 +5,7 @@ agentic install integrity — see docs/wiki/agentic-install-integrity.md
 for the doctrine, deferred extensions, and `version.txt` sentinel format.
 
 Lifted verbatim-on-contract 2026-05-28 from the example-retrieval-repo repo's
-example_retrieval_repo_scripts/lib/check_install_divergence.py
+project_rag_scripts/lib/check_install_divergence.py
 
 PUBLIC CONTRACT (pinned — downstream consumers bind to these surfaces):
 

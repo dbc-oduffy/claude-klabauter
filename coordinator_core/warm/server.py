@@ -2083,6 +2083,8 @@ class _ServerContext:
         boot_token: Optional[str] = None,
         listen_socket: Any = None,
         endpoint_path: Optional[Path] = None,
+        spawn_epoch: Optional[float] = None,
+        listener_at: Optional[float] = None,
     ):
         self.name = name
         self.sid = sid
@@ -2107,6 +2109,15 @@ class _ServerContext:
         # the shape every test that constructs a context directly gets,
         # keeping the idle watchdog's behaviour unchanged for them.
         self.boot_token = boot_token
+        # AC4 (docs/plans/2026-09-06-the-p90-reopens-on-a-measurement-not-a-
+        # rebuild.md, P023-C3): carried through from `main`'s own
+        # `spawn_epoch`/`listener_at` locals solely so `_record_accept_ready`
+        # can compute a third boot timestamp without re-deriving either --
+        # both `None` on every pre-existing construction (including every
+        # direct `_ServerContext(...)` in `test_server_loop.py`), which is
+        # what makes `_record_accept_ready` a no-op for them.
+        self.spawn_epoch = spawn_epoch
+        self.listener_at = listener_at
         self.in_flight = InFlightCounter()
         # Pool tasks submitted and not yet settled, counted by the future's
         # own done-callback rather than by the connection thread. The two
@@ -2306,12 +2317,9 @@ class _ServerContext:
             # never non-None here in practice: only a MUTATING method is ever
             # admitted (§ below), and this branch runs only for a
             # COMPUTE_ONLY one -- passed through anyway so this fallback's
-            # own behaviour matches `_run_dispatch`'s general contract. Only
-            # passed when present -- `dispatch_key` is never non-None here
-            # in practice (only a MUTATING method is ever admitted, and this
-            # branch runs only for a COMPUTE_ONLY one), and existing callers
-            # of `_run_dispatch` predating this contract never expect the
-            # kwarg at all.
+            # own behaviour matches `_run_dispatch`'s general contract, and
+            # existing callers of `_run_dispatch` predating this contract
+            # never expect the kwarg at all.
             if dispatch_key is not None:
                 return _run_dispatch(msg, caller=caller, isolated=False, dispatch_key=dispatch_key)
             return _run_dispatch(msg, caller=caller, isolated=False)
@@ -2500,6 +2508,58 @@ class _ServerContext:
         while not self._idle_watchdog_stop.wait(_IDLE_WATCHDOG_POLL_SECS):
             self._idle_tick()
 
+    def _record_accept_ready(self) -> None:
+        """Third boot-ready timestamp (AC4, `docs/plans/2026-09-06-the-p90-
+        reopens-on-a-measurement-not-a-rebuild.md`, P023-C3).
+
+        `_record_own_boot` (this file's module-level helper, called from
+        `main`/`_run_guarded` BEFORE either `serve_forever`/
+        `serve_forever_unix` runs) already writes two intervals through
+        `telemetry.record_server_boot`: spawn -> endpoint bound
+        (`listener_secs`) and spawn -> op-registry preloaded
+        (`ready_secs`) -- both instants pass well before a single worker
+        thread or accept thread/pool exists. This method is the SECOND
+        recorded call the plan's AC4 offers as one of three threading
+        options (over a new return value or a mutable context field): it
+        re-uses `record_server_boot`'s existing two field names on a
+        SECOND row for this pid rather than inventing a third field, since
+        this row's `writes` footprint does not touch `warm/telemetry.py`.
+        `listener_secs` is repeated unchanged (same interval, same value);
+        `ready_secs` on THIS row is re-measured at the point this method
+        actually runs -- immediately before the blocking `_stopped.wait()`
+        tail, i.e. once `_start_worker_pool` and the accept layer
+        (`_start_pending_listener_pool` / `_start_acceptor_pool`) and the
+        idle watchdog are all already started. That is the third, distinct
+        time point: it answers how much of boot is worker/accept-thread
+        startup PAST the op-registry preload the first row's `ready_secs`
+        already covers -- letting a reader partition boot time into
+        server-side (this file) vs. not-server-side, without asserting it
+        explains the 4-5s residue (AC4 is independent of AC7's PM verdict).
+
+        A no-op when `spawn_epoch` is `None` -- unstamped spawns (every
+        direct `_ServerContext(...)` test construction) never call
+        `telemetry.record_server_boot` here, matching `_record_own_boot`'s
+        own guard. Best-effort and silent on any other failure, for the
+        same reason `_record_own_boot` is: an instrument must never be why
+        a server fails to boot.
+        """
+        if self.spawn_epoch is None:
+            return
+        try:
+            now = time.time()
+            telemetry.record_server_boot(
+                listener_secs=(
+                    (self.listener_at - self.spawn_epoch)
+                    if self.listener_at is not None
+                    else 0.0
+                ),
+                ready_secs=now - self.spawn_epoch,
+                pid=os.getpid(),
+                engine_root=self.engine_root,
+            )
+        except Exception:
+            return
+
     def serve_forever(self, first_handle: int) -> None:
         """Kick off `WORKER_POOL_SIZE` bounded dispatch workers,
         `PENDING_LISTENER_POOL_SIZE` independent self-replenishing accept
@@ -2540,6 +2600,10 @@ class _ServerContext:
         self._start_worker_pool()
         self._start_pending_listener_pool(first_handle)
         threading.Thread(target=self._idle_watchdog_loop, daemon=True).start()
+        # AC4: the accept layer (this pool) is now up, so this is the
+        # earliest point the accept loop is actually ready to accept
+        # connections -- see `_record_accept_ready`'s own docstring.
+        self._record_accept_ready()
         self._stopped.wait()
 
     def serve_forever_unix(self, listen_socket: Any) -> None:
@@ -2571,6 +2635,10 @@ class _ServerContext:
         self._start_worker_pool()
         self._start_acceptor_pool(listen_socket)
         threading.Thread(target=self._idle_watchdog_loop, daemon=True).start()
+        # AC4: the accept layer (this pool) is now up, so this is the
+        # earliest point the accept loop is actually ready to accept
+        # connections -- see `_record_accept_ready`'s own docstring.
+        self._record_accept_ready()
         self._stopped.wait()
 
     def _start_acceptor_pool(
@@ -3117,6 +3185,8 @@ def _run_guarded() -> int:
         boot_token=token,
         listen_socket=elected.listen_socket,
         endpoint_path=elected.endpoint_path,
+        spawn_epoch=spawn_epoch,
+        listener_at=listener_at,
     )
 
     # Dispatch on WHICH ENDPOINT WAS WON, not on the platform read again.

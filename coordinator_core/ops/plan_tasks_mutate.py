@@ -507,26 +507,33 @@ def _validate_row(row: dict, *, governed: bool = False, plan_created: Optional[s
 
     `_PLAN_TASKS_SCHEMA_GOVERNED_DICT`/`_PLAN_TASKS_SCHEMA_DICT` live in
     `coordinator_core.frontmatter.schema_validate` (moved there 2026-07-29),
-    not here. That module's `check_plan_tasks_source` is NOT a shared
-    validation entrypoint for this logic — it has zero production callers
-    repo-wide (one test only), and the write guards each inline their own
-    copy of this same shape-then-cross-field sequence instead of calling it.
-    Nor can they: `check_plan_tasks_source` hardcodes claude-klabauter's own vendored
-    schema, while the write guards deliberately resolve DoE's vendored
-    corpus copy (which its own docstring notes has drifted from claude-klabauter's),
-    and it short-circuits on the first error where the guards need every
-    row's errors. So this is genuinely THREE independent copies of
-    governed-aware per-row validation — this one, the write-guard copy, and
-    `check_plan_tasks_source` — not one shared implementation. What IS
-    shared, and does keep the copies from disagreeing about MEANING, are the
-    low-level primitives each copy calls:
-    `_plan_tasks_schema_without_pm_approved_required` (the governed schema
-    derivation), `is_governed_plan`, and `_apply_cross_field_rules` — a row
-    cannot be "governed" in one copy and "legacy" in another. But the
-    validation SEQUENCE itself — which schema to pick, when to run
-    cross-field rules, how to merge the two error lists — is duplicated
-    three times, and nothing enforces the three sequences stay in lockstep
-    if one of them changes.
+    not here. That module's `check_plan_tasks_source` is genuinely THREE
+    independent copies away from this one — it hardcodes claude-klabauter's own
+    vendored schema, while the write guards deliberately resolve DoE's
+    vendored corpus copy (which its own docstring notes has drifted from
+    claude-klabauter's), and it short-circuits on the first error where the guards
+    need every row's errors. As of P084-C1/C2, `check_plan_tasks_source`
+    and both write guards share ONE statement of which spine-level legs run
+    and in what order (`PLAN_TASKS_SPINE_SEQUENCE` /
+    `plan_tasks_spine_errors`, in `schema_validate.py`) — but that sharing
+    covers the WHOLE-SPINE legs (integrity, ordering, grouping-approval),
+    not this function's per-row shape-then-cross-field sequence, which
+    remains duplicated here and (independently) inside each write guard's
+    own per-row loop. What IS shared, and does keep the per-row copies from
+    disagreeing about MEANING, are the low-level primitives each copy
+    calls: `_plan_tasks_schema_without_pm_approved_required` (the governed
+    schema derivation), `is_governed_plan`, and `_apply_cross_field_rules`
+    — a row cannot be "governed" in one copy and "legacy" in another. But
+    the per-row validation SEQUENCE itself — which schema to pick, when to
+    run cross-field rules, how to merge the two error lists — stays
+    duplicated across this function and the write guards' per-row loops,
+    and nothing enforces those copies stay in lockstep if one of them
+    changes. This function's own precondition call to
+    `check_plan_tasks_ordering` (in `_resolve`, below) stays a direct
+    single-leg call rather than routing through the accumulating driver —
+    it is a precondition on existing on-disk order, not a spine validation
+    pass, and routing it through the driver would make a mutation refuse on
+    defects it does not own.
     """
     schema = _PLAN_TASKS_SCHEMA_GOVERNED_DICT if governed else _PLAN_TASKS_SCHEMA_DICT
     errors = _validate_json_schema_node(row, schema, schema)

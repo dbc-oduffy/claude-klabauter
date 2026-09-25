@@ -950,3 +950,96 @@ def test_other_preamble_failures_stay_transient(monkeypatch: pytest.MonkeyPatch)
 
     assert client.try_warm_dispatch(_MSG) is None
     assert client.last_cold_reason() is None
+
+
+# ---------------------------------------------------------------------------
+# AC3: the two shared cold-fallback reason-tag buckets, one per
+# `_try_warm_dispatch_inner` None-return site -- never a distinct reason
+# per site.
+# ---------------------------------------------------------------------------
+
+
+def test_warmth_disabled_tags_spawn_triggering_miss(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(client, "is_warm_enabled", lambda: False)
+    assert client.try_warm_dispatch(_MSG) is None
+    assert client._cold_bucket_for_row() == client.COLD_BUCKET_SPAWN_TRIGGERING_MISS
+
+
+def test_file_not_found_tags_spawn_triggering_miss(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise_enoent(pipe):
+        raise FileNotFoundError(2, "no such pipe")
+
+    monkeypatch.setattr(client, "_open_pipe", _raise_enoent)
+    monkeypatch.setattr(
+        client,
+        "spawn_detached",
+        lambda repo_root, script, args=None, **kwargs: True,
+    )
+    assert client.try_warm_dispatch(_MSG) is None
+    assert client._cold_bucket_for_row() == client.COLD_BUCKET_SPAWN_TRIGGERING_MISS
+
+
+def test_permission_error_tags_spawn_triggering_miss(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise_permission(pipe):
+        raise PermissionError("someone else's pipe")
+
+    monkeypatch.setattr(client, "_open_pipe", _raise_permission)
+    assert client.try_warm_dispatch(_MSG) is None
+    assert client._cold_bucket_for_row() == client.COLD_BUCKET_SPAWN_TRIGGERING_MISS
+
+
+def test_error_pipe_busy_tags_spawn_triggering_miss(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise_busy(pipe):
+        exc = OSError("pipe busy")
+        exc.winerror = client.ERROR_PIPE_BUSY
+        raise exc
+
+    monkeypatch.setattr(client, "_open_pipe", _raise_busy)
+    assert client.try_warm_dispatch(_MSG) is None
+    assert client._cold_bucket_for_row() == client.COLD_BUCKET_SPAWN_TRIGGERING_MISS
+
+
+def test_engine_skew_tags_spawn_triggering_miss(monkeypatch: pytest.MonkeyPatch) -> None:
+    skew_line = json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "error": {"code": client.ENGINE_SKEW, "message": "skew"}}
+    ).encode("utf-8") + b"\n"
+    monkeypatch.setattr(client, "_open_pipe", lambda pipe: _FakePipe(read_result=skew_line))
+    assert client.try_warm_dispatch(_MSG) is None
+    assert client._cold_bucket_for_row() == client.COLD_BUCKET_SPAWN_TRIGGERING_MISS
+
+
+def test_zero_byte_close_tags_drain_window_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(client, "_open_pipe", lambda pipe: _FakePipe(read_result=b""))
+    assert client.try_warm_dispatch(_MSG) is None
+    assert client._cold_bucket_for_row() == client.COLD_BUCKET_DRAIN_WINDOW_ZERO_BYTE_CLOSE
+
+
+def test_malformed_response_tags_drain_window_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        client, "_open_pipe", lambda pipe: _FakePipe(read_result=b"not json\n")
+    )
+    assert client.try_warm_dispatch(_MSG) is None
+    assert client._cold_bucket_for_row() == client.COLD_BUCKET_DRAIN_WINDOW_ZERO_BYTE_CLOSE
+
+
+def test_broken_pipe_on_both_attempts_tags_drain_window_bucket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        client,
+        "_open_pipe",
+        lambda pipe: _FakePipe(raise_on_write=BrokenPipeError()),
+    )
+    assert client.try_warm_dispatch(_MSG) is None
+    assert client._cold_bucket_for_row() == client.COLD_BUCKET_DRAIN_WINDOW_ZERO_BYTE_CLOSE
+
+
+def test_permanent_reason_folds_into_spawn_triggering_miss_bucket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC3: uses -- never replaces -- `_cold_reason`'s own never-overwrite/
+    first-reason-wins mechanism. A permanent preamble failure happened
+    strictly before any pipe was opened, so it reports the same bucket an
+    ordinary no-pipe/busy miss gets, not a third, unclassified value."""
+    monkeypatch.setattr(client, "_cold_reason", "some permanent reason")
+    assert client._cold_bucket_for_row() == client.COLD_BUCKET_SPAWN_TRIGGERING_MISS

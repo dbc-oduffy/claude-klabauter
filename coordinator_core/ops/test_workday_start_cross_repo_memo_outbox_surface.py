@@ -288,7 +288,7 @@ def test_verified_delivery_silent_nothing_gone(tmp_path, monkeypatch):
     '0 gone deliveries'."""
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
-    claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+    claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     outbox = tmp_path / "empty-outbox"
     outbox.mkdir()
@@ -314,7 +314,7 @@ def test_gone_delivery_emits_one_nudge_naming_topic_receiver_and_resend(
 ):
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
-    claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+    claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     outbox = tmp_path / "empty-outbox"
     outbox.mkdir()
@@ -345,7 +345,7 @@ def test_gone_delivery_with_delivery_branch_names_the_ref(tmp_path, monkeypatch)
     was rewritten' from 'the object vanished outright'."""
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
-    claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+    claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     outbox = tmp_path / "empty-outbox"
     outbox.mkdir()
@@ -373,7 +373,7 @@ def test_gone_delivery_without_delivery_branch_names_no_ref_and_no_none(
     UNKNOWN, never imply a mismatch or print the literal 'None'."""
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
-    claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+    claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     outbox = tmp_path / "empty-outbox"
     outbox.mkdir()
@@ -434,7 +434,7 @@ def test_fresh_restorable_delivery_is_silent(tmp_path, monkeypatch):
     it' — surfacing it immediately would nudge on every send."""
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
-    claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+    claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     outbox = tmp_path / "empty-outbox"
     outbox.mkdir()
@@ -468,7 +468,7 @@ def test_stale_restorable_delivery_emits_nudge(tmp_path, monkeypatch):
     suggestion: the memo is anchored, so re-sending fixes nothing."""
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
-    claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+    claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     outbox = tmp_path / "empty-outbox"
     outbox.mkdir()

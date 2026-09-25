@@ -850,7 +850,7 @@
       "repo": "fixture-owner/fixture-repo",
       "coordinator_root_path": ".",
       "title": "Fixture Cross-Repo Memo 001 — deterministic parity test anchor",
-      "from": "example-retrieval-repo",
+      "from": "project-rag",
       "to": "claude-klabauter",
       "status": "open",
       "created": "2026-07-01",

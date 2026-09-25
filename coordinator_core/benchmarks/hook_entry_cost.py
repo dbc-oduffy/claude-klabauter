@@ -297,7 +297,9 @@ def classify_guard_registration() -> List[GuardCallVariance]:
 
 # ---------------------------------------------------------------------------
 # Filesystem-probe enumeration: what does the chain do per call that is not
-# CPU (dispatch brief, citing probe-spray's own ~8-fs-op audit)?
+# CPU (dispatch brief, citing a since-deleted nudge guard's own ~8-fs-op
+# audit -- docs/plans/2026-08-21-the-advisory-band-gets-smaller-cheaper-
+# and-honest.md C5)?
 # ---------------------------------------------------------------------------
 
 
@@ -306,8 +308,9 @@ class FsProbeCount:
     """Filesystem-primitive call counts attributed to one guard, over one
     `CORPUS_PAYLOADS` label. `os.stat`/`os.lstat`/`os.path.exists`/
     `os.path.isfile`/`os.path.isdir`/builtin `open` are patched -- the same
-    primitive set `probe-spray`'s own audit counted (dispatch brief: "~8
-    filesystem operations on every Bash call"), not a reinvented set."""
+    primitive set the since-deleted nudge guard's own audit counted
+    (dispatch brief: "~8 filesystem operations on every Bash call"), not a
+    reinvented set."""
 
     guard_name: str
     payload_label: str

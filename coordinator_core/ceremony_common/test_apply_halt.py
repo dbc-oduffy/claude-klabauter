@@ -357,9 +357,95 @@ def test_every_ceremony_apply_module_flushes_its_composition_record() -> None:
         )
 
 
+def test_every_ceremony_apply_module_threads_exit_code_label(
+) -> None:
+    """Widened per docs/plans/2026-09-11-half-the-compositions-do-not-finish-
+    clea.md chunk C2: a ninth (here, fourth) ceremony call site added later
+    without threading `exit_code_label` fails this pin rather than shipping
+    an unlabelled flush."""
+    for dotted_name in _CEREMONY_APPLY_MODULES:
+        source = inspect.getsource(_import_ceremony_apply_module(dotted_name))
+        assert "exit_code_label(" in source, (
+            f"{dotted_name} never calls apply_halt.exit_code_label"
+        )
+        assert "flush_composition_record(" in source and "exit_code_label=" in source, (
+            f"{dotted_name} must pass exit_code_label= on its "
+            "flush_composition_record call"
+        )
+
+
 def test_every_ceremony_apply_module_constructs_its_own_budget_via_the_factory() -> None:
     for dotted_name in _CEREMONY_APPLY_MODULES:
         source = inspect.getsource(_import_ceremony_apply_module(dotted_name))
         assert "make_fleet_budget(" in source, (
             f"{dotted_name} never calls telemetry.composition_record.make_fleet_budget"
         )
+
+
+class TestExitCodeLabel:
+    """AC2: the failure-path oracle for the ceremony ladder's own
+    `exit_code_label`. Every ladder constant maps to its own name -- the
+    ceremony case includes SUCCESS = 0, which CEREMONY_HALT_EXIT_CODES does
+    not hold; DIRECTIVE_FAILED plus a `budget_breach` report key maps to
+    BUDGET_BREACH; DIRECTIVE_FAILED without the key keeps its ladder name;
+    the post-loop breach (SUCCESS/HALTED_AT_JUDGMENT with the key) keeps its
+    ladder name; an unrecognized int returns None."""
+
+    def test_success_maps_to_its_own_name(self) -> None:
+        assert apply_halt.exit_code_label(0) == "SUCCESS"
+
+    def test_halted_at_judgment_maps_to_its_own_name(self) -> None:
+        assert (
+            apply_halt.exit_code_label(apply_halt.CEREMONY_HALT_EXIT_CODES["HALTED_AT_JUDGMENT"])
+            == "HALTED_AT_JUDGMENT"
+        )
+
+    def test_directive_failed_without_budget_breach_key_keeps_its_ladder_name(self) -> None:
+        assert (
+            apply_halt.exit_code_label(
+                apply_halt.CEREMONY_HALT_EXIT_CODES["DIRECTIVE_FAILED"], {"error": "x"}
+            )
+            == "DIRECTIVE_FAILED"
+        )
+
+    def test_directive_failed_with_no_report_keeps_its_ladder_name(self) -> None:
+        assert (
+            apply_halt.exit_code_label(apply_halt.CEREMONY_HALT_EXIT_CODES["DIRECTIVE_FAILED"])
+            == "DIRECTIVE_FAILED"
+        )
+
+    def test_directive_failed_with_budget_breach_key_labels_budget_breach(self) -> None:
+        assert (
+            apply_halt.exit_code_label(
+                apply_halt.CEREMONY_HALT_EXIT_CODES["DIRECTIVE_FAILED"],
+                {"budget_breach": "over budget"},
+            )
+            == "BUDGET_BREACH"
+        )
+
+    def test_transport_fail_maps_to_its_own_name(self) -> None:
+        assert (
+            apply_halt.exit_code_label(apply_halt.CEREMONY_HALT_EXIT_CODES["TRANSPORT_FAIL"])
+            == "TRANSPORT_FAIL"
+        )
+
+    def test_partial_mutation_maps_to_its_own_name(self) -> None:
+        assert (
+            apply_halt.exit_code_label(apply_halt.CEREMONY_HALT_EXIT_CODES["PARTIAL_MUTATION"])
+            == "PARTIAL_MUTATION"
+        )
+
+    def test_success_with_budget_breach_key_keeps_ladder_name_not_budget_breach(self) -> None:
+        assert apply_halt.exit_code_label(0, {"budget_breach": "over budget"}) == "SUCCESS"
+
+    def test_halted_at_judgment_with_budget_breach_key_keeps_ladder_name(self) -> None:
+        assert (
+            apply_halt.exit_code_label(
+                apply_halt.CEREMONY_HALT_EXIT_CODES["HALTED_AT_JUDGMENT"],
+                {"budget_breach": "over budget"},
+            )
+            == "HALTED_AT_JUDGMENT"
+        )
+
+    def test_unrecognized_int_returns_none(self) -> None:
+        assert apply_halt.exit_code_label(99) is None

@@ -169,22 +169,6 @@ class CommitOutcome(NamedTuple):
     #: must already suspect the bug to know to read the field reproduces the
     #: bug.
     no_delta: Tuple[str, ...] = ()
-    #: The subset of `no_delta` that was declared DELETED and that HEAD did
-    #: not have. Separated because the two halves of `no_delta` are not the
-    #: same fact and only one of them is benign.
-    #:
-    #: A path whose bytes already match HEAD contributed nothing and nothing
-    #: was owed. A path declared deleted that HEAD never carried is a
-    #: DECLARATION THE CALLER COULD NOT HAVE MEANT -- there was no such file
-    #: to delete -- and it is what an untracked path looks like after
-    #: `coordinator-safe-commit :: _split_paths_for_commit_v2` misclassifies
-    #: it from the wrong cwd: the new file the caller wanted committed is
-    #: silently skipped instead (`state/audits/2026-08-31-committer-p0-*`).
-    #:
-    #: Kept OUT of `no_delta`'s own membership, deliberately: `NothingToCommit`
-    #: and every existing reader key on that tuple, and narrowing it to fix a
-    #: message would change refusal behaviour. This is additive.
-    declared_absent_from_head: Tuple[str, ...] = ()
     #: Set ONLY when `commit.gpgsign` is true and signing did not happen --
     #: the commit landed unsigned anyway (`_sign_commit_tree`'s negative
     #: spec: signing must never refuse a commit). `None` on every ordinary
@@ -208,6 +192,24 @@ class NothingToCommit(CommitRefused):
     a caller must already suspect the bug to know to read it, which is the
     bug. `git commit` itself refuses this without `--allow-empty`; this route
     now agrees. Deliberate marker commits opt in via `allow_empty=True`."""
+
+
+class PhantomDeletionDeclared(CommitRefused):
+    """A `deleted_paths` member is absent from HEAD -- there was no such path
+    to delete. Refused rather than landed, real paths in the same call
+    included: nothing is written, HEAD is unmoved, and any staged entry the
+    member held is untouched.
+
+    A path the caller `git add`-ed, then removed from disk, then declared in
+    `deleted_paths` cannot land as a deletion -- HEAD has no entry for it, so
+    the assembled tree carries no delta, and `commit_paths` would otherwise
+    write `index_updates[p] = index_write.ABSENT`, unstaging the real staged
+    content the index was holding with no tree ever carrying those bytes.
+    That is a declaration the caller could not have meant, and it is what an
+    untracked new file looks like after `coordinator-safe-commit ::
+    _split_paths_for_commit_v2` misclassifies it from the wrong cwd
+    (`state/audits/2026-08-31-committer-p0-*`). If you meant to commit a new
+    file, name it in `paths`, not `deleted_paths`."""
 
 
 class CommitDeniedByActionGuard(CommitRefused):
@@ -1209,27 +1211,43 @@ def commit_paths(
     # commit, one notch narrower, and the loop was already computing the fact
     # per path before discarding it.
     no_delta = []
-    declared_absent_from_head = []
+    phantom_deletions = []
     for p, val in assembled.items():
         head_dir, _, head_name = p.rpartition("/")
         head_entry = spine.get(head_dir, {}).get(head_name)
         if val is _ABSENT:
             if head_entry is None:
                 no_delta.append(p)
-                declared_absent_from_head.append(p)
+                phantom_deletions.append(p)
         elif head_entry == val:
             no_delta.append(p)
 
     # UNDECLARED STAGED DELETION (op-route leg of `state/bug-backlog/
     # 2026-08-31-four-bug-blitz-commits-deleted-five-file-6216c89502b9.
     # yaml`): a genuine, HEAD-tracked deletion -- `delete_list` minus the
-    # phantom-already-absent members just split into `declared_absent_
-    # from_head` above -- whose message never says so. Reuses the spine
-    # walk just finished rather than probing again: zero added spawns,
-    # zero added reads. Sits before any tree or commit object is written,
-    # same as every other refusal on this route.
-    genuine_deletions = [p for p in delete_list if p not in declared_absent_from_head]
+    # phantom members just split into `phantom_deletions` above -- whose
+    # message never says so. Reuses the spine walk just finished rather than
+    # probing again: zero added spawns, zero added reads. Sits before any
+    # tree or commit object is written, same as every other refusal on this
+    # route.
+    genuine_deletions = [p for p in delete_list if p not in phantom_deletions]
     action_guard.assert_no_undeclared_staged_deletion(genuine_deletions, message)
+
+    # PHANTOM DELETION (§ Design item 1): a `deleted_paths` member HEAD never
+    # carried refuses the WHOLE call, real paths included -- before
+    # `NothingToCommit` and before any tree/commit/ref/index write. Not
+    # gated on `allow_empty`: that flag declares an intended empty diff and
+    # says nothing about a path HEAD never carried.
+    if phantom_deletions:
+        shown = sorted(phantom_deletions)
+        paths = ", ".join(shown[:5])
+        if len(shown) > 5:
+            paths += ", ..."
+        raise PhantomDeletionDeclared(
+            f"{len(shown)} declared-deleted path(s) are absent from HEAD -- "
+            f"there is no such path to delete: {paths}. If you meant to "
+            "commit a new file, name it in paths, not deleted_paths."
+        )
 
     if not allow_empty and len(no_delta) == len(assembled):
         raise NothingToCommit(
@@ -1371,7 +1389,6 @@ def commit_paths(
         staged_preferred=tuple(staged_preferred),
         worktree_over_staged=tuple(worktree_over_staged),
         no_delta=tuple(no_delta),
-        declared_absent_from_head=tuple(declared_absent_from_head),
         sign_warning=sign_warning,
     )
     try:
@@ -1389,7 +1406,6 @@ def commit_paths(
         staged_preferred=tuple(staged_preferred),
         worktree_over_staged=tuple(worktree_over_staged),
         no_delta=tuple(no_delta),
-        declared_absent_from_head=tuple(declared_absent_from_head),
         sign_warning=sign_warning,
     )
 
@@ -1411,6 +1427,53 @@ def _index_key(root: Path, raw_path: str) -> str:
         return candidate.resolve().relative_to(root.resolve()).as_posix()
     except ValueError:
         raise CommitRefused(f"path is outside the repository: {raw_path}")
+
+
+def partition_declared_deletions(
+    repo: Union[str, Path], deleted_paths: Sequence[str]
+) -> Optional[Tuple["list[str]", "list[str]"]]:
+    """Split `deleted_paths` into `(tracked_at_head, absent_from_head)`.
+
+    Zero git spawns, zero `.git/index` reads. Each member is keyed through
+    `_index_key`, the same helper `commit_paths` itself uses, so a
+    non-repo-relative or backslash-spelled path classes identically here and
+    in the engine; a member `_index_key` would refuse (outside the repo
+    root) is classed absent rather than raised -- this helper must not refuse
+    for a shape `commit_paths` would refuse differently. One
+    `read_tree_spine` call resolves every member's HEAD entry off the same
+    walk `commit_paths` performs for its own delta pass. Both returned lists
+    carry the caller's ORIGINAL spellings, not the keyed form, so a caller
+    like `release_committed_claims(group["paths"])` still matches what it
+    passed in.
+
+    Returns `None` when the spine is unreadable -- unlike
+    `ops/ceremony/git_native._head_entry_for`, this never falls back to a
+    spawning HEAD read; an unreadable spine is `None`, and the caller passes
+    through to `commit_paths`' own refusal. It never answers "absent" when
+    it could not read.
+    """
+    root = Path(repo)
+    keyed: "list[str]" = []
+    for raw_path in deleted_paths:
+        try:
+            keyed.append(_index_key(root, raw_path))
+        except CommitRefused:
+            keyed.append(raw_path.replace("\\", "/"))
+
+    spine = read_tree_spine(repo, keyed)
+    if spine is None:
+        return None
+
+    tracked_at_head: "list[str]" = []
+    absent_from_head: "list[str]" = []
+    for raw_path, key in zip(deleted_paths, keyed):
+        head_dir, _, head_name = key.rpartition("/")
+        head_entry = spine.get(head_dir, {}).get(head_name)
+        if head_entry is None:
+            absent_from_head.append(raw_path)
+        else:
+            tracked_at_head.append(raw_path)
+    return tracked_at_head, absent_from_head
 
 
 def stage_paths_in_process(

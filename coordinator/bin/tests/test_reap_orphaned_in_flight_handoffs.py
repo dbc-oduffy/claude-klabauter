@@ -57,9 +57,24 @@ class _FakeDisposition:
 
 
 class _FakeSurveyResult:
-    def __init__(self, would_release, would_reclaim, dispositions=None):
+    def __init__(self, would_release, would_reclaim, dispositions=None, would_undetermined=0):
         self.would_release = would_release
         self.would_reclaim = would_reclaim
+        self.dispositions = dispositions or []
+        self.would_undetermined = would_undetermined
+
+
+class _FakeMemoDisposition:
+    def __init__(self, path, holder, verdict, detail):
+        self.path = path
+        self.holder = holder
+        self.verdict = verdict
+        self.detail = detail
+
+
+class _FakeMemoSurveyResult:
+    def __init__(self, would_release, dispositions=None):
+        self.would_release = would_release
         self.dispositions = dispositions or []
 
 
@@ -258,6 +273,94 @@ def test_no_candidates_applies_empty_list_and_exits_zero(monkeypatch, capsys):
     assert rc == 0
     assert apply_calls == [[]]
     assert "would_release=0 would_reclaim=0" in capsys.readouterr().out
+
+
+# ===========================================================================
+# Memo survey (2026-09-11, plan C6): --dry-run prints memo_would_release=
+# and mutates nothing; a failed memo release gives rc 1; the existing
+# handoff assertions above are unchanged.
+# ===========================================================================
+def test_dry_run_prints_memo_would_release_and_never_applies(monkeypatch, capsys):
+    mod = _load_module()
+    _patch_resolver(mod, monkeypatch)
+
+    monkeypatch.setattr(mod, "survey", lambda repo_root: _FakeSurveyResult(0, 0))
+    monkeypatch.setattr(
+        mod, "apply_dispositions",
+        lambda dispositions: (_ for _ in ()).throw(
+            AssertionError("--dry-run must never call apply_dispositions"))
+    )
+
+    memo_dispositions = [
+        _FakeMemoDisposition("state/cross-repo/inbox/a.md", "dead1", "release", "detail"),
+    ]
+    monkeypatch.setattr(
+        mod, "memo_survey",
+        lambda repo_root: _FakeMemoSurveyResult(1, memo_dispositions),
+    )
+    monkeypatch.setattr(
+        mod, "memo_apply_dispositions",
+        lambda dispositions: (_ for _ in ()).throw(
+            AssertionError("--dry-run must never call memo_apply_dispositions"))
+    )
+
+    rc = mod.main(["--dry-run"])
+    assert rc == 0
+
+    out = capsys.readouterr().out
+    assert "memo_would_release=1" in out
+    assert "state/cross-repo/inbox/a.md" in out
+    assert "[dry-run] no changes made" in out
+
+
+def test_default_applies_memo_dispositions_from_memo_survey(monkeypatch, capsys):
+    mod = _load_module()
+    _patch_resolver(mod, monkeypatch)
+
+    monkeypatch.setattr(mod, "survey", lambda repo_root: _FakeSurveyResult(0, 0, []))
+    monkeypatch.setattr(mod, "apply_dispositions", lambda passed: ([], [], []))
+
+    memo_dispositions = [
+        _FakeMemoDisposition("state/cross-repo/inbox/a.md", "dead1", "release", "detail"),
+    ]
+    monkeypatch.setattr(
+        mod, "memo_survey", lambda repo_root: _FakeMemoSurveyResult(1, memo_dispositions),
+    )
+    memo_apply_calls = []
+    monkeypatch.setattr(
+        mod, "memo_apply_dispositions",
+        lambda passed: (memo_apply_calls.append(passed),
+                         (["state/cross-repo/inbox/a.md"], []))[1],
+    )
+
+    rc = mod.main([])
+    assert rc == 0
+    assert memo_apply_calls == [memo_dispositions]
+    assert "[dry-run]" not in capsys.readouterr().out
+
+
+def test_memo_apply_failure_is_reported_and_exits_one(monkeypatch, capsys):
+    mod = _load_module()
+    _patch_resolver(mod, monkeypatch)
+
+    monkeypatch.setattr(mod, "survey", lambda repo_root: _FakeSurveyResult(0, 0, []))
+    monkeypatch.setattr(mod, "apply_dispositions", lambda passed: ([], [], []))
+
+    memo_dispositions = [
+        _FakeMemoDisposition("state/cross-repo/inbox/a.md", "dead1", "release", "detail"),
+    ]
+    monkeypatch.setattr(
+        mod, "memo_survey", lambda repo_root: _FakeMemoSurveyResult(1, memo_dispositions),
+    )
+    monkeypatch.setattr(
+        mod, "memo_apply_dispositions",
+        lambda passed: ([], ["state/cross-repo/inbox/a.md: release-memo failed: rc=3"]),
+    )
+
+    rc = mod.main([])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "release-memo failed: rc=3" in err
 
 
 if __name__ == "__main__":

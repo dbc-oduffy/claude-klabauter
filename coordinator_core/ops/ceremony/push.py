@@ -74,7 +74,7 @@ def condense_git_diagnostic(text: str, *, limit: int = _MAX_DIAGNOSTIC_CHARS) ->
     return "...(truncated) " + condensed[-limit:]
 
 
-from coordinator_core.ipc import CEREMONY_BUDGET_SECS
+from coordinator_core.ipc import CEREMONY_BUDGET_SECS, DISPATCH_TIMEOUT_SECS
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.git.git_state import head_sha as head_sha_local
 from coordinator_core.ops.ceremony import git_native
@@ -208,9 +208,40 @@ PUSH_RETRY_BUDGET_SECS: float = 12.0
 #: `PUSH_RETRY_BUDGET_SECS` does -- that 600s backstop is what keeps the
 #: publish guarantee intact at a budget sized for the dominant single-attempt
 #: case. Ratchets in step with `push_cadence.SWEEP_TOTAL_CEILING_SECS`/
-#: `EXIT_SWEEP_CEILING_SECS`, never independently -- both were re-derived to
-#: the same ratios C5 set (EXIT = 2x this budget, SWEEP_TOTAL > EXIT) rather
-#: than left pointing at 6.0's now-superseded arithmetic.
+#: `EXIT_SWEEP_CEILING_SECS`, never independently -- CORRECTION (P052-C5,
+#: docs/plans/2026-09-10-push-cadence-hang-detection-over-elapsed-timeout.md):
+#: the prior wording here claimed both were "re-derived to the same ratios
+#: C5 set (EXIT = 2x this budget, SWEEP_TOTAL > EXIT)"; that was already
+#: false at HEAD (`EXIT_SWEEP_CEILING_SECS` = 17.0 against this 16.0 budget
+#: is +1.0s headroom, not 2x) independent of this plan. The actual
+#: relationship each sibling constant's own docstring in `push_cadence.py`
+#: derives is additive headroom over this budget, not a ratio.
+#:
+#: ARM B (P052-C1, docs/research/2026-09-10-git-push-progress-stall-
+#: measurement.md): the fixed-elapsed budget below stays a RETAINED
+#: FALLBACK, not the primary hang instrument -- `git_native.push_streamed`'s
+#: silence watchdog (`STALL_SILENCE_SECS` = 14.036s, steady-state
+#: inter-line silence) is primary; this 16.0s ladder deadline is the
+#: layered backstop for the case the watchdog cannot see (e.g. the process
+#: never reaching a push leg at all). The two bounds answer different
+#: questions and must not be conflated: `STALL_SILENCE_SECS` is a
+#: steady-state SILENCE window measured between progress lines once
+#: transfer has started; the measured first-line grace (`H` = 0.237s,
+#: spawn-to-first-counter) is smaller still and is NOT this budget -- this
+#: 16.0s number remains the whole-ladder elapsed deadline, unchanged by
+#: either. The surviving total-duration bound for one `push_streamed` call
+#: is `ipc.DISPATCH_TIMEOUT_SECS` (30.0s, the un-raisable end-to-end op
+#: guard) -- named here as the candidate C2's `total_timeout` parameter
+#: takes, so a push that never goes silent (one progress line every
+#: `STALL_SILENCE_SECS - e` forever) is still bounded. This ladder's own
+#: 16.0s deadline (`budget_secs`/`_remaining_or_none`) additionally bounds
+#: every REMOTE leg below -- push, fetch, rebase-recovery, set-upstream --
+#: via the shared `deadline` computed at entry; none of those legs falls
+#: back silently to `git_native`'s own `REMOTE_BUDGET_SECS` default, since
+#: the cadence caller (`push_cadence.py`) always passes `budget_secs`
+#: explicitly (`_remaining_or_none` returns `None`, keeping git_native's
+#: default, ONLY for a caller that never set a budget at all -- see that
+#: function's own docstring).
 #:
 #: MEASURED FLOOR this clears, n=6 direct measurements under the documented
 #: 50-70-session load norm: 2.07s, 2.85s, 5.64s, 8.54s, 14.54s, 15.31s (max
@@ -345,14 +376,24 @@ _PUSH_TIMEOUT_RE = re.compile(r"timed out after \d")
 
 
 def _is_indeterminate_push_result(result: "git_native.GitResult") -> bool:
-    """True iff *result* is a subprocess timeout, not an observed git failure.
+    """True iff *result* is a subprocess timeout OR a silence stall-kill, not
+    an observed git failure.
 
     `returncode == -1` alone is not enough -- `_git()` also returns -1 for an
     `OSError` (git not on PATH), which IS a definite, observed failure, just
     not one git itself reported. Only the timeout text names a result that
     was never observed.
+
+    `result.stall_killed` (P052-C3) is the second, independent arm: a
+    silence-watchdog kill from `git_native.push_streamed` also never observed
+    the push's true outcome -- the child may have already landed the objects
+    server-side before the watchdog terminated it -- so it is `unconfirmed`
+    on the same reasoning as a subprocess timeout, never `failed`. The
+    existing timeout arm's text is unchanged; this is an `or` in front of it.
     """
-    return result.returncode == -1 and bool(_PUSH_TIMEOUT_RE.search(result.stderr or ""))
+    return result.stall_killed or (
+        result.returncode == -1 and bool(_PUSH_TIMEOUT_RE.search(result.stderr or ""))
+    )
 
 
 def resolve_post_push_sha(worktree_root: Union[str, Path], pre_push_sha: Optional[str]) -> Optional[str]:
@@ -1479,6 +1520,7 @@ def push_with_retry(
     allow_protected_branch: bool = False,
     protected_branch_override_reason: Optional[str] = None,
     budget_secs: Optional[float] = None,
+    use_streamed_push: bool = False,
 ) -> PushOutcome:
     """Push with reject-detect -> fetch -> rebase --onto -> re-push, bounded.
 
@@ -1561,6 +1603,26 @@ def push_with_retry(
     `work/*` branch that would have passed the gate anyway does NOT print
     that line, since nothing was in fact overridden (see that call site
     below for the reasoning).
+
+    `use_streamed_push` (P052-C3, 2026-09-10) -- keyword-only, default
+    `False`. When `True`, the push leg's NO-UPSTREAM call
+    (`git_native.push(root, ...)`, the genuine-first-push /
+    day-branch-publish shape) uses `git_native.push_streamed` instead --
+    `git push --progress` watched for a silence stall -- so a hung child is
+    killed on `STALL_SILENCE_SECS` of silence rather than riding the whole
+    `budget_secs` ladder deadline out. A stall-kill sets
+    `GitResult.stall_killed`, which `_is_indeterminate_push_result` now also
+    matches, so it lands in `PushOutcome.unconfirmed`, never `failed` and
+    never retried blind. `push_streamed`'s own `total_timeout` is passed as
+    `ipc.DISPATCH_TIMEOUT_SECS` (30.0s) -- the surviving total-duration
+    bound named in the plan's AC8, so a child that keeps emitting progress
+    lines close together forever is still terminated. `False` (the default)
+    keeps every existing caller -- the interactive ladder, the ceremony
+    push, and this leg when an upstream IS configured (`push_refspec`,
+    untouched by this opt-in) -- byte-identical. NEVER ambient: no env var,
+    no module-level flag; the cadence caller
+    (`ops.push_outstanding.push_outstanding` -> `warm.push_cadence._sweep_one`)
+    is the one sanctioned consumer as of this chunk.
     """
     root = Path(worktree_root)
 
@@ -1653,6 +1715,16 @@ def push_with_retry(
                     upstream_info.branch_ref,
                     timeout=leg_timeout,
                 )
+            )
+        elif use_streamed_push:
+            # P052-C3: the streamed primitive owns its own silence and
+            # total-duration bounds (`STALL_SILENCE_SECS`,
+            # `DISPATCH_TIMEOUT_SECS`) rather than `leg_timeout` -- a stall
+            # kill must fire on silence, not on this ladder's own
+            # per-attempt remainder, which a still-progressing push may
+            # legitimately exceed (AC8/AC9).
+            push_result = git_native.push_streamed(
+                root, total_timeout=DISPATCH_TIMEOUT_SECS
             )
         else:
             push_result = (

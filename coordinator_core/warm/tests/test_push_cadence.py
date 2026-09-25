@@ -478,6 +478,51 @@ def test_sweep_lock_hold_secs_is_keyed_to_the_cadence_budget():
     assert push_cadence._SWEEP_LOCK_HOLD_SECS == push_cadence.CADENCE_PUSH_RETRY_BUDGET_SECS + 10.0
 
 
+# ---------------------------------------------------------------------------
+# P052-C6 (docs/plans/2026-09-10-push-cadence-hang-detection-over-elapsed-
+# timeout.md): the mechanical relationship guard pinning C5's arm-B
+# derivation of the four enumerated constants -- a docstring alone does not
+# discharge AC6, a test asserting the exact formula does. Arm B was
+# selected (docs/research/2026-09-10-git-push-progress-stall-measurement.md):
+# `CADENCE_PUSH_RETRY_BUDGET_SECS` is RETAINED as the fallback rather than
+# retired, and `SWEEP_TOTAL_CEILING_SECS`/`EXIT_SWEEP_CEILING_SECS` are both
+# re-derived off it (this module's own docstrings for each constant name
+# the exact offsets pinned here).
+# ---------------------------------------------------------------------------
+
+
+def test_sweep_total_ceiling_secs_is_cadence_budget_plus_its_named_margin():
+    """`SWEEP_TOTAL_CEILING_SECS` = `CADENCE_PUSH_RETRY_BUDGET_SECS` + 2.0 --
+    the one-repo-per-tick sizing this module's own docstring derives (2.0s
+    covering the sweep's own per-repo overhead beyond the push itself)."""
+    assert (
+        push_cadence.SWEEP_TOTAL_CEILING_SECS
+        == push_cadence.CADENCE_PUSH_RETRY_BUDGET_SECS + 2.0
+    )
+
+
+def test_exit_sweep_ceiling_secs_is_cadence_budget_plus_its_named_margin():
+    """`EXIT_SWEEP_CEILING_SECS` = `CADENCE_PUSH_RETRY_BUDGET_SECS` + 1.0 --
+    strictly under `SWEEP_TOTAL_CEILING_SECS`'s own +2.0 margin, per that
+    constant's own docstring (exit-path latency is the more sensitive of
+    the two)."""
+    assert (
+        push_cadence.EXIT_SWEEP_CEILING_SECS
+        == push_cadence.CADENCE_PUSH_RETRY_BUDGET_SECS + 1.0
+    )
+
+
+def test_cadence_push_retry_budget_secs_was_not_retired():
+    """Arm B's negative spec: unlike arm A, `CADENCE_PUSH_RETRY_BUDGET_SECS`
+    survives as the fallback bound rather than being retired outright, and
+    every constant re-derived off it still imports it live rather than a
+    frozen copy of its old value."""
+    from coordinator_core.ops.ceremony.push import CADENCE_PUSH_RETRY_BUDGET_SECS
+
+    assert push_cadence.CADENCE_PUSH_RETRY_BUDGET_SECS is CADENCE_PUSH_RETRY_BUDGET_SECS
+    assert push_cadence.CADENCE_PUSH_RETRY_BUDGET_SECS > 0
+
+
 def test_successful_push_does_not_feed_the_failure_detector(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
 

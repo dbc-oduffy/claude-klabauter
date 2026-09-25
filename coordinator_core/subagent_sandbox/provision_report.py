@@ -355,10 +355,15 @@ TEMPLATE_TYPES = ("run-report", "review-findings", "assessment", "staff-eng-revi
 
 #: Superset frontmatter field set shared by every template -- unchanged
 #: field NAMES/ORDER across all types (status/agent_type/spawned_at/
-#: lead_session_id/divergence/commits/dispatch_feed); only the body
-#: sections vary by type. See CONTRACT.md's provision-and-emit contract
+#: lead_session_id/target_plan/divergence/commits/dispatch_feed); only the
+#: body sections vary by type. See CONTRACT.md's provision-and-emit contract
 #: before touching field names/order here -- this is a pinned wire shape.
-def _frontmatter(agent_type: str, spawned_at: str, lead_session_id: Optional[str] = None) -> str:
+def _frontmatter(
+    agent_type: str,
+    spawned_at: str,
+    lead_session_id: Optional[str] = None,
+    target_plan: Optional[str] = None,
+) -> str:
     """``lead_session_id`` is the REQUESTING EM's session id -- distinct
     from the spawned agent's own ``agent_id`` (resolve_effective_types'
     first return leg, never written into frontmatter itself). Sourced
@@ -367,6 +372,12 @@ def _frontmatter(agent_type: str, spawned_at: str, lead_session_id: Optional[str
     ``_provision``'s call site. Falls back to the literal ``null`` when
     absent -- in practice this is never absent when reached via
     ``_provision`` since ``session_id`` is required for eligibility.
+
+    ``target_plan`` is the payload's ``plan_path`` value, rendered RAW (no
+    ``Path``, no separator rewrite, no stem reduction) -- exactly the same
+    literal-``null`` fallback ``lead_session_id`` uses when absent or empty.
+    docs/plans/2026-09-11-emit-target-plan-in-the-provision-report-
+    frontmatter.md (C1).
 
     ``dispatch_feed``'s sub-properties in run-report.schema.json
     (``label``/``agent_type``/``model``/``effort``/``schema_ref``/
@@ -386,6 +397,7 @@ def _frontmatter(agent_type: str, spawned_at: str, lead_session_id: Optional[str
         f"agent_type: {agent_type}\n"
         f"spawned_at: {spawned_at}\n"
         f"lead_session_id: {lead_session_id if lead_session_id is not None else 'null'}\n"
+        f"target_plan: {target_plan if target_plan else 'null'}\n"
         "divergence:\n"
         "  diverged: false\n"
         "commits: []\n"
@@ -708,7 +720,11 @@ def _exit_interview_section() -> str:
 
 
 def _build_run_report_legacy_doc_text(
-    agent_type: str, spawned_at: str, lead_session_id: Optional[str] = None
+    agent_type: str,
+    spawned_at: str,
+    lead_session_id: Optional[str] = None,
+    *,
+    target_plan: Optional[str] = None,
 ) -> str:
     """The ORIGINAL, pre-``--type`` run-report shape, frozen verbatim.
 
@@ -718,12 +734,13 @@ def _build_run_report_legacy_doc_text(
     directly (not ``main()``) and predates the ``--type`` axis. Do not
     add sections here; new shapes belong in the ``TEMPLATE_TYPES``
     registry below, reachable only when a payload/CLI actually opts into
-    a ``type``. ``lead_session_id`` threads through to ``_frontmatter``
-    only -- it is a frontmatter-only addition (SUBSUME), not a body-shape
-    change, so it does not disturb this shape's frozen-legacy-body pin.
+    a ``type``. ``lead_session_id``/``target_plan`` thread through to
+    ``_frontmatter`` only -- both are frontmatter-only additions (SUBSUME),
+    not a body-shape change, so neither disturbs this shape's
+    frozen-legacy-body pin.
     """
     return (
-        _frontmatter(agent_type, spawned_at, lead_session_id)
+        _frontmatter(agent_type, spawned_at, lead_session_id, target_plan=target_plan)
         + "## Run notes\n\n"
         + "## Observations\n\n"
         + _exit_interview_section()
@@ -731,15 +748,19 @@ def _build_run_report_legacy_doc_text(
 
 
 def _build_run_report_doc_text(
-    agent_type: str, spawned_at: str, lead_session_id: Optional[str] = None
+    agent_type: str,
+    spawned_at: str,
+    lead_session_id: Optional[str] = None,
+    *,
+    target_plan: Optional[str] = None,
 ) -> str:
     """``--type run-report`` (explicit, or the CLI's own default): the
     legacy run-report body plus a ``## Divergence from plan`` section and a
     trackable ``## Completion`` checklist marker. Layered on top of the
-    EXISTING ``divergence``/``commits``/``lead_session_id`` frontmatter --
-    no new frontmatter fields introduced at this layer."""
+    EXISTING ``divergence``/``commits``/``lead_session_id``/``target_plan``
+    frontmatter -- no new frontmatter fields introduced at this layer."""
     return (
-        _frontmatter(agent_type, spawned_at, lead_session_id)
+        _frontmatter(agent_type, spawned_at, lead_session_id, target_plan=target_plan)
         + "## Run notes\n\n"
         + "## Observations\n\n"
         + "## Execution capability\n\n"
@@ -755,11 +776,15 @@ def _build_run_report_doc_text(
 
 
 def _build_review_findings_doc_text(
-    agent_type: str, spawned_at: str, lead_session_id: Optional[str] = None
+    agent_type: str,
+    spawned_at: str,
+    lead_session_id: Optional[str] = None,
+    *,
+    target_plan: Optional[str] = None,
 ) -> str:
     """``--type review-findings``: per-finding disposition slots."""
     return (
-        _frontmatter(agent_type, spawned_at, lead_session_id)
+        _frontmatter(agent_type, spawned_at, lead_session_id, target_plan=target_plan)
         + "## Execution capability\n\n"
         + "<!-- Name what you actually ran to reach this verdict (tests, a probe, the CLI under review), or the literal `none — this verdict rests on reading only`. A verdict resting on reading alone is a legitimate answer; an unstated one is not. -->\n\n"
         + "## Findings\n\n"
@@ -769,11 +794,15 @@ def _build_review_findings_doc_text(
 
 
 def _build_assessment_doc_text(
-    agent_type: str, spawned_at: str, lead_session_id: Optional[str] = None
+    agent_type: str,
+    spawned_at: str,
+    lead_session_id: Optional[str] = None,
+    *,
+    target_plan: Optional[str] = None,
 ) -> str:
     """``--type assessment``: question/answer shape."""
     return (
-        _frontmatter(agent_type, spawned_at, lead_session_id)
+        _frontmatter(agent_type, spawned_at, lead_session_id, target_plan=target_plan)
         + "## Questions\n\n"
         + "<!-- One entry per question: `- Q: ... / A: ...` -->\n\n"
         + _exit_interview_section()
@@ -781,7 +810,11 @@ def _build_assessment_doc_text(
 
 
 def _build_staff_eng_review_doc_text(
-    agent_type: str, spawned_at: str, lead_session_id: Optional[str] = None
+    agent_type: str,
+    spawned_at: str,
+    lead_session_id: Optional[str] = None,
+    *,
+    target_plan: Optional[str] = None,
 ) -> str:
     """``--type staff-eng-review``: verdict + rationale + per-finding slots.
 
@@ -807,7 +840,7 @@ def _build_staff_eng_review_doc_text(
     filled-in content and defeat the empty-scaffold refusal.
     """
     return (
-        _frontmatter(agent_type, spawned_at, lead_session_id)
+        _frontmatter(agent_type, spawned_at, lead_session_id, target_plan=target_plan)
         + "## Verdict\n\n"
         + "## Rationale\n\n"
         + "## Execution capability\n\n"
@@ -842,6 +875,7 @@ def _build_plan_coverage_check_doc_text(
     lead_session_id: Optional[str] = None,
     *,
     plan_path: Optional[str] = None,
+    target_plan: Optional[str] = None,
 ) -> str:
     """``"plan-coverage-check"``: the plan-coverage-checker lens's sidecar
     skeleton (docs/plans/2026-08-21-the-provisioner-writes-the-sidecar-
@@ -880,7 +914,7 @@ def _build_plan_coverage_check_doc_text(
         f"plan: {plan_path or ''}\n"
     )
     frontmatter = _append_lens_frontmatter_keys(
-        _frontmatter(agent_type, spawned_at, lead_session_id), lens_keys
+        _frontmatter(agent_type, spawned_at, lead_session_id, target_plan=target_plan), lens_keys
     )
     return frontmatter + _PLAN_COVERAGE_CHECK_SKELETON + "\n\n" + _exit_interview_section()
 
@@ -890,7 +924,7 @@ def _build_plan_coverage_check_doc_text(
 #: key never touches this registry (see ``_build_doc_text`` below), which
 #: is what makes the no-type-key back-compat guarantee possible alongside
 #: the "run-report" default's added sections.
-_TEMPLATE_REGISTRY: Dict[str, Callable[[str, str, Optional[str]], str]] = {
+_TEMPLATE_REGISTRY: Dict[str, Callable[..., str]] = {
     "run-report": _build_run_report_doc_text,
     "review-findings": _build_review_findings_doc_text,
     "assessment": _build_assessment_doc_text,
@@ -906,6 +940,7 @@ def _build_doc_text(
     lead_session_id: Optional[str] = None,
     *,
     plan_path: Optional[str] = None,
+    target_plan: Optional[str] = None,
 ) -> str:
     """Dispatch to the type-keyed template registry, or the frozen legacy
     run-report shape when ``doc_type`` is ``None`` (payload carried no
@@ -921,13 +956,27 @@ def _build_doc_text(
     ``"plan-coverage-check"``'s builder, which needs it for the lens-owned
     ``plan:`` frontmatter key -- every other registry entry keeps the exact
     3-positional-arg call shape it always had, so this addition cannot
-    disturb their dispatch or the legacy no-type path above."""
+    disturb their dispatch or the legacy no-type path above.
+
+    ``target_plan`` (docs/plans/2026-09-11-emit-target-plan-in-the-
+    provision-report-frontmatter.md, C1) is a keyword-only addition
+    forwarded to EVERY builder below, unlike ``plan_path`` -- it feeds the
+    pinned ``_frontmatter`` block present on all six template shapes, not a
+    lens-owned key on one of them."""
     if not doc_type:
-        return _build_run_report_legacy_doc_text(agent_type, spawned_at, lead_session_id)
+        return _build_run_report_legacy_doc_text(
+            agent_type, spawned_at, lead_session_id, target_plan=target_plan
+        )
     builder = _TEMPLATE_REGISTRY.get(doc_type, _build_run_report_doc_text)
     if doc_type == "plan-coverage-check":
-        return builder(agent_type, spawned_at, lead_session_id, plan_path=plan_path)
-    return builder(agent_type, spawned_at, lead_session_id)
+        return builder(
+            agent_type,
+            spawned_at,
+            lead_session_id,
+            plan_path=plan_path,
+            target_plan=target_plan,
+        )
+    return builder(agent_type, spawned_at, lead_session_id, target_plan=target_plan)
 
 
 #: header_style dialects the assembler knows how to extract, mirroring
@@ -1431,7 +1480,12 @@ def _provision_plan_derivable_doc(
     # Redundant second `_declared_plan_disagrees_with_stem`
     # scan removed here; see this commit's message for why.
     doc_text = _build_doc_text(
-        agent_type, spawned_at, doc_type, lead_session_id=session_id, plan_path=plan_path
+        agent_type,
+        spawned_at,
+        doc_type,
+        lead_session_id=session_id,
+        plan_path=plan_path,
+        target_plan=plan_path,
     )
 
     plan_sidecars_root.mkdir(parents=True, exist_ok=True)
@@ -1690,7 +1744,13 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
     # (resolve_effective_types' first return leg above): agent_id is the
     # SPAWNED agent's own id, session_id/lead_session_id is who dispatched
     # it. Never conflate the two when reading this doc downstream.
-    doc_text = _build_doc_text(effective_label, spawned_at, doc_type, lead_session_id=session_id)
+    doc_text = _build_doc_text(
+        effective_label,
+        spawned_at,
+        doc_type,
+        lead_session_id=session_id,
+        target_plan=plan_path,
+    )
 
     # AC1: stamp the review receipt on an eligible reviewer's OWN sidecar,
     # at dispatch, before the very first write -- see _splice_review_receipt

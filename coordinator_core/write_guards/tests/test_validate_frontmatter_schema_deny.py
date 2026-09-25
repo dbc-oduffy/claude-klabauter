@@ -2526,9 +2526,14 @@ class TestPlanTasksSpineIntegrityDeny:
         assert self._check(tmp_path, body) is None
 
     def test_siblings_report_the_identical_finding(self, tmp_path):
-        """Both guards share the door, so neither can drift about what counts
-        as an unreadable spine — the lockstep the two hand-duplicated
-        `_plan_tasks_spine_errors` bodies are required to keep.
+        """Both guards share the `plan_tasks_spine_errors` driver (P084-C2),
+        but each declares its OWN leg subset — the deny guard omits
+        "ordering", the advisory guard includes it — so the two no longer
+        report the identical finding for every spine. This fixture's single
+        clean row exercises only the legs both sides declare (integrity,
+        per_row), so it still proves identical per-row findings there; a
+        spine that violates ordering would diverge (see
+        `test_plan_tasks_spine_sequence_parity.py` for that assertion).
         """
         import coordinator_core.frontmatter.schema_validate as sv
         from coordinator_core.write_guards import (

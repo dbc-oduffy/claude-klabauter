@@ -295,6 +295,171 @@ def test_historical_claim_missing_claimed_at_still_names_the_holder(workspace):
     assert claim_state.resolve_historical_claim(handoff, common_dir=common_dir) == ("sess-noat", None)
 
 
+# ---------------------------------------------------------------------------
+# compare_claim_state — Track B (AC6, AC7, AC9).
+# ---------------------------------------------------------------------------
+
+
+def test_comparator_agree(workspace):
+    common_dir, handoff = workspace
+    _write_claim_dir(common_dir, handoff.name, "sess-a", "2026-08-07T10:00:00Z")
+    _write_handoff(handoff, claimed_by="sess-a", claimed_at="2026-08-07T10:00:00Z", status="claimed")
+
+    with mock.patch.object(claim_state, "cs_claim_holder_live", return_value=True):
+        report = claim_state.compare_claim_state(handoff, common_dir=common_dir)
+
+    assert report.verdict == "agree"
+    assert report.ledger_holder == "sess-a"
+    assert report.mirror_holder == "sess-a"
+    assert report.age is None
+    assert report.ledger_resolver_source == "not-recorded"
+    assert report.bound_exceeded is False
+
+
+def test_comparator_ledger_only_reports_age_off_ledger_claimed_at(workspace):
+    common_dir, handoff = workspace
+    _write_claim_dir(common_dir, handoff.name, "sess-a", "2026-08-07T10:00:00Z")
+    _write_handoff(handoff, status="open")
+
+    with mock.patch.object(claim_state, "cs_claim_holder_live", return_value=True):
+        report = claim_state.compare_claim_state(
+            handoff, common_dir=common_dir, now=1786096800.0 + 60.0  # 2026-08-07T10:00:00Z + 60s
+        )
+
+    assert report.verdict == "ledger-only"
+    assert report.mirror_holder is None
+    assert isinstance(report.age, float)
+    assert report.age == pytest.approx(60.0, abs=1.0)
+    assert report.bound_exceeded is False
+
+
+def test_comparator_mirror_only_age_not_measurable(workspace):
+    common_dir, handoff = workspace
+    _write_handoff(handoff, claimed_by="sess-mirror", claimed_at="2026-08-07T10:00:00Z", status="claimed")
+
+    report = claim_state.compare_claim_state(handoff, common_dir=common_dir)
+
+    assert report.verdict == "mirror-only"
+    assert report.age == claim_state.AGE_NOT_MEASURABLE
+    assert report.bound_exceeded is False
+
+
+def test_comparator_holder_mismatch_ages_off_ledger_side(workspace):
+    common_dir, handoff = workspace
+    _write_claim_dir(common_dir, handoff.name, "sess-x", "2026-08-07T10:00:00Z")
+    _write_handoff(handoff, claimed_by="sess-y", claimed_at="2026-08-07T09:00:00Z", status="claimed")
+
+    with mock.patch.object(claim_state, "cs_claim_holder_live", return_value=True):
+        report = claim_state.compare_claim_state(
+            handoff, common_dir=common_dir, now=1786096800.0 + 10.0  # ledger onset + 10s
+        )
+
+    assert report.verdict == "holder-mismatch"
+    assert report.ledger_holder == "sess-x"
+    assert report.mirror_holder == "sess-y"
+    assert isinstance(report.age, float)
+    assert report.age == pytest.approx(10.0, abs=1.0)
+
+
+def test_comparator_neither_no_age(workspace):
+    common_dir, handoff = workspace
+    _write_handoff(handoff, status="open")
+
+    report = claim_state.compare_claim_state(handoff, common_dir=common_dir)
+
+    assert report.verdict == "neither"
+    assert report.age is None
+    assert report.ledger_holder is None
+    assert report.mirror_holder is None
+
+
+def test_comparator_malformed_claimed_at_degrades_to_not_measurable(workspace):
+    common_dir, handoff = workspace
+    claim_dir = _write_claim_dir(common_dir, handoff.name, "sess-a")
+    (claim_dir / "claimed_at").write_text("not-a-timestamp", encoding="utf-8")
+    _write_handoff(handoff, status="open")
+
+    with mock.patch.object(claim_state, "cs_claim_holder_live", return_value=True):
+        report = claim_state.compare_claim_state(handoff, common_dir=common_dir)
+
+    assert report.verdict == "ledger-only"
+    assert report.age == claim_state.AGE_NOT_MEASURABLE
+    assert report.bound_exceeded is False
+
+
+def test_comparator_resolver_source_not_recorded_by_default(workspace):
+    common_dir, handoff = workspace
+    _write_claim_dir(common_dir, handoff.name, "sess-a", "2026-08-07T10:00:00Z")
+    _write_handoff(handoff, claimed_by="sess-a", claimed_at="2026-08-07T10:00:00Z", status="claimed")
+
+    with mock.patch.object(claim_state, "cs_claim_holder_live", return_value=True):
+        report = claim_state.compare_claim_state(handoff, common_dir=common_dir)
+
+    assert report.ledger_resolver_source == "not-recorded"
+
+
+def test_comparator_resolver_source_read_when_present(workspace):
+    common_dir, handoff = workspace
+    claim_dir = _write_claim_dir(common_dir, handoff.name, "sess-a", "2026-08-07T10:00:00Z")
+    (claim_dir / "resolver_source").write_text("attributable_session_id:warm", encoding="utf-8")
+    _write_handoff(handoff, claimed_by="sess-a", claimed_at="2026-08-07T10:00:00Z", status="claimed")
+
+    with mock.patch.object(claim_state, "cs_claim_holder_live", return_value=True):
+        report = claim_state.compare_claim_state(handoff, common_dir=common_dir)
+
+    assert report.ledger_resolver_source == "attributable_session_id:warm"
+
+
+def test_comparator_bound_exceeded_is_a_named_reported_field(workspace):
+    common_dir, handoff = workspace
+    _write_claim_dir(common_dir, handoff.name, "sess-a", "2026-08-07T10:00:00Z")
+    _write_handoff(handoff, status="open")
+
+    with mock.patch.object(claim_state, "cs_claim_holder_live", return_value=True):
+        under_bound = claim_state.compare_claim_state(
+            handoff, common_dir=common_dir, now=1786096800.0 + 10.0
+        )
+        over_bound = claim_state.compare_claim_state(
+            handoff,
+            common_dir=common_dir,
+            now=1786096800.0 + claim_state.DISAGREEMENT_AGE_BOUND_SECONDS_300 + 1.0,
+        )
+
+    assert under_bound.bound_exceeded is False
+    assert over_bound.bound_exceeded is True
+    assert over_bound.bound_seconds == claim_state.DISAGREEMENT_AGE_BOUND_SECONDS_300
+
+
+def test_comparator_composes_resolve_claim_state_not_a_second_read(workspace):
+    """AC6: composed over resolve_claim_state, not a second read of either
+    side — the gated ledger read (cs_claim_holder_live) is exercised exactly
+    once per compare_claim_state call."""
+    common_dir, handoff = workspace
+    _write_claim_dir(common_dir, handoff.name, "sess-a", "2026-08-07T10:00:00Z")
+    _write_handoff(handoff, claimed_by="sess-a", claimed_at="2026-08-07T10:00:00Z", status="claimed")
+
+    with mock.patch.object(claim_state, "cs_claim_holder_live", return_value=True) as live:
+        claim_state.compare_claim_state(handoff, common_dir=common_dir)
+
+    assert live.call_count == 1
+
+
+def test_comparator_never_touches_disagreement_flag(workspace):
+    """AC7 hard stop: the comparator is a new axis beside the
+    `disagreement` pin, not a replacement — resolve_claim_state's own flag
+    is unaffected by, and unread by, the comparator's verdict."""
+    common_dir, handoff = workspace
+    _write_claim_dir(common_dir, handoff.name, "sess-x", "2026-08-07T10:00:00Z")
+    _write_handoff(handoff, claimed_by="sess-y", claimed_at="2026-08-07T09:00:00Z", status="claimed")
+
+    with mock.patch.object(claim_state, "cs_claim_holder_live", return_value=True):
+        state = claim_state.resolve_claim_state(handoff, common_dir=common_dir)
+        report = claim_state.compare_claim_state(handoff, common_dir=common_dir)
+
+    assert state.disagreement is False
+    assert report.verdict == "holder-mismatch"
+
+
 def test_import_cycle_stays_broken():
     """Slice A P3: the C1 commit message claims an explicit import-cycle
     smoke test was verified; no such test existed. This is that test — import

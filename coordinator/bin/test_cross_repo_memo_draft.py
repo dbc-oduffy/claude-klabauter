@@ -629,7 +629,7 @@ def test_draft_resolved_sibling_receiver_ok() -> None:
         os.makedirs(receiver_repo, exist_ok=True)
 
         mock_impl = _make_mock_machine_local_keys_and_get(
-            tmpdir, {"repos.example_retrieval_repo": receiver_repo}
+            tmpdir, {"repos.project_rag": receiver_repo}
         )
         _write_registry_toml(claude_home, {_repo_key_for("example-retrieval-repo-em"): receiver_repo, _repo_key_for("sender_repo-em"): sender_repo})
         env = {
@@ -686,7 +686,7 @@ def test_draft_premise_check_advisory_fires_and_does_not_crash() -> None:
         os.makedirs(receiver_repo, exist_ok=True)
 
         mock_impl = _make_mock_machine_local_keys_and_get(
-            tmpdir, {"repos.example_retrieval_repo": receiver_repo}
+            tmpdir, {"repos.project_rag": receiver_repo}
         )
         _write_registry_toml(claude_home, {_repo_key_for("example-retrieval-repo-em"): receiver_repo, _repo_key_for("sender_repo-em"): sender_repo})
         env = {

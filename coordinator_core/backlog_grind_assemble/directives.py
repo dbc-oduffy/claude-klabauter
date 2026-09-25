@@ -111,9 +111,11 @@ __all__ = [
     "build_stage_and_commit",
     "build_commit_readiness_gate",
     "build_tier_u_grant_flow",
+    "build_tier_u_grant_check",
     "build_spinoff_handoff_template_emission",
     "build_executor_dispatch_prompt_template_emission",
     "build_decision_scaffold_directive",
+    "build_resolve_validation_cmd",
 ]
 
 GRANULARITY_PER_ITEM = "per-item"
@@ -147,6 +149,14 @@ _TIER_U_GRANT_CLI = "tier-u-grant-cli"
 
 _SPINOFF_HANDOFF_TEMPLATE_CLI = "spinoff-handoff-template"
 _EXECUTOR_DISPATCH_PROMPT_TEMPLATE_CLI = "executor-dispatch-prompt-template"
+
+#: P071-C7 — bug-blitz's `commands/bug-blitz.md:60` (at DoE 57e11749)
+#: mandates `coordinator-resolve-validation-cmd --full`; this cli names
+#: C7's own `apply.py::_CLI_DISPATCH` entry, which resolves the FULL test
+#: command IN-PROCESS (`coordinator_core.resolve_validation_cmd.
+#: cs_resolve_full_test_cmd`) rather than shelling out to the bin
+#: trampoline — never invoked from this module.
+_RESOLVE_VALIDATION_CMD_CLI = "coordinator-resolve-validation-cmd"
 
 
 def build_stage_and_commit(
@@ -317,6 +327,40 @@ def build_tier_u_grant_flow(
     return jp, directive
 
 
+def build_tier_u_grant_check(
+    *,
+    id: str,
+    depends_on: str,
+) -> dict[str, Any]:
+    """Build the confirm-green `check` directive a caller fires against the
+    session-scoped token `build_tier_u_grant_flow`'s write directive already
+    minted — the "same grant covers the confirm-green re-run, no second
+    ask" property `commands/bug-blitz.md:54-55` and
+    `skills/bug-sweep/SKILL.md:91,163` both name. This is a bare directive,
+    not a (judgment_point, directive) pair: the check consumes a token a
+    judgment point already gated, so it carries no second judgment point of
+    its own and no `already_satisfied` (a satisfied-by-default recheck is
+    the silence this cluster exists to close).
+
+    `depends_on` is the grant's own WRITE DIRECTIVE id (the
+    `write_directive_id` `build_tier_u_grant_flow` returned), never its
+    `jp_id` — ordering the check against the directive that actually mints
+    the token is what keeps the check from dispatching before the token
+    exists; the caller wires this edge, this builder only shapes it.
+
+    The directive shells out to `tier-u-grant-cli check` — the same CLI
+    `build_tier_u_grant_flow`'s write directive already targets by name.
+    Failure disposition (raise-on-denied-check) is the dispatch handler's
+    job (C3), not this builder's — this module only returns dicts.
+    """
+    return {
+        "id": id,
+        "cli": _TIER_U_GRANT_CLI,
+        "args": ["check"],
+        "depends_on": depends_on,
+    }
+
+
 def build_spinoff_handoff_template_emission(
     *,
     id: str,
@@ -427,6 +471,31 @@ def build_decision_scaffold_directive(
         _DECISION_FLAG_SPEC,
         root=root,
     )
+
+
+def build_resolve_validation_cmd(
+    *,
+    id: str,
+    depends_on: Optional[str] = None,
+) -> dict[str, Any]:
+    """Build the bare directive that resolves bug-blitz's FULL test
+    command (P071-C7) — `commands/bug-blitz.md:60`'s
+    `coordinator-resolve-validation-cmd --full` citation, discharged by
+    C4's `apply.py` dispatch handler calling
+    `coordinator_core.resolve_validation_cmd.cs_resolve_full_test_cmd`
+    in-process. This builder carries no argv payload (`args` stays
+    empty) — the handler resolves purely from `repo_root`, the same
+    single input the native module itself takes. No judgment point gates
+    this directive: resolving which command to run is not an
+    authorization ask (contrast `build_tier_u_grant_flow`), so this is a
+    single dict, not a (judgment_point, directive) pair.
+    """
+    return {
+        "id": id,
+        "cli": _RESOLVE_VALIDATION_CMD_CLI,
+        "args": [],
+        "depends_on": depends_on,
+    }
 
 
 def _decision_slug(text: str) -> str:

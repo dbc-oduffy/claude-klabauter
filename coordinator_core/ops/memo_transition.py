@@ -106,8 +106,24 @@ the first thing to commit a memo.transition write. The consumer-agnostic
 contract is unchanged: the caller's ``repo_root`` param stays unused; the memo's
 own git root is what commits.
 
+surface_advisory wiring (AC4/AC5, P080-C2): ``action`` and ``resolve`` (including
+``correct_realization`` and the stranded-write resume path) attach an additive
+``surface_advisory`` reply key exactly when the call's params carry ``realized_by``
+(changed or re-supplied unchanged) and ``coordinator_core.ops.memo.surface_advisory
+:: surface_advisory`` returns a verdict rather than ``None`` for the call's committed
+frontmatter. Computed via ONE call to that single named entry point, AFTER
+``_commit_terminal_write`` returns (so it sees the committed frontmatter and never
+runs inside ``locked_rmw`` — lock-hold time is unchanged) — see ``_attach_surface_
+advisory``. The op does not repeat the SHA-shape check; that check lives solely
+inside ``surface_advisory``.
+
 Negative-spec:
-  - Does NOT subprocess / shell out. No node, no cli_path, no fallback escape hatch.
+  - Does NOT subprocess / shell out directly. No node, no cli_path, no fallback escape
+    hatch. Two git READS exist in this module's own call graph, both routed through
+    named helpers, never a bare subprocess.run in this file: ``_memo_path_dirty``'s
+    ``git status --porcelain`` (stranded-write resume detection) and, additive as of
+    P080-C2, ``surface_advisory``'s single ``git log`` touched-path read (see
+    "surface_advisory wiring" below). Neither is this module spawning git itself.
   - Every field write in this module (status, picked_up_at, picked_up_by, decision,
     decision_note, realized_by, actioned_note) uses numeric_quoting=True — node's
     serializeYamlScalar (schema.js) has no separate quoting flag; it unconditionally
@@ -163,6 +179,7 @@ from coordinator_core.frontmatter.schema_validate import (
 )
 from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+from coordinator_core.ops.memo.surface_advisory import surface_advisory
 from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS
@@ -278,6 +295,38 @@ def _err(message: str) -> dict:
     write performed" — read the message.
     """
     return {"exit_code": 1, "applied": False, "error": message}
+
+
+def _attach_surface_advisory(reply: dict, params: dict | None, content: str, git_root: Path) -> dict:
+    """Attach an additive ``surface_advisory`` reply key (AC4) in place, when
+    this call's ``params`` write ``realized_by`` (changed or re-supplied
+    unchanged) and the single named ``surface_advisory`` entry point
+    (``coordinator_core.ops.memo.surface_advisory``) returns a verdict rather
+    than ``None`` for the call's own committed frontmatter (``content`` — the
+    FULL memo file text, matching ``_commit_terminal_write``'s own ``content``
+    parameter; the frontmatter block is extracted here via ``split_frontmatter``).
+
+    Called by every site that calls ``_commit_terminal_write`` (directly, or
+    via ``_resume_probe_and_commit``'s resume branch) — never inside
+    ``locked_rmw`` (AC5) and never on the genuine idempotent no-op path (no
+    write, no advisory — AC4). Does not repeat the SHA-shape check;
+    ``surface_advisory`` is the only place that runs.
+    """
+    if not params or not params.get("realized_by"):
+        return reply
+    split = split_frontmatter(content)
+    if split is None:
+        return reply
+    try:
+        fm_dict = yaml.safe_load(split.fm_text) or {}
+    except yaml.YAMLError:
+        return reply
+    if not isinstance(fm_dict, dict):
+        return reply
+    advisory = surface_advisory(fm_dict, git_root)
+    if advisory is not None:
+        reply["surface_advisory"] = advisory
+    return reply
 
 
 # ---------------------------------------------------------------------------
@@ -442,7 +491,7 @@ def _memo_path_dirty(git_root: Path, relpath: str) -> bool:
 
 def _resume_probe_and_commit(
     memo_path: Path, git_root: Path, verb: str, content: str, resumed_message: str,
-    *, attributed_session_id: str | None = None,
+    *, attributed_session_id: str | None = None, params: dict | None = None,
 ) -> dict | None:
     """After a verb's own idempotency comparison finds the on-disk frontmatter
     already at the verb's expected terminal state, detect and recover a
@@ -472,6 +521,11 @@ def _resume_probe_and_commit(
     ``attributed_session_id`` — OPTIONAL, passed straight through to
     ``_commit_terminal_write``'s own parameter of the same name. See that
     function's docstring for which verbs' callers have anything to pass.
+
+    ``params`` — OPTIONAL (AC4, P080-C2), passed straight through to
+    ``_attach_surface_advisory`` so a resumed stranded write carries the same
+    additive ``surface_advisory`` key a fresh write would (only ``action``/
+    ``resolve`` callers, whose ``params`` can carry ``realized_by``, pass it).
     """
     try:
         # rel_id, matching _commit_terminal_write's own pathspec derivation —
@@ -489,11 +543,11 @@ def _resume_probe_and_commit(
         attributed_session_id=attributed_session_id,
     )
     if commit_error is not None:
-        return _err(commit_error)
+        return _attach_surface_advisory(_err(commit_error), params, content, git_root)
 
     reply = _ok(False, resumed_message, commit_sha=commit_sha)
     reply["resumed"] = True
-    return reply
+    return _attach_surface_advisory(reply, params, content, git_root)
 
 
 # ---------------------------------------------------------------------------
@@ -1154,9 +1208,18 @@ def _apply_realization_correction(fm_text: str, params: dict) -> str:
 
     Audit trail: whatever ``decision_note`` this write ends up carrying (the
     caller-supplied one, or the pre-existing one if the caller didn't supply a
-    new one) has a ``[correction ...]`` clause appended naming the superseded
-    ``realized_by`` value and a UTC timestamp — the superseded SHA is never
-    silently dropped. No new frontmatter key is introduced.
+    new one) has a ``[correction ...]`` clause appended — the superseded
+    ``realized_by`` value is never silently dropped. No new frontmatter key is
+    introduced.
+
+    Clause text (AC11, P080-C2): conditional on whether ``realized_by`` actually
+    moved. When ``params["realized_by"]`` equals the current on-disk value (a
+    re-supplied-unchanged correction, e.g. C6's case — the SHA is right, only
+    ``decision_note`` needed the record straightened out), the unconditional
+    "realized_by superseded — was <sha>" wording would be an untrue durable
+    claim while the field still carries that exact SHA. The clause is instead
+    ``[correction <ts>: decision_note corrected]``. The moved-SHA path keeps
+    today's ``realized_by superseded — was <sha>`` clause byte-for-byte.
     """
     cur_realized_by = unquote_yaml_scalar(read_fm_field(fm_text, "realized_by"))
     new_realized_by = params.get("realized_by")
@@ -1165,9 +1228,12 @@ def _apply_realization_correction(fm_text: str, params: dict) -> str:
         base_note = unquote_yaml_scalar(read_fm_field(fm_text, "decision_note")) or ""
 
     ts = datetime.now(timezone.utc).isoformat()
-    clause = (
-        f"[correction {ts}: realized_by superseded — was {cur_realized_by or '(none)'}]"
-    )
+    if new_realized_by and new_realized_by == cur_realized_by:
+        clause = f"[correction {ts}: decision_note corrected]"
+    else:
+        clause = (
+            f"[correction {ts}: realized_by superseded — was {cur_realized_by or '(none)'}]"
+        )
     combined_note = f"{base_note} {clause}".strip() if base_note else clause
 
     if read_fm_field(fm_text, "decision_note") is None:
@@ -1686,6 +1752,7 @@ def _action(memo: str, params: dict, cwd: str | None = None) -> dict:
             memo_path, git_root, "action", new_text,
             f"{memo} already actioned at target disposition — resumed a stranded "
             "uncommitted write and committed it",
+            params=params,
         )
         if resumed_reply is not None:
             return resumed_reply
@@ -1739,9 +1806,11 @@ def _action(memo: str, params: dict, cwd: str | None = None) -> dict:
 
     commit_sha, commit_error = _commit_terminal_write(memo_path, git_root, "action", new_text)
     if commit_error is not None:
-        return _err(commit_error)
+        return _attach_surface_advisory(_err(commit_error), params, new_text, git_root)
 
-    return _ok(True, f"actioned {memo}", commit_sha=commit_sha)
+    return _attach_surface_advisory(
+        _ok(True, f"actioned {memo}", commit_sha=commit_sha), params, new_text, git_root
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2272,7 +2341,7 @@ def _resolve(memo: str, session_id: str, at: str, params: dict, cwd: str | None 
             # resume in logs/commit messages.
             f"{memo} already resolved at target disposition — resumed a stranded "
             "uncommitted resolve write and committed it",
-            attributed_session_id=_sid,
+            attributed_session_id=_sid, params=params,
         )
         if resumed_reply is not None:
             return resumed_reply
@@ -2290,9 +2359,12 @@ def _resolve(memo: str, session_id: str, at: str, params: dict, cwd: str | None 
         memo_path, git_root, "resolve", new_text, attributed_session_id=_sid,
     )
     if commit_error is not None:
-        return _err(commit_error)
+        return _attach_surface_advisory(_err(commit_error), params, new_text, git_root)
 
-    return _ok(True, f"resolved {memo} (picked_up_by {_sid})", commit_sha=commit_sha)
+    return _attach_surface_advisory(
+        _ok(True, f"resolved {memo} (picked_up_by {_sid})", commit_sha=commit_sha),
+        params, new_text, git_root,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -136,16 +136,8 @@ def _budget() -> dict:
 def test_green_path_spawn_count_matches_budget_and_is_attributed(tmp_path, monkeypatch):
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
-    claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+    claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
-    # The no-reader gate (`_no_reader_gate` / `_memo_has_no_reader`) probes a
-    # capability keyed on real host state (peer inbox drain evidence) that
-    # this fixture cannot control cleanly and that would otherwise gate the
-    # send loudly with a warning, spending zero spawns before ever reaching
-    # the counted commit. Forced reachable here, exactly the override the
-    # gate's own warning names, so the spawn count measured below is the
-    # commit's, not the gate's non-determinism.
-    monkeypatch.setenv("COORDINATOR_CAP_PEER_EMS_REACHABLE", "1")
     _write_draft(sender_repo, "green-path-topic")
 
     with _count_spawns_attributed(monkeypatch) as spawns:
@@ -199,12 +191,8 @@ def test_unreadable_head_spine_refusal_spawn_count_matches_budget_and_reaches_ru
     """
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
-    claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+    claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
-    # See the green-path test's comment: forced, so the failure this test
-    # asserts is the head-spine refusal, never the (host-state-dependent)
-    # no-reader gate firing first at zero spawns.
-    monkeypatch.setenv("COORDINATOR_CAP_PEER_EMS_REACHABLE", "1")
     _write_draft(sender_repo, "head-spine-unreadable-topic")
 
     # `_head_entry_for`'s fallback is `git_state.head_blobs`, which -- being
@@ -268,9 +256,8 @@ def test_receiver_signing_enabled_spawn_count_matches_budget_and_reaches_write_s
         cwd=str(receiver_repo), check=True, capture_output=True,
         **no_console_creationflags(),
     )
-    claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+    claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
-    monkeypatch.setenv("COORDINATOR_CAP_PEER_EMS_REACHABLE", "1")
     _write_draft(sender_repo, "receiver-signing-topic")
 
     with _count_spawns_attributed(monkeypatch) as spawns:

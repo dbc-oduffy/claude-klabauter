@@ -619,3 +619,107 @@ def test_draft_summary_file_resolves_into_draft() -> None:
                 f"{name}: draft frontmatter should carry the file-sourced summary "
                 f"(YAML-escaped): {content!r}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Test 9 — AC4 (docs/plans/2026-09-07-a-claim-is-written-twice-and-nothing-
+# compares-them.md, P026-C1): the `sender_unattributed` post-send notice's
+# cause is MEASURED from `attributable_session_id_with_source` (source /
+# warm / pid), not one hardcoded sentence claiming "engine env and caller
+# both unresolved" regardless of which case actually held.
+#
+# Same in-process unit pattern as Test 5 (`route_mutation`'s return envelope
+# is the one seam `_cmd_send` reads for this branch — faking it exercises
+# the CLI's own contract, not arithmetic it should compute itself). The
+# `attributable_session_id_with_source` import inside `_cmd_send` is a
+# late/inline import, so patching the source attribute on
+# `coordinator_core.session.core` before calling `_cmd_send` is what the
+# call actually resolves against.
+# ---------------------------------------------------------------------------
+
+def test_send_sender_unattributed_notice_names_measured_cause() -> None:
+    name = "test_send_sender_unattributed_notice_names_measured_cause"
+
+    import argparse
+    import importlib.util
+    import sys as _sys
+    from importlib.machinery import SourceFileLoader
+
+    import coordinator_core.session.core as session_core
+
+    loader = SourceFileLoader("cross_repo_memo_unattributed", _script_path())
+    spec = importlib.util.spec_from_loader("cross_repo_memo_unattributed", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+
+    mod._current_repo_root = lambda: "/fake/sender/repo"
+    mod._warn_if_unregistered_sender = lambda: None
+
+    # `_cmd_send`'s `import cc_invoke` is a LOCAL import inside the function
+    # body — it never becomes an attribute of the loaded `mod` object, so
+    # `mod.cc_invoke` does not exist until `_cmd_send` itself runs and binds
+    # the name locally. The real target is `sys.modules['cc_invoke']` (bin/lib's
+    # module, cached process-wide once `lib` has bootstrapped it onto
+    # sys.path) — patched there, restored after.
+    if _bin_dir() not in _sys.path:
+        _sys.path.insert(0, _bin_dir())
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    import cc_invoke as _cc_invoke_real
+
+    def _fake_route_mutation(op, params, sender_root, legacy_send):
+        return {
+            "exit_code": 0,
+            "acted": [
+                {
+                    "id": "/fake/receiver/repo/cross-repo/inbox/2026-08-25-roundtrip-topic.md",
+                    "sender_unattributed": True,
+                }
+            ],
+        }
+
+    original_route_mutation = _cc_invoke_real.route_mutation
+    _cc_invoke_real.route_mutation = _fake_route_mutation
+
+    original_resolution_fn = session_core.attributable_session_id_with_source
+    try:
+        session_core.attributable_session_id_with_source = (
+            lambda cwd=None: session_core.SessionIdResolution(
+                session_id="", source=session_core.SOURCE_UNRESOLVED, warm=False, pid=4242
+            )
+        )
+        args = argparse.Namespace(topic="roundtrip-topic")
+        rc, stderr_text = _capture_cmd_send_stderr(mod, args)
+    finally:
+        session_core.attributable_session_id_with_source = original_resolution_fn
+        _cc_invoke_real.route_mutation = original_route_mutation
+
+    if rc != 0:
+        raise AssertionError(f"{name}: sender_unattributed is not a failure, expected exit 0, got {rc}")
+    if "engine env and caller both unresolved" in stderr_text:
+        raise AssertionError(
+            f"{name}: the old hardcoded sentence must not appear — the cause is "
+            f"measured, not asserted: {stderr_text!r}"
+        )
+    if "pid 4242" not in stderr_text:
+        raise AssertionError(
+            f"{name}: the notice should name the resolving pid from the measured "
+            f"resolution: {stderr_text!r}"
+        )
+    if "cold env-tier chain" not in stderr_text:
+        raise AssertionError(
+            f"{name}: an unresolved, cold resolution should be named as such: {stderr_text!r}"
+        )
+
+
+def _capture_cmd_send_stderr(mod, args) -> "tuple[int, str]":
+    """Runs `mod._cmd_send(args)` with stderr captured, without pulling in
+    pytest's `capsys` fixture — this file's other tests use plain assertions
+    (`skip_test`, manual `raise AssertionError`), not pytest fixtures, so this
+    matches that convention rather than mixing the two styles."""
+    import contextlib
+    import io
+
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        rc = mod._cmd_send(args)
+    return rc, buf.getvalue()

@@ -439,7 +439,7 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
     #                            deliverable.cascade_terminal (2 git spawns
     #                            PER ADVANCED CANDIDATE -- see below)
     #   does NOT spawn:          write_surface.emit_manifest,
-    #                            fleet.prune_closed_bugs, roadmap.serve,
+    #                            roadmap.serve,
     #                            handoff.reconcile_open
     #   unestablished:           ceremony.post_commit_tail -- it CALLS
     #                            deliverable.cascade_terminal's retained
@@ -553,52 +553,13 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         ),
         "spinoff": None,
     },
-    "fleet.prune_closed_bugs": {
-        "c2_citation": {
-            "route": "warm_server",
-            "confidence": "EXACT",
-            "n": 6,
-            "p95_ms": 828.125,
-            "window": "all_time",
-            "t_start_min": "2026-08-27T09:54:29Z",
-            "t_start_max": "2026-08-29T11:28:28Z",
-            "verdict": "unadjudicated",
-            "outcome": "re-affirmed",
-        },
-        "measured": {"max_ms": 828.1, "p50_ms": 468.8, "n": 2, "unit": "process_ms"},
-        "note": (
-            "n=2 -- thin, and recorded as thin rather than rounded up. The "
-            "thinness is the SHAPE of the op, not a sampling outage: this is a "
-            "low-frequency high-batch archiver, and its two calls moved 35 "
-            "files. A low invocation count answers 'how often does it run', "
-            "never 'is there a consumer' -- treating it as the latter is the "
-            "category error the superseded disposition below made."
-        ),
-        "disposition": (
-            "REBUILD AT THE BAR (ruling 4) -- corrected 2026-08-31 against a "
-            "fresh count. The superseded text read 'gravestone ... housekeeping "
-            "on a file nothing blocks on, evidenced by only 2 calls total. "
-            "Comes back only if the backlog grows to a size a person stops "
-            "noticing and tidying by hand -- not observed.' That contradicted "
-            "K-021's requirement-affirmed finding in the same repo and cited no "
-            "evidence for its own claim; the reconciliation the rebuild baton "
-            "demanded is below, and it goes against this text. MEASURED at HEAD "
-            "2026-08-31: 43 status:closed entries sit unpruned in "
-            "state/bug-backlog/ (861 total), against the 3 K-021 recorded on "
-            "2026-08-27 -- a 14x growth in four days. 28 archive commits landed "
-            "in archive/bug-backlog/ in the preceding 7 days, every one of them "
-            "by hand, since the op's own last batched runs (299c5ca588, "
-            "51841f32b4) both predate the 2026-08-27 cut. So the trigger the "
-            "old text named -- 'the backlog grows to a size a person stops "
-            "noticing and tidying by hand' -- has BOTH halves observed: the "
-            "pile grows AND people are tidying by hand at 4 commits a day. "
-            "'Nothing blocks on it' is refuted directly by that toil. "
-            "Requirement affirmed; v2 spec and its measured budgets are in "
-            "state/handoffs/2026-08-29-rebuild-fleet-prune-closed-bugs-under-"
-            "the-bar.md."
-        ),
-        "spinoff": None,
-    },
+    # fleet.prune_closed_bugs — REMOVED by delegated PM assent (autonomous-mode
+    # APM ruling), and pruned from both test_op_suspension_ratchet
+    # _RATIFIED_SUSPENSIONS lists in this same commit. Not the old op earning its
+    # way back: ops/fleet/prune_bugs.py is the v2 rebuild
+    # (docs/plans/2026-09-07-fleet-prune-closed-bugs-v2-rebuild.md). Measured
+    # before lifting: handler dry-run, mode already-terminal, 56-71ms process
+    # time over 6 runs, 0 spawns, 7 candidates of 176 records.
     "ceremony.commit": {
         "c2_citation": {
             "route": "warm_server",

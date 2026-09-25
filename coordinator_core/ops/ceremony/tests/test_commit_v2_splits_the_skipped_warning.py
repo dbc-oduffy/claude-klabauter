@@ -1,16 +1,19 @@
-"""The operator-facing half of the `no_delta` split: two sentences, not one.
+"""The operator-facing half of the phantom-deletion flip: refused, not warned.
 
-`_handler` rendered every `no_delta` path as "contributed nothing -- already
-at HEAD". That is true of a path whose bytes match HEAD and FALSE of a path
-declared deleted that HEAD never carried -- which is what an untracked new
-file becomes once `_split_paths_for_commit_v2` misclassifies it from the
-wrong cwd. The operator's brand-new file was skipped, and the warning told
-them nothing was owed
+`_handler` used to render every `no_delta` path, including one declared
+deleted that HEAD never carried, as "contributed nothing -- already at
+HEAD" -- a sentence that is FALSE for that case, and is what an untracked
+new file became once `_split_paths_for_commit_v2` misclassified it from the
+wrong cwd. `commit_paths` now raises `PhantomDeletionDeclared` for that
+member before anything is written, refusing the whole call, so this module
+pins the operator-facing half of that: `committed: False`, with the path
+named in the error, never folded into an "already at HEAD" warning
 (`state/audits/2026-08-31-committer-p0-root-cause-cwd-probe-becomes-deletion.md`,
 signature B).
 
 `coordinator_core/git/tests/test_declared_absent_from_head_is_split_out.py`
-pins the field this reads. This module pins only what the operator sees.
+pins the engine-side raise this reads. This module pins only what the
+operator sees.
 
 Throwaway `tmp_path` repos throughout; the working repo is never touched.
 """
@@ -63,8 +66,9 @@ def _joined(result) -> str:
     return " ".join(result["warnings"])
 
 
-def test_a_path_head_never_had_is_reported_as_skipped_not_as_already_at_head(tmp_path):
+def test_a_path_head_never_had_refuses_the_whole_call_not_a_skipped_warning(tmp_path):
     repo = _repo(tmp_path)
+    before = _git(["rev-parse", "HEAD"], repo).strip()
     (repo / "seed.md").write_bytes(b"moved\n")
 
     result = _call(
@@ -76,12 +80,9 @@ def test_a_path_head_never_had_is_reported_as_skipped_not_as_already_at_head(tmp
         },
     )
 
-    assert result["committed"] is True
-    assert len(result["warnings"]) == 1
-    warning = result["warnings"][0]
-    assert "SKIPPED" in warning
-    assert "ghost.md" in warning
-    assert "already at HEAD" not in warning
+    assert result["committed"] is False
+    assert "ghost.md" in result["error"]
+    assert _git(["rev-parse", "HEAD"], repo).strip() == before
 
 
 def test_a_path_matching_head_still_gets_the_already_at_head_sentence(tmp_path):
@@ -100,14 +101,17 @@ def test_a_path_matching_head_still_gets_the_already_at_head_sentence(tmp_path):
     assert "SKIPPED" not in warning
 
 
-def test_both_kinds_together_are_two_warnings_each_naming_only_its_own_path(tmp_path):
+def test_both_kinds_together_still_refuses_the_whole_call_on_the_phantom(tmp_path):
     # The collapse this fix exists to undo: one sentence covering both halves
-    # necessarily said "already at HEAD" about a path HEAD never had.
+    # necessarily said "already at HEAD" about a path HEAD never had. Now the
+    # phantom refuses the whole call, so the ordinary no-delta member never
+    # gets a chance to land either.
     repo = _repo(tmp_path)
     (repo / "extra.md").write_bytes(b"extra\n")
     _git(["add", "--", "extra.md"], repo)
     _git(["commit", "-qm", "extra"], repo)
     (repo / "extra.md").write_bytes(b"moved\n")
+    before = _git(["rev-parse", "HEAD"], repo).strip()
 
     result = _call(
         repo,
@@ -118,13 +122,9 @@ def test_both_kinds_together_are_two_warnings_each_naming_only_its_own_path(tmp_
         },
     )
 
-    assert result["committed"] is True
-    assert len(result["warnings"]) == 2
-    matched = [w for w in result["warnings"] if "already at HEAD" in w]
-    skipped = [w for w in result["warnings"] if "SKIPPED" in w]
-    assert len(matched) == 1 and len(skipped) == 1
-    assert "held.md" in matched[0] and "ghost.md" not in matched[0]
-    assert "ghost.md" in skipped[0] and "held.md" not in skipped[0]
+    assert result["committed"] is False
+    assert "ghost.md" in result["error"]
+    assert _git(["rev-parse", "HEAD"], repo).strip() == before
 
 
 def test_an_ordinary_commit_warns_about_neither(tmp_path):

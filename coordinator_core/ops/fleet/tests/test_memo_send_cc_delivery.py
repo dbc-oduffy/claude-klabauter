@@ -91,7 +91,7 @@ class TestCcActuallyDelivers:
         to_repo = _make_receiver_git_repo(tmp_path, name="to-repo")
         cc_repo = _make_receiver_git_repo(tmp_path, name="cc-repo")
         claude_home = _make_claude_home(
-            tmp_path, {"example_retrieval_repo": to_repo, "example_cockpit_repo": cc_repo},
+            tmp_path, {"project_rag": to_repo, "example_cockpit_repo": cc_repo},
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft_with_cc(
@@ -136,7 +136,7 @@ class TestCcActuallyDelivers:
         claude_home = _make_claude_home(
             tmp_path,
             {
-                "example_retrieval_repo": to_repo,
+                "project_rag": to_repo,
                 "example_cockpit_repo": cc_repo_a,
                 "example_store_repo": cc_repo_b,
             },
@@ -162,7 +162,7 @@ class TestUnresolvableCcRefusesTheWholeSendBeforeAnyWrite:
     def test_unresolvable_cc_name_refuses_loud_and_writes_nothing(self, tmp_path, monkeypatch):
         sender_repo = _make_sender_git_repo(tmp_path)
         to_repo = _make_receiver_git_repo(tmp_path, name="to-repo")
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": to_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": to_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft_with_cc(
             sender_repo, "cc-unresolvable-topic",
@@ -186,7 +186,7 @@ class TestUnresolvableCcRefusesTheWholeSendBeforeAnyWrite:
     def test_unresolvable_cc_never_silently_dropped(self, tmp_path, monkeypatch, capsys=None):
         sender_repo = _make_sender_git_repo(tmp_path)
         to_repo = _make_receiver_git_repo(tmp_path, name="to-repo")
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": to_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": to_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft_with_cc(
             sender_repo, "cc-unresolvable-topic-2",
@@ -211,7 +211,7 @@ class TestCcDeliveryFailureAfterToLandedIsPartialNotSilent:
         to_repo = _make_receiver_git_repo(tmp_path, name="to-repo")
         cc_repo = _make_receiver_git_repo(tmp_path, name="cc-repo")
         claude_home = _make_claude_home(
-            tmp_path, {"example_retrieval_repo": to_repo, "example_cockpit_repo": cc_repo},
+            tmp_path, {"project_rag": to_repo, "example_cockpit_repo": cc_repo},
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft_with_cc(
@@ -256,7 +256,7 @@ class TestCcNeverReachesAPublishMirror:
         """
         sender_repo = _make_sender_git_repo(tmp_path)
         to_repo = _make_receiver_git_repo(tmp_path, name="to-repo")
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": to_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": to_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft_with_cc(
             sender_repo, "cc-mirror-topic",
@@ -307,7 +307,7 @@ class TestPublishMirrorAddressesRouteToTheOwner:
         owner_repo = _make_receiver_git_repo(tmp_path, name="owner-repo")
         mirror_repo = _make_receiver_git_repo(tmp_path, name="mirror-repo")
         self._home_with_mirror(
-            tmp_path, monkeypatch, owner_repo, mirror_repo, extra={"example_retrieval_repo": to_repo},
+            tmp_path, monkeypatch, owner_repo, mirror_repo, extra={"project_rag": to_repo},
         )
         _write_draft_with_cc(sender_repo, "mirror-cc", to="example-retrieval-repo-em", cc="claude-klabauter-em")
 

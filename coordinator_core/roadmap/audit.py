@@ -4,12 +4,12 @@ coordinator:roadmap-planning.
 
 Purpose: closes the gap that ``bin/lint-frontmatter.js`` cannot enforce per-file:
 rules that compare multiple stubs in the active set, or cross-reference a stub
-against ``state/roadmap/<run-id>/pm-gates.md``. Runs 5 independent audits and
+against ``state/roadmap/<run-id>/pm-gates.md``. Runs 7 independent audits and
 accumulates ALL failures before exiting (never short-circuits on the first
 failure) — mirrors the bash oracle's ``fail()``/``pass()`` accumulate-don't-abort
 posture.
 
-Port of: audit-roadmap.sh (DoE b5a4192c, 2026-07-20), 441 LoC, 5 audits.
+Port of: audit-roadmap.sh (DoE b5a4192c, 2026-07-20), 441 LoC, 7 audits.
 Spec backlink: docs/plans/2026-05-08-roadmap-skill-and-handoff-lifecycle.md § Phase 5
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T3a-g3e
 
@@ -25,7 +25,11 @@ Audit 5 — dependency-order invariant: for every edge A blocked_by B (B ships
   first), ``number(B) < number(A)`` and ``(sprint(B), wave(B)) <_lex
   (sprint(A), wave(A))`` (strict; equal slot is a violation). Missing sprint on
   either endpoint fails loud. Edges to absent stub_ids are unresolved (not
-  silently dropped). Cycles fail loud.
+  silently dropped). Cycles fail loud. The inverse ``blocks`` direction is
+  walked for referential integrity ONLY — a ``blocks`` edge to an absent
+  stub_id is unresolved (same FAIL severity as a dangling ``blocked_by``
+  edge) but is never fed into the number/(sprint, wave) monotonicity checks,
+  which would double-report an edge declared from both ends.
 Audit 6 (whole-roadmap only, C1 of docs/plans/2026-09-12-audit-roadmap-
   derives-its-write-set-from.md) — write-set disjointness: no two LIVE plans
   in the roadmap may declare the same repo-relative `writes:`/`writes_under:`
@@ -35,6 +39,12 @@ Audit 6 (whole-roadmap only, C1 of docs/plans/2026-09-12-audit-roadmap-
   `dispatch_emit.spine_read.read_spine`. Always emits a COVERAGE line naming
   how many batons resolved to a live plan, so a PASS is never ambiguous
   between "checked and clean" and "could not see".
+Audit 7 (runs on both arms, C3 of docs/plans/2026-09-11-roadmap-audits-
+  readiness-views-and-recor.md) — M-XL `loe:` band: any stub whose `loe:` is
+  present and outside `{M, L, XL}` fails. Absent `loe:` is a pass with a
+  count, not a fail — see `state/backlogs/2026-09-11-loe-band-tighten-to-
+  fail-on-absence.md` for the artifact that tightens this once the corpus
+  turns over.
 
 Sprint-scoped mode (C4, ``run_audit(..., sprint_id=...)`` / CLI ``--sprint``)
 — stubs now arrive one sprint at a time (docs/plans/2026-08-21-engine-half-
@@ -51,7 +61,13 @@ root. Audit 5 resolves cross-sprint edges by reading the spine record ALONE
 (``check_cross_sprint_edge_order`` over ``sprints[].ordinal`` and
 ``cross_sprint_edges[]``) — no dependency on the descriptor-altitude edge
 entity C5b resolves, so this mode is buildable, and usable, without C5b's
-answer once C3b's ``spine.schema.json`` lands. Audits 2 (ready_to_fire
+answer once C3b's ``spine.schema.json`` lands. C1 additionally scopes the
+widened ``blocked_by``/``blocks`` referential-integrity check to this arm's
+own stub cluster (``_audit5_referential_integrity_sprint_scoped``, reusing
+the stub map Audits 1/3 already query — no extra ``query_records`` call):
+a sprint whose own cluster passes ``--sprint`` while the same stubs fail
+whole-roadmap on a dangling edge is the split-readiness surface this mode
+exists to close. Audits 2 (ready_to_fire
 uniqueness) and 4 (pending-row reference) are whole-roadmap-only and are not
 run in sprint-scoped mode — the C4 body names only 1/3/5.
 
@@ -492,9 +508,18 @@ def _resolve_number(stub: Dict[str, Any]) -> Optional[float]:
 
 def check_dependency_order(stubs: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Verify stub numbers and (sprint, wave) slots are dependency-monotone
-    across all declared blocked_by edges. Byte-parity port of
-    roadmap-graph.js's ``checkDependencyOrder`` — see that file's docstring
-    for the full invariant description.
+    across all declared blocked_by edges, plus referential integrity (only)
+    on the inverse ``blocks`` edges. Ported from roadmap-graph.js's
+    ``checkDependencyOrder`` — see that file's docstring for the full
+    invariant description — since extended with the ``blocks`` direction;
+    the JS original is retired and this is no longer a byte-parity claim.
+
+    ``blocks`` is checked for referential integrity ONLY (an id absent from
+    *stubs* is reported ``unresolved`` exactly like a dangling ``blocked_by``
+    edge, tagged ``"edge": "blocks"``). It is NOT fed into the number/(sprint,
+    wave) monotonicity checks below — ``blocks`` is the inverse of
+    ``blocked_by``, so re-deriving ordering from it would double-report every
+    edge declared from both ends.
 
     Returns {"ok": bool, "violations": [...], "unresolved": [...], "cycle": list|None}.
     """
@@ -514,7 +539,12 @@ def check_dependency_order(stubs: List[Dict[str, Any]]) -> Dict[str, Any]:
         for dep_id in blocked_by:
             if dep_id not in stub_map:
                 unresolved.append(
-                    {"from": stub["stub_id"], "to": dep_id, "reason": "unresolved-edge"}
+                    {
+                        "from": stub["stub_id"],
+                        "to": dep_id,
+                        "reason": "unresolved-edge",
+                        "edge": "blocked_by",
+                    }
                 )
                 continue
 
@@ -561,6 +591,19 @@ def check_dependency_order(stubs: List[Dict[str, Any]]) -> Dict[str, Any]:
                             "slotB": {"sprint": b["sprint"], "wave": b["wave"]},
                         }
                     )
+
+        # `blocks` is the inverse edge -- referential integrity only (no
+        # number/(sprint, wave) monotonicity re-derivation; see docstring).
+        for dep_id in (stub.get("blocks") or []):
+            if dep_id not in stub_map:
+                unresolved.append(
+                    {
+                        "from": stub["stub_id"],
+                        "to": dep_id,
+                        "reason": "unresolved-edge",
+                        "edge": "blocks",
+                    }
+                )
 
     cycle = _detect_cycles(stubs, stub_map)
 
@@ -1139,6 +1182,13 @@ def _build_stub_descriptors(results: List[Dict[str, Any]]) -> List[Dict[str, Any
             blocked_by = [str(blocked_by)]
         else:
             blocked_by = []
+        blocks = fm.get("blocks")
+        if isinstance(blocks, list):
+            blocks = [str(b) for b in blocks]
+        elif blocks:
+            blocks = [str(blocks)]
+        else:
+            blocks = []
         stubs.append(
             {
                 "stub_id": str(stub_id),
@@ -1146,6 +1196,7 @@ def _build_stub_descriptors(results: List[Dict[str, Any]]) -> List[Dict[str, Any
                 "sprint": _coerce_int_or_nan(sprint),
                 "wave": _coerce_int_or_nan(wave),
                 "blocked_by": blocked_by,
+                "blocks": blocks,
             }
         )
     return stubs
@@ -1209,10 +1260,16 @@ def _audit5_dependency_order(r: _Reporter, run_id: str, data_root: Path) -> None
             )
 
     for u in result["unresolved"]:
-        r.fail(
-            f"Audit 5: unresolved blocked_by edge — {u['from']} depends on "
-            f"{u['to']} which is not in the roadmap_id={run_id} stub set"
-        )
+        if u.get("edge") == "blocks":
+            r.fail(
+                f"Audit 5: unresolved blocks edge — {u['from']} blocks "
+                f"{u['to']} which is not in the roadmap_id={run_id} stub set"
+            )
+        else:
+            r.fail(
+                f"Audit 5: unresolved blocked_by edge — {u['from']} depends on "
+                f"{u['to']} which is not in the roadmap_id={run_id} stub set"
+            )
 
     if result["cycle"]:
         r.fail(f"Audit 5: dependency cycle detected among stubs: {' → '.join(result['cycle'])}")
@@ -1511,6 +1568,85 @@ def _audit6_write_set_disjointness(
         )
 
 
+#: Allowed `loe:` values (docs/plans/2026-09-11-roadmap-audits-readiness-
+#: views-and-recor.md C3). Mirrors `_cf_loe_band`'s allow-list in
+#: schema_validate.py one-for-one — keep both in sync by hand, the same way
+#: `_cf_cost_enum`'s T0-T3 list and any future audit-side mirror of it would
+#: have to be.
+_LOE_BAND = frozenset({"M", "L", "XL"})
+
+
+def _audit7_loe_band(
+    r: _Reporter,
+    run_id: str,
+    data_root: Path,
+    stub_filter: Optional[set] = None,
+    scope_label: Optional[str] = None,
+) -> None:
+    """Audit 7 — M-XL `loe:` band. Any stub whose `loe:` is PRESENT and
+    outside `{M, L, XL}` fails. ABSENT `loe:` is NOT a failure (census rows
+    6-7 in the plan's Recipe measure zero stubs carrying `cost:`/`loe:`
+    today; failing on absence would red every roadmap in the corpus on the
+    day this lands) — it is reported as a pass, carrying the absent-count
+    and the grep that reproduces it, so a green run hands the operator the
+    tightening condition rather than relying on them to remember it. See
+    `state/backlogs/2026-09-11-loe-band-tighten-to-fail-on-absence.md` for
+    the artifact that turns this into a `r.fail` once the corpus turns over.
+
+    *stub_filter*/*scope_label* are the C4 sprint-scoped mode's hook, same
+    contract as `_audit1_stub_coverage`'s: when *stub_filter* is given (a
+    set of stub_ids), the band check runs against that subset only.
+    """
+    where = f"{_ROADMAP_BATON_KIND_WHERE} AND roadmap_id={run_id}"
+    live = query_records("handoff", data_root, where=where)
+    arch = query_records("handoff-archived", data_root, where=where)
+    all_records = live + arch
+
+    if stub_filter is not None:
+        all_records = [
+            rec
+            for rec in all_records
+            if str(rec.get("frontmatter", {}).get("stub_id")) in stub_filter
+        ]
+
+    label = f" (sprint-scoped, sprint={scope_label})" if scope_label else ""
+    if not all_records:
+        r.passed(
+            f"Audit 7{label}: no roadmap-baton stubs found for roadmap_id={run_id} — "
+            f"loe-band check skipped."
+        )
+        return
+
+    absent_count = 0
+    for rec in all_records:
+        fm = rec.get("frontmatter", {})
+        stub_id = fm.get("stub_id") or f"<untagged:{id(rec)}>"
+        loe = fm.get("loe")
+        if loe is None:
+            absent_count += 1
+            continue
+        if str(loe) not in _LOE_BAND:
+            r.fail(
+                f"Audit 7{label}: stub {stub_id} carries loe={loe!r}, outside the "
+                f"M-XL band {sorted(_LOE_BAND)}"
+            )
+
+    if absent_count:
+        r.passed(
+            f"Audit 7{label}: {absent_count} of {len(all_records)} stub(s) for "
+            f"roadmap_id={run_id} carry no loe: (absence is not a failure today; "
+            f"reproduce with: "
+            f"grep -rL '^loe:' state/handoffs state/handoffs/.archive "
+            f"--include='*.md' | xargs grep -l 'roadmap_id: {run_id}' | wc -l — "
+            f"see state/backlogs/2026-09-11-loe-band-tighten-to-fail-on-absence.md)."
+        )
+    else:
+        r.passed(
+            f"Audit 7{label}: all {len(all_records)} stub(s) for roadmap_id={run_id} "
+            f"carry an in-band loe: value."
+        )
+
+
 # ---------------------------------------------------------------------------
 # CLI entry
 # ---------------------------------------------------------------------------
@@ -1557,6 +1693,53 @@ def _audit5_cross_sprint_edge_order(
         )
 
 
+def _audit5_referential_integrity_sprint_scoped(
+    r: _Reporter, run_id: str, data_root: Path, stub_filter: set, scope_label: str
+) -> None:
+    """C1's widened unresolved-edge check (``blocked_by`` AND ``blocks``),
+    scoped to one sprint's own stub cluster — the positive decision named in
+    the C1 body (resolve pass E6): a sprint whose own cluster passes
+    ``--sprint`` while the same stubs fail whole-roadmap on a dangling edge is
+    the split-readiness surface this plan closes. Reuses the stub map
+    `_audit1_stub_coverage`/`_audit3_pm_gates_cross_reference` already build
+    for this arm rather than a second query — no extra `query_records` call,
+    no git spawn. Only referential integrity is scoped here: number/(sprint,
+    wave) monotonicity is whole-roadmap Audit 5's job (`_audit5_dependency_order`),
+    not named in the C4 body's sprint-scoped list, and stays there unchanged.
+    """
+    where = f"{_ROADMAP_BATON_KIND_WHERE} AND roadmap_id={run_id}"
+    live = query_records("handoff", data_root, where=where)
+    arch = query_records("handoff-archived", data_root, where=where)
+    scoped_results = [
+        rec
+        for rec in (live + arch)
+        if str(rec.get("frontmatter", {}).get("stub_id")) in stub_filter
+    ]
+    stubs = _build_stub_descriptors(scoped_results)
+    result = check_dependency_order(stubs)
+
+    for u in result["unresolved"]:
+        if u.get("edge") == "blocks":
+            r.fail(
+                f"Audit 5 (sprint-scoped, sprint={scope_label}): unresolved blocks "
+                f"edge — {u['from']} blocks {u['to']} which is not in sprint="
+                f"{scope_label}'s own stub cluster for roadmap_id={run_id}"
+            )
+        else:
+            r.fail(
+                f"Audit 5 (sprint-scoped, sprint={scope_label}): unresolved blocked_by "
+                f"edge — {u['from']} depends on {u['to']} which is not in sprint="
+                f"{scope_label}'s own stub cluster for roadmap_id={run_id}"
+            )
+
+    if not result["unresolved"] and r.exit_code == 0:
+        r.passed(
+            f"Referential integrity (sprint-scoped, sprint={scope_label}): "
+            f"{len(stubs)} stub(s) in this sprint's cluster carry no dangling "
+            f"blocked_by/blocks edge."
+        )
+
+
 def _sprint_scoped_fail_summary(
     r: _Reporter, run_id: str, sprint_id: str
 ) -> Tuple[int, List[str], List[str]]:
@@ -1577,9 +1760,12 @@ def _run_audit_sprint_scoped(
     from `state/roadmap/<run-id>/sprint-<ordinal>/`, mirroring C11's
     per-sprint `OVERVIEW.md` homing), and Audit 5 resolves cross-sprint
     edges from the spine record alone (`_audit5_cross_sprint_edge_order`).
-    Audits 2 and 4 are whole-roadmap-only (ready_to_fire uniqueness and
-    pm-gates pending-row reference are not named in the C4 body's sprint-
-    scoped list) and are not run here.
+    Audit 7 (`_audit7_loe_band`, added by C3 of docs/plans/2026-09-11-
+    roadmap-audits-readiness-views-and-recor.md) is scoped to the same
+    sprint cluster, same rationale as Audits 1/3/5. Audits 2 and 4 are
+    whole-roadmap-only (ready_to_fire uniqueness and pm-gates pending-row
+    reference are not named in the C4 body's sprint-scoped list) and are
+    not run here.
     """
     r = _Reporter()
     spine_path = state_root / "roadmap" / run_id / "SPINE.md"
@@ -1637,6 +1823,18 @@ def _run_audit_sprint_scoped(
         _audit3_pm_gates_cross_reference(
             r, run_id, data_root, pmg_path, stub_filter=sprint_stub_ids, scope_label=sprint_id
         )
+        _audit5_referential_integrity_sprint_scoped(
+            r, run_id, data_root, sprint_stub_ids, sprint_id
+        )
+        # C3 positive decision (resolve pass E6): the loe-band check is
+        # stub-set-scoped and cheap (reads a `loe:` string off stubs this
+        # arm already resolved, no extra query_records call and no git
+        # spawn) — a sprint that passes --sprint while the same stubs fail
+        # whole-roadmap on loe: is the split-readiness surface this mode
+        # exists to close, same as Audits 1/3/5 above it.
+        _audit7_loe_band(
+            r, run_id, data_root, stub_filter=sprint_stub_ids, scope_label=sprint_id
+        )
     _audit5_cross_sprint_edge_order(r, spine, run_id, sprint_id)
 
     r.stdout_lines.append("")
@@ -1661,7 +1859,7 @@ def run_audit(
 
     *sprint_id* is the C4 sprint-scoped mode's entry point: when given,
     delegates to `_run_audit_sprint_scoped` instead of running the
-    whole-roadmap 5-audit set. Default None reproduces the original
+    whole-roadmap 7-audit set. Default None reproduces the original
     whole-roadmap behaviour unchanged.
 
     Returns (exit_code, stdout_lines, stderr_lines).
@@ -1686,6 +1884,7 @@ def run_audit(
     # called. Whole-roadmap only, per the plan's C1 body: the C4 sprint-scoped
     # mode runs Audits 1/3/5 by name and is deliberately not extended here.
     _audit6_write_set_disjointness(r, run_id, data_root, data_root)
+    _audit7_loe_band(r, run_id, data_root)
 
     r.stdout_lines.append("")
     if r.exit_code == 0:
@@ -1702,9 +1901,9 @@ def run_audit(
 def main(argv: List[str]) -> int:
     """CLI entry: ``audit-roadmap <run-id> [--root <dir>] [--sprint <sprint-id>]``.
 
-    ``--sprint`` selects the C4 sprint-scoped mode (Audits 1/3/5 scoped to
+    ``--sprint`` selects the C4 sprint-scoped mode (Audits 1/3/5/7 scoped to
     one sprint descriptor's own cluster, reading `SPINE.md`) instead of the
-    whole-roadmap 5-audit set.
+    whole-roadmap 7-audit set.
     """
     if not argv:
         print("Usage: audit-roadmap <run-id> [--root <dir>] [--sprint <sprint-id>]", file=sys.stderr)
@@ -1713,7 +1912,7 @@ def main(argv: List[str]) -> int:
             file=sys.stderr,
         )
         print(
-            "  --sprint scopes Audits 1/3/5 to one sprint descriptor's own cluster "
+            "  --sprint scopes Audits 1/3/5/7 to one sprint descriptor's own cluster "
             "(spine.schema.json's sprints[]).",
             file=sys.stderr,
         )

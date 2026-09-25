@@ -163,13 +163,32 @@ def test_claude_klabauter_root_returns_a_live_working_tree_unchanged(monkeypatch
     assert qa._claude_klabauter_root() == "/repos/claude-klabauter"
 
 
-def test_env_override_route_is_also_refused(monkeypatch):
-    """The env rung is guarded too -- it is the rung the warm server poisons."""
+def test_mirror_valued_env_override_falls_through_to_the_registry(monkeypatch):
+    """The engine-root variable names the engine CODE root -- the published
+    mirror on a standard install -- so it is never taken as the data home; the
+    registry rung answers instead."""
     from coordinator_core.ops import queue_append as qa
     from coordinator_core.telemetry import op_latency
 
     monkeypatch.setattr(qa, "coordinator_engine_root_env", lambda _name: "/repos/publish-mirror")
     monkeypatch.setattr(op_latency, "execution_route", lambda: op_latency.IN_PROCESS)
+    monkeypatch.setattr(qa, "_engine_source_root", lambda: None)
+    monkeypatch.setattr(qa, "_machine_local_get", lambda key: "/repos/claude-klabauter")
+    monkeypatch.setattr(qa, "_is_published_engine_mirror", lambda root: root == "/repos/publish-mirror")
+
+    assert qa._claude_klabauter_root() == "/repos/claude-klabauter"
+
+
+def test_mirror_valued_env_and_registry_is_still_refused(monkeypatch):
+    """Falling through never lands in the mirror: a mirror-naming registry
+    rung still refuses."""
+    from coordinator_core.ops import queue_append as qa
+    from coordinator_core.telemetry import op_latency
+
+    monkeypatch.setattr(qa, "coordinator_engine_root_env", lambda _name: "/repos/publish-mirror")
+    monkeypatch.setattr(op_latency, "execution_route", lambda: op_latency.IN_PROCESS)
+    monkeypatch.setattr(qa, "_engine_source_root", lambda: None)
+    monkeypatch.setattr(qa, "_machine_local_get", lambda key: "/repos/publish-mirror")
     monkeypatch.setattr(qa, "_is_published_engine_mirror", lambda root: True)
 
     with pytest.raises(qa._ClaudeKlabauterUnresolvable):

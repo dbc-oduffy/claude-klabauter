@@ -220,7 +220,7 @@ def test_non_copy_install_plugin_excluded(tmp_path: Path, monkeypatch: pytest.Mo
     reg_dir = tmp_path / "regdir"
     reg_dir.mkdir()
     (reg_dir / "registry.local.toml").write_text(
-        "[plugin.mirrors.example-retrieval-repo]\n"
+        "[plugin.mirrors.project-rag]\n"
         'propagation_mode = "editable_sibling_venv"\n'
         'source_path = "/src/example-retrieval-repo"\n'
         'reverse_drift_cmd = "bash bin/check-reverse-drift.sh"\n',

@@ -199,7 +199,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from coordinator_core._settings_home import settings_home
+from coordinator_core._claude_klabauter_root import _claude_home, _machine_local_get
 from coordinator_core.daily_branch import is_work_branch
 from coordinator_core.engine_root import coordinator_engine_root_env
 from coordinator_core.git.git_dir import resolve_git_common_dir
@@ -260,55 +260,13 @@ GENERATES = [
 # ---------------------------------------------------------------------------
 # state-root resolution (local minimal Rule-5 port — see module docstring)
 # ---------------------------------------------------------------------------
-
-_CLAUDE_HOME_ENV = "CLAUDE_HOME"
-
-
-def _claude_home() -> str:
-    """Return the ~/.claude root, honouring CLAUDE_HOME env var for test isolation."""
-    override = os.environ.get(_CLAUDE_HOME_ENV)
-    if override:
-        return override
-    return os.path.join(os.path.expanduser("~"), ".claude")
-
-
-def _machine_local_impl() -> str:
-    """Return the path to _machine_local.py (best-effort; None-safe callers),
-    settings-home first.
-
-    Settings-home-first per DR-210 Amendment 2026-07-24 ("coordinator resolves
-    nothing through ``~/.claude/bin``); the retired compat mirror stays as a
-    last-resort rung only. Negative-spec: does NOT stop consulting the mirror —
-    a machine whose settings-home copy is absent must still resolve.
-    """
-    override = os.environ.get("MACHINE_LOCAL_IMPL")
-    if override:
-        return override
-    settings_home_impl = os.path.join(str(settings_home()), "bin", "_machine_local.py")
-    if os.path.exists(settings_home_impl):
-        return settings_home_impl
-    return os.path.join(_claude_home(), "bin", "_machine_local.py")
-
-
-def _machine_local_get(key: str) -> Optional[str]:
-    """Call ``machine-local get <key>`` and return the value, or None on failure."""
-    impl = _machine_local_impl()
-    if not os.path.exists(impl):
-        return None
-    try:
-        import sys
-
-        result = subprocess.run(
-            [sys.executable, impl, "get", key],
-            capture_output=True,
-            text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except OSError:
-        return None
-    if result.returncode != 0 or not result.stdout.strip():
-        return None
-    return result.stdout.strip()
+#
+# `_claude_home`/`_machine_local_impl`/`_machine_local_get` are imported from
+# the shared `coordinator_core._claude_klabauter_root` helper (Kira close-review
+# ab37bb04 finding #2) -- this module's own prior copies matched that
+# helper's policy exactly (same env var names, same settings-home-first
+# fallback, same subprocess shape), so the duplication carried no real
+# difference and consolidated cleanly.
 
 
 def _claude_klabauter_root() -> Optional[str]:
@@ -1295,7 +1253,7 @@ _TRUST_CAVEAT_TMPL = (
     "\n## Trust caveats\n"
     "- Unreal Engine project detected (`{uproject}`) — do NOT trust your training data "
     "on UE5 APIs, classes, or Blueprint semantics. Verify every claim via "
-    "`mcp__example_retrieval_repo__*` tools or dispatch `game-dev:staff-game-dev` (the Game Dev Reviewer). This "
+    "`mcp__project-rag__*` tools or dispatch `game-dev:staff-game-dev` (the Game Dev Reviewer). This "
     "applies to your delegates — restate it in every UE dispatch brief.\n"
 )
 

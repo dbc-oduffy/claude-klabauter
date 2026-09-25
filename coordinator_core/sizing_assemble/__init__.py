@@ -807,6 +807,115 @@ def stages(resolved_route: str, resized_tshirt: str) -> dict:
     }
 
 
+def _render_d_lobby_lane(resolved_route: str, tshirt: str) -> str:
+    """Projects `d-lobby-lane`'s served arm from `stages()` — never a stored string.
+
+    Lobby-owned routes render the full chain in order; room-owned routes render
+    the single entry row `stages()` already names as the instruction.
+    """
+    chain = stages(resolved_route, tshirt)
+    return " / ".join(chain["rows"])
+
+
+#: DECISION POINTS the sizing band actually discriminates, never lane prose —
+#: every served arm is PROJECTED at call time from values `route()` has
+#: already computed, so no arm text exists in two places. Exactly one of
+#: `render`/`judgment_input` per entry (never both, never neither); enforced
+#: at import by `_assert_disposition_registry_total()` below.
+DISPOSITION_REGISTRY = (
+    {
+        "id": "d-lobby-lane",
+        "decision_point": "which stage chain does this route/tshirt commit the session to",
+        "inputs": ("tshirt", "route"),
+        "render": _render_d_lobby_lane,
+    },
+    {
+        "id": "d-xl-exit",
+        "decision_point": "which XL exit does the session pick",
+        "inputs": ("route",),
+        "judgment_input": (
+            "PM assent plus the falsifiable-restatement test named in "
+            "docs/plans/2026-09-11-serve-the-arm-that-applies.md"
+        ),
+    },
+)
+
+
+def _assert_disposition_registry_total() -> None:
+    """Every registry entry is exactly-one-of served/declined, never neither/both.
+
+    Import-time rather than call-time, mirroring `_assert_stage_table_total`
+    directly above: an entry that is neither served nor explicitly declined
+    fails here, not at the call site of a session already under way.
+    """
+    for entry in DISPOSITION_REGISTRY:
+        has_render = "render" in entry
+        has_judgment = "judgment_input" in entry
+        if has_render == has_judgment:
+            raise AssertionError(
+                f"sizing_assemble: disposition entry {entry.get('id')!r} must "
+                "carry exactly one of render/judgment_input"
+            )
+        if has_render and not callable(entry["render"]):
+            raise AssertionError(
+                f"sizing_assemble: disposition entry {entry['id']!r} render is "
+                "not callable"
+            )
+
+
+_assert_disposition_registry_total()
+
+
+def dispositions(
+    resolved_route: str,
+    resized_tshirt: str,
+    *,
+    pre_resize_tshirt: bool = False,
+) -> dict[str, Any]:
+    """The arm that applies at this route/tshirt, or the named judgment that
+    stops the engine short — never an exception, never an empty/falsy value.
+
+    Returns ``{"served": [...], "no_arm": [...]}``. Each served element is
+    ``{id, decision_point, arm, basis}``; each no_arm element is
+    ``{id, decision_point, judgment_input, basis}``.
+
+    `pre_resize_tshirt` marks the express-lane call site, where the resize has
+    not run yet: the tshirt fed to `basis` is the raw validated value, and
+    that basis notes the stage it was read at so it is never mistaken for the
+    resized value on the standard lane.
+    """
+    served: list[dict[str, Any]] = []
+    no_arm: list[dict[str, Any]] = []
+    for entry in DISPOSITION_REGISTRY:
+        basis: dict[str, Any] = {}
+        for inp in entry["inputs"]:
+            if inp == "tshirt":
+                basis["tshirt"] = resized_tshirt
+            elif inp == "route":
+                basis["route"] = resolved_route
+        if "render" in entry:
+            if pre_resize_tshirt and "tshirt" in basis:
+                basis["tshirt_stage"] = "pre-resize"
+            served.append(
+                {
+                    "id": entry["id"],
+                    "decision_point": entry["decision_point"],
+                    "arm": entry["render"](resolved_route, resized_tshirt),
+                    "basis": basis,
+                }
+            )
+        else:
+            no_arm.append(
+                {
+                    "id": entry["id"],
+                    "decision_point": entry["decision_point"],
+                    "judgment_input": entry["judgment_input"],
+                    "basis": basis,
+                }
+            )
+    return {"served": served, "no_arm": no_arm}
+
+
 def route(
     *,
     appetite: Optional[str] = None,
@@ -893,6 +1002,7 @@ def route(
             # is absent here would make absence mean two different things to
             # the caller reading it.
             "stages": stages("dispatch", tshirt),
+            "dispositions": dispositions("dispatch", tshirt, pre_resize_tshirt=True),
             "narration": "Express lane: trivial ask, no sizing ceremony.",
             "next_move": "Dispatch directly. No sizing-object persisted (D3).",
             # C4: D3 never scaffolds -- present and empty, never absent, so
@@ -1292,6 +1402,7 @@ def route(
         # in the same frame as the route that implies it and pays no second
         # process to get it.
         "stages": stages(resolved_route, resized_tshirt),
+        "dispositions": dispositions(resolved_route, resized_tshirt),
         "scout_evidence": scout_evidence,
         "narration": narration,
         "next_move": next_move,

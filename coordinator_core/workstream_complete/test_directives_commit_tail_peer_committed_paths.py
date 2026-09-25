@@ -532,6 +532,32 @@ def test_run_close_commit_and_release_claims_releases_on_commit_failure_too(
 # ---------------------------------------------------------------------------
 
 
+def test_run_close_commit_fails_loud_on_a_phantom_named_in_both_lists(repo, monkeypatch):
+    """P027-T5 census: the real `run_close_commit` caller shape puts a
+    declared deletion into BOTH `stage_paths` and `deleted_paths`
+    (`present_paths = [p for p in stage_paths if p in deleted_set or
+    (root / p).exists()]` puts it into `present_paths` too, and `if not
+    present_paths and not deleted_paths:` does not short-circuit either
+    shape). A phantom absent from both disk and HEAD reaches `commit_paths`
+    this way and the engine refuses with `PhantomDeletionDeclared`. A close
+    whose whole declared pathspec is phantom FAILS rather than no-opping,
+    and that is intended -- `run_close_commit` returns `commit_failed=True`
+    with the path named in `diagnostics`."""
+    root, _branch = repo
+
+    result = directives_commit_tail.run_close_commit(
+        root,
+        session_id="census-phantom-session",
+        subject="phantom-in-both-lists fixture",
+        deleted_paths=["ghost.txt"],
+        stage_paths=["ghost.txt"],
+    )
+
+    assert result.commit_failed is True
+    assert any("ghost.txt" in d for d in result.diagnostics), result.diagnostics
+    assert result.committed_sha is None
+
+
 def test_run_close_commit_and_release_claims_releases_full_touch_surface_not_just_stage_paths(
     hooks_live_repo, monkeypatch
 ):

@@ -2,7 +2,7 @@
 coordinator_core.ops.verify_ue_overrides — plain module, no registered op.
 
 Purpose: walks the machine-local-registered UE-context directories
-(repos.example_game_workbench_repo, repos.example_retrieval_repo, optional
+(repos.example_game_workbench_repo, repos.project_rag, optional
 repos.example-sim-repo) and asserts each carries the expected UE plugin override keys in its
 .claude/settings.json enabledPlugins object. Exits 0 on success, 1 with diagnostic
 output on failure. This is a MANUAL diagnostic — per docs/wiki/per-project-plugin-
@@ -17,7 +17,7 @@ ladder.
 
 machine-local keys consumed (must be set in registry.local.toml):
     repos.example_game_workbench_repo  — root of the example-game-workbench-repo repo
-    repos.example_retrieval_repo             — root of the example-retrieval-repo repo
+    repos.project_rag             — root of the example-retrieval-repo repo
     repos.example-sim-repo                — root of the example-sim-repo UE project (optional; skipped
                                      if unset on this machine)
 
@@ -74,7 +74,7 @@ _EITHER_VENDOR_GAME_DEV = (
 # most- to least-canonical purely for readable output; nothing depends on it.
 _UE_CONTEXT_REPO_KEYS = (
     "repos.example_game_workbench_repo",
-    "repos.example_retrieval_repo",
+    "repos.project_rag",
     "repos.example-sim-repo",
 )
 

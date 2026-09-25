@@ -68,7 +68,7 @@ def _write_reply_draft(sender_repo: Path, topic: str, *, in_reply_to, sent_by: s
 def sender_and_receiver(tmp_path, monkeypatch):
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
-    claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+    claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     return sender_repo, receiver_repo
 

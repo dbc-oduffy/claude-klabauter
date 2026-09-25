@@ -27,7 +27,7 @@ SUPERSEDED 2026-08-19 — Check 1 no longer iterates ``COORDINATOR_OWNED_KEYS``.
     because a hardcoded key literal cannot survive publication: percolation
     depersonalizes sibling-repo codenames, so the PUBLISHED engine compared
     ``repos.example_retrieval_repo`` against an operator registry that says
-    ``repos.example_retrieval_repo``. Every renamed literal missed, and Check 1 degenerated
+    ``repos.project_rag``. Every renamed literal missed, and Check 1 degenerated
     twice over — a WARN per renamed key on every ceremony, AND no ability to
     detect a genuinely unclassified key, since it already reported those keys as
     unclassified unconditionally. Observed live: 7 of 14 literals renamed, a
@@ -146,8 +146,8 @@ COORDINATOR_OWNED_KEYS: List[str] = [
     "plugin.mirrors",
     "publish.targets",
     "repos.example-sim-repo",
-    "repos.example_retrieval_repo",
-    "repos.example_retrieval_repo_ue_addon",
+    "repos.project_rag",
+    "repos.project_rag_ue_addon",
     "repos.example_game_workbench_repo",
     "repos.example_repo",
     "repos.example_stats_repo",
@@ -320,7 +320,7 @@ def _declared_owned_keys(ml_dir: Path) -> List[str]:
     Derived rather than hardcoded, because a hardcoded key list cannot survive
     publication. Percolation depersonalizes sibling-repo codenames, so the
     PUBLISHED engine carries ``repos.example_retrieval_repo`` where the
-    operator's real machine-local registry says ``repos.example_retrieval_repo``. Every
+    operator's real machine-local registry says ``repos.project_rag``. Every
     renamed literal then misses, and check 1 degenerates twice over: it emits a
     WARN per renamed key on every ceremony, and it can no longer detect a
     genuinely unclassified key, because it already reports those keys as

@@ -215,10 +215,23 @@ def _resolve_number(stub: Dict[str, Any]) -> Optional[int]:
 
 def check_dependency_order(stubs: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Verify stub numbers and (sprint, wave) slots are dependency-monotone across
-    every declared blocked_by edge in *stubs*.
+    every declared blocked_by edge in *stubs*, plus referential integrity (only)
+    on the inverse ``blocks`` edges.
 
-    Byte-parity port of roadmap-graph.js's ``checkDependencyOrder`` -- see that
-    file's docstring for the full invariant description (repeated in brief here):
+    Ported from roadmap-graph.js's ``checkDependencyOrder`` -- see that file's
+    docstring for the full invariant description (repeated in brief here) --
+    since extended with the ``blocks`` direction; the JS original is retired
+    and this is no longer a byte-parity claim. This copy is
+    `number_stubs.py`'s AUTHORING-time verification gate (imported from here,
+    not from `coordinator_core.roadmap.audit`'s parallel copy) and is widened
+    identically so the gate that could PREVENT a dangling `blocks:` edge does
+    not stay blind to it while the audit that merely reports one sees it.
+
+    ``blocks`` is checked for referential integrity ONLY (an id absent from
+    *stubs* is reported ``unresolved``, tagged ``"edge": "blocks"``). It is
+    NOT fed into the number/(sprint, wave) monotonicity checks below --
+    ``blocks`` is the inverse of ``blocked_by``, so re-deriving ordering from
+    it would double-report every edge declared from both ends.
 
     Invariant (must hold for every edge A blocked_by B, B ships first)::
 
@@ -257,7 +270,12 @@ def check_dependency_order(stubs: List[Dict[str, Any]]) -> Dict[str, Any]:
         for dep_id in blocked_by:
             if dep_id not in stub_map:
                 unresolved.append(
-                    {"from": stub["stub_id"], "to": dep_id, "reason": "unresolved-edge"}
+                    {
+                        "from": stub["stub_id"],
+                        "to": dep_id,
+                        "reason": "unresolved-edge",
+                        "edge": "blocked_by",
+                    }
                 )
                 continue
 
@@ -306,6 +324,19 @@ def check_dependency_order(stubs: List[Dict[str, Any]]) -> Dict[str, Any]:
                             "slotB": {"sprint": b["sprint"], "wave": b["wave"]},
                         }
                     )
+
+        # `blocks` is the inverse edge -- referential integrity only (no
+        # number/(sprint, wave) monotonicity re-derivation; see docstring).
+        for dep_id in (stub.get("blocks") or []):
+            if dep_id not in stub_map:
+                unresolved.append(
+                    {
+                        "from": stub["stub_id"],
+                        "to": dep_id,
+                        "reason": "unresolved-edge",
+                        "edge": "blocks",
+                    }
+                )
 
     cycle = _detect_cycles(stubs, stub_map)
 

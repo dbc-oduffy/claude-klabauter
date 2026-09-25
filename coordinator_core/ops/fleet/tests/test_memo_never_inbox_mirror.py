@@ -169,7 +169,7 @@ def test_cc_leg_refuses_mirror_regardless_of_registry_state(
     real_receiver = _make_mirror_git_repo(tmp_path, "real-receiver")
     mirror_repo = _make_mirror_git_repo(tmp_path, receiver_dir)
     claude_home = _make_claude_home(
-        tmp_path, {"example_retrieval_repo": real_receiver, receiver_key: mirror_repo}
+        tmp_path, {"project_rag": real_receiver, receiver_key: mirror_repo}
     )
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     draft_path = _write_draft(

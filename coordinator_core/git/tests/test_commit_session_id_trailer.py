@@ -6,8 +6,12 @@ fc03df470bcc.yaml`)."""
 
 import subprocess
 
+import pytest
+
 from coordinator_core.git import commit as gcommit
 from coordinator_core.session import core as session_core
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _NOWIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 

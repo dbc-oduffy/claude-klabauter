@@ -12,7 +12,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-from coordinator_core.ops.generator_provenance import _extract_generates, discover_generators
+import ast
+
+from coordinator_core.ops.generator_provenance import (
+    _extract_generates,
+    _extract_mutates,
+    _mutates_concrete_patterns,
+    discover_generators,
+)
 from coordinator_core.ops.staleness_git import Verdict
 
 import pytest
@@ -1119,6 +1126,94 @@ def run():
     assert [r for r in records if r.generator == "coordinator_core/gen_devnull.py"] == []
 
 
+def test_r10_module_level_constant_file_rooted_chain_resolves_undeclared(tmp_path):
+    """The C4 shape from `publish-allowlist-generate.py`: a module-level
+    `_REPO_ROOT / "setup" / "targets.portable"` constant, written to from a
+    function that never mentions `_REPO_ROOT` itself. Without R10 the write
+    site's target is a bare Name with no local binding and stays unresolved
+    forever."""
+    _write(
+        tmp_path,
+        "coordinator_core/gen_module_constant.py",
+        """
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_PORTABLE_PATH = _REPO_ROOT / "setup" / "targets.portable"
+
+def run():
+    _PORTABLE_PATH.write_text("x")
+""",
+    )
+
+    records = discover_generators(tmp_path)
+    matches = [
+        r for r in records if r.generator == "coordinator_core/gen_module_constant.py"
+    ]
+    assert len(matches) == 1
+    assert matches[0].verdict == Verdict.UNDECLARED
+
+
+def test_r10_two_hop_module_constant_chain_resolves_undeclared(tmp_path):
+    """The `claude-klabauter-revendor-schema.py` shape: `_REPO_ROOT` is itself bound to
+    `_BIN_DIR.parent`, a Name-to-Name chain, so R10 must chase two hops (not
+    one) to reach the `__file__`-rooted base."""
+    _write(
+        tmp_path,
+        "coordinator_core/gen_two_hop_constant.py",
+        """
+from pathlib import Path
+
+_BIN_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _BIN_DIR.parent
+_PIN_FILE = _REPO_ROOT / "coordinator_core" / "tests" / "pinned.py"
+
+def run():
+    _PIN_FILE.write_text("x")
+""",
+    )
+
+    records = discover_generators(tmp_path)
+    matches = [
+        r for r in records if r.generator == "coordinator_core/gen_two_hop_constant.py"
+    ]
+    assert len(matches) == 1
+    assert matches[0].verdict == Verdict.UNDECLARED
+
+
+def test_r10_anti_scope_non_file_rooted_base_stays_unresolved(tmp_path):
+    """AC4's Anti-scope guard: `project_dir / "pyproject.toml"` must NOT
+    flatten just because it is a `/`-chain on a module-level constant --
+    `project_dir` here is not `__file__`-rooted, so the chain must stay
+    WRITE_TARGET_UNRESOLVED rather than inventing a false UNDECLARED against
+    this repo's own tracked `pyproject.toml`."""
+    _write(
+        tmp_path,
+        "coordinator_core/gen_non_file_rooted_constant.py",
+        """
+from pathlib import Path
+
+def _discover_project_dir():
+    return Path("/somewhere/else")
+
+project_dir = _discover_project_dir()
+_TOML = project_dir / "pyproject.toml"
+
+def run():
+    _TOML.write_text("x")
+""",
+    )
+
+    records = discover_generators(tmp_path)
+    matches = [
+        r
+        for r in records
+        if r.generator == "coordinator_core/gen_non_file_rooted_constant.py"
+    ]
+    assert len(matches) == 1
+    assert matches[0].verdict == Verdict.WRITE_TARGET_UNRESOLVED
+
+
 def test_r5_tempfile_gettempdir_base_excluded(tmp_path):
     _write(
         tmp_path,
@@ -1747,3 +1842,30 @@ def run():
     assert record.mutates == ()
     assert "state/foo.yaml" in record.detail
     assert "concrete path" in record.detail
+
+
+# P012-C5 (docs/plans/2026-08-26-seven-generators-owe-a-staleness-contrac.md)
+# -- the two live UNDECLARED modules, read directly off the real repo files
+# rather than derived from a sweep (AC12): each keeps its concrete MUTATES
+# path (append-only ledger / surgical shared-file edit is not a generated
+# artifact) and stays UNDECLARED by design, with the reason recorded at the
+# declaration site.
+_C5_UNDECLARED_TARGETS = (
+    ("coordinator_core/ops/distill_apply_disposal.py", "state/distillation-log.md"),
+    ("coordinator_core/ops/workday_complete_step2_5_dirty_tree.py", ".gitignore"),
+)
+
+
+@pytest.mark.parametrize("rel_path,concrete_path", _C5_UNDECLARED_TARGETS)
+def test_c5_modules_keep_concrete_mutates_undeclared(rel_path, concrete_path):
+    tree = ast.parse((_REPO_ROOT / rel_path).read_text(encoding="utf-8"))
+    generates = _extract_generates(tree)
+    mutates = _extract_mutates(tree)
+    assert generates is None, (
+        f"{rel_path}: GENERATES must stay absent -- neither module emits a "
+        "fixed artifact for the site named here (see P012-C5 site comment)"
+    )
+    assert isinstance(mutates, list) and concrete_path in mutates
+    assert _mutates_concrete_patterns(mutates) == [concrete_path] or concrete_path in _mutates_concrete_patterns(
+        mutates
+    )

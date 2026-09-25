@@ -17,6 +17,8 @@ import pytest
 from coordinator_core.git import commit as gcommit
 from coordinator_core.git.commit import CommitRefused
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _NOWIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 _PORTABLE = (
@@ -249,6 +251,29 @@ def test_ac7_repo_without_declarations_yaml_is_never_refused(tmp_path):
     )
     out = gcommit.commit_paths(
         r, ["coordinator_core/brand_new.py"], "mirror, no declarations yaml"
+    )
+    assert out.sha
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_ac7_portable_present_declarations_missing_is_never_refused(repo):
+    """Fail-open narrow combo (code-reviewer S4 Finding 2): `portable_text`
+    resolves (so `touched_published_names` finds a missing name for the
+    row) but `setup/publish-allowlist-declarations.yaml` does not -- the
+    `deny_names` leg can't run, so `unclassified` treats this name as not
+    refused rather than refusing conservatively. Confirms the fail-open
+    path fires only for THIS name/row, not by silently swallowing the
+    unrelated already-passing rows."""
+    (repo / "setup" / "publish-allowlist-declarations.yaml").unlink()
+    (repo / "coordinator_core" / "new_module.py").write_text(
+        "x = 1\n", encoding="utf-8", newline="\n"
+    )
+
+    out = gcommit.commit_paths(
+        repo,
+        ["coordinator_core/new_module.py"],
+        "declarations yaml missing, name unclassified",
     )
     assert out.sha
 

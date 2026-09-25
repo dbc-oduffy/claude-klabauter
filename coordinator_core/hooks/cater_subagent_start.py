@@ -312,7 +312,29 @@ def _compose_sidecar_offer_text(sidecar_path: str) -> str:
     )
 
 
-def _compose_sidecar_miss_text(sentinel_path: str = "", *, is_named: bool = False) -> str:
+#: Appended to the no-sentinel-path miss body when the dispatch's own `cwd`
+#: does not resolve to any git repo at all (`_show_toplevel_no_spawn(cwd)`
+#: returned `None`) -- the honest, nameable cause behind an otherwise-generic
+#: "no scaffold" notice. This module never guesses a repo from an
+#: unresolvable `cwd` (`_provision`'s own klabauter#47 refusal, module
+#: docstring), so this is a DIAGNOSIS, not a workaround: it tells the reader
+#: WHY provisioning could not happen, rather than leaving a miss that reads
+#: identically to an internal engine defect. See
+#: `state/bug-backlog/` for the incident this closes: a
+#: `coordinator:overengineering-reviewer`/`coordinator:code-reviewer`/
+#: `coordinator:review-integrator` dispatch fired with a payload `cwd` set to
+#: a non-repo parent directory of several mounted checkouts (a cloud
+#: container's ambient session cwd), never to the repo any of them worked in.
+SIDECAR_MISS_NO_REPO_CWD_NOTE = (
+    " Your dispatch cwd is not inside any git repository, so no repo could "
+    "be resolved to hold a sidecar -- this is not an internal error; report "
+    "which repo your work targets so the dispatcher can re-check its cwd."
+)
+
+
+def _compose_sidecar_miss_text(
+    sentinel_path: str = "", *, is_named: bool = False, no_repo_cwd: bool = False
+) -> str:
     """Parameterized over two authored bodies (`docs/plans/2026-08-25-a-
     missed-sidecar-leaves-a-file-the-em-ca.md` AC3), replacing the retired
     single-body `enforce-agent-dispatch-mode.py ::
@@ -327,7 +349,13 @@ def _compose_sidecar_miss_text(sentinel_path: str = "", *, is_named: bool = Fals
     possible or the write itself failed): the no-path body, which never
     tells the child to derive or scaffold its own path -- that instruction
     (`the path your agent definition names`) is retired for both bodies;
-    the string is gone by construction (AC3)."""
+    the string is gone by construction (AC3).
+
+    `no_repo_cwd` is only ever true alongside an empty `sentinel_path` --
+    a sentinel write itself requires a resolved `git_root`
+    (`_write_miss_sentinel`'s own `if not git_root: return ""` gate), so a
+    non-repo `cwd` can never reach the sentinel-bearing branch below.
+    """
     if sentinel_path:
         return (
             "\n\n"
@@ -361,6 +389,7 @@ def _compose_sidecar_miss_text(sentinel_path: str = "", *, is_named: bool = Fals
             "and say in them that provisioning missed. Ending your turn "
             "without sending delivers nothing."
             + SIDECAR_MISS_NO_FOREIGN_WRITE
+            + (SIDECAR_MISS_NO_REPO_CWD_NOTE if no_repo_cwd else "")
             + "\n"
             + SIDECAR_MISS_MARKER
         )
@@ -370,6 +399,7 @@ def _compose_sidecar_miss_text(sentinel_path: str = "", *, is_named: bool = Fals
         + " -- no scaffold. Report inline in your reply; say provisioning "
         "missed."
         + SIDECAR_MISS_NO_FOREIGN_WRITE
+        + (SIDECAR_MISS_NO_REPO_CWD_NOTE if no_repo_cwd else "")
         + "\n"
         + SIDECAR_MISS_MARKER
     )
@@ -921,6 +951,17 @@ def _write_miss_sentinel(
         return ""
 
 
+def _no_repo_cwd_diagnosis(sentinel_path: str, cwd: Optional[str]) -> bool:
+    """DIAGNOSIS, not a re-derivation attempt (module docstring, klabauter#47):
+    only meaningful once `sentinel_path` is already known empty -- a resolved
+    `git_root` would have let `_write_miss_sentinel` succeed, so this can
+    only ever be true alongside the no-path body. Shared by both miss-return
+    arms in `_resolve_sidecar_leg` rather than each re-deriving the same
+    `_show_toplevel_no_spawn(cwd)` check.
+    """
+    return not sentinel_path and (not cwd or _show_toplevel_no_spawn(cwd) is None)
+
+
 def _resolve_sidecar_leg(
     payload: Dict[str, Any],
     cwd: Optional[str],
@@ -1035,7 +1076,10 @@ def _resolve_sidecar_leg(
         sentinel_path = ""
         if _NAMED_TEAMMATE_CANONICAL_SHAPE_RE.fullmatch(agent_id):
             sentinel_path = _write_miss_sentinel(payload, cwd, agent_id, agent_type)
-        return sentinel_path, _compose_sidecar_miss_text(sentinel_path, is_named=True)
+        no_repo_cwd = _no_repo_cwd_diagnosis(sentinel_path, cwd)
+        return sentinel_path, _compose_sidecar_miss_text(
+            sentinel_path, is_named=True, no_repo_cwd=no_repo_cwd
+        )
 
     policy = load_policy(None)
 
@@ -1124,8 +1168,11 @@ def _resolve_sidecar_leg(
             stamped_type,
             leaf=_compute_unnamed_sentinel_leaf(stamped_type),
         )
+    no_repo_cwd = _no_repo_cwd_diagnosis(sentinel_path, cwd)
     return sentinel_path, _compose_sidecar_miss_text(
-        sentinel_path, is_named=bool(agent_id and _is_named_teammate_agent_id(agent_id))
+        sentinel_path,
+        is_named=bool(agent_id and _is_named_teammate_agent_id(agent_id)),
+        no_repo_cwd=no_repo_cwd,
     )
 
 

@@ -104,7 +104,7 @@ REPO_KEYS: Tuple[Tuple[str, str], ...] = (
     ("repos.doe_claude", "DoE-claude"),
     ("repos.claude_klabauter", "claude-klabauter"),
     ("repos.example_cockpit_repo", "example-cockpit-repo"),
-    ("repos.example_retrieval_repo", "example-retrieval-repo"),
+    ("repos.project_rag", "project-rag"),
     ("repos.example_market_data_repo", "example-market-data-repo"),
 )
 
@@ -238,7 +238,7 @@ def _check_transitive_import_isolation(
 
 
 def _resolve_repo_root(registry_key: str) -> Path:
-    """Resolve `registry_key` (e.g. "repos.example_retrieval_repo") via the machine-local
+    """Resolve `registry_key` (e.g. "repos.project_rag") via the machine-local
     registry -- never a literal path. Raises RuntimeError (never silently skips
     a repo) when the key is unset or resolves to something that isn't a live
     directory, since a silently-dropped repo would understate this oracle's

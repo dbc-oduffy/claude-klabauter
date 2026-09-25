@@ -16,7 +16,7 @@
       {"kind": "literal", "line": "workstream: PLACEHOLDER  # replace with roadmap short prefix slug"},
       {"kind": "literal", "line": "sprint: 1  # fill from roadmap-number-stubs topo output (Step 2.1.5)"},
       {"kind": "literal", "line": "wave: 1    # fill from roadmap-number-stubs topo output (Step 2.1.5)"},
-      {"kind": "literal", "line": "cost: T1   # T0 trivial | T1 small (<1h) | T2 medium (1-4h) | T3 multi-day"},
+      {"kind": "literal", "line": "loe: M"},
       {"kind": "literal", "line": "deployment_state: awaiting_gate"},
       {"kind": "literal", "line": "blocks: []"},
       {"kind": "literal", "line": "blocked_by: []"},

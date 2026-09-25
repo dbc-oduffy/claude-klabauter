@@ -153,7 +153,7 @@ def _handler(params: dict, repo_root=None) -> dict:
 
     Params:
         server_name (str, required): the `mcpServers` key to resolve
-            (e.g. "example-retrieval-repo").
+            (e.g. "project-rag").
         claude_json_path (str, optional): override path to the
             `.claude.json` file — test/override seam only; production
             callers omit it and get `${CLAUDE_HOME:-$HOME}/.claude.json`.

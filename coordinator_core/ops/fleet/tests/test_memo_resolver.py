@@ -199,11 +199,11 @@ class TestRegistryHomeHonorsMachineLocalImpl:
         monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
 
         impl_script = self._make_mocked_settings_home(
-            tmp_path, 'schema = 1\n"repos.example_retrieval_repo" = "/abs/path/to/example-retrieval-repo"\n'
+            tmp_path, 'schema = 1\n"repos.project_rag" = "/abs/path/to/example-retrieval-repo"\n'
         )
         monkeypatch.setenv("MACHINE_LOCAL_IMPL", str(impl_script))
 
-        assert read_registry_repos() == {"repos.example_retrieval_repo": "/abs/path/to/example-retrieval-repo"}
+        assert read_registry_repos() == {"repos.project_rag": "/abs/path/to/example-retrieval-repo"}
 
     def test_read_publish_mirrors_honors_machine_local_impl_override(self, tmp_path, monkeypatch):
         """Same override, exercised through read_publish_mirrors() — the seam
@@ -241,7 +241,7 @@ class TestRegistryHomeHonorsMachineLocalImpl:
         memo.send refusal presented (in-process dispatches, which set no
         MACHINE_LOCAL_IMPL, passed the identical case).
         """
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": tmp_path / "rag-repo"})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": tmp_path / "rag-repo"})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
 
@@ -250,7 +250,7 @@ class TestRegistryHomeHonorsMachineLocalImpl:
         bare_impl.write_text("# stub — never executed by this test\n", encoding="utf-8")
         monkeypatch.setenv("MACHINE_LOCAL_IMPL", str(bare_impl))
 
-        assert read_registry_repos() == {"repos.example_retrieval_repo": str(tmp_path / "rag-repo")}
+        assert read_registry_repos() == {"repos.project_rag": str(tmp_path / "rag-repo")}
 
     def test_no_override_falls_back_to_claude_home_resolution(self, tmp_path, monkeypatch):
         """Absent MACHINE_LOCAL_IMPL, registry_home() is unaffected (unchanged
@@ -258,10 +258,10 @@ class TestRegistryHomeHonorsMachineLocalImpl:
         """
         monkeypatch.delenv("MACHINE_LOCAL_IMPL", raising=False)
         monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": tmp_path / "rag-repo"})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": tmp_path / "rag-repo"})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
-        assert read_registry_repos() == {"repos.example_retrieval_repo": str(tmp_path / "rag-repo")}
+        assert read_registry_repos() == {"repos.project_rag": str(tmp_path / "rag-repo")}
 
 
 class TestMachineLocalImplSecondVectorDeterministic:
@@ -350,14 +350,14 @@ class TestResolveReceiverInboxZeroMatch:
 
     def test_registered_receiver_resolves(self, tmp_path, monkeypatch):
         receiver_repo = tmp_path / "rag-repo"
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         inbox_dir, receiver_repo_path, all_repos = resolve_receiver_inbox("example-retrieval-repo-em")
 
         assert receiver_repo_path == receiver_repo
         assert inbox_dir == receiver_repo / "cross-repo" / "inbox"
-        assert all_repos["repos.example_retrieval_repo"] == str(receiver_repo)
+        assert all_repos["repos.project_rag"] == str(receiver_repo)
 
     def test_registry_read_failure_propagates(self, tmp_path, monkeypatch):
         """A corrupt registry raises RegistryReadError THROUGH resolve_receiver_inbox too."""
@@ -432,7 +432,7 @@ class TestAmbiguousCentralReceiver:
 
 class TestConventionAndAliasMapping:
     def test_convention_repo_key_strips_em_suffix(self):
-        assert convention_repo_key("example-retrieval-repo-em") == "repos.example_retrieval_repo"
+        assert convention_repo_key("example-retrieval-repo-em") == "repos.project_rag"
 
     def test_receiver_em_to_repo_key_convention_fallback(self, tmp_path, monkeypatch):
         monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "no-such-home"))
@@ -446,7 +446,7 @@ class TestSuggestNearestReceiver:
         """The plan's own worked example: 'claude-klabauter-em' -> suggests 'claude-klabauter-em'."""
         all_repos = {
             "repos.claude_klabauter": "/abs/path/to/claude-klabauter",
-            "repos.example_retrieval_repo": "/abs/path/to/example-retrieval-repo",
+            "repos.project_rag": "/abs/path/to/example-retrieval-repo",
         }
 
         suggestion = suggest_nearest_receiver("claude-klabauter-em", all_repos)
@@ -459,7 +459,7 @@ class TestSuggestNearestReceiver:
 
     def test_wildly_unrelated_id_returns_none(self):
         """A receiver id with no close match returns None rather than a bad guess."""
-        all_repos = {"repos.example_retrieval_repo": "/abs/path/to/example-retrieval-repo"}
+        all_repos = {"repos.project_rag": "/abs/path/to/example-retrieval-repo"}
 
         suggestion = suggest_nearest_receiver("xyz-completely-unrelated-zzz", all_repos)
 
@@ -472,7 +472,7 @@ class TestSuggestNearestReceiver:
         treat its return value as a resolution; it never returns a Path or opens
         any file.
         """
-        all_repos = {"repos.example_retrieval_repo": "/abs/path/to/example-retrieval-repo"}
+        all_repos = {"repos.project_rag": "/abs/path/to/example-retrieval-repo"}
 
         suggestion = suggest_nearest_receiver("example-retrieval-repo-em", all_repos)
 
@@ -558,7 +558,7 @@ class TestCanonicalReceiverId:
             assert canonical_receiver_id(redirect) == "doe-claude-em", redirect
 
     def test_non_central_receiver_returned_unchanged(self, tmp_path, monkeypatch):
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": tmp_path / "rag-repo"})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": tmp_path / "rag-repo"})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         self._make_manifest(tmp_path, claude_home, central_ids=["doe-claude-em"])
 
@@ -670,7 +670,7 @@ class TestResolveSelfEmId:
     def test_unregistered_repo_falls_back_to_basename_convention(self, tmp_path, monkeypatch):
         self_repo = tmp_path / "some-unregistered-repo"
         self_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": tmp_path / "rag-repo"})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": tmp_path / "rag-repo"})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         assert resolve_self_em_id(self_repo) == "some-unregistered-repo-em"
@@ -788,8 +788,8 @@ class TestPublishMirrorReroute:
         assert same_repo_path(repo, owner_repo)
 
     def test_mirror_alias_not_in_repos_routes_to_its_owner(self, tmp_path, monkeypatch):
-        owner_repo = tmp_path / "example-retrieval-repo"
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": owner_repo})
+        owner_repo = tmp_path / "project-rag"
+        claude_home = _make_claude_home(tmp_path, {"project_rag": owner_repo})
         _add_mirrors(claude_home, {"deep_research_claude": {"owner": "example-retrieval-repo-em", "path": str(tmp_path / "drc")}})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
@@ -822,8 +822,8 @@ class TestPublishMirrorReroute:
             assert same_repo_path(repo, doe), alias
 
     def test_an_ordinary_receiver_is_not_rerouted(self, tmp_path, monkeypatch):
-        repo_path = tmp_path / "example-retrieval-repo"
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": repo_path})
+        repo_path = tmp_path / "project-rag"
+        claude_home = _make_claude_home(tmp_path, {"project_rag": repo_path})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         assert reroute_owner("example-retrieval-repo-em") is None
@@ -847,7 +847,7 @@ class TestReceiverCheckoutDefect:
         assert receiver_checkout_defect(repo) == "no-checkout"
 
     def test_ordinary_git_checkout_is_deliverable(self, tmp_path):
-        repo = tmp_path / "example-retrieval-repo"
+        repo = tmp_path / "project-rag"
         repo.mkdir()
         (repo / ".git").mkdir()
         assert receiver_checkout_defect(repo) is None

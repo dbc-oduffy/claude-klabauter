@@ -30,7 +30,7 @@ from coordinator_core.ops.fleet.tests.test_memo_send_duplicate_reply_warning imp
     _seed_prior_reply_row,
 )
 
-_QUALIFIERS = frozenset({"doe-claude", "example-retrieval-repo", "claude-klabauter", "receiver-repo"})
+_QUALIFIERS = frozenset({"doe-claude", "project-rag", "claude-klabauter", "receiver-repo"})
 
 
 # ---------------------------------------------------------------------------
@@ -39,11 +39,11 @@ _QUALIFIERS = frozenset({"doe-claude", "example-retrieval-repo", "claude-klabaut
 
 class TestRepoQualifierNames:
     def test_registry_key_lowercased_and_underscore_to_hyphen(self):
-        names = _repo_qualifier_names({"example_retrieval_repo": "/some/path/receiver-repo"})
-        assert "example-retrieval-repo" in names
+        names = _repo_qualifier_names({"project_rag": "/some/path/receiver-repo"})
+        assert "project-rag" in names
 
     def test_basename_of_registry_path_included(self):
-        names = _repo_qualifier_names({"example_retrieval_repo": "/some/path/receiver-repo"})
+        names = _repo_qualifier_names({"project_rag": "/some/path/receiver-repo"})
         assert "receiver-repo" in names
 
     def test_empty_registry_yields_empty_set(self):
@@ -117,7 +117,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 def sender_and_receiver(tmp_path, monkeypatch):
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
-    claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+    claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     return sender_repo, receiver_repo
 
@@ -162,7 +162,7 @@ class TestCitationLintHeldOnce:
         sender_repo = _make_sender_git_repo(tmp_path)
         (sender_repo / "cross-repo" / "inbox").mkdir(parents=True)
         (sender_repo / "cross-repo" / "inbox" / ".gitkeep").write_text("", encoding="utf-8")
-        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": sender_repo})
+        claude_home = _make_claude_home(tmp_path, {"project_rag": sender_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(
             sender_repo, "self-send-topic",
