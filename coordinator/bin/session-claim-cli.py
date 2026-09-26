@@ -306,14 +306,22 @@ def _sid_looks_valid(sid: str) -> bool:
 #: load-bearing, not decoration: ``artifact`` is the PATH-TOUCH plane
 _SUBCOMMANDS = (
     "subcommands: claim-artifact <class> | release-artifact <class> | "
-    "clear-claim-if-dead <class> | claim-plan | is-session-live | "
+    "release-or-relinquish <class> | clear-claim-if-dead <class> | "
+    "claim-plan | take-over-claim plan | is-session-live | "
     "list-stale-claim-handoffs | list-claims-by-session | who-claims-path\n"
     "  <class>: handoff | memo | plan (basename-keyed claim records), or "
     "'artifact' (path-touch plane — basename is a repo-relative PATH; this "
     "is how a path claim who-claims-path reports is released)\n"
     "  'artifact' is valid on release-artifact and clear-claim-if-dead ONLY. "
     "claim-artifact refuses it: a touch-claim is recorded by touching the "
-    "path, never declared ahead of one."
+    "path, never declared ahead of one.\n"
+    "  release-or-relinquish <class> <basename> [baton_repo_root]: releases "
+    "like release-artifact, and additionally writes a DR-205 relinquishment "
+    "marker for a plan claim this process's own identity still recognises.\n"
+    "  take-over-claim plan <basename> --justification <text> "
+    "[baton_repo_root]: DR-205's fail-loud takeover verb. 'plan' is the ONLY "
+    "valid class token here (D2) -- any other value is a usage error, not a "
+    "runtime refusal, and calls no claims function."
 )
 
 _HELP_FLAGS = ("--help", "-h", "help")
@@ -481,8 +489,8 @@ def _dispatch(argv: list[str]) -> int:
         return 0
 
     _CLAIM_SUBCOMMANDS = (
-        "claim-artifact", "release-artifact", "clear-claim-if-dead", "claim-plan",
-        "list-claims-by-session",
+        "claim-artifact", "release-artifact", "release-or-relinquish",
+        "clear-claim-if-dead", "claim-plan", "list-claims-by-session",
     )
     if subcmd in _CLAIM_SUBCOMMANDS:
         try:
@@ -521,6 +529,22 @@ def _dispatch(argv: list[str]) -> int:
                 _emit_claim_not_found_note("release-artifact", class_, basename, claim_dir)
         return _call_claim_bool("release-artifact", mod.release_artifact, class_, basename, baton_repo_root)
 
+    if subcmd == "release-or-relinquish":
+        if len(rest) < 2:
+            return _usage("session-claim-cli release-or-relinquish <class> <basename> [baton_repo_root]")
+        _flagged = _reject_flag_like_positionals("session-claim-cli release-or-relinquish <class> <basename> [baton_repo_root]", rest)
+        if _flagged is not None:
+            return _flagged
+        class_, basename = rest[0], rest[1]
+        baton_repo_root = rest[2] if len(rest) > 2 else ""
+        if class_ in _CLASSED_CLAIM_CLASSES:
+            claim_dir = _claim_lookup_dir(mod, class_, basename, baton_repo_root)
+            if claim_dir is not None and not claim_dir.is_dir():
+                _emit_claim_not_found_note("release-or-relinquish", class_, basename, claim_dir)
+        return _call_claim_bool(
+            "release-or-relinquish", mod.release_or_relinquish_artifact, class_, basename, baton_repo_root
+        )
+
     if subcmd == "clear-claim-if-dead":
         if len(rest) < 2:
             return _usage("session-claim-cli clear-claim-if-dead <class> <basename> [baton_repo_root]")
@@ -543,6 +567,70 @@ def _dispatch(argv: list[str]) -> int:
         if not positional:
             return _usage("session-claim-cli claim-plan <slug> [--for-execution]")
         return _bool_to_exit(mod.claim_plan(positional[0], for_execution=for_execution))
+
+    if subcmd == "take-over-claim":
+        _usage_line = (
+            "session-claim-cli take-over-claim plan <basename> "
+            "--justification <text> [baton_repo_root]"
+        )
+        if not rest:
+            return _usage(_usage_line)
+        class_token = rest[0]
+        if class_token != "plan":
+            print(
+                f"session-claim-cli: take-over-claim: only the 'plan' class "
+                f"supports takeover (D2) — {class_token!r} is not valid here",
+                file=sys.stderr,
+            )
+            return _usage(_usage_line)
+
+        remaining = rest[1:]
+        justification = None
+        positionals = []
+        i = 0
+        while i < len(remaining):
+            arg = remaining[i]
+            if arg == "--justification":
+                if i + 1 >= len(remaining):
+                    print(
+                        "session-claim-cli: take-over-claim: --justification "
+                        "requires a value",
+                        file=sys.stderr,
+                    )
+                    return _usage(_usage_line)
+                justification = remaining[i + 1]
+                i += 2
+                continue
+            if isinstance(arg, str) and arg.startswith("--"):
+                print(
+                    f"session-claim-cli: take-over-claim: unrecognised flag "
+                    f"{arg!r}",
+                    file=sys.stderr,
+                )
+                return _usage(_usage_line)
+            positionals.append(arg)
+            i += 1
+        if not positionals:
+            return _usage(_usage_line)
+        basename = positionals[0]
+        baton_repo_root = positionals[1] if len(positionals) > 1 else ""
+        if justification is None:
+            justification = ""
+
+        try:
+            mod = _import_module()
+        except _cc_invoke().StaleEngineImportError as exc:
+            print(f"session-claim-cli: {exc}", file=sys.stderr)
+            return _TRANSPORT_FAIL
+        except RuntimeError as exc:
+            print(f"session-claim-cli: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
+            return _TRANSPORT_FAIL
+        except ImportError as exc:
+            print(f"session-claim-cli: coordinator_core.session.claims not importable: {exc}", file=sys.stderr)
+            return _TRANSPORT_FAIL
+        return _call_claim_bool(
+            "take-over-claim", mod.take_over_claim, basename, justification, baton_repo_root
+        )
 
     if subcmd == "list-claims-by-session":
         if not rest:
@@ -678,6 +766,18 @@ def _dispatch(argv: list[str]) -> int:
             name_col = _render_claimant_name(sid, path, lookup_result)
             kind_col = _render_claimant_kind(sid, path, lookup_result)
             rows.append(f"{sid}\t{'live' if live else 'dead'}\t{name_col}\t{kind_col}")
+        if not rows:
+            # A5/DD4 -- SC-DR-023's own caveat, cited verbatim rather than
+            # paraphrased (Review: coordinator:staff-eng -- register is one
+            # fact, once): empty output here reports no RECORDED claimant,
+            # never that the path was never written.
+            print(
+                "session-claim-cli: who-claims-path: no claimant recorded -- "
+                "no holder is not evidence no one wrote it: a write through "
+                "a subprocess or an unrecognised shape records no claim "
+                "(SC-DR-023).",
+                file=sys.stderr,
+            )
         for row in rows:
             print(row)
         return 0

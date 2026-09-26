@@ -61,6 +61,7 @@ import importlib.util
 import os
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -307,6 +308,13 @@ def _emit(rc_ubt, rc_validate) -> None:
 def _run_fast_test_cmd(cmd: str, env: dict) -> tuple[int, str]:
     _err(f"[workday-complete-step1] fast-test: running: {cmd}")
     argv = shlex.split(cmd)
+    resolved = shutil.which(argv[0], path=env.get("PATH"))
+    if resolved is None:
+        ft_content = f"[workday-complete-step1] fast-test: command not found on PATH: {argv[0]!r}\n"
+        sys.stderr.write(ft_content)
+        sys.stderr.flush()
+        return 127, ft_content
+    argv[0] = resolved
     spawn_kwargs = dict(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

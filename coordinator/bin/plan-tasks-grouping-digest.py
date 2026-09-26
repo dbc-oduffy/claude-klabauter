@@ -7,7 +7,7 @@ grouping (every member of `schema_validate._PLAN_TASKS_GROUPING_ORDER` —
 prospective close (`--cut`) would produce — the value a PM approving a cut
 records as `digest` in that grouping's `grouping_approvals` block. Read-only:
 never writes the plan, never takes the file lock. Same "plain local read,
-direct import" shape as append-integrator-dispositions.py's trampoline — no
+direct import" shape as review-findings-ledger.py's trampoline — no
 JSON-RPC round-trip needed for an in-process Python caller.
 
 This tool computes a value; it does not grant an approval. It never checks or

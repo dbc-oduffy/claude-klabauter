@@ -27,12 +27,18 @@ _cli = _load_cli_module()
 class _StubClaims:
 
     def __init__(self, *, claim_artifact=None, release_artifact=None,
+                 release_or_relinquish_artifact=None,
                  clear_claim_if_dead=None, claim_plan=None,
+                 take_over_claim=None,
                  list_claims_by_session=None, claim_dir_for=None):
         self.claim_artifact = claim_artifact or (lambda *a, **k: True)
         self.release_artifact = release_artifact or (lambda *a, **k: True)
+        self.release_or_relinquish_artifact = (
+            release_or_relinquish_artifact or (lambda *a, **k: True)
+        )
         self.clear_claim_if_dead = clear_claim_if_dead or (lambda *a, **k: True)
         self.claim_plan = claim_plan or (lambda *a, **k: True)
+        self.take_over_claim = take_over_claim or (lambda *a, **k: True)
         self.list_claims_by_session = list_claims_by_session or (lambda *a, **k: [])
         self.claim_dir_for = claim_dir_for or (lambda *a, **k: None)
 
@@ -181,6 +187,86 @@ def test_release_artifact_false_exits_1(stub_import_module):
     assert rc == 1
 
 
+def test_release_or_relinquish_true_exits_0(stub_import_module):
+    stub_import_module(_StubClaims(release_or_relinquish_artifact=lambda *a, **k: True))
+    rc = _cli.main(["release-or-relinquish", "plan", "some-basename"])
+    assert rc == 0
+
+
+def test_release_or_relinquish_false_exits_1(stub_import_module):
+    stub_import_module(_StubClaims(release_or_relinquish_artifact=lambda *a, **k: False))
+    rc = _cli.main(["release-or-relinquish", "plan", "some-basename"])
+    assert rc == 1
+
+
+def test_release_or_relinquish_dispatches_to_the_right_function(stub_import_module):
+    calls = []
+    stub_import_module(_StubClaims(
+        release_or_relinquish_artifact=lambda *a, **k: calls.append(a) or True,
+    ))
+    rc = _cli.main(["release-or-relinquish", "plan", "some-basename"])
+    assert rc == 0
+    assert calls == [("plan", "some-basename", "")]
+
+
+def test_take_over_claim_true_exits_0(stub_import_module):
+    stub_import_module(_StubClaims(take_over_claim=lambda *a, **k: True))
+    rc = _cli.main(["take-over-claim", "plan", "some-basename", "--justification", "handed off"])
+    assert rc == 0
+
+
+def test_take_over_claim_false_exits_1(stub_import_module):
+    stub_import_module(_StubClaims(take_over_claim=lambda *a, **k: False))
+    rc = _cli.main(["take-over-claim", "plan", "some-basename", "--justification", "handed off"])
+    assert rc == 1
+
+
+def test_take_over_claim_dispatches_basename_justification_and_repo_root(stub_import_module):
+    calls = []
+    stub_import_module(_StubClaims(
+        take_over_claim=lambda *a, **k: calls.append(a) or True,
+    ))
+    rc = _cli.main([
+        "take-over-claim", "plan", "some-basename",
+        "--justification", "handed off", "/some/repo",
+    ])
+    assert rc == 0
+    assert calls == [("some-basename", "handed off", "/some/repo")]
+
+
+def test_take_over_claim_memo_is_usage_error_and_calls_no_claims_function(monkeypatch):
+    """D2: only the ``plan`` class supports takeover. Any other class token
+    is a usage error at the CLI, never a runtime branch that reaches
+    ``claims.take_over_claim`` -- pinned by making ``_import_module`` itself
+    explode if this subcommand ever reaches it for a non-plan class."""
+
+    def _boom():
+        raise AssertionError("take-over-claim must not import claims for a non-plan class")
+
+    monkeypatch.setattr(_cli, "_import_module", _boom)
+    rc = _cli.main(["take-over-claim", "memo", "x", "--justification", "y"])
+    assert rc != 0
+    assert rc == 2  # usage error, not a claims-function refusal (rc 1)
+
+
+def test_take_over_claim_no_class_token_exits_2(stub_import_module):
+    stub_import_module(_StubClaims())
+    rc = _cli.main(["take-over-claim"])
+    assert rc == 2
+
+
+def test_take_over_claim_missing_justification_value_exits_2(stub_import_module):
+    stub_import_module(_StubClaims())
+    rc = _cli.main(["take-over-claim", "plan", "some-basename", "--justification"])
+    assert rc == 2
+
+
+def test_take_over_claim_missing_basename_exits_2(stub_import_module):
+    stub_import_module(_StubClaims())
+    rc = _cli.main(["take-over-claim", "plan", "--justification", "why"])
+    assert rc == 2
+
+
 def test_clear_claim_if_dead_true_exits_0(stub_import_module):
     stub_import_module(_StubClaims(clear_claim_if_dead=lambda *a, **k: True))
     rc = _cli.main(["clear-claim-if-dead", "handoff", "some-basename"])
@@ -282,6 +368,40 @@ def test_release_artifact_existing_claim_dir_emits_no_not_found_note(
     ))
 
     rc = _cli.main(["release-artifact", "handoff", "real-handoff"])
+
+    assert rc == 0
+    assert "no claim at" not in capsys.readouterr().err
+
+
+def test_release_or_relinquish_bogus_basename_emits_not_found_note_exit_0(
+    stub_import_module, tmp_path, capsys
+):
+    (tmp_path / "plan-claims" / "the-real-plan").mkdir(parents=True)
+    stub_import_module(_StubClaims(
+        release_or_relinquish_artifact=lambda *a, **k: True,
+        claim_dir_for=_claim_dir_for_under(tmp_path),
+    ))
+
+    rc = _cli.main(["release-or-relinquish", "plan", "bogus-basename"])
+
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "release-or-relinquish" in err
+    assert "no claim at" in err
+    assert "'plan'" in err
+    assert "'bogus-basename'" in err
+
+
+def test_release_or_relinquish_existing_claim_dir_emits_no_not_found_note(
+    stub_import_module, tmp_path, capsys
+):
+    (tmp_path / "plan-claims" / "real-plan").mkdir(parents=True)
+    stub_import_module(_StubClaims(
+        release_or_relinquish_artifact=lambda *a, **k: True,
+        claim_dir_for=_claim_dir_for_under(tmp_path),
+    ))
+
+    rc = _cli.main(["release-or-relinquish", "plan", "real-plan"])
 
     assert rc == 0
     assert "no claim at" not in capsys.readouterr().err
@@ -496,6 +616,12 @@ def test_release_artifact_missing_basename_exits_2(stub_import_module):
     assert rc == 2
 
 
+def test_release_or_relinquish_missing_basename_exits_2(stub_import_module):
+    stub_import_module(_StubClaims())
+    rc = _cli.main(["release-or-relinquish", "plan"])
+    assert rc == 2
+
+
 def test_clear_claim_if_dead_missing_basename_exits_2(stub_import_module):
     stub_import_module(_StubClaims())
     rc = _cli.main(["clear-claim-if-dead", "handoff"])
@@ -518,6 +644,19 @@ def test_release_artifact_empty_basename_value_error_exits_1_not_traceback(
 
     stub_import_module(_StubClaims(release_artifact=_raise_empty_basename))
     rc = _cli.main(["release-artifact", "plan", ""])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "basename required" in err
+
+
+def test_release_or_relinquish_empty_basename_value_error_exits_1_not_traceback(
+    stub_import_module, capsys
+):
+    def _raise_empty_basename(*a, **k):
+        raise ValueError("basename required")
+
+    stub_import_module(_StubClaims(release_or_relinquish_artifact=_raise_empty_basename))
+    rc = _cli.main(["release-or-relinquish", "plan", ""])
     assert rc == 1
     err = capsys.readouterr().err
     assert "basename required" in err
@@ -883,6 +1022,23 @@ def test_who_claims_path_no_claimant_exits_0_no_output(
     rc = _cli.main(["who-claims-path", "some/path.txt"])
     assert rc == 0
     assert capsys.readouterr().out == ""
+
+
+def test_who_claims_path_no_claimant_names_no_holder_caveat_on_stderr(
+    stub_import_claim_index_module, stub_import_liveness_module, capsys
+):
+    """A5/DD4: empty-result output carries SC-DR-023's own "no holder is
+    not evidence" caveat, cited verbatim -- the same wording
+    `block_subagent_commit.py`'s orphan denial carries."""
+    stub_import_claim_index_module(
+        _StubClaimIndex(lookup=lambda paths, cwd=None: {p: [] for p in paths})
+    )
+    stub_import_liveness_module(_StubLiveness())
+    rc = _cli.main(["who-claims-path", "some/path.txt"])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "no holder is not evidence no one wrote it" in err
+    assert "SC-DR-023" in err
 
 
 def test_who_claims_path_with_claimants_reports_liveness_per_row(

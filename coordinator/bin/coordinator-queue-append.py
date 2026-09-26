@@ -1577,7 +1577,7 @@ Spec backlink: docs/plans/2026-06-25-example-initiative-tc-2-queues-lessons-cons
         help=(
             "(improvement-queue) Classification of the target change. "
             "Valid: script-edit, skill-edit, wiki-append, wiki-new, hook-edit, "
-            "agent-prompt-edit, doc-edit, test-edit, code-edit."
+            "agent-prompt-edit, doc-edit, test-edit, code-edit, config-edit, verification."
         ),
     )
 

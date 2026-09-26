@@ -75,6 +75,15 @@ Behaviour:
      ``deliverable_id`` all OMIT the trailer — never stamp a guessed or
      placeholder value. No env-var bypass, no config flag, no fallback that
      invents an id.
+     Gated (DD1, B2, F2, 2026-09-26) on
+     ``coordinator_core.git.commit_trailers.session_holds_multiple_held_
+     pickups`` — IMPORTED, mirrored the same way step 3b's plan-claim
+     ambiguity gate already is: when this session's ``pickup_history`` at
+     THIS ``git_dir`` holds live claims on two-or-more handoffs carrying
+     DISTINCT ``deliverable_id``s, step 4 is skipped entirely (omit, don't
+     guess — the flat ``pickup.deliverable_id`` key this step reads is
+     overwritten on every pickup, so it can only ever answer with the LAST
+     one). A single held pickup is unaffected.
   4a. Cross-repo fallback (2026-07-27): ``session-shape.json`` is written into
      the git-dir of whichever repo was ``cwd`` when ``/pickup`` ran — almost
      always DoE-claude, since EM sessions operate from there (DoE-claude
@@ -624,6 +633,31 @@ def _session_holds_multiple_plan_claims(claims: list) -> bool:
         return False
 
 
+def _session_holds_multiple_held_pickups(git_dir: str, session_id: str) -> bool:
+    """Lazy import of B2's landed
+    ``coordinator_core.git.commit_trailers.session_holds_multiple_held_pickups``
+    (DD1, F2) -- the PICKUP ambiguity-gate predicate, mirrored the same way
+    ``_session_holds_multiple_plan_claims`` above already is (IMPORTED, not
+    hand-rolled -- same zero-``coordinator_core.ops``-import property, same
+    ``_ensure_claude_klabauter_on_syspath()`` bootstrap). Any import/lookup failure
+    degrades to ``False`` -- the SAFE direction is to NOT gate (fall through
+    to the pickup tier, today's behaviour), never to silently omit a
+    resolvable trailer because the ambiguity check itself errored."""
+    if not git_dir or not session_id:
+        return False
+    claude_klabauter_root = _ensure_claude_klabauter_on_syspath()
+    if not claude_klabauter_root:
+        return False
+    try:
+        from coordinator_core.git.commit_trailers import (
+            session_holds_multiple_held_pickups,
+        )
+
+        return session_holds_multiple_held_pickups(git_dir, session_id)
+    except Exception:
+        return False
+
+
 def _resolve_deliverable_id_from_claimed_plan() -> str:
     try:
         lib_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
@@ -713,13 +747,19 @@ def _resolve_deliverable_id(git_dir: str, session_id: str, paths: "list | None" 
     if _session_holds_multiple_plan_claims(claims):
         return ""
 
-    deliverable_id = _resolve_deliverable_id_at(git_dir, session_id)
-    if deliverable_id:
-        return deliverable_id
+    # DD1 (B2, F2): omit, don't guess -- mirrors the engine's own gate,
+    # checked per git_dir (a gate firing here skips only THAT git_dir's
+    # pickup tier; the claimed-plan fallback below still runs).
+    if not _session_holds_multiple_held_pickups(git_dir, session_id):
+        deliverable_id = _resolve_deliverable_id_at(git_dir, session_id)
+        if deliverable_id:
+            return deliverable_id
     doe_root = _resolve_doe_root()
     if doe_root:
         doe_git_dir = os.path.join(doe_root, ".git")
-        if os.path.normpath(doe_git_dir) != os.path.normpath(git_dir):
+        if os.path.normpath(doe_git_dir) != os.path.normpath(
+            git_dir
+        ) and not _session_holds_multiple_held_pickups(doe_git_dir, session_id):
             deliverable_id = _resolve_deliverable_id_at(doe_git_dir, session_id)
             if deliverable_id:
                 return deliverable_id

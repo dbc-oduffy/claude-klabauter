@@ -10,7 +10,8 @@ file closes the gap left on this module, mirroring that file's structure
 and conventions rather than inventing new ones.
 
 Spec backlink: pln-reap-orphaned-execnet-gateways-398c2c,
-chunk C1.
+chunk C1. Row R13 (docs/plans/2026-09-26-inbox-blitz-claude-klabauter-fixes-fyi-rest.md)
+adds T6: argv[0] resolution via shutil.which before Popen.
 
 Test coverage:
   T1  _add_process_group_spawn_kwargs sets start_new_session on every
@@ -27,13 +28,19 @@ Test coverage:
       ProcessGroupTeardownTest, the end-to-end proof of AC3's exit-code-
       identity contract that this file's earlier tests exercise only at
       the `_teardown_process_group` unit level.
+  T6  _run_fast_test_cmd resolves argv[0] via shutil.which before Popen --
+      a fake `pnpm.CMD` shim placed on PATH resolves and runs, and an
+      unresolved argv[0] fails fast with rc=127 and a one-line message,
+      without ever reaching Popen.
 """
 from __future__ import annotations
 
 import importlib.util
 import os
+import stat
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -128,6 +135,42 @@ class ProcessGroupTeardownTest(unittest.TestCase):
         rc, content = mod._run_fast_test_cmd(
             "this-binary-does-not-exist-anywhere-12345", env
         )
+        self.assertEqual(rc, 127)
+        self.assertIn("command not found", content)
+
+
+class ArgvWhichResolutionTest(unittest.TestCase):
+
+    def test_t6_fake_cmd_shim_on_path_resolves_and_runs(self) -> None:
+        mod = _load_cli_module()
+        env = dict(os.environ)
+        with tempfile.TemporaryDirectory() as shim_dir:
+            shim_name = "pnpm-fake-shim.CMD" if os.name == "nt" else "pnpm-fake-shim"
+            shim_path = os.path.join(shim_dir, shim_name)
+            with open(shim_path, "w") as f:
+                f.write(f"#!{sys.executable}\nimport sys; sys.exit(0)\n")
+            os.chmod(shim_path, os.stat(shim_path).st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+            env["PATH"] = shim_dir + os.pathsep + env.get("PATH", "")
+            with mock.patch.object(mod.subprocess, "Popen") as fake_popen:
+                fake_proc = mock.Mock()
+                fake_proc.communicate.return_value = ("", "")
+                fake_proc.returncode = 0
+                fake_proc.pid = os.getpid()
+                fake_popen.return_value = fake_proc
+                rc, _content = mod._run_fast_test_cmd("pnpm-fake-shim run test", env)
+            self.assertEqual(rc, 0)
+            fake_popen.assert_called_once()
+            called_argv = fake_popen.call_args[0][0]
+            self.assertEqual(called_argv[0], shim_path)
+
+    def test_t6_unresolved_argv0_fails_before_popen(self) -> None:
+        mod = _load_cli_module()
+        env = dict(os.environ)
+        with mock.patch.object(mod.subprocess, "Popen") as fake_popen:
+            rc, content = mod._run_fast_test_cmd(
+                "this-binary-does-not-exist-anywhere-12345 run test", env
+            )
+            fake_popen.assert_not_called()
         self.assertEqual(rc, 127)
         self.assertIn("command not found", content)
 

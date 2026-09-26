@@ -53,8 +53,9 @@ exit 0. A caller checking only `returncode == 0` must be able to trust that outc
 exit 0 means an entry was actually written.
 
 --target-wiki validation (A7): validated against the real central wiki inventory
-(<doe_root>/coordinator/docs/wiki/*.md) unless the literal value 'unknown' is passed,
-or --allow-new-wiki is given (escape hatch for a genuine change_kind: wiki-new
+(<doe_root>/coordinator/docs/wiki/**/*.md, enumerated recursively — nested pages such
+as coordinator-tripwires/ count) unless the literal value 'unknown' is passed, or
+--allow-new-wiki is given (escape hatch for a genuine wiki-new OR wiki-append
 promotion, where the target intentionally does not exist yet). An unresolvable
 DoE-claude root during this check is the SAME exit 3 as the write-skip case above —
 never a silently-skipped validation.
@@ -371,11 +372,15 @@ def _list_central_wiki_targets(wiki_dir: str) -> frozenset[str]:
     _bootstrap_engine()
     if not os.path.isdir(wiki_dir):
         raise RuntimeError(f"central wiki directory not found: {wiki_dir!r}")
-    return frozenset(
-        f"{_TARGET_WIKI_PREFIX}{name}"
-        for name in os.listdir(wiki_dir)
-        if name.endswith(".md")
-    )
+    targets = []
+    for dirpath, _dirnames, filenames in os.walk(wiki_dir):
+        for name in filenames:
+            if not name.endswith(".md"):
+                continue
+            rel = os.path.relpath(os.path.join(dirpath, name), wiki_dir)
+            rel = rel.replace(os.sep, "/")
+            targets.append(f"{_TARGET_WIKI_PREFIX}{rel}")
+    return frozenset(targets)
 
 
 def _validate_target_wiki(
@@ -449,6 +454,32 @@ def _validate_target_wiki(
     )
     parser.error("\n".join(lines))
     return 2
+
+
+def _repo_relative_outbox_path(path: str) -> str:
+    """Best-effort convert an absolute lessons-outbox PATH into a
+    'state/lessons-outbox/<file>'-style path relative to the resolved DoE
+    root (23c: printing an absolute host path is a portability trap for a
+    local EM who stamps the printed line verbatim into a `promoted_to`
+    field, per the 2026-09-24 example-game-repo-em memo).
+
+    Falls back to PATH unchanged when the DoE root is unresolvable (e.g.
+    `_DoeUnresolvable`) or PATH does not resolve under it (a
+    LESSON_PROMOTE_OUTBOX_ROOT test-isolation override pointing somewhere
+    unrelated to the resolved DoE root) — never raises, this is a display
+    nicety only, never a gate on the write that already succeeded."""
+    _bootstrap_engine()
+    try:
+        root = doe_root()
+    except _DoeUnresolvable:
+        return path
+    try:
+        rel = os.path.relpath(path, root)
+    except ValueError:
+        return path
+    if rel.startswith(".."):
+        return path
+    return rel.replace(os.sep, "/")
 
 
 def _write_path_excl(out_path: str, content: str) -> str:
@@ -688,11 +719,14 @@ def main(argv: list[str] | None = None) -> int:
     except ArgvFidelityError as exc:
         parser.error(str(exc))
 
-    # wiki-append targets an EXISTING wiki section by schema semantics (see
-    if args.allow_new_wiki and args.change_kind != "wiki-new":
+    # --allow-new-wiki is an escape hatch for --target-wiki validation and is not
+    # wiki-new-only: a wiki-append promotion can also legitimately target a wiki
+    # page that does not exist in the central inventory yet (e.g. the page is
+    # being created by a sibling change in the same batch).
+    if args.allow_new_wiki and args.change_kind not in _WIKI_TARGETING_CHANGE_KINDS:
         parser.error(
-            f"--allow-new-wiki is only valid with --change-kind wiki-new "
-            f"(got --change-kind {args.change_kind!r})"
+            f"--allow-new-wiki is only valid with --change-kind wiki-new or "
+            f"wiki-append (got --change-kind {args.change_kind!r})"
         )
 
     # --target-wiki passes through UNCHANGED and UNVALIDATED.
@@ -746,7 +780,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: could not write outbox entry: {exc}", file=sys.stderr)
             return 1
 
-        print(f"Lesson outbox entry written: {path}")
+        print(f"Lesson outbox entry written: {_repo_relative_outbox_path(path)}")
         print(f"  id:          {entry_id}")
         print(f"  from_repo:   {from_repo}")
         print(f"  change_kind: {args.change_kind}")
@@ -851,7 +885,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 1
         # cheap check that would have made the DOE_ROOT/native-write mismatch
-        print(f"Lesson outbox entry written: {out_path}")
+        print(f"Lesson outbox entry written: {_repo_relative_outbox_path(out_path)}")
         print(f"  id:          {result.get('entry_id', entry_id)}")
         print(f"  from_repo:   {result.get('from_repo', from_repo)}")
         print(f"  change_kind: {result.get('change_kind', args.change_kind)}")

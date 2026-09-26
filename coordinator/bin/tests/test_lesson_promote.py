@@ -271,7 +271,7 @@ def test_native_params_contain_required_fields():
         "--title", "My lesson",
         "--body", "Lesson body text",
         "--change-kind", "wiki-append",
-        "--target-wiki", "docs/wiki/computed-skills.md",
+        "--target-wiki", "docs/wiki/skills-corpus/computed-skills.md",
         "--scope-tags", "drain,cross-repo",
         "--evidence", "abc1234",
     ]
@@ -289,7 +289,7 @@ def test_native_params_contain_required_fields():
     assert params["title"] == "My lesson"
     assert params["body"] == "Lesson body text"
     assert params["change_kind"] == "wiki-append"
-    assert params["target_wiki"] == "docs/wiki/computed-skills.md"
+    assert params["target_wiki"] == "docs/wiki/skills-corpus/computed-skills.md"
     assert params["scope_tags"] == ["drain", "cross-repo"]
     assert params["evidence"] == "abc1234"
 
@@ -616,3 +616,79 @@ class TestInheritedAmbientEnvDoesNotBypassMockedRoute:
         assert written == [], (
             f"no write may land under an inherited-ambient DOE_ROOT; found {written}"
         )
+
+
+# ---------------------------------------------------------------------------
+# IBMFR-R08 — Item 8: lesson-promote sees nested central wiki pages;
+# --allow-new-wiki is not wiki-new-only.
+# ---------------------------------------------------------------------------
+
+
+def test_nested_wiki_page_validates_as_target(tmp_path, monkeypatch):
+    """A page nested under a subdirectory of the central wiki (e.g.
+    coordinator-tripwires/) must validate as a real --target-wiki entry —
+    _list_central_wiki_targets enumerates *.md recursively, not just the
+    top-level of the wiki dir."""
+    wiki_dir = tmp_path / "wiki"
+    nested_dir = wiki_dir / "coordinator-tripwires"
+    nested_dir.mkdir(parents=True)
+    (nested_dir / "a-nested-tripwire.md").write_text("# A nested tripwire\n")
+
+    monkeypatch.setenv(_cli_mod._WIKI_ROOT_ENV, str(wiki_dir))
+
+    fake_result = {"out_path": "/fake/path.yaml"}
+    argv = [
+        "--title", "My lesson",
+        "--body", "Lesson body text",
+        "--change-kind", "wiki-append",
+        "--target-wiki", "coordinator-tripwires/a-nested-tripwire.md",
+        "--scope-tags", "drain",
+        "--evidence", "abc1234",
+    ]
+
+    with (
+        unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=fake_result) as mock_route,
+        unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
+        unittest.mock.patch("sys.stdout", io.StringIO()),
+    ):
+        rc = _cli_mod.main(argv)
+
+    assert rc == 0, "a nested wiki page must validate, never fall through to parser.error"
+    params = mock_route.call_args[0][1]
+    assert params["target_wiki"] == "docs/wiki/coordinator-tripwires/a-nested-tripwire.md"
+
+
+def test_allow_new_wiki_accepted_with_wiki_append(tmp_path, monkeypatch):
+    """--allow-new-wiki is not wiki-new-only: a wiki-append promotion may also
+    pass --allow-new-wiki to skip the central-wiki-inventory check for a target
+    that does not exist yet — this must NOT hit the
+    '--allow-new-wiki is only valid with --change-kind wiki-new' parser.error."""
+    wiki_dir = tmp_path / "wiki"
+    wiki_dir.mkdir()
+    monkeypatch.setenv(_cli_mod._WIKI_ROOT_ENV, str(wiki_dir))
+
+    fake_result = {"out_path": "/fake/path.yaml"}
+    argv = [
+        "--title", "My lesson",
+        "--body", "Lesson body text",
+        "--change-kind", "wiki-append",
+        "--target-wiki", "docs/wiki/does-not-exist-yet.md",
+        "--allow-new-wiki",
+        "--scope-tags", "drain",
+        "--evidence", "abc1234",
+    ]
+
+    with (
+        unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=fake_result) as mock_route,
+        unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
+        unittest.mock.patch("sys.stdout", io.StringIO()),
+    ):
+        rc = _cli_mod.main(argv)
+
+    assert rc == 0, "--allow-new-wiki with wiki-append must pass, not hit the wiki-new-only gate"
+    params = mock_route.call_args[0][1]
+    assert params["target_wiki"] == "docs/wiki/does-not-exist-yet.md"

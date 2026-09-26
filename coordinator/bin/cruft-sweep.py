@@ -48,6 +48,13 @@ Options:
                           root, or cwd if not in a git repo); useful for tests
   --quiet                 Suppress human-readable banner
 
+  cruft_sweep.projects_size_cap_gib (machine-local registry key, default: 2)
+                          Byte-cap in GiB for UUID-gated projects/ bytes,
+                          resolved at _apply_machine_local_days_override.
+  cruft_sweep.size_cap_mtime_floor_hours (machine-local registry key,
+                          default: 24) Age floor below which a file is
+                          never evicted by the size cap.
+
 Exit codes:
   0  success or lock contention (contention exits silently)
   1  unexpected error (including COORDINATOR_CONTENT_ROOT / doe-root
@@ -368,6 +375,12 @@ Options:
   --quiet                 Suppress human-readable banner
   -h, --help              Show this help and exit
 
+  cruft_sweep.projects_size_cap_gib (machine-local registry key, default: 2)
+                          Byte-cap in GiB for UUID-gated projects/ bytes.
+  cruft_sweep.size_cap_mtime_floor_hours (machine-local registry key,
+                          default: 24) Age floor below which a file is never
+                          evicted by the size cap.
+
 Exit codes:
   0  success or lock contention (contention exits silently)
   1  unexpected error
@@ -400,6 +413,8 @@ class SweepConfig:
     parent_roots: List[str] = field(default_factory=list)
     scratch_age_days: str = "7"
     repo_root: str = ""
+    size_cap_gib: str = "2"
+    size_cap_floor_hours: str = "24"
 
 
 @dataclass
@@ -564,6 +579,22 @@ def _apply_machine_local_days_override(cfg: SweepConfig) -> None:
     if value and value.isdigit():
         cfg.days = value
 
+    cap_value = _machine_registry_get("cruft_sweep.projects_size_cap_gib")
+    if cap_value:
+        cap_value = cap_value.strip()
+    if cap_value:
+        try:
+            if float(cap_value) > 0:
+                cfg.size_cap_gib = cap_value
+        except ValueError:
+            pass
+
+    floor_value = _machine_registry_get("cruft_sweep.size_cap_mtime_floor_hours")
+    if floor_value:
+        floor_value = floor_value.strip()
+    if floor_value and floor_value.isdigit() and int(floor_value) > 0:
+        cfg.size_cap_floor_hours = floor_value
+
 
 def _acquire_lock(lock_dir: str) -> None:
     """Exclusive lock via os.mkdir (atomic on POSIX and Windows). On ANY
@@ -620,10 +651,14 @@ def _sweep_harness(cfg: "SweepConfig", totals: "Totals") -> None:
         sys.exit(1)
 
     log_path = Path(cfg.log_path) if cfg.log_path else None
+    size_cap_bytes = int(float(cfg.size_cap_gib) * 1024**3)
+    size_cap_mtime_floor_secs = int(cfg.size_cap_floor_hours) * 3600
     harness_bytes, harness_items = sweep_harness(
         Path(cfg.projects_root), Path(cfg.file_history_root), int(cfg.days),
         blocklist, apply=cfg.apply, json_mode=cfg.json_mode, quiet=cfg.quiet,
         log_path=log_path,
+        size_cap_bytes=size_cap_bytes,
+        size_cap_mtime_floor_secs=size_cap_mtime_floor_secs,
     )
     totals.harness_bytes = harness_bytes
     totals.harness_items = harness_items

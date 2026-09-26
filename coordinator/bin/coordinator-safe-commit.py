@@ -1128,7 +1128,10 @@ def _refuse_contested_pathspec(paths: Sequence[str], worktree_root: str) -> None
     )
     print(
         "Drop the named path(s) from the pathspec, or coordinate with the "
-        "holder(s) BY NAME -- a session id re-points, a name does not. "
+        "holder(s) BY NAME -- a session is IDENTIFIED by its sid and "
+        "ADDRESSED by the name resolved from the registry at refusal time "
+        "(printed above): neither a sid nor a name is a permanently stable "
+        "address on its own. "
         "READ claims are not listed here and never block. "
         "A holder releases its own claim with `session-claim-cli "
         "release-artifact artifact <path>` -- landed or still in flight, "

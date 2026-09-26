@@ -7,6 +7,8 @@ import os
 import re
 import sys
 
+import yaml
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 _BIN_LIB_DIR = os.path.join(SCRIPT_DIR, "lib")
@@ -22,6 +24,16 @@ def _bootstrap_imports() -> None:
 
 
 # Respects COORDINATOR_INITIATIVE_ROOT env override for test isolation.
+#
+# central=False (not True) is deliberate: coordinator_state_root(central=True)
+# is Rule 4, a hardcoded backward-compat default that always resolves to
+# claude-klabauter's own engine install location (_claude_klabauter_state()) regardless
+# of which repo invoked this CLI. A consumer repo (e.g. Example-market-data-repo)
+# running `coordinator-initiative create` would silently mint its initiative
+# under claude-klabauter's state tree instead of its own. central=False (Rule 5) resolves
+# from the invoking repo's own git root instead -- falling through to the
+# shared engine root only when that root IS the meta-repo, which is the
+# correct "central" case.
 def _resolve_initiatives_dir() -> str | None:
     override = os.environ.get("COORDINATOR_INITIATIVE_ROOT", "")
     if override:
@@ -41,10 +53,10 @@ def _resolve_initiatives_dir() -> str | None:
         return None
 
     try:
-        state_root = coordinator_state_root(central=True)
+        state_root = coordinator_state_root(central=False)
     except (CrossCuttingStateRoot, StateRootError):
         print(
-            "coordinator-initiative: failed to resolve central state root via "
+            "coordinator-initiative: failed to resolve the invoking repo's state root via "
             "coordinator_core.state_root.",
             file=sys.stderr,
         )
@@ -57,7 +69,7 @@ def _resolve_initiatives_dir() -> str | None:
     state_root = state_root.strip()
     if not state_root:
         print(
-            "coordinator-initiative: coordinator_state_root --central returned empty path.",
+            "coordinator-initiative: coordinator_state_root returned empty path.",
             file=sys.stderr,
         )
         return None
@@ -209,6 +221,63 @@ def _cmd_create(args: list[str]) -> int:
     return 0
 
 
+# A plain-YAML record (no `---` frontmatter fence) is a whole file that IS a
+# single YAML mapping document, e.g. state/initiatives/*.yaml itself. Parsed
+# to confirm it is a mapping, then FK-injected by a top-level line rewrite
+# (matching the frontmatter branch's approach) rather than a full
+# load-then-dump round-trip, which would reformat quoting/ordering the record
+# author chose.
+def _attach_one_plain_yaml(
+    artifact_path: str,
+    initiative_id: str,
+    content: str,
+    original_lines: list[str],
+) -> tuple[bool, list[str], list[str]]:
+    try:
+        parsed = yaml.safe_load(content)
+    except yaml.YAMLError as exc:
+        return False, [], [
+            f"coordinator-initiative attach: artifact is not valid YAML: {artifact_path}",
+            f"  {exc}",
+        ]
+
+    if not isinstance(parsed, dict):
+        return False, [], [
+            f"coordinator-initiative attach: artifact has no YAML frontmatter block and is not "
+            f"a plain-YAML mapping document: {artifact_path}",
+            "  The file must either begin with a --- frontmatter opening line, or be a whole "
+            "  YAML document whose top level is a mapping.",
+        ]
+
+    found = False
+    out_lines: list[str] = []
+    for line in original_lines:
+        stripped = line.rstrip("\r\n")
+        if re.match(r"^initiative:", stripped):
+            out_lines.append(f"initiative: {initiative_id}\n")
+            found = True
+            continue
+        out_lines.append(line)
+
+    if not found:
+        if out_lines and not out_lines[-1].endswith("\n"):
+            out_lines[-1] = out_lines[-1] + "\n"
+        out_lines.append(f"initiative: {initiative_id}\n")
+
+    new_content = "".join(out_lines)
+
+    if not re.search(rf"^initiative: {re.escape(initiative_id)}", new_content, re.MULTILINE):
+        return False, [], [
+            f"coordinator-initiative attach: failed to inject initiative FK into {artifact_path}",
+        ]
+
+    tmp = f"{artifact_path}.tmp.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        f.write(new_content)
+    os.replace(tmp, artifact_path)
+    return True, [f"attached: {artifact_path} -> initiative: {initiative_id}"], []
+
+
 def _attach_one(artifact_path: str, initiative_id: str, initiatives_dir: str) -> tuple[bool, list[str], list[str]]:
     initiative_yaml = os.path.join(initiatives_dir, f"{initiative_id}.yaml")
     if not os.path.isfile(initiative_yaml):
@@ -225,11 +294,7 @@ def _attach_one(artifact_path: str, initiative_id: str, initiatives_dir: str) ->
 
     first_line = original_lines[0].rstrip("\r\n") if original_lines else ""
     if first_line != "---":
-        return False, [], [
-            f"coordinator-initiative attach: artifact has no YAML frontmatter block: {artifact_path}",
-            "  The file must begin with a --- frontmatter opening line.",
-            "  Ensure the artifact has a valid YAML frontmatter block before attaching.",
-        ]
+        return _attach_one_plain_yaml(artifact_path, initiative_id, content, original_lines)
 
     in_front = False
     found = False
